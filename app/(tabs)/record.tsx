@@ -1,18 +1,30 @@
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Alert,
+  ActivityIndicator,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useState, useEffect, useRef } from "react";
+import { useAction } from "convex/react";
+import { api } from "../../convex/_generated/api";
 import {
   requestMicrophonePermission,
   startRecording,
   stopRecording,
 } from "../../lib/audio";
+import { readFileAsBase64 } from "../../lib/convex";
 
 export default function RecordScreen() {
   const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [duration, setDuration] = useState(0);
   const [permissionDenied, setPermissionDenied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const processVoiceReminder = useAction(api.actions.processVoiceReminder);
 
   useEffect(() => {
     return () => {
@@ -27,14 +39,34 @@ export default function RecordScreen() {
   };
 
   const handleRecordPress = async () => {
+    if (isProcessing) return;
+
     if (isRecording) {
       if (timerRef.current) clearInterval(timerRef.current);
       const uri = await stopRecording();
       setIsRecording(false);
       setDuration(0);
+
       if (uri) {
-        console.log("Recording saved to:", uri);
-        Alert.alert("Recording Complete", `Saved to: ${uri}`);
+        setIsProcessing(true);
+        try {
+          const base64 = await readFileAsBase64(uri);
+          console.log("[VR] Processing audio...");
+          const result = await processVoiceReminder({ audioBase64: base64 });
+          console.log("[VR] Result:", JSON.stringify(result, null, 2));
+          Alert.alert(
+            "Reminder Created",
+            `"${result.title}"\n\nScheduled: ${result.time} (${result.frequency})\n\nTranscript: "${result.transcript}"`
+          );
+        } catch (error) {
+          console.error("[VR] Processing error:", error);
+          Alert.alert(
+            "Error",
+            "Failed to process your reminder. Please try again."
+          );
+        } finally {
+          setIsProcessing(false);
+        }
       }
     } else {
       const status = await requestMicrophonePermission();
@@ -60,11 +92,13 @@ export default function RecordScreen() {
       <View style={styles.content}>
         <Text style={styles.title}>New Reminder</Text>
         <Text style={styles.subtitle}>
-          {isRecording
-            ? "Listening... Speak your reminder"
-            : permissionDenied
-              ? "Microphone access required"
-              : "Tap the microphone and speak your reminder"}
+          {isProcessing
+            ? "Processing your reminder..."
+            : isRecording
+              ? "Listening... Speak your reminder"
+              : permissionDenied
+                ? "Microphone access required"
+                : "Tap the microphone and speak your reminder"}
         </Text>
 
         {isRecording && (
@@ -74,20 +108,33 @@ export default function RecordScreen() {
         <View style={styles.micContainer}>
           {isRecording && <View style={styles.pulseRing} />}
           <TouchableOpacity
-            style={[styles.micButton, isRecording && styles.micButtonRecording]}
+            style={[
+              styles.micButton,
+              isRecording && styles.micButtonRecording,
+              isProcessing && styles.micButtonProcessing,
+            ]}
             onPress={handleRecordPress}
             activeOpacity={0.8}
+            disabled={isProcessing}
           >
-            <Ionicons
-              name={isRecording ? "stop" : "mic"}
-              size={48}
-              color="#fff"
-            />
+            {isProcessing ? (
+              <ActivityIndicator size="large" color="#fff" />
+            ) : (
+              <Ionicons
+                name={isRecording ? "stop" : "mic"}
+                size={48}
+                color="#fff"
+              />
+            )}
           </TouchableOpacity>
         </View>
 
         <Text style={styles.buttonLabel}>
-          {isRecording ? "Tap to Stop" : "Tap to Record"}
+          {isProcessing
+            ? "Please wait..."
+            : isRecording
+              ? "Tap to Stop"
+              : "Tap to Record"}
         </Text>
 
         <Text style={styles.hint}>
@@ -148,6 +195,10 @@ const styles = StyleSheet.create({
   micButtonRecording: {
     backgroundColor: "#FF3B30",
     shadowColor: "#FF3B30",
+  },
+  micButtonProcessing: {
+    backgroundColor: "#8E8E93",
+    shadowColor: "#8E8E93",
   },
   pulseRing: {
     position: "absolute",
