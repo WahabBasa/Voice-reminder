@@ -41,6 +41,14 @@ export const processVoiceReminder = action({
   "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is weekly)
 }
 
+IMPORTANT - Time parsing rules:
+- Speech-to-text often transcribes times with spaces instead of colons
+- "10 4 p.m." means 10:04 PM = "22:04"
+- "9 30 a.m." means 9:30 AM = "09:30"
+- "10 15 p.m." means 10:15 PM = "22:15"
+- The first number is hours, the second is minutes
+- Current time is approximately ${new Date().toLocaleTimeString()}
+
 If the user doesn't specify a time, use a reasonable default.
 If the user doesn't specify frequency, assume "once".
 The description should be a friendly reminder message like "Time to take your medicine" or "Don't forget to call mom".`,
@@ -55,11 +63,14 @@ The description should be a friendly reminder message like "Time to take your me
     const parsed = JSON.parse(completion.choices[0].message.content || "{}");
 
     // 3. Generate TTS
+    // Add emphasis and repeat for clarity, use slower/clearer voice
+    const ttsText = `Hey! ${parsed.description}. ${parsed.description}`;
     const ttsResponse = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: "nova",
-      input: parsed.description,
+      model: "tts-1-hd",
+      voice: "onyx", // deeper, clearer voice
+      input: ttsText,
       response_format: "mp3",
+      speed: 0.9, // slightly slower
     });
 
     const ttsBuffer = Buffer.from(await ttsResponse.arrayBuffer());

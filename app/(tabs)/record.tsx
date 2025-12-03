@@ -17,6 +17,8 @@ import {
   stopRecording,
 } from "../../lib/audio";
 import { readFileAsBase64 } from "../../lib/convex";
+import { scheduleReminder } from "../../lib/notifications";
+import { formatNextTrigger, getNextTriggerTime } from "../../lib/time";
 
 export default function RecordScreen() {
   const [isRecording, setIsRecording] = useState(false);
@@ -54,9 +56,32 @@ export default function RecordScreen() {
           console.log("[VR] Processing audio...");
           const result = await processVoiceReminder({ audioBase64: base64 });
           console.log("[VR] Result:", JSON.stringify(result, null, 2));
+
+          // Schedule notification
+          if (!result.audioUrl) {
+            throw new Error("Failed to get audio URL");
+          }
+          console.log("[VR] Scheduling notification...");
+          await scheduleReminder({
+            id: result.id,
+            title: result.title,
+            description: result.description,
+            time: result.time,
+            frequency: result.frequency,
+            days: result.days,
+            audioUrl: result.audioUrl,
+          });
+
+          const nextTrigger = getNextTriggerTime({
+            time: result.time,
+            frequency: result.frequency,
+            days: result.days,
+          });
+          const nextTriggerStr = formatNextTrigger(nextTrigger);
+
           Alert.alert(
             "Reminder Created",
-            `"${result.title}"\n\nScheduled: ${result.time} (${result.frequency})\n\nTranscript: "${result.transcript}"`
+            `"${result.title}"\n\nNext: ${nextTriggerStr}\n\nTranscript: "${result.transcript}"`
           );
         } catch (error) {
           console.error("[VR] Processing error:", error);

@@ -565,6 +565,13 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 
 ---
 
+## Known Issues (To Address)
+
+- [ ] **TTS volume too low** - OpenAI TTS output is quiet; may need audio normalization or different voice settings
+- [ ] **Processing is slow** - Whisper → GPT → TTS chain takes several seconds; consider streaming or showing progress steps
+
+---
+
 ## Limitations (POC Scope)
 
 - No user authentication

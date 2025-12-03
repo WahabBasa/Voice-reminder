@@ -42,3 +42,44 @@ export async function stopRecording(): Promise<string | null> {
 export function getRecording(): Audio.Recording | null {
   return recording;
 }
+
+let currentSound: Audio.Sound | null = null;
+
+export async function playAudio(uri: string): Promise<void> {
+  console.log(`[VR] playAudio called with uri: ${uri}`);
+  
+  // Stop any currently playing sound
+  if (currentSound) {
+    console.log("[VR] Stopping previous sound");
+    try {
+      await currentSound.unloadAsync();
+    } catch (e) {
+      console.log("[VR] Error unloading previous sound:", e);
+    }
+    currentSound = null;
+  }
+
+  console.log("[VR] Setting audio mode...");
+  await Audio.setAudioModeAsync({
+    allowsRecordingIOS: false,
+    playsInSilentModeIOS: true,
+    staysActiveInBackground: true,
+  });
+
+  console.log("[VR] Creating sound object...");
+  const { sound } = await Audio.Sound.createAsync(
+    { uri },
+    { shouldPlay: true, volume: 1.0 }
+  );
+  currentSound = sound;
+  console.log("[VR] Sound created and playing");
+
+  // Clean up when done
+  sound.setOnPlaybackStatusUpdate((status) => {
+    if (status.isLoaded && status.didJustFinish) {
+      console.log("[VR] Audio playback finished");
+      sound.unloadAsync();
+      currentSound = null;
+    }
+  });
+}

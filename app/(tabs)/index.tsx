@@ -13,6 +13,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
+import { cancelReminder } from "../../lib/notifications";
+import { formatNextTrigger, getNextTriggerTime } from "../../lib/time";
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -25,7 +27,14 @@ export default function HomeScreen() {
       {
         text: "Delete",
         style: "destructive",
-        onPress: () => deleteReminder({ id }),
+        onPress: async () => {
+          try {
+            await cancelReminder(id);
+          } catch (e) {
+            console.log("[VR] Failed to cancel notification:", e);
+          }
+          await deleteReminder({ id });
+        },
       },
     ]);
   };
@@ -60,28 +69,38 @@ export default function HomeScreen() {
         <FlatList
           data={reminders}
           keyExtractor={(item) => item._id}
-          renderItem={({ item }) => (
-            <View style={styles.reminderCard}>
-              <View style={styles.cardHeader}>
-                <Text style={styles.reminderTitle}>{item.title}</Text>
-                <TouchableOpacity
-                  onPress={() => handleDelete(item._id, item.title)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Ionicons name="trash-outline" size={20} color="#FF3B30" />
-                </TouchableOpacity>
+          renderItem={({ item }) => {
+            const nextTrigger = getNextTriggerTime({
+              time: item.time,
+              frequency: item.frequency,
+              days: item.days,
+            });
+            return (
+              <View style={styles.reminderCard}>
+                <View style={styles.cardHeader}>
+                  <Text style={styles.reminderTitle}>{item.title}</Text>
+                  <TouchableOpacity
+                    onPress={() => handleDelete(item._id, item.title)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.reminderTime}>
+                  {item.time} · {item.frequency}
+                  {item.days && item.days.length > 0
+                    ? ` · ${item.days.join(", ")}`
+                    : ""}
+                </Text>
+                <Text style={styles.reminderNext}>
+                  Next: {formatNextTrigger(nextTrigger)}
+                </Text>
+                <Text style={styles.reminderDescription}>
+                  "{item.description}"
+                </Text>
               </View>
-              <Text style={styles.reminderTime}>
-                {item.time} · {item.frequency}
-                {item.days && item.days.length > 0
-                  ? ` · ${item.days.join(", ")}`
-                  : ""}
-              </Text>
-              <Text style={styles.reminderDescription}>
-                "{item.description}"
-              </Text>
-            </View>
-          )}
+            );
+          }}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
             <TouchableOpacity
@@ -170,6 +189,12 @@ const styles = StyleSheet.create({
   reminderTime: {
     fontSize: 15,
     color: "#8E8E93",
+    marginBottom: 4,
+  },
+  reminderNext: {
+    fontSize: 14,
+    color: "#007AFF",
+    fontWeight: "500",
     marginBottom: 6,
   },
   reminderDescription: {
