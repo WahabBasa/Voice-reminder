@@ -26,67 +26,63 @@
 
 ## 📝 Devlog Writing Guidelines
 
-**Writing Style: Semi-Formal Technical Documentation**
-- Write as a senior engineer documenting their work session
-- Use conversational but professional tone
-- Balance readability with technical depth
+**Writing Style: Conversational Technical Notes**
+- Write like you're telling a coworker what you did
+- Keep it casual but include the technical details that matter
+- Explain what happened, but no exposition or lecturing
+- Get to the point, don't pad it out
 
-**Entry Structure (Required Elements):**
-1. **Header**: `## Session Title - (HH:MM)` with clear description
-2. **Status Line**: `**Status**: ✅/⚠️/❌ One-line summary of outcome`
-3. **Context** (optional for small changes): Brief problem statement or goal
-4. **Changes Made**: Bullet points with file paths and line numbers
-5. **Result**: What works now that didn't before
+**Tone - explain what happened, don't lecture:**
+- ✅ "Windows path was too long so the build kept failing. Moved to `C:\Dev\VR` and it worked."
+- ❌ "The build failed due to Windows' 260 character path limit. This is a common Windows issue when projects are in deep directories. The solution was to move the project to a shorter path."
 
-**Length Guidelines - Scale with Work Done:**
-- **Quick fixes** (5-15 lines): Single issue, file change, result
-- **Feature work** (20-35 lines): Multiple files, architectural decisions, testing notes
-- **Major sessions** (35-40 lines MAX): Complex integrations, migrations, full context
-- **Never exceed 40 lines** - split into separate entries if needed
+**Entry Structure:**
+1. **Header**: `## What you did - (HH:MM)`
+2. **Status**: `**Status**: ✅/⚠️/❌ Quick result`
+3. **The meat**: What changed, what broke, what fixed it
+4. **Files touched** (with line numbers when relevant)
 
-**Technical Specificity Requirements:**
-- ✅ Always include file paths: `convex/auth.ts:24-30`
-- ✅ Reference actual code patterns: "Added `EXPO_PUBLIC_CONVEX_URL` env var"
-- ✅ Explain architectural decisions: Why this approach vs alternatives
-- ✅ Document debugging process: What failed, what worked, lesson learned
-- ❌ Avoid vague descriptions: "fixed bug", "updated code", "made changes"
+**Length:**
+- Quick fixes: 5-15 lines
+- Feature work: 20-35 lines  
+- Big sessions: 40 lines MAX - split if longer
 
-**Example - Quick Fix (5-15 lines):**
+**Be Specific:**
+- ✅ File paths: `app/(tabs)/record.tsx:25-41`
+- ✅ Actual values: "Added `--legacy-peer-deps` flag"
+- ❌ Vague: "fixed the bug", "updated some code"
+
+**Example - Quick Fix:**
 ```markdown
-## Record button toggle fix - (19:30)
+## Fixed record button toggle - (19:30)
 
-**Status**: ✅ Button now shows correct state when recording
+**Status**: ✅ Working
 
-Added visual feedback for recording state:
-- `app/(tabs)/record.tsx:25-41` - Added "Tap to Record/Stop" label
-- `app/(tabs)/record.tsx:106-111` - Added buttonLabel style
+Button wasn't showing the stop state. Added a "Tap to Record/Stop" label below the mic button so it's obvious what state you're in.
 
-Button now clearly shows blue mic → red stop with text label.
+- `app/(tabs)/record.tsx:25-41` - added label
+- `app/(tabs)/record.tsx:106-111` - buttonLabel style
 ```
 
-**Example - Feature Work (20-35 lines):**
+**Example - Feature Work:**
 ```markdown
-## Phase 1: Project Setup Complete - (19:00)
+## Got Phase 1 working - (19:00)
 
-**Status**: ✅ Expo + Convex app running on Android device
+**Status**: ✅ App running on phone
 
-### Setup
-- Initialized Expo project with expo-dev-client
-- Connected Convex backend (dashboard: proper-stoat-767)
-- Installed dependencies: notifee, expo-av, expo-file-system, openai
+Set up the Expo project with Convex backend. Had a few hiccups:
 
-### Implementation
-- `app/_layout.tsx` - Root layout with ConvexProvider
-- `app/(tabs)/index.tsx` - Home screen with empty reminder list
-- `app/(tabs)/record.tsx` - Record screen with mic button UI
-- `android/build.gradle` - Added Notifee maven repository
+- Windows path too long - moved to `C:\Dev\VR`
+- React 19 peer dep drama - used `--legacy-peer-deps`  
+- Phone couldn't connect to Metro - `adb reverse tcp:8081 tcp:8081` fixed it
 
-### Issues Resolved
-- Windows path length limit → Moved project to `C:\Dev\VR`
-- React 19 peer deps → Used `--legacy-peer-deps` flag
-- Firewall blocking Metro → Used ADB reverse for USB connection
+Files:
+- `app/_layout.tsx` - ConvexProvider wrapper
+- `app/(tabs)/index.tsx` - home screen, empty state
+- `app/(tabs)/record.tsx` - mic button UI
+- `android/build.gradle:20` - notifee maven repo
 
-App builds and runs on Samsung SM_G955F via USB.
+Running on Samsung SM_G955F. Two tabs, both working.
 ```
 
 ---
