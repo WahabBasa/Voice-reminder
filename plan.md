@@ -56,44 +56,51 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 
 ---
 
-## Phase 1: Project Setup & Basic UI
+## Phase 1: Project Setup & Basic UI ✅ COMPLETED
 
 **Goal:** Working Expo app with Convex connected and basic navigation
 
+**Status:** Completed on 2025-12-03
+
 ### Tasks
 
-1. **Initialize Expo Project**
+1. **Initialize Expo Project** ✅
    ```bash
    npx create-expo-app@latest VoiceReminder
    cd VoiceReminder
    npx expo install expo-dev-client
    ```
 
-2. **Setup Convex**
+2. **Setup Convex** ✅
    ```bash
    npm install convex
-   npx convex init
+   npx convex dev --once --configure=new --project voice-reminder
    ```
+   - Dashboard: https://dashboard.convex.dev/d/proper-stoat-767
 
-3. **Install Dependencies**
+3. **Install Dependencies** ✅
    ```bash
-   npm install @notifee/react-native
+   npm install @notifee/react-native openai --legacy-peer-deps
    npx expo install expo-av expo-file-system
-   npm install openai
    ```
 
-4. **Create Basic Screens**
+4. **Create Basic Screens** ✅
    - Home Screen: Empty list + "Add Reminder" button
-   - Record Screen: Placeholder UI
+   - Record Screen: Mic button with tap to record/stop UI
 
-5. **Connect Convex Provider**
-   - Wrap app in `ConvexProvider`
-   - Verify connection in Convex dashboard
+5. **Connect Convex Provider** ✅
+   - Wrapped app in `ConvexProvider` in `app/_layout.tsx`
+   - EXPO_PUBLIC_CONVEX_URL set in `.env.local`
 
 ### Test Checklist
-- [ ] App builds and runs
-- [ ] Navigation between screens works
-- [ ] Convex connection verified
+- [x] App builds and runs
+- [x] Navigation between screens works (tabs)
+- [x] Convex connection verified
+
+### Notes
+- Project moved to `C:\Dev\VR` due to Windows path length limits
+- Using `--legacy-peer-deps` for npm installs due to React 19 peer dep conflicts
+- Added Notifee maven repo to `android/build.gradle`
 
 ---
 
