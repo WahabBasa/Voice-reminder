@@ -104,9 +104,11 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 
 ---
 
-## Phase 2: Audio Recording
+## Phase 2: Audio Recording ✅ COMPLETED
 
 **Goal:** Record user's voice and get audio file ready to send
+
+**Status:** Completed on 2025-12-03
 
 ### Tasks
 
@@ -144,10 +146,14 @@ A voice-based reminder app where users speak what they want to be reminded of, a
    ```
 
 ### Test Checklist
-- [ ] Permission prompt appears
-- [ ] Recording starts/stops correctly
-- [ ] Audio file URI logged to console
-- [ ] Recording indicator displays
+- [x] Permission prompt appears
+- [x] Recording starts/stops correctly
+- [x] Audio file URI logged to console
+- [x] Recording indicator displays
+
+### Notes
+- expo-av is deprecated (removed in SDK 54), replacement is `expo-audio`. Works fine for now.
+- Created `lib/audio.ts` with helper functions for cleaner code
 
 ---
 

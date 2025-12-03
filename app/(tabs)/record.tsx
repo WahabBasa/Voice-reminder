@@ -1,14 +1,58 @@
-import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import {
+  requestMicrophonePermission,
+  startRecording,
+  stopRecording,
+} from "../../lib/audio";
 
 export default function RecordScreen() {
   const [isRecording, setIsRecording] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [permissionDenied, setPermissionDenied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const handleRecordPress = () => {
-    setIsRecording(!isRecording);
-    // Recording logic will be added in Phase 2
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
+  const formatDuration = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const handleRecordPress = async () => {
+    if (isRecording) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      const uri = await stopRecording();
+      setIsRecording(false);
+      setDuration(0);
+      if (uri) {
+        console.log("Recording saved to:", uri);
+        Alert.alert("Recording Complete", `Saved to: ${uri}`);
+      }
+    } else {
+      const status = await requestMicrophonePermission();
+      if (status !== "granted") {
+        setPermissionDenied(true);
+        Alert.alert(
+          "Microphone Permission Required",
+          "Please enable microphone access in your device settings to record reminders."
+        );
+        return;
+      }
+      setPermissionDenied(false);
+      await startRecording();
+      setIsRecording(true);
+      timerRef.current = setInterval(() => {
+        setDuration((d) => d + 1);
+      }, 1000);
+    }
   };
 
   return (
@@ -18,8 +62,14 @@ export default function RecordScreen() {
         <Text style={styles.subtitle}>
           {isRecording
             ? "Listening... Speak your reminder"
-            : "Tap the microphone and speak your reminder"}
+            : permissionDenied
+              ? "Microphone access required"
+              : "Tap the microphone and speak your reminder"}
         </Text>
+
+        {isRecording && (
+          <Text style={styles.timer}>{formatDuration(duration)}</Text>
+        )}
 
         <View style={styles.micContainer}>
           {isRecording && <View style={styles.pulseRing} />}
@@ -69,7 +119,14 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: "#8E8E93",
     textAlign: "center",
-    marginBottom: 48,
+    marginBottom: 16,
+  },
+  timer: {
+    fontSize: 48,
+    fontWeight: "300",
+    color: "#FF3B30",
+    marginBottom: 32,
+    fontVariant: ["tabular-nums"],
   },
   micContainer: {
     position: "relative",

@@ -4,7 +4,7 @@
 
 **ALWAYS RUN THESE CHECKS BEFORE DEVELOPMENT:**
 
-1. **Check Current Date** - Run `date` command to verify today's date
+1. **Check Current Date/Time** - Run `Get-Date -Format "yyyy-MM-dd HH:mm"` (PowerShell)
 2. **Check Today's Devlog** - Look for `updates/YYYY-MM-DD_devlog.md`
 3. **Create Devlog if Missing** - If no devlog exists for today, create `updates/YYYY-MM-DD_devlog.md`
 4. **Read plan.md** - Review project plan, tech stack, and current phase status
