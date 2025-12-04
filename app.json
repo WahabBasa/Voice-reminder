@@ -19,11 +19,12 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#FAFAFA"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.wahabbasa.VoiceReminder"
+      "package": "com.wahabbasa.VoiceReminder",
+      "navigationBarColor": "#FAFAFA"
     },
     "web": {
       "favicon": "./assets/favicon.png"

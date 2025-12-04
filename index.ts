@@ -1,3 +1,4 @@
+import "react-native-gesture-handler";
 import notifee, { EventType } from "@notifee/react-native";
 import { handleNotificationEvent } from "./lib/notifications";
 

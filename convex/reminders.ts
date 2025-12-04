@@ -52,3 +52,18 @@ export const remove = mutation({
     await ctx.db.delete(args.id);
   },
 });
+
+export const update = mutation({
+  args: {
+    id: v.id("reminders"),
+    title: v.string(),
+    description: v.string(),
+    time: v.string(),
+    frequency: v.string(),
+    days: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const { id, ...updates } = args;
+    await ctx.db.patch(id, updates);
+  },
+});
