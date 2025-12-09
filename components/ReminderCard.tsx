@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, Pressable } from "react-native";
+import { View, Text, StyleSheet, Pressable, TouchableOpacity } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, {
   useAnimatedStyle,
@@ -6,7 +6,7 @@ import Animated, {
   withSpring,
 } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { colors, spacing, typography, shadows, borderRadius } from "../lib/theme";
+import { colors, spacing } from "../lib/theme";
 import { formatNextTrigger, getNextTriggerTime } from "../lib/time";
 
 interface ReminderCardProps {
@@ -15,8 +15,10 @@ interface ReminderCardProps {
   time: string;
   frequency: string;
   days?: string[];
+  isCompleted?: boolean;
   onPress: () => void;
   onDelete: () => void;
+  onMarkDone?: () => void;
 }
 
 const DELETE_THRESHOLD = -80;
@@ -26,8 +28,10 @@ export default function ReminderCard({
   time,
   frequency,
   days = [],
+  isCompleted = false,
   onPress,
   onDelete,
+  onMarkDone,
 }: ReminderCardProps) {
   const translateX = useSharedValue(0);
   const nextTrigger = getNextTriggerTime({ time, frequency, days });
@@ -61,9 +65,24 @@ export default function ReminderCard({
     onDelete();
   };
 
+  const DAY_ABBREV: Record<string, string> = {
+    mon: "Mon",
+    tue: "Tue",
+    wed: "Wed",
+    thu: "Thu",
+    fri: "Fri",
+    sat: "Sat",
+    sun: "Sun",
+  };
+
   const getFrequencyLabel = () => {
     if (frequency === "once") return "Once";
     if (frequency === "daily") return "Daily";
+    if (frequency === "custom" && days.length > 0) {
+      const dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+      const sortedDays = [...days].sort((a, b) => dayOrder.indexOf(a) - dayOrder.indexOf(b));
+      return sortedDays.map(d => DAY_ABBREV[d] || d).join(", ");
+    }
     if (frequency === "weekly") return "Weekly";
     return frequency;
   };
@@ -85,16 +104,40 @@ export default function ReminderCard({
               pressed && styles.cardPressed,
             ]}
           >
-            <Text style={styles.title} numberOfLines={1}>
-              {title}
-            </Text>
+            <View style={styles.iconBadge}>
+              <Ionicons name="notifications" size={24} color={colors.accent} />
+            </View>
 
-            <View style={styles.footer}>
-              <Text style={styles.nextText}>{nextTriggerStr}</Text>
-              <View style={styles.frequencyBadge}>
-                <Text style={styles.frequencyText}>{getFrequencyLabel()}</Text>
+            <View style={styles.infoContainer}>
+              <Text style={styles.title} numberOfLines={1}>
+                {title}
+              </Text>
+              <Text style={styles.frequencyText}>{getFrequencyLabel()} at {time}</Text>
+              <View style={styles.timeRow}>
+                <Ionicons name="time-outline" size={16} color="#666" />
+                <Text style={styles.nextText}>{nextTriggerStr}</Text>
               </View>
             </View>
+
+            {isCompleted ? (
+              <View style={styles.doneBadge}>
+                <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
+                <Text style={styles.doneText}>Done</Text>
+              </View>
+            ) : (
+              onMarkDone && (
+                <TouchableOpacity
+                  style={styles.doneButton}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    onMarkDone();
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="checkmark" size={20} color="#fff" />
+                </TouchableOpacity>
+              )
+            )}
           </Pressable>
         </Animated.View>
       </GestureDetector>
@@ -104,16 +147,16 @@ export default function ReminderCard({
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: spacing.sm,
+    marginBottom: 12,
   },
   deleteAction: {
     position: "absolute",
     right: 0,
     top: 0,
-    bottom: spacing.sm,
+    bottom: 12,
     width: 100,
     backgroundColor: colors.destructive,
-    borderRadius: borderRadius.md,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "flex-end",
     paddingRight: spacing.lg,
@@ -123,38 +166,77 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: colors.card,
-    borderRadius: borderRadius.md,
-    ...shadows.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 3,
   },
   cardContent: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
   },
   cardPressed: {
     opacity: 0.95,
   },
-  title: {
-    ...typography.bodyBold,
-    marginBottom: spacing.xs,
-  },
-  footer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  nextText: {
-    fontSize: 14,
-    color: colors.textSecondary,
-  },
-  frequencyBadge: {
+  iconBadge: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: colors.accentLight,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.sm,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 15,
+  },
+  infoContainer: {
+    flex: 1,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 4,
   },
   frequencyText: {
-    fontSize: 12,
-    fontWeight: "500",
-    color: colors.accent,
+    fontSize: 14,
+    color: "#666",
+    marginBottom: 4,
+  },
+  timeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  nextText: {
+    marginLeft: 5,
+    fontSize: 14,
+    color: "#666",
+  },
+  doneButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.accent,
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 10,
+  },
+  doneBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#E8F5E9",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginLeft: 10,
+  },
+  doneText: {
+    color: "#4CAF50",
+    fontWeight: "600",
+    fontSize: 14,
+    marginLeft: 4,
   },
 });

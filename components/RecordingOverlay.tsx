@@ -5,11 +5,13 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Modal,
-  Pressable,
+  Platform,
+  ScrollView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useState, useEffect, useRef } from "react";
-import { colors, spacing, typography, shadows, borderRadius } from "../lib/theme";
+import { colors, spacing } from "../lib/theme";
 import {
   requestMicrophonePermission,
   startRecording,
@@ -89,7 +91,7 @@ export default function RecordingOverlay({
     }
   };
 
-  const handleBackdropPress = () => {
+  const handleClose = () => {
     if (state === "idle") {
       onClose();
     }
@@ -105,81 +107,161 @@ export default function RecordingOverlay({
   return (
     <Modal
       visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={handleBackdropPress}
+      animationType="slide"
+      onRequestClose={handleClose}
     >
-      <Pressable style={styles.backdrop} onPress={handleBackdropPress}>
-        <Pressable style={styles.content} onPress={(e) => e.stopPropagation()}>
-          <View style={styles.card}>
+      <View style={styles.container}>
+        <LinearGradient
+          colors={colors.accentGradient}
+          style={styles.headerGradient}
+        />
+
+        <View style={styles.content}>
+          <View style={styles.header}>
             <TouchableOpacity
-              style={[
-                styles.micButton,
-                state === "recording" && styles.micButtonRecording,
-                state === "processing" && styles.micButtonProcessing,
-              ]}
-              onPress={handleMicPress}
-              activeOpacity={0.8}
-              disabled={state === "processing"}
+              onPress={handleClose}
+              style={styles.backButton}
+              disabled={state !== "idle"}
             >
-              {state === "processing" ? (
-                <ActivityIndicator size="large" color="#fff" />
-              ) : (
-                <Ionicons
-                  name={state === "recording" ? "stop" : "mic"}
-                  size={40}
-                  color="#fff"
-                />
-              )}
+              <Ionicons name="chevron-back" size={28} color={colors.accent} />
             </TouchableOpacity>
+            <Text style={styles.headerTitle}>New Reminder</Text>
+          </View>
 
-            {state === "recording" && (
-              <Text style={styles.timer}>{formatDuration(duration)}</Text>
-            )}
+          <ScrollView
+            style={styles.scrollContent}
+            contentContainerStyle={styles.scrollContainer}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.micSection}>
+              <TouchableOpacity
+                style={[
+                  styles.micButton,
+                  state === "recording" && styles.micButtonRecording,
+                  state === "processing" && styles.micButtonProcessing,
+                ]}
+                onPress={handleMicPress}
+                activeOpacity={0.8}
+                disabled={state === "processing"}
+              >
+                {state === "processing" ? (
+                  <ActivityIndicator size="large" color="#fff" />
+                ) : (
+                  <Ionicons
+                    name={state === "recording" ? "stop" : "mic"}
+                    size={48}
+                    color="#fff"
+                  />
+                )}
+              </TouchableOpacity>
 
-            <Text style={styles.statusText}>{getStatusText()}</Text>
+              {state === "recording" && (
+                <Text style={styles.timer}>{formatDuration(duration)}</Text>
+              )}
+
+              <Text style={styles.statusText}>{getStatusText()}</Text>
+            </View>
 
             {state === "idle" && !permissionDenied && (
-              <View style={styles.examples}>
+              <View style={styles.examplesCard}>
                 <Text style={styles.examplesTitle}>Try saying:</Text>
-                <Text style={styles.exampleText}>"Call mom tomorrow at 3pm"</Text>
-                <Text style={styles.exampleText}>"Take vitamins every morning at 9"</Text>
+                <View style={styles.exampleItem}>
+                  <Ionicons name="chatbubble-outline" size={18} color={colors.accent} />
+                  <Text style={styles.exampleText}>"Call mom tomorrow at 3pm"</Text>
+                </View>
+                <View style={styles.exampleItem}>
+                  <Ionicons name="chatbubble-outline" size={18} color={colors.accent} />
+                  <Text style={styles.exampleText}>"Take vitamins every morning at 9"</Text>
+                </View>
+                <View style={styles.exampleItem}>
+                  <Ionicons name="chatbubble-outline" size={18} color={colors.accent} />
+                  <Text style={styles.exampleText}>"Meeting on Monday at 2pm"</Text>
+                </View>
               </View>
             )}
-          </View>
-        </Pressable>
-      </Pressable>
+
+            {state === "processing" && (
+              <View style={styles.processingCard}>
+                <Text style={styles.processingTitle}>Processing your voice...</Text>
+                <Text style={styles.processingSubtitle}>
+                  Transcribing and creating your reminder
+                </Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
+  container: {
     flex: 1,
-    backgroundColor: colors.overlay,
-    justifyContent: "center",
-    alignItems: "center",
+    backgroundColor: "#f8f9fa",
+  },
+  headerGradient: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: Platform.OS === "ios" ? 140 : 120,
   },
   content: {
-    width: "85%",
-    maxWidth: 340,
+    flex: 1,
+    paddingTop: Platform.OS === "ios" ? 50 : 30,
   },
-  card: {
-    backgroundColor: colors.card,
-    borderRadius: borderRadius.lg,
-    padding: spacing.xl,
+  header: {
+    flexDirection: "row",
     alignItems: "center",
-    ...shadows.card,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    zIndex: 1,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "white",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: "white",
+    marginLeft: 15,
+  },
+  scrollContent: {
+    flex: 1,
+  },
+  scrollContainer: {
+    padding: 20,
+    alignItems: "center",
+  },
+  micSection: {
+    alignItems: "center",
+    marginTop: 40,
+    marginBottom: 40,
   },
   micButton: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
     backgroundColor: colors.accent,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: spacing.md,
-    ...shadows.fab,
+    marginBottom: spacing.lg,
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
   },
   micButtonRecording: {
     backgroundColor: colors.destructive,
@@ -190,29 +272,65 @@ const styles = StyleSheet.create({
     shadowColor: colors.textSecondary,
   },
   timer: {
-    fontSize: 36,
+    fontSize: 48,
     fontWeight: "300",
     color: colors.destructive,
     marginBottom: spacing.sm,
     fontVariant: ["tabular-nums"],
   },
   statusText: {
-    ...typography.body,
+    fontSize: 18,
     color: colors.textSecondary,
     textAlign: "center",
-    marginBottom: spacing.md,
   },
-  examples: {
-    alignItems: "center",
+  examplesCard: {
+    width: "100%",
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   examplesTitle: {
-    ...typography.caption,
-    marginBottom: spacing.xs,
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#333",
+    marginBottom: 16,
+  },
+  exampleItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
   },
   exampleText: {
-    fontSize: 13,
-    color: colors.textSecondary,
+    fontSize: 15,
+    color: "#666",
     fontStyle: "italic",
-    marginBottom: 2,
+    marginLeft: 10,
+  },
+  processingCard: {
+    width: "100%",
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 24,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+  },
+  processingTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 8,
+  },
+  processingSubtitle: {
+    fontSize: 14,
+    color: "#666",
+    textAlign: "center",
   },
 });

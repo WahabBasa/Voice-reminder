@@ -1,10 +1,12 @@
 export const colors = {
-  background: "#FAFAFA",
+  background: "#f8f9fa",
   card: "#FFFFFF",
   textPrimary: "#1A1A1A",
   textSecondary: "#6B6B6B",
   accent: "#4A90D9",
+  accentDark: "#3A7BC8",
   accentLight: "#E8F1FA",
+  accentGradient: ["#4A90D9", "#3A7BC8"] as [string, string],
   success: "#34C759",
   destructive: "#FF3B30",
   muted: "#E5E5E5",

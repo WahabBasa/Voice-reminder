@@ -1,26 +1,15 @@
 import { View, Text, StyleSheet } from "react-native";
-import WheelPicker from "@quidone/react-native-wheel-picker";
-import { colors, spacing, borderRadius } from "../lib/theme";
+import ScrollSelector from "./ScrollSelector";
+import { colors, borderRadius } from "../lib/theme";
 
 interface TimePickerProps {
   value: Date;
   onChange: (date: Date) => void;
 }
 
-const hours = Array.from({ length: 12 }, (_, i) => ({
-  value: i + 1,
-  label: String(i + 1),
-}));
-
-const minutes = Array.from({ length: 60 }, (_, i) => ({
-  value: i,
-  label: i.toString().padStart(2, "0"),
-}));
-
-const periods = [
-  { value: "AM", label: "AM" },
-  { value: "PM", label: "PM" },
-];
+const hours = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, "0"));
+const minutes = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
+const periods = ["AM", "PM"];
 
 export default function TimePicker({ value, onChange }: TimePickerProps) {
   const currentHour = value.getHours();
@@ -39,33 +28,47 @@ export default function TimePicker({ value, onChange }: TimePickerProps) {
 
   return (
     <View style={styles.container}>
-      <WheelPicker
-        data={hours}
-        value={hour12}
-        onValueChanged={({ item }) => updateTime(item.value, minute, isPM)}
-        width={70}
-        itemHeight={44}
-        itemTextStyle={styles.itemText}
+      <ScrollSelector
+        dataSource={hours}
+        selectedIndex={hour12 - 1}
+        onValueChange={(val) => {
+          const newHour = parseInt(val, 10);
+          updateTime(newHour, minute, isPM);
+        }}
+        wrapperHeight={150}
+        wrapperWidth={70}
+        itemHeight={50}
+        highlightColor="#e0e0e0"
+        highlightBorderWidth={1}
       />
-      
+
       <Text style={styles.separator}>:</Text>
-      
-      <WheelPicker
-        data={minutes}
-        value={minute}
-        onValueChanged={({ item }) => updateTime(hour12, item.value, isPM)}
-        width={70}
-        itemHeight={44}
-        itemTextStyle={styles.itemText}
+
+      <ScrollSelector
+        dataSource={minutes}
+        selectedIndex={minute}
+        onValueChange={(val) => {
+          const newMinute = parseInt(val, 10);
+          updateTime(hour12, newMinute, isPM);
+        }}
+        wrapperHeight={150}
+        wrapperWidth={70}
+        itemHeight={50}
+        highlightColor="#e0e0e0"
+        highlightBorderWidth={1}
       />
-      
-      <WheelPicker
-        data={periods}
-        value={isPM ? "PM" : "AM"}
-        onValueChanged={({ item }) => updateTime(hour12, minute, item.value === "PM")}
-        width={70}
-        itemHeight={44}
-        itemTextStyle={styles.itemText}
+
+      <ScrollSelector
+        dataSource={periods}
+        selectedIndex={isPM ? 1 : 0}
+        onValueChange={(val) => {
+          updateTime(hour12, minute, val === "PM");
+        }}
+        wrapperHeight={150}
+        wrapperWidth={60}
+        itemHeight={50}
+        highlightColor="#e0e0e0"
+        highlightBorderWidth={1}
       />
     </View>
   );
@@ -78,16 +81,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.background,
     borderRadius: borderRadius.md,
-    paddingVertical: spacing.sm,
   },
   separator: {
     fontSize: 28,
     fontWeight: "600",
     color: colors.textPrimary,
-    marginHorizontal: spacing.xs,
-  },
-  itemText: {
-    fontSize: 22,
-    color: colors.textPrimary,
+    marginHorizontal: 4,
   },
 });

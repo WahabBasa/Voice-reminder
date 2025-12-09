@@ -5,14 +5,18 @@ import {
   StyleSheet,
   TouchableOpacity,
   TextInput,
+  Dimensions,
 } from "react-native";
 import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import Slider from "@react-native-community/slider";
 import { Audio } from "expo-av";
-import { colors, spacing, typography, borderRadius } from "../lib/theme";
+import { colors, spacing } from "../lib/theme";
 import DaySelector from "./DaySelector";
 import TimePicker from "./TimePicker";
+
+const { width } = Dimensions.get("window");
 
 export interface ReminderData {
   id: string;
@@ -29,19 +33,19 @@ interface DetailSheetProps {
   reminder: ReminderData | null;
   onClose: () => void;
   onSave?: (data: ReminderData) => void;
+  onDelete?: (id: string) => void;
 }
 
 const FREQUENCIES = [
-  { value: "once", label: "Once" },
-  { value: "daily", label: "Daily" },
-  { value: "weekly", label: "Weekly" },
+  { value: "once", label: "Once", icon: "sunny-outline" as const },
+  { value: "daily", label: "Daily", icon: "sync-outline" as const },
+  { value: "custom", label: "Custom", icon: "calendar-outline" as const },
 ];
 
 const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
-  ({ reminder, onClose, onSave }, ref) => {
+  ({ reminder, onClose, onSave, onDelete }, ref) => {
     const snapPoints = useMemo(() => ["90%"], []);
 
-    // Editable state
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
     const [time, setTime] = useState(new Date());
@@ -50,8 +54,8 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
     const [volume, setVolume] = useState(0.8);
     const [sound, setSound] = useState<Audio.Sound | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
+    const [showTimePicker, setShowTimePicker] = useState(false);
 
-    // Update state when reminder changes
     useEffect(() => {
       if (reminder) {
         setTitle(reminder.title || "");
@@ -59,7 +63,6 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
         setFrequency(reminder.frequency || "once");
         setDays(reminder.days || []);
         
-        // Parse time string to Date
         if (reminder.time) {
           const [hours, minutes] = reminder.time.split(":").map(Number);
           const date = new Date();
@@ -69,7 +72,6 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
       }
     }, [reminder]);
 
-    // Cleanup sound on unmount
     useEffect(() => {
       return () => {
         if (sound) {
@@ -147,10 +149,22 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
         description,
         time: timeStr,
         frequency,
-        days: frequency === "weekly" ? days : [],
+        days: frequency === "custom" ? days : [],
       });
 
       (ref as any)?.current?.dismiss();
+    };
+
+    const handleCancel = () => {
+      (ref as any)?.current?.dismiss();
+    };
+
+    const formatTime = (date: Date) => {
+      return date.toLocaleTimeString("default", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
     };
 
     const hasChanges = () => {
@@ -184,41 +198,48 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
         <BottomSheetScrollView style={styles.content} showsVerticalScrollIndicator={false}>
           {reminder ? (
             <>
-              {/* Title */}
-              <View style={styles.field}>
-                <Text style={styles.label}>Title</Text>
-                <TextInput
-                  style={styles.input}
-                  value={title}
-                  onChangeText={setTitle}
-                  placeholder="Reminder title"
-                  placeholderTextColor={colors.textSecondary}
-                />
+              {/* Title Input */}
+              <View style={styles.section}>
+                <View style={styles.inputContainer}>
+                  <TextInput
+                    style={styles.mainInput}
+                    value={title}
+                    onChangeText={setTitle}
+                    placeholder="Reminder Title"
+                    placeholderTextColor="#999"
+                  />
+                </View>
               </View>
 
-              {/* Time - Wheel Picker */}
-              <View style={styles.field}>
-                <Text style={styles.label}>Time</Text>
-                <TimePicker value={time} onChange={setTime} />
-              </View>
-
-              {/* Frequency */}
-              <View style={styles.field}>
-                <Text style={styles.label}>Repeats</Text>
-                <View style={styles.frequencyOptions}>
+              {/* How often? */}
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>How often?</Text>
+                <View style={styles.optionsGrid}>
                   {FREQUENCIES.map((f) => (
                     <TouchableOpacity
                       key={f.value}
                       style={[
-                        styles.frequencyOption,
-                        frequency === f.value && styles.frequencyOptionActive,
+                        styles.optionCard,
+                        frequency === f.value && styles.selectedOptionCard,
                       ]}
                       onPress={() => setFrequency(f.value)}
                     >
+                      <View
+                        style={[
+                          styles.optionIcon,
+                          frequency === f.value && styles.selectedOptionIcon,
+                        ]}
+                      >
+                        <Ionicons
+                          name={f.icon}
+                          size={24}
+                          color={frequency === f.value ? "white" : "#666"}
+                        />
+                      </View>
                       <Text
                         style={[
-                          styles.frequencyText,
-                          frequency === f.value && styles.frequencyTextActive,
+                          styles.optionLabel,
+                          frequency === f.value && styles.selectedOptionLabel,
                         ]}
                       >
                         {f.label}
@@ -228,10 +249,10 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
                 </View>
               </View>
 
-              {/* Days (for weekly) */}
-              {frequency === "weekly" && (
-                <View style={styles.field}>
-                  <Text style={styles.label}>Days</Text>
+              {/* Days (for custom) */}
+              {frequency === "custom" && (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>Which days?</Text>
                   <DaySelector
                     selectedDays={days}
                     onToggle={handleDayToggle}
@@ -239,81 +260,132 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
                 </View>
               )}
 
-              {/* Divider */}
-              <View style={styles.divider} />
+              {/* Time */}
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>What time?</Text>
+                {showTimePicker ? (
+                  <View style={styles.timePickerWrapper}>
+                    <TimePicker value={time} onChange={setTime} />
+                    <TouchableOpacity
+                      style={styles.doneButton}
+                      onPress={() => setShowTimePicker(false)}
+                    >
+                      <Text style={styles.doneButtonText}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.timeButton}
+                    onPress={() => setShowTimePicker(true)}
+                  >
+                    <View style={styles.timeIconContainer}>
+                      <Ionicons name="time-outline" size={20} color={colors.accent} />
+                    </View>
+                    <Text style={styles.timeButtonText}>{formatTime(time)}</Text>
+                    <Ionicons name="chevron-forward" size={20} color="#666" />
+                  </TouchableOpacity>
+                )}
+              </View>
 
               {/* Voice Preview */}
               {reminder.audioUrl && (
-                <View style={styles.field}>
-                  <Text style={styles.label}>Voice Preview</Text>
-                  <View style={styles.previewContainer}>
-                    <Text style={styles.previewText} numberOfLines={2}>
-                      "{description || "No description"}"
-                    </Text>
-                    <TouchableOpacity
-                      style={styles.playButton}
-                      onPress={handlePlayPreview}
-                    >
-                      <Ionicons
-                        name={isPlaying ? "stop" : "play"}
-                        size={24}
-                        color="#fff"
-                      />
-                    </TouchableOpacity>
-                  </View>
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>Voice Preview</Text>
+                  <View style={styles.card}>
+                    <View style={styles.previewRow}>
+                      <View style={styles.previewTextContainer}>
+                        <Text style={styles.previewText} numberOfLines={2}>
+                          "{description || "No description"}"
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.playButton}
+                        onPress={handlePlayPreview}
+                      >
+                        <Ionicons
+                          name={isPlaying ? "stop" : "play"}
+                          size={24}
+                          color="#fff"
+                        />
+                      </TouchableOpacity>
+                    </View>
 
-                  {/* Volume Slider */}
-                  <View style={styles.volumeContainer}>
-                    <Ionicons name="volume-low" size={18} color={colors.textSecondary} />
-                    <Slider
-                      style={styles.slider}
-                      minimumValue={0}
-                      maximumValue={1}
-                      value={volume}
-                      onSlidingComplete={async (newVolume) => {
-                        setVolume(newVolume);
-                        if (sound) {
-                          await sound.setVolumeAsync(newVolume);
-                        }
-                      }}
-                      minimumTrackTintColor={colors.accent}
-                      maximumTrackTintColor={colors.muted}
-                      thumbTintColor={colors.accent}
-                    />
-                    <Ionicons name="volume-high" size={18} color={colors.textSecondary} />
+                    <View style={styles.volumeContainer}>
+                      <Ionicons name="volume-low" size={18} color="#666" />
+                      <Slider
+                        style={styles.slider}
+                        minimumValue={0}
+                        maximumValue={1}
+                        value={volume}
+                        onSlidingComplete={async (newVolume) => {
+                          setVolume(newVolume);
+                          if (sound) {
+                            await sound.setVolumeAsync(newVolume);
+                          }
+                        }}
+                        minimumTrackTintColor={colors.accent}
+                        maximumTrackTintColor="#ddd"
+                        thumbTintColor={colors.accent}
+                      />
+                      <Ionicons name="volume-high" size={18} color="#666" />
+                    </View>
                   </View>
                 </View>
               )}
 
-              {/* Description (editable) */}
-              <View style={styles.field}>
-                <Text style={styles.label}>What to say</Text>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  value={description}
-                  onChangeText={setDescription}
-                  placeholder="What should the reminder say?"
-                  placeholderTextColor={colors.textSecondary}
-                  multiline
-                  numberOfLines={3}
-                />
+              {/* Description */}
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>What to say</Text>
+                <View style={styles.textAreaContainer}>
+                  <TextInput
+                    style={styles.textArea}
+                    value={description}
+                    onChangeText={setDescription}
+                    placeholder="What should the reminder say?"
+                    placeholderTextColor="#999"
+                    multiline
+                    numberOfLines={3}
+                    textAlignVertical="top"
+                  />
+                </View>
               </View>
 
-              {/* Save Button */}
-              {(hasChanges() || reminder.isNew) && (
+              {/* Footer Buttons */}
+              <View style={styles.footer}>
+                {(hasChanges() || reminder.isNew) && (
+                  <TouchableOpacity
+                    style={styles.saveButton}
+                    onPress={handleSave}
+                    activeOpacity={0.8}
+                  >
+                    <LinearGradient
+                      colors={colors.accentGradient}
+                      style={styles.saveButtonGradient}
+                    >
+                      <Text style={styles.saveButtonText}>
+                        {reminder.isNew ? "Create Reminder" : "Save Changes"}
+                      </Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
-                  style={styles.saveButton}
-                  onPress={handleSave}
-                  activeOpacity={0.8}
+                  style={styles.cancelButton}
+                  onPress={handleCancel}
                 >
-                  <Text style={styles.saveButtonText}>
-                    {reminder.isNew ? "Create Reminder" : "Save Changes"}
-                  </Text>
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
                 </TouchableOpacity>
-              )}
+                {!reminder.isNew && onDelete && (
+                  <TouchableOpacity
+                    style={styles.deleteButton}
+                    onPress={() => onDelete(reminder.id)}
+                  >
+                    <Ionicons name="trash-outline" size={20} color="#FF5252" />
+                    <Text style={styles.deleteButtonText}>Delete Reminder</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
 
-              {/* Extra padding for bottom nav bar */}
-              <View style={{ height: 100 }} />
+              <View style={{ height: 50 }} />
             </>
           ) : (
             <View style={styles.emptyContent}>
@@ -332,17 +404,17 @@ export default DetailSheet;
 
 const styles = StyleSheet.create({
   background: {
-    backgroundColor: colors.card,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: "#f8f9fa",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
   },
   handleIndicator: {
-    backgroundColor: colors.muted,
+    backgroundColor: "#ddd",
     width: 40,
   },
   content: {
     flex: 1,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: 20,
   },
   emptyContent: {
     flex: 1,
@@ -351,75 +423,154 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xl,
   },
   emptyText: {
-    color: colors.textSecondary,
+    color: "#666",
   },
-  field: {
-    marginBottom: spacing.lg,
+  section: {
+    marginBottom: 25,
   },
-  label: {
-    ...typography.caption,
-    fontWeight: "600",
-    marginBottom: spacing.sm,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    marginBottom: 15,
   },
-  input: {
-    backgroundColor: colors.background,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    fontSize: 16,
-    color: colors.textPrimary,
+  inputContainer: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  textArea: {
-    minHeight: 80,
-    textAlignVertical: "top",
+  mainInput: {
+    fontSize: 18,
+    color: "#333",
+    padding: 15,
   },
-  frequencyOptions: {
+  optionsGrid: {
     flexDirection: "row",
-    gap: spacing.sm,
+    gap: 10,
   },
-  frequencyOption: {
+  optionCard: {
     flex: 1,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: borderRadius.md,
-    backgroundColor: colors.background,
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 15,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  frequencyOptionActive: {
+  selectedOptionCard: {
     backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
-  frequencyText: {
+  optionIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "#f5f5f5",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  selectedOptionIcon: {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+  },
+  optionLabel: {
     fontSize: 14,
-    fontWeight: "500",
-    color: colors.textSecondary,
+    fontWeight: "600",
+    color: "#333",
   },
-  frequencyTextActive: {
-    color: "#fff",
+  selectedOptionLabel: {
+    color: "white",
   },
-  divider: {
-    height: 1,
-    backgroundColor: colors.border,
-    marginVertical: spacing.md,
-  },
-  previewContainer: {
+  timeButton: {
     flexDirection: "row",
     alignItems: "center",
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  timeIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: colors.accentLight,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    gap: spacing.md,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  timeButtonText: {
+    flex: 1,
+    fontSize: 16,
+    color: "#333",
+  },
+  timePickerWrapper: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+  },
+  doneButton: {
+    alignSelf: "flex-end",
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    backgroundColor: colors.accent,
+    borderRadius: 8,
+    marginTop: 10,
+  },
+  doneButtonText: {
+    color: "white",
+    fontWeight: "600",
+  },
+  card: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  previewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  previewTextContainer: {
+    flex: 1,
+    backgroundColor: colors.accentLight,
+    borderRadius: 12,
+    padding: 12,
+    marginRight: 12,
   },
   previewText: {
-    flex: 1,
     fontSize: 14,
     fontStyle: "italic",
-    color: colors.textPrimary,
+    color: "#333",
   },
   playButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: colors.accent,
     justifyContent: "center",
     alignItems: "center",
@@ -427,23 +578,77 @@ const styles = StyleSheet.create({
   volumeContainer: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: spacing.sm,
-    gap: spacing.sm,
+    marginTop: 12,
   },
   slider: {
     flex: 1,
     height: 40,
+    marginHorizontal: 8,
+  },
+  textAreaContainer: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  textArea: {
+    minHeight: 100,
+    padding: 15,
+    fontSize: 16,
+    color: "#333",
+  },
+  footer: {
+    marginTop: 10,
   },
   saveButton: {
-    backgroundColor: colors.accent,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
+    borderRadius: 16,
+    overflow: "hidden",
+    marginBottom: 12,
+  },
+  saveButtonGradient: {
+    paddingVertical: 15,
+    justifyContent: "center",
     alignItems: "center",
-    marginTop: spacing.md,
   },
   saveButtonText: {
-    color: "#fff",
+    color: "white",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  cancelButton: {
+    paddingVertical: 15,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "white",
+  },
+  cancelButtonText: {
+    color: "#666",
     fontSize: 16,
     fontWeight: "600",
+  },
+  deleteButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 15,
+    borderRadius: 16,
+    marginTop: 12,
+    backgroundColor: "#FFF5F5",
+    borderWidth: 1,
+    borderColor: "#FFCDD2",
+  },
+  deleteButtonText: {
+    color: "#FF5252",
+    fontSize: 16,
+    fontWeight: "600",
+    marginLeft: 8,
   },
 });
