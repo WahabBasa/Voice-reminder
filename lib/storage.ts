@@ -6,6 +6,7 @@ const HISTORY_KEY = "@reminder_history";
 // Reminder type (local storage version)
 export interface Reminder {
   id: string;
+  convexId?: string;
   title: string;
   description: string;
   time: string;
@@ -13,6 +14,8 @@ export interface Reminder {
   days: string[];
   audioUrl?: string;
   createdAt: string;
+  soundRepeatMode?: "count" | "until_stopped";
+  soundRepeatCount?: number;
 }
 
 // Reminder CRUD functions
@@ -33,6 +36,8 @@ export async function addReminder(reminder: Omit<Reminder, "id" | "createdAt">):
       ...reminder,
       id: Math.random().toString(36).substr(2, 9),
       createdAt: new Date().toISOString(),
+      soundRepeatMode: reminder.soundRepeatMode || "count",
+      soundRepeatCount: reminder.soundRepeatCount ?? 1,
     };
     reminders.push(newReminder);
     await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(reminders));
@@ -48,7 +53,11 @@ export async function updateReminder(updatedReminder: Reminder): Promise<void> {
     const reminders = await getReminders();
     const index = reminders.findIndex((r) => r.id === updatedReminder.id);
     if (index !== -1) {
-      reminders[index] = updatedReminder;
+      reminders[index] = {
+        ...updatedReminder,
+        soundRepeatMode: updatedReminder.soundRepeatMode || "count",
+        soundRepeatCount: updatedReminder.soundRepeatCount ?? 1,
+      };
       await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(reminders));
     }
   } catch (error) {

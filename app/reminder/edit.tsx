@@ -10,10 +10,12 @@ import {
   Alert,
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
+import { useMutation } from "convex/react";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import Slider from "@react-native-community/slider";
 import { Audio } from "expo-av";
+import { api } from "../../convex/_generated/api";
 import { colors, spacing } from "../../lib/theme";
 import {
   getReminders,
@@ -25,6 +27,13 @@ import { cancelReminder, scheduleReminder } from "../../lib/notifications";
 import DaySelector from "../../components/DaySelector";
 import TimePicker from "../../components/TimePicker";
 
+const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: number }[] = [
+  { label: "1x", mode: "count", count: 1 },
+  { label: "2x", mode: "count", count: 2 },
+  { label: "3x", mode: "count", count: 3 },
+  { label: "Until stopped", mode: "until_stopped" },
+];
+
 const FREQUENCIES = [
   { value: "once", label: "Once", icon: "sunny-outline" as const },
   { value: "daily", label: "Daily", icon: "sync-outline" as const },
@@ -34,6 +43,8 @@ const FREQUENCIES = [
 export default function EditReminderScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const updateConvexReminder = useMutation(api.reminders.update);
+  const removeConvexReminder = useMutation(api.reminders.remove);
 
   const [reminder, setReminder] = useState<Reminder | null>(null);
   const [title, setTitle] = useState("");
@@ -44,17 +55,21 @@ export default function EditReminderScreen() {
   const [volume, setVolume] = useState(0.8);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("count");
+  const [soundRepeatCount, setSoundRepeatCount] = useState<number>(1);
 
   const loadReminder = useCallback(async () => {
     if (!id) return;
     const reminders = await getReminders();
     const found = reminders.find((r) => r.id === id);
-    if (found) {
-      setReminder(found);
-      setTitle(found.title || "");
-      setDescription(found.description || "");
-      setFrequency(found.frequency || "once");
-      setDays(found.days || []);
+      if (found) {
+        setReminder(found);
+        setTitle(found.title || "");
+        setDescription(found.description || "");
+        setFrequency(found.frequency === "weekly" ? "custom" : (found.frequency || "once"));
+        setDays(found.days || []);
+        setSoundRepeatMode(found.soundRepeatMode || "count");
+        setSoundRepeatCount(found.soundRepeatCount ?? 1);
 
       if (found.time) {
         const [hours, minutes] = found.time.split(":").map(Number);
@@ -128,9 +143,24 @@ export default function EditReminderScreen() {
       time: timeStr,
       frequency,
       days: frequency === "custom" ? days : [],
+      soundRepeatMode,
+      soundRepeatCount,
     };
 
     try {
+      if (reminder.convexId) {
+        await updateConvexReminder({
+          id: reminder.convexId as any,
+          title,
+          description,
+          time: timeStr,
+          frequency,
+          days: frequency === "custom" ? days : undefined,
+          soundRepeatMode,
+          soundRepeatCount,
+        });
+      }
+
       await updateReminderStorage(updatedReminder);
 
       // Reschedule notification
@@ -144,6 +174,8 @@ export default function EditReminderScreen() {
           frequency,
           days: frequency === "custom" ? days : [],
           audioUrl: reminder.audioUrl,
+          soundRepeatMode,
+          soundRepeatCount,
         });
       }
 
@@ -167,6 +199,14 @@ export default function EditReminderScreen() {
             await cancelReminder(reminder.id);
           } catch (e) {
             console.log("[VR] Failed to cancel notification:", e);
+          }
+
+          if (reminder.convexId) {
+            try {
+              await removeConvexReminder({ id: reminder.convexId as any });
+            } catch (e) {
+              console.log("[VR] Failed to delete Convex reminder:", e);
+            }
           }
           await deleteReminderStorage(reminder.id);
           router.back();
@@ -195,7 +235,9 @@ export default function EditReminderScreen() {
       description !== reminder.description ||
       timeStr !== reminder.time ||
       frequency !== reminder.frequency ||
-      currentDays !== originalDays
+      currentDays !== originalDays ||
+      (reminder.soundRepeatMode || "count") !== soundRepeatMode ||
+      (reminder.soundRepeatCount ?? 1) !== soundRepeatCount
     );
   };
 
@@ -292,6 +334,37 @@ export default function EditReminderScreen() {
           <Text style={styles.sectionTitle}>What time?</Text>
           <View style={styles.timePickerWrapper}>
             <TimePicker value={time} onChange={setTime} />
+          </View>
+        </View>
+
+        {/* Sound repeats */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Sound repeats</Text>
+          <View style={styles.repeatRow}>
+            {REPEAT_OPTIONS.map((opt) => {
+              const active =
+                opt.mode === soundRepeatMode &&
+                (opt.mode !== "count" || opt.count === soundRepeatCount);
+              return (
+                <TouchableOpacity
+                  key={opt.label}
+                  style={[styles.repeatChip, active && styles.repeatChipActive]}
+                  onPress={() => {
+                    setSoundRepeatMode(opt.mode);
+                    if (opt.count) setSoundRepeatCount(opt.count);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.repeatChipText,
+                      active && styles.repeatChipTextActive,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
 
@@ -487,6 +560,32 @@ const styles = StyleSheet.create({
     padding: 15,
     borderWidth: 1,
     borderColor: "#e0e0e0",
+  },
+  repeatRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 8,
+  },
+  repeatChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    backgroundColor: "white",
+  },
+  repeatChipActive: {
+    backgroundColor: colors.accentLight,
+    borderColor: colors.accent,
+  },
+  repeatChipText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#444",
+  },
+  repeatChipTextActive: {
+    color: colors.accent,
   },
   card: {
     backgroundColor: "white",

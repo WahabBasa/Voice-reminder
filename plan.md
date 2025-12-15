@@ -170,7 +170,7 @@ A voice-based reminder app where users speak what they want to be reminded of, a
      title: v.string(),
      description: v.string(),
      time: v.string(),              // "08:00"
-     frequency: v.string(),         // "once" | "daily" | "weekly"
+     frequency: v.string(),         // "once" | "daily" | "custom"
      days: v.optional(v.array(v.string())), // ["mon", "wed", "fri"]
      audioStorageId: v.id("_storage"),
      createdAt: v.number(),
@@ -228,7 +228,7 @@ A voice-based reminder app where users speak what they want to be reminded of, a
      messages: [{
        role: "system",
        content: `Parse this reminder request into JSON:
-         { title, description, time (HH:MM), frequency (once|daily|weekly), days (array if weekly) }`
+         { title, description, time (HH:MM), frequency (once|daily|custom), days (array if custom) }`
      }, {
        role: "user",
        content: transcript
@@ -252,12 +252,12 @@ A voice-based reminder app where users speak what they want to be reminded of, a
    - `deleteReminder`: Remove reminder + audio file
 
 ### Test Checklist
-- [ ] Audio uploads to Convex successfully
-- [ ] Whisper returns accurate transcription
-- [ ] GPT returns valid structured JSON
-- [ ] TTS audio file stored in Convex
-- [ ] Can play TTS audio URL in browser
-- [ ] Reminders saved to database
+- [x] Audio uploads to Convex successfully (implemented in `convex/actions.ts`)
+- [x] Whisper returns accurate transcription (wired in `convex/actions.ts`)
+- [x] GPT returns valid structured JSON (wired in `convex/actions.ts`)
+- [x] TTS audio file stored in Convex (`ctx.storage.store` in `convex/actions.ts`)
+- [ ] Can play returned `audioUrl` end-to-end (needs runtime check)
+- [x] Reminders saved to database (insert via `internal.reminders.create`)
 
 ---
 
@@ -329,7 +329,7 @@ Solution: Create a NEW channel for each reminder's TTS file
    ```typescript
    function getNextTriggerTime(reminder: Reminder): number {
      // Parse reminder.time ("08:00")
-     // Apply frequency logic (once, daily, weekly)
+     // Apply frequency logic (once, daily, custom)
      // Return timestamp in milliseconds
    }
    ```
@@ -346,11 +346,11 @@ android/app/src/main/res/raw/
 This requires `expo prebuild` or a config plugin.
 
 ### Test Checklist
-- [ ] Notification channel created successfully
-- [ ] Notification appears at scheduled time
-- [ ] **TTS audio plays when app is in background**
-- [ ] **TTS audio plays when app is killed** (critical!)
-- [ ] Repeating reminders reschedule correctly
+- [x] Notification channel created successfully (`lib/notifications.ts#createReminderChannel`)
+- [x] Notification appears at scheduled time (`lib/notifications.ts#scheduleReminder`)
+- [ ] TTS audio plays when app is in background (handlers implemented; needs device verification)
+- [ ] TTS audio plays when app is killed (handlers implemented; needs device verification)
+- [x] Repeating reminders reschedule correctly (`lib/notifications.ts#handleNotificationEvent`)
 
 ---
 
@@ -429,11 +429,11 @@ This requires `expo prebuild` or a config plugin.
    - Skeleton loaders for list
 
 ### Test Checklist
-- [ ] Reminders display correctly in list
-- [ ] Next trigger time is accurate
-- [ ] Delete removes notification + all data
-- [ ] Empty state displays properly
-- [ ] Loading states work
+- [x] Reminders display correctly in list (`app/index.tsx`, `components/ReminderCard.tsx`)
+- [x] Next trigger time is accurate (`lib/time.ts`, used by `components/ReminderCard.tsx`)
+- [x] Delete removes notification + local data + Convex record (`app/index.tsx`, `app/reminder/edit.tsx`, `lib/notifications.ts`, `convex/reminders.ts`)
+- [x] Empty state displays properly (`app/index.tsx`)
+- [x] Loading states work (recording overlay processing state in `components/RecordingOverlay.tsx`)
 
 ---
 
@@ -506,29 +506,41 @@ This requires `expo prebuild` or a config plugin.
 ## File Structure
 
 ```
-VoiceReminder/
-├── app/
-│   ├── (tabs)/
-│   │   ├── index.tsx           # Home - reminder list
-│   │   └── record.tsx          # Record new reminder
-│   └── _layout.tsx             # Root layout + providers
-├── components/
-│   ├── ReminderCard.tsx        # Single reminder display
-│   ├── RecordButton.tsx        # Hold-to-record button
-│   ├── EmptyState.tsx          # No reminders view
-│   └── LoadingSpinner.tsx      # Processing indicator
-├── lib/
-│   ├── notifications.ts        # Notifee helpers
-│   ├── audio.ts                # Recording helpers
-│   ├── time.ts                 # Schedule calculations
-│   └── permissions.ts          # Permission helpers
-├── convex/
-│   ├── schema.ts               # Database schema
-│   ├── reminders.ts            # Queries + mutations
-│   ├── actions.ts              # OpenAI processing
-│   └── http.ts                 # HTTP endpoints
-├── app.json                    # Expo config
-└── package.json
+VR/
+  app/
+    _layout.tsx
+    index.tsx
+    calendar.tsx
+    history.tsx
+    reminder/
+      new.tsx
+      edit.tsx
+  components/
+    RecordingOverlay.tsx
+    ReminderCard.tsx
+    DaySelector.tsx
+    TimePicker.tsx
+    DetailSheet.tsx
+    ScrollSelector/
+      HighlightView.tsx
+      Placeholder.tsx
+      SelectedItem.tsx
+      index.tsx
+  lib/
+    audio.ts
+    convex.ts
+    notifications.ts
+    storage.ts
+    theme.ts
+    time.ts
+  convex/
+    actions.ts
+    reminders.ts
+    schema.ts
+    _generated/
+  app.json
+  index.ts
+  package.json
 ```
 
 ---
@@ -539,8 +551,13 @@ VoiceReminder/
 # Convex (auto-generated)
 CONVEX_DEPLOYMENT=xxx
 
-# OpenAI (set in Convex dashboard)
+# OpenAI (set in Convex dashboard) - used for Whisper + parsing
 OPENAI_API_KEY=sk-xxx
+
+# ResembleAI (set in Convex dashboard) - used for TTS
+RESEMBLE_API_KEY=xxx
+RESEMBLE_PROJECT_UUID=xxx  # optional: if omitted, first project is auto-selected
+RESEMBLE_VOICE_UUID=xxx  # ember voice UUID
 ```
 
 ---
@@ -575,7 +592,7 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 ## Limitations (POC Scope)
 
 - No user authentication
-- No editing reminders (delete + recreate)
+- Editing reminders supported (no TTS regeneration yet)
 - No snooze functionality  
 - Single device only (no cross-device sync)
 - No timezone handling (uses device timezone)

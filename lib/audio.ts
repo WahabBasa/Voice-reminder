@@ -45,7 +45,7 @@ export function getRecording(): Audio.Recording | null {
 
 let currentSound: Audio.Sound | null = null;
 
-export async function playAudio(uri: string): Promise<void> {
+export async function playAudio(uri: string, waitForFinish = false): Promise<void> {
   console.log(`[VR] playAudio called with uri: ${uri}`);
   
   // Stop any currently playing sound
@@ -74,12 +74,17 @@ export async function playAudio(uri: string): Promise<void> {
   currentSound = sound;
   console.log("[VR] Sound created and playing");
 
-  // Clean up when done
-  sound.setOnPlaybackStatusUpdate((status) => {
-    if (status.isLoaded && status.didJustFinish) {
-      console.log("[VR] Audio playback finished");
-      sound.unloadAsync();
-      currentSound = null;
+  await new Promise<void>((resolve) => {
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (status.isLoaded && status.didJustFinish) {
+        console.log("[VR] Audio playback finished");
+        sound.unloadAsync();
+        currentSound = null;
+        resolve();
+      }
+    });
+    if (!waitForFinish) {
+      resolve();
     }
   });
 }

@@ -22,6 +22,8 @@ export interface ReminderNotification {
   frequency: string;
   days?: string[];
   audioUrl: string;
+  soundRepeatMode?: "count" | "until_stopped";
+  soundRepeatCount?: number;
 }
 
 function getLocalAudioPath(reminderId: string): string {
@@ -126,6 +128,8 @@ export async function scheduleReminder(
         days: reminder.days?.join(",") || "",
         title: reminder.title,
         description: reminder.description,
+        soundRepeatMode: reminder.soundRepeatMode || "count",
+        soundRepeatCount: reminder.soundRepeatCount ?? 1,
       },
     },
     trigger
@@ -172,8 +176,23 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
         
         if (fileInfo.exists) {
           console.log("[VR] Starting audio playback...");
-          await playAudio(localAudioPath);
-          console.log("[VR] Audio playback initiated");
+
+          const repeatMode = (data.soundRepeatMode as string) || "count";
+          const repeatCountRaw = Number(data.soundRepeatCount ?? 1);
+          const repeatCount =
+            repeatMode === "count"
+              ? Math.max(1, repeatCountRaw || 1)
+              : 6; // safety cap for "until stopped"
+
+          for (let i = 0; i < repeatCount; i++) {
+            await playAudio(localAudioPath, true);
+            // short gap between repeats except last
+            if (i < repeatCount - 1) {
+              await new Promise((resolve) => setTimeout(resolve, 300));
+            }
+          }
+
+          console.log("[VR] Audio playback completed repeats");
         } else {
           console.log("[VR] ERROR: Audio file does not exist!");
         }

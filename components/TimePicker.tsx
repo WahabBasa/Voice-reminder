@@ -31,6 +31,7 @@ export default function TimePicker({ value, onChange }: TimePickerProps) {
       <ScrollSelector
         dataSource={hours}
         selectedIndex={hour12 - 1}
+        loop
         onValueChange={(val) => {
           const newHour = parseInt(val, 10);
           updateTime(newHour, minute, isPM);
@@ -47,6 +48,7 @@ export default function TimePicker({ value, onChange }: TimePickerProps) {
       <ScrollSelector
         dataSource={minutes}
         selectedIndex={minute}
+        loop
         onValueChange={(val) => {
           const newMinute = parseInt(val, 10);
           updateTime(hour12, newMinute, isPM);

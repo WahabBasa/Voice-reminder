@@ -132,9 +132,9 @@ export default function ReminderCard({
                     e.stopPropagation();
                     onMarkDone();
                   }}
-                  activeOpacity={0.7}
+                  activeOpacity={0.85}
                 >
-                  <Ionicons name="checkmark" size={20} color="#fff" />
+                  <Text style={styles.doneButtonText}>Done</Text>
                 </TouchableOpacity>
               )
             )}
@@ -216,13 +216,18 @@ const styles = StyleSheet.create({
     color: "#666",
   },
   doneButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
     backgroundColor: colors.accent,
     justifyContent: "center",
     alignItems: "center",
     marginLeft: 10,
+  },
+  doneButtonText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 14,
   },
   doneBadge: {
     flexDirection: "row",

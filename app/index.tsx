@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -8,11 +8,12 @@ import {
   Dimensions,
   Platform,
   Alert,
+  Modal,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { useAction } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../convex/_generated/api";
 import { colors } from "../lib/theme";
@@ -62,10 +63,12 @@ const QUICK_ACTIONS = [
 export default function HomeScreen() {
   const router = useRouter();
   const processVoiceReminder = useAction(api.actions.processVoiceReminder);
+  const removeConvexReminder = useMutation(api.reminders.remove);
 
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [showRecording, setShowRecording] = useState(false);
   const [todaysHistory, setTodaysHistory] = useState<ReminderHistory[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   const loadData = useCallback(async () => {
     const [loadedReminders, history] = await Promise.all([
@@ -82,11 +85,18 @@ export default function HomeScreen() {
     }, [loadData])
   );
 
-  const isCompletedToday = (reminderId: string) => {
-    return todaysHistory.some(
-      (entry) => entry.reminderId === reminderId && entry.status === "completed"
-    );
-  };
+  const completedTodaySet = useMemo(() => {
+    const set = new Set<string>();
+    for (const entry of todaysHistory) {
+      if (entry.status === "completed") set.add(entry.reminderId);
+    }
+    return set;
+  }, [todaysHistory]);
+
+  const pendingReminders = useMemo(() => {
+    if (completedTodaySet.size === 0) return reminders;
+    return reminders.filter((reminder) => !completedTodaySet.has(reminder.id));
+  }, [reminders, completedTodaySet]);
 
   const handleMarkDone = async (reminderId: string, reminderTitle: string) => {
     await recordCompletion(reminderId, reminderTitle, "completed");
@@ -118,14 +128,20 @@ export default function HomeScreen() {
         throw new Error("Failed to get audio URL");
       }
 
+      const frequency = result.frequency === "weekly" ? "custom" : result.frequency;
+      const days = frequency === "custom" ? (result.days || []) : [];
+
       // Save to local storage
       const newReminder = await addReminder({
+        convexId: result.id,
         title: result.title,
         description: result.description,
         time: result.time,
-        frequency: result.frequency,
-        days: result.days || [],
+        frequency,
+        days,
         audioUrl: result.audioUrl,
+        soundRepeatMode: "count",
+        soundRepeatCount: 1,
       });
 
       // Schedule notification
@@ -138,6 +154,8 @@ export default function HomeScreen() {
           frequency: newReminder.frequency,
           days: newReminder.days,
           audioUrl: newReminder.audioUrl,
+          soundRepeatMode: newReminder.soundRepeatMode,
+          soundRepeatCount: newReminder.soundRepeatCount,
         });
       }
 
@@ -157,23 +175,32 @@ export default function HomeScreen() {
     router.push(`/reminder/edit?id=${reminder.id}`);
   };
 
-  const handleDeleteReminder = async (id: string) => {
+  const handleDeleteReminder = async (reminder: Reminder) => {
     try {
-      await cancelReminder(id);
+      await cancelReminder(reminder.id);
     } catch (e) {
       console.log("[VR] Failed to cancel notification:", e);
     }
-    await deleteReminderStorage(id);
+
+    if (reminder.convexId) {
+      try {
+        await removeConvexReminder({ id: reminder.convexId as any });
+      } catch (e) {
+        console.log("[VR] Failed to delete Convex reminder:", e);
+      }
+    }
+
+    await deleteReminderStorage(reminder.id);
     loadData();
   };
 
-  const handleDelete = (id: string, title: string) => {
-    Alert.alert("Delete Reminder", `Delete "${title}"?`, [
+  const handleDelete = (reminder: Reminder) => {
+    Alert.alert("Delete Reminder", `Delete "${reminder.title}"?`, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
-        onPress: () => handleDeleteReminder(id),
+        onPress: () => handleDeleteReminder(reminder),
       },
     ]);
   };
@@ -184,7 +211,11 @@ export default function HomeScreen() {
         <View style={styles.headerContent}>
           <View style={styles.headerTop}>
             <Text style={styles.headerTitle}>My Reminders</Text>
-            <TouchableOpacity style={styles.notificationButton}>
+            <TouchableOpacity
+              style={styles.notificationButton}
+              onPress={() => setShowNotifications(true)}
+              activeOpacity={0.8}
+            >
               <Ionicons name="notifications-outline" size={24} color="white" />
               {reminders.length > 0 && (
                 <View style={styles.notificationBadge}>
@@ -229,7 +260,6 @@ export default function HomeScreen() {
           </View>
 
           {(() => {
-            const pendingReminders = reminders.filter(r => !isCompletedToday(r.id));
             if (pendingReminders.length === 0) {
               return (
                 <View style={styles.emptyState}>
@@ -256,7 +286,7 @@ export default function HomeScreen() {
                 days={reminder.days}
                 isCompleted={false}
                 onPress={() => handleReminderPress(reminder)}
-                onDelete={() => handleDelete(reminder.id, reminder.title)}
+                onDelete={() => handleDelete(reminder)}
                 onMarkDone={() => handleMarkDone(reminder.id, reminder.title)}
               />
             ));
@@ -269,6 +299,64 @@ export default function HomeScreen() {
         onClose={handleCloseRecording}
         onRecordingComplete={handleRecordingComplete}
       />
+
+      <Modal
+        visible={showNotifications}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setShowNotifications(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={styles.backdrop}
+            activeOpacity={1}
+            onPress={() => setShowNotifications(false)}
+          />
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Notifications</Text>
+              <TouchableOpacity
+                onPress={() => setShowNotifications(false)}
+                style={styles.modalClose}
+              >
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+
+            {reminders.length === 0 ? (
+              <View style={styles.modalEmpty}>
+                <Ionicons name="notifications-off-outline" size={48} color="#ccc" />
+                <Text style={styles.modalEmptyText}>No reminders scheduled</Text>
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {reminders.map((reminder) => (
+                  <View key={reminder.id} style={styles.notificationItem}>
+                    <View style={styles.notificationIcon}>
+                      <Ionicons name="notifications" size={22} color={colors.accent} />
+                    </View>
+                    <View style={styles.notificationContent}>
+                      <Text style={styles.notificationTitle} numberOfLines={1}>
+                        {reminder.title}
+                      </Text>
+                      <Text style={styles.notificationSubtitle} numberOfLines={2}>
+                        {reminder.description || "No description"}
+                      </Text>
+                      <Text style={styles.notificationTime}>
+                        {reminder.time} · {reminder.frequency === "custom" && reminder.days?.length
+                          ? reminder.days.join(", ")
+                          : reminder.frequency === "daily"
+                            ? "Daily"
+                            : "Once"}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -321,6 +409,85 @@ const styles = StyleSheet.create({
     color: "white",
     fontSize: 11,
     fontWeight: "700",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.35)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  modalCard: {
+    width: "100%",
+    backgroundColor: "white",
+    borderRadius: 18,
+    padding: 18,
+    maxHeight: "70%",
+    elevation: 6,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#333",
+  },
+  modalClose: {
+    padding: 6,
+  },
+  modalEmpty: {
+    alignItems: "center",
+    paddingVertical: 30,
+  },
+  modalEmptyText: {
+    color: "#666",
+    marginTop: 10,
+    fontSize: 16,
+  },
+  notificationItem: {
+    flexDirection: "row",
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: "#f7f7f7",
+    marginBottom: 10,
+  },
+  notificationIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.accentLight,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  notificationContent: {
+    flex: 1,
+  },
+  notificationTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1a1a1a",
+  },
+  notificationSubtitle: {
+    fontSize: 14,
+    color: "#555",
+    marginTop: 4,
+  },
+  notificationTime: {
+    fontSize: 12,
+    color: "#888",
+    marginTop: 6,
   },
   content: {
     flex: 1,

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -57,20 +57,33 @@ export default function CalendarScreen() {
 
   const { days, firstDay } = getDaysInMonth(selectedDate);
 
-  const hasActivityOnDate = (date: Date) => {
-    return history.some(
-      (entry) => new Date(entry.timestamp).toDateString() === date.toDateString()
-    );
-  };
+  const historyIndex = useMemo(() => {
+    const activityDates = new Set<string>();
+    const completedByDateAndReminder = new Set<string>();
 
-  const isCompletedOnDate = (reminderId: string, date: Date) => {
-    return history.some(
-      (entry) =>
-        entry.reminderId === reminderId &&
-        new Date(entry.timestamp).toDateString() === date.toDateString() &&
-        entry.status === "completed"
-    );
-  };
+    for (const entry of history) {
+      const dateStr = new Date(entry.timestamp).toDateString();
+      activityDates.add(dateStr);
+      if (entry.status === "completed") {
+        completedByDateAndReminder.add(`${dateStr}|${entry.reminderId}`);
+      }
+    }
+
+    return { activityDates, completedByDateAndReminder };
+  }, [history]);
+
+  const hasActivityOnDate = useCallback(
+    (date: Date) => historyIndex.activityDates.has(date.toDateString()),
+    [historyIndex]
+  );
+
+  const isCompletedOnDate = useCallback(
+    (reminderId: string, date: Date) =>
+      historyIndex.completedByDateAndReminder.has(
+        `${date.toDateString()}|${reminderId}`
+      ),
+    [historyIndex]
+  );
 
   const handleMarkDone = async (reminderId: string, reminderTitle: string) => {
     await recordCompletion(reminderId, reminderTitle, "completed");
@@ -78,15 +91,15 @@ export default function CalendarScreen() {
   };
 
   const getRemindersForDate = (date: Date) => {
-    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const dayName = dayNames[date.getDay()];
+    const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    const dayKey = dayKeys[date.getDay()];
 
     return reminders.filter((reminder) => {
       if (reminder.frequency === "daily") {
         return true; // Show every day
       }
-      if (reminder.frequency === "custom") {
-        return reminder.days.includes(dayName); // Show on selected days
+      if (reminder.frequency === "custom" || reminder.frequency === "weekly") {
+        return reminder.days.includes(dayKey); // Show on selected days
       }
       // "once" - show if created on this date
       return new Date(reminder.createdAt).toDateString() === date.toDateString();

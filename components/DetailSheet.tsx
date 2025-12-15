@@ -16,6 +16,13 @@ import { colors, spacing } from "../lib/theme";
 import DaySelector from "./DaySelector";
 import TimePicker from "./TimePicker";
 
+const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: number }[] = [
+  { label: "1x", mode: "count", count: 1 },
+  { label: "2x", mode: "count", count: 2 },
+  { label: "3x", mode: "count", count: 3 },
+  { label: "Until stopped", mode: "until_stopped" },
+];
+
 const { width } = Dimensions.get("window");
 
 export interface ReminderData {
@@ -27,6 +34,8 @@ export interface ReminderData {
   days?: string[];
   audioUrl?: string;
   isNew?: boolean;
+  soundRepeatMode?: "count" | "until_stopped";
+  soundRepeatCount?: number;
 }
 
 interface DetailSheetProps {
@@ -55,6 +64,8 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
     const [sound, setSound] = useState<Audio.Sound | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [showTimePicker, setShowTimePicker] = useState(false);
+    const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("count");
+    const [soundRepeatCount, setSoundRepeatCount] = useState<number>(1);
 
     useEffect(() => {
       if (reminder) {
@@ -62,6 +73,8 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
         setDescription(reminder.description || "");
         setFrequency(reminder.frequency || "once");
         setDays(reminder.days || []);
+        setSoundRepeatMode(reminder.soundRepeatMode || "count");
+        setSoundRepeatCount(reminder.soundRepeatCount ?? 1);
         
         if (reminder.time) {
           const [hours, minutes] = reminder.time.split(":").map(Number);
@@ -138,21 +151,26 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
       }
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
       if (!reminder) return;
 
       const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time.getMinutes().toString().padStart(2, "0")}`;
 
-      onSave?.({
-        ...reminder,
-        title,
-        description,
-        time: timeStr,
-        frequency,
-        days: frequency === "custom" ? days : [],
-      });
-
-      (ref as any)?.current?.dismiss();
+      try {
+        await onSave?.({
+          ...reminder,
+          title,
+          description,
+          time: timeStr,
+          frequency,
+          days: frequency === "custom" ? days : [],
+          soundRepeatMode,
+          soundRepeatCount,
+        });
+      } finally {
+        // Always close the sheet after attempting save
+        (ref as any)?.current?.dismiss();
+      }
     };
 
     const handleCancel = () => {
@@ -180,7 +198,9 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
         description !== reminder.description ||
         timeStr !== reminder.time ||
         frequency !== reminder.frequency ||
-        currentDays !== originalDays
+        currentDays !== originalDays ||
+        (reminder.soundRepeatMode || "count") !== soundRepeatMode ||
+        (reminder.soundRepeatCount ?? 1) !== soundRepeatCount
       );
     };
 
@@ -285,6 +305,40 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
                     <Ionicons name="chevron-forward" size={20} color="#666" />
                   </TouchableOpacity>
                 )}
+              </View>
+
+              {/* Sound repeats */}
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Sound repeats</Text>
+                <View style={styles.repeatRow}>
+                  {REPEAT_OPTIONS.map((opt) => {
+                    const active =
+                      opt.mode === soundRepeatMode &&
+                      (opt.mode !== "count" || opt.count === soundRepeatCount);
+                    return (
+                      <TouchableOpacity
+                        key={opt.label}
+                        style={[
+                          styles.repeatChip,
+                          active && styles.repeatChipActive,
+                        ]}
+                        onPress={() => {
+                          setSoundRepeatMode(opt.mode);
+                          if (opt.count) setSoundRepeatCount(opt.count);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.repeatChipText,
+                            active && styles.repeatChipTextActive,
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               </View>
 
               {/* Voice Preview */}
@@ -538,6 +592,32 @@ const styles = StyleSheet.create({
   doneButtonText: {
     color: "white",
     fontWeight: "600",
+  },
+  repeatRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 8,
+  },
+  repeatChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    backgroundColor: "white",
+  },
+  repeatChipActive: {
+    backgroundColor: colors.accentLight,
+    borderColor: colors.accent,
+  },
+  repeatChipText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#444",
+  },
+  repeatChipTextActive: {
+    color: colors.accent,
   },
   card: {
     backgroundColor: "white",

@@ -10,7 +10,7 @@ const DAY_MAP: Record<string, number> = {
 
 export interface ReminderSchedule {
   time: string; // "HH:MM"
-  frequency: string; // "once" | "daily" | "weekly"
+  frequency: string; // "once" | "daily" | "weekly" | "custom"
   days?: string[]; // ["mon", "wed", "fri"]
 }
 
@@ -30,7 +30,10 @@ export function getNextTriggerTime(schedule: ReminderSchedule): number {
     return target.getTime();
   }
 
-  if (schedule.frequency === "weekly" && schedule.days?.length) {
+  if (
+    (schedule.frequency === "weekly" || schedule.frequency === "custom") &&
+    schedule.days?.length
+  ) {
     const targetDays = schedule.days
       .map((d) => DAY_MAP[d.toLowerCase()])
       .filter((d) => d !== undefined)

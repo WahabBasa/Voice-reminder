@@ -10,12 +10,22 @@ import {
   Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
+import { useAction } from "convex/react";
+import { api } from "../../convex/_generated/api";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { colors } from "../../lib/theme";
 import { addReminder } from "../../lib/storage";
+import { scheduleReminder } from "../../lib/notifications";
 import DaySelector from "../../components/DaySelector";
 import TimePicker from "../../components/TimePicker";
+
+const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: number }[] = [
+  { label: "1x", mode: "count", count: 1 },
+  { label: "2x", mode: "count", count: 2 },
+  { label: "3x", mode: "count", count: 3 },
+  { label: "Until stopped", mode: "until_stopped" },
+];
 
 const FREQUENCIES = [
   { value: "once", label: "Once", icon: "sunny-outline" as const },
@@ -25,12 +35,15 @@ const FREQUENCIES = [
 
 export default function NewReminderScreen() {
   const router = useRouter();
+  const processTextReminder = useAction(api.actions.processTextReminder);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [time, setTime] = useState(new Date());
   const [frequency, setFrequency] = useState("once");
   const [days, setDays] = useState<string[]>([]);
+  const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("count");
+  const [soundRepeatCount, setSoundRepeatCount] = useState<number>(1);
 
   const handleDayToggle = (day: string) => {
     setDays((prev) =>
@@ -45,20 +58,52 @@ export default function NewReminderScreen() {
     }
 
     const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time.getMinutes().toString().padStart(2, "0")}`;
+    const desc = description.trim() || title.trim();
 
     try {
-      await addReminder({
+      const result = await processTextReminder({
         title: title.trim(),
-        description: description.trim(),
+        description: desc,
         time: timeStr,
         frequency,
         days: frequency === "custom" ? days : [],
-        audioUrl: undefined,
+        soundRepeatMode,
+        soundRepeatCount,
       });
+
+      if (!result.audioUrl) {
+        throw new Error("Failed to get audio URL");
+      }
+
+      const newReminder = await addReminder({
+        convexId: result.id,
+        title: result.title,
+        description: result.description,
+        time: result.time,
+        frequency: result.frequency,
+        days: result.days || [],
+        audioUrl: result.audioUrl,
+        soundRepeatMode,
+        soundRepeatCount,
+      });
+
+      if (newReminder.audioUrl) {
+        await scheduleReminder({
+          id: newReminder.id,
+          title: newReminder.title,
+          description: newReminder.description,
+          time: newReminder.time,
+          frequency: newReminder.frequency,
+          days: newReminder.days,
+          audioUrl: newReminder.audioUrl,
+          soundRepeatMode,
+          soundRepeatCount,
+        });
+      }
 
       Alert.alert(
         "Created",
-        "Reminder created! Note: Voice playback requires using voice input.",
+        "Reminder created and voice generated.",
         [{ text: "OK", onPress: () => router.back() }]
       );
     } catch (error) {
@@ -150,6 +195,37 @@ export default function NewReminderScreen() {
           </View>
         </View>
 
+        {/* Sound repeats */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Sound repeats</Text>
+          <View style={styles.repeatRow}>
+            {REPEAT_OPTIONS.map((opt) => {
+              const active =
+                opt.mode === soundRepeatMode &&
+                (opt.mode !== "count" || opt.count === soundRepeatCount);
+              return (
+                <TouchableOpacity
+                  key={opt.label}
+                  style={[styles.repeatChip, active && styles.repeatChipActive]}
+                  onPress={() => {
+                    setSoundRepeatMode(opt.mode);
+                    if (opt.count) setSoundRepeatCount(opt.count);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.repeatChipText,
+                      active && styles.repeatChipTextActive,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
         {/* Description */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Notes (optional)</Text>
@@ -171,7 +247,7 @@ export default function NewReminderScreen() {
         <View style={styles.infoCard}>
           <Ionicons name="information-circle-outline" size={20} color={colors.accent} />
           <Text style={styles.infoText}>
-            Manual reminders won't have voice playback. Use voice input for spoken reminders.
+            This will generate a spoken reminder and schedule it as a notification.
           </Text>
         </View>
 
@@ -304,6 +380,32 @@ const styles = StyleSheet.create({
   },
   selectedOptionLabel: {
     color: "white",
+  },
+  repeatRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 8,
+  },
+  repeatChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    backgroundColor: "white",
+  },
+  repeatChipActive: {
+    backgroundColor: colors.accentLight,
+    borderColor: colors.accent,
+  },
+  repeatChipText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#444",
+  },
+  repeatChipTextActive: {
+    color: colors.accent,
   },
   timePickerWrapper: {
     backgroundColor: "white",
