@@ -12,9 +12,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import Slider from "@react-native-community/slider";
 import { Audio } from "expo-av";
+import { TimerPickerModal } from "react-native-timer-picker";
 import { colors, spacing } from "../lib/theme";
 import DaySelector from "./DaySelector";
-import TimePicker from "./TimePicker";
 
 const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: number }[] = [
   { label: "1x", mode: "count", count: 1 },
@@ -283,28 +283,45 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
               {/* Time */}
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>What time?</Text>
-                {showTimePicker ? (
-                  <View style={styles.timePickerWrapper}>
-                    <TimePicker value={time} onChange={setTime} />
-                    <TouchableOpacity
-                      style={styles.doneButton}
-                      onPress={() => setShowTimePicker(false)}
-                    >
-                      <Text style={styles.doneButtonText}>Done</Text>
-                    </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.timeButton}
+                  onPress={() => setShowTimePicker(true)}
+                >
+                  <View style={styles.timeIconContainer}>
+                    <Ionicons name="time-outline" size={20} color={colors.accent} />
                   </View>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.timeButton}
-                    onPress={() => setShowTimePicker(true)}
-                  >
-                    <View style={styles.timeIconContainer}>
-                      <Ionicons name="time-outline" size={20} color={colors.accent} />
-                    </View>
-                    <Text style={styles.timeButtonText}>{formatTime(time)}</Text>
-                    <Ionicons name="chevron-forward" size={20} color="#666" />
-                  </TouchableOpacity>
-                )}
+                  <Text style={styles.timeButtonText}>{formatTime(time)}</Text>
+                  <Ionicons name="chevron-forward" size={20} color="#666" />
+                </TouchableOpacity>
+
+                {showTimePicker ? (
+                  <TimerPickerModal
+                    closeOnOverlayPress
+                    LinearGradient={LinearGradient}
+                    hideDays
+                    initialValue={{
+                      hours: time.getHours(),
+                      minutes: time.getMinutes(),
+                    }}
+                    modalTitle="Select time"
+                    onCancel={() => setShowTimePicker(false)}
+                    onConfirm={({ hours, minutes, seconds }) => {
+                      const isPm = (seconds ?? 0) >= 12;
+                      const hour24 = (hours % 12) + (isPm ? 12 : 0);
+                      const next = new Date(time);
+                      next.setHours(hour24, minutes, 0, 0);
+                      setTime(next);
+                      setShowTimePicker(false);
+                    }}
+                    setIsVisible={setShowTimePicker}
+                    styles={{ theme: "light" }}
+                    useAmPmWheel
+                    use12HourPicker
+                    visible={showTimePicker}
+                    amLabel="AM"
+                    pmLabel="PM"
+                  />
+                ) : null}
               </View>
 
               {/* Sound repeats */}

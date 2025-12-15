@@ -13,6 +13,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { useMutation } from "convex/react";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
+import { TimerPickerModal } from "react-native-timer-picker";
 import Slider from "@react-native-community/slider";
 import { Audio } from "expo-av";
 import { api } from "../../convex/_generated/api";
@@ -25,7 +26,6 @@ import {
 } from "../../lib/storage";
 import { cancelReminder, scheduleReminder } from "../../lib/notifications";
 import DaySelector from "../../components/DaySelector";
-import TimePicker from "../../components/TimePicker";
 
 const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: number }[] = [
   { label: "1x", mode: "count", count: 1 },
@@ -57,6 +57,7 @@ export default function EditReminderScreen() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("count");
   const [soundRepeatCount, setSoundRepeatCount] = useState<number>(1);
+  const [showTimePicker, setShowTimePicker] = useState(false);
 
   const loadReminder = useCallback(async () => {
     if (!id) return;
@@ -332,9 +333,45 @@ export default function EditReminderScreen() {
         {/* Time */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>What time?</Text>
-          <View style={styles.timePickerWrapper}>
-            <TimePicker value={time} onChange={setTime} />
-          </View>
+          <TouchableOpacity
+            style={styles.timeButton}
+            onPress={() => setShowTimePicker(true)}
+          >
+            <View style={styles.timeIconContainer}>
+              <Ionicons name="time-outline" size={20} color={colors.accent} />
+            </View>
+            <Text style={styles.timeButtonText}>{formatTime(time)}</Text>
+            <Ionicons name="chevron-forward" size={20} color="#666" />
+          </TouchableOpacity>
+
+          {showTimePicker ? (
+            <TimerPickerModal
+              closeOnOverlayPress
+              LinearGradient={LinearGradient}
+              hideDays
+              visible={showTimePicker}
+              setIsVisible={setShowTimePicker}
+              modalTitle="Select time"
+              onCancel={() => setShowTimePicker(false)}
+              amLabel="AM"
+              initialValue={{
+                hours: time.getHours(),
+                minutes: time.getMinutes(),
+              }}
+              onConfirm={({ hours, minutes, seconds }) => {
+                const isPm = (seconds ?? 0) >= 12;
+                const hour24 = (hours % 12) + (isPm ? 12 : 0);
+                const next = new Date(time);
+                next.setHours(hour24, minutes, 0, 0);
+                setTime(next);
+                setShowTimePicker(false);
+              }}
+              pmLabel="PM"
+              styles={{ theme: "light" }}
+              useAmPmWheel
+              use12HourPicker
+            />
+          ) : null}
         </View>
 
         {/* Sound repeats */}
@@ -560,6 +597,29 @@ const styles = StyleSheet.create({
     padding: 15,
     borderWidth: 1,
     borderColor: "#e0e0e0",
+  },
+  timeButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+  },
+  timeIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.accentLight,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  timeButtonText: {
+    flex: 1,
+    fontSize: 16,
+    color: "#333",
   },
   repeatRow: {
     flexDirection: "row",
