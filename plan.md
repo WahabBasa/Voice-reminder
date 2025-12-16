@@ -16,7 +16,7 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 | Audio Recording | expo-av | Native audio recording |
 | STT | OpenAI Whisper | Accurate speech-to-text |
 | Parsing | OpenAI GPT-4o-mini | Extract structured reminder data |
-| TTS | OpenAI TTS | Natural-sounding reminder voice |
+| TTS | ElevenLabs TTS | Natural-sounding reminder voice |
 | AI SDK | OpenAI SDK directly | Simpler than Vercel AI SDK for our use case |
 
 ---
@@ -34,7 +34,7 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 │  2. CONVEX BACKEND                                          │
 │     - Receives audio → Whisper STT → text                   │
 │     - GPT parses: title, time, frequency                    │
-│     - OpenAI TTS generates audio file                       │
+│     - ElevenLabs TTS generates audio file                    │
 │     - Returns structured data + audio URL                   │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -157,9 +157,11 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 
 ---
 
-## Phase 3: Convex Backend + OpenAI Integration
+## Phase 3: Convex Backend + OpenAI Integration ✅ COMPLETED
 
 **Goal:** Process audio → get transcription, parsed reminder, and TTS audio
+
+**Status:** Completed on 2025-12-16
 
 ### Tasks
 
@@ -261,9 +263,11 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 
 ---
 
-## Phase 4: Notifications with Custom Sound
+## Phase 4: Notifications with Custom Sound ✅ COMPLETED
 
 **Goal:** Schedule notifications that play TTS audio even when app is killed
+
+**Status:** Completed on 2025-12-16
 
 ### Critical Concept
 ```
@@ -354,9 +358,11 @@ This requires `expo prebuild` or a config plugin.
 
 ---
 
-## Phase 5: Complete UI & Polish
+## Phase 5: Complete UI & Polish ✅ COMPLETED
 
 **Goal:** Full reminder list, details, and delete functionality
+
+**Status:** Completed on 2025-12-16
 
 ### Tasks
 
@@ -554,10 +560,21 @@ CONVEX_DEPLOYMENT=xxx
 # OpenAI (set in Convex dashboard) - used for Whisper + parsing
 OPENAI_API_KEY=sk-xxx
 
-# ResembleAI (set in Convex dashboard) - used for TTS
-RESEMBLE_API_KEY=xxx
-RESEMBLE_PROJECT_UUID=xxx  # optional: if omitted, first project is auto-selected
-RESEMBLE_VOICE_UUID=xxx  # ember voice UUID
+# ElevenLabs (set in Convex dashboard) - used for TTS
+ELEVENLABS_API_KEY=xxx
+ELEVENLABS_VOICE_ID=xxx
+TTS_PROVIDER=elevenlabs  # optional: auto-selects based on env vars if omitted
+ELEVENLABS_MODEL_ID=eleven_multilingual_v2
+ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
+ELEVENLABS_STABILITY=0.5
+ELEVENLABS_SIMILARITY_BOOST=0.75
+ELEVENLABS_STYLE=0
+ELEVENLABS_USE_SPEAKER_BOOST=true
+
+# ResembleAI (legacy fallback TTS)
+# RESEMBLE_API_KEY=xxx
+# RESEMBLE_PROJECT_UUID=xxx  # optional: if omitted, first project is auto-selected
+# RESEMBLE_VOICE_UUID=xxx  # ember voice UUID
 ```
 
 ---
@@ -584,7 +601,7 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 
 ## Known Issues (To Address)
 
-- [ ] **TTS volume too low** - OpenAI TTS output is quiet; may need audio normalization or different voice settings
+- [ ] **TTS volume too low** - reminder audio may be quiet; consider normalization or adjusting voice settings
 - [ ] **Processing is slow** - Whisper → GPT → TTS chain takes several seconds; consider streaming or showing progress steps
 
 ---

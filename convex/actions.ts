@@ -19,12 +19,42 @@ type ResembleProjectsResponse = {
   items?: Array<{ uuid: string; name?: string }>;
 };
 
+type TtsProvider = "resemble" | "elevenlabs";
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(`Missing required env var: ${name}`);
   }
   return value;
+}
+
+function getTtsProvider(): TtsProvider {
+  const configured = process.env.TTS_PROVIDER?.toLowerCase();
+  if (configured === "elevenlabs" || configured === "resemble") return configured;
+  if (process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_VOICE_ID) return "elevenlabs";
+  return "resemble";
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function numberEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function booleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "1" || normalized === "true") return true;
+  if (normalized === "0" || normalized === "false") return false;
+  return fallback;
 }
 
 let cachedResembleProjectUuid: string | null = null;
@@ -112,6 +142,53 @@ async function synthesizeWithResemble(args: {
   return Buffer.from(json.audio_content, "base64");
 }
 
+async function synthesizeWithElevenLabs(args: { text: string }): Promise<Buffer> {
+  const apiKey = requireEnv("ELEVENLABS_API_KEY");
+  const voiceId = requireEnv("ELEVENLABS_VOICE_ID");
+  const modelId = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
+  const outputFormat = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
+
+  const url = new URL(
+    `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`
+  );
+  url.searchParams.set("output_format", outputFormat);
+
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+    },
+    body: JSON.stringify({
+      text: args.text,
+      model_id: modelId,
+      voice_settings: {
+        stability: clamp(numberEnv("ELEVENLABS_STABILITY", 0.5), 0, 1),
+        similarity_boost: clamp(numberEnv("ELEVENLABS_SIMILARITY_BOOST", 0.75), 0, 1),
+        style: clamp(numberEnv("ELEVENLABS_STYLE", 0), 0, 1),
+        use_speaker_boost: booleanEnv("ELEVENLABS_USE_SPEAKER_BOOST", true),
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`ElevenLabs TTS failed (${response.status}): ${body.slice(0, 500)}`);
+  }
+
+  const audio = await response.arrayBuffer();
+  return Buffer.from(audio);
+}
+
+async function synthesizeReminderTts(args: { text: string; title?: string }): Promise<Buffer> {
+  const provider = getTtsProvider();
+  if (provider === "elevenlabs") {
+    return await synthesizeWithElevenLabs({ text: args.text });
+  }
+  return await synthesizeWithResemble(args);
+}
+
 export const processVoiceReminder = action({
   args: { audioBase64: v.string() },
   handler: async (ctx, args) => {
@@ -174,7 +251,7 @@ The description should be a friendly reminder message like "Time to take your me
 
     // 3. Generate TTS
     const ttsText = `Hey! ${parsed.description}`;
-    const ttsBuffer = await synthesizeWithResemble({
+    const ttsBuffer = await synthesizeReminderTts({
       text: ttsText,
       title: parsed.title as string,
     });
@@ -229,7 +306,7 @@ export const processTextReminder = action({
     const days = frequency === "custom" ? args.days : undefined;
 
     const ttsText = `Hey! ${args.description}`;
-    const ttsBuffer = await synthesizeWithResemble({
+    const ttsBuffer = await synthesizeReminderTts({
       text: ttsText,
       title: args.title,
     });
