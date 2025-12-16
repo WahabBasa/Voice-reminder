@@ -75,7 +75,7 @@ index dbbd5dc..ee268a4 100644
    }, /*#__PURE__*/_react.default.createElement(_reactNative.Text, {
      allowFontScaling: allowFontScaling,
 diff --git a/node_modules/react-native-timer-picker/dist/commonjs/components/TimerPicker/TimerPicker.js b/node_modules/react-native-timer-picker/dist/commonjs/components/TimerPicker/TimerPicker.js
-index eda09ae..ae156f4 100644
+index eda09ae..98b0e0b 100644
 --- a/node_modules/react-native-timer-picker/dist/commonjs/components/TimerPicker/TimerPicker.js
 +++ b/node_modules/react-native-timer-picker/dist/commonjs/components/TimerPicker/TimerPicker.js
 @@ -57,6 +57,7 @@ const TimerPicker = /*#__PURE__*/(0, _react.forwardRef)((props, ref) => {
@@ -102,7 +102,7 @@ index eda09ae..ae156f4 100644
    (0, _react.useEffect)(() => {
      onDurationChange === null || onDurationChange === void 0 || onDurationChange({
        days: selectedDays,
-@@ -111,34 +115,47 @@ const TimerPicker = /*#__PURE__*/(0, _react.forwardRef)((props, ref) => {
+@@ -111,9 +115,9 @@ const TimerPicker = /*#__PURE__*/(0, _react.forwardRef)((props, ref) => {
        reset: options => {
          var _daysDurationScrollRe, _hoursDurationScrollR, _minutesDurationScrol, _secondsDurationScrol;
          setSelectedDays(safeInitialValue.days);
@@ -114,53 +114,25 @@ index eda09ae..ae156f4 100644
          (_daysDurationScrollRe = daysDurationScrollRef.current) === null || _daysDurationScrollRe === void 0 || _daysDurationScrollRe.reset(options);
          (_hoursDurationScrollR = hoursDurationScrollRef.current) === null || _hoursDurationScrollR === void 0 || _hoursDurationScrollR.reset(options);
          (_minutesDurationScrol = minutesDurationScrollRef.current) === null || _minutesDurationScrol === void 0 || _minutesDurationScrol.reset(options);
-         (_secondsDurationScrol = secondsDurationScrollRef.current) === null || _secondsDurationScrol === void 0 || _secondsDurationScrol.reset(options);
-       },
-       setValue: (value, options) => {
--        if (value.days) {
-+        if (value.days !== undefined) {
-           var _daysDurationScrollRe2;
-           setSelectedDays(value.days);
-           (_daysDurationScrollRe2 = daysDurationScrollRef.current) === null || _daysDurationScrollRe2 === void 0 || _daysDurationScrollRe2.setValue(value.days, options);
+@@ -127,8 +131,15 @@ const TimerPicker = /*#__PURE__*/(0, _react.forwardRef)((props, ref) => {
          }
--        if (value.hours) {
-+        if (value.hours !== undefined) {
+         if (value.hours) {
            var _hoursDurationScrollR2;
 -          setSelectedHours(value.hours);
 -          (_hoursDurationScrollR2 = hoursDurationScrollRef.current) === null || _hoursDurationScrollR2 === void 0 || _hoursDurationScrollR2.setValue(value.hours, options);
-+          const nextHours = shouldUseAmPmWheel ? value.hours % 12 : value.hours;
-+          setSelectedHours(nextHours);
-+          (_hoursDurationScrollR2 = hoursDurationScrollRef.current) === null || _hoursDurationScrollR2 === void 0 || _hoursDurationScrollR2.setValue(nextHours, options);
++          const nextHoursForWheel = shouldUseAmPmWheel ? value.hours % 12 : value.hours;
++          setSelectedHours(nextHoursForWheel);
++          (_hoursDurationScrollR2 = hoursDurationScrollRef.current) === null || _hoursDurationScrollR2 === void 0 || _hoursDurationScrollR2.setValue(nextHoursForWheel, options);
 +          if (shouldUseAmPmWheel) {
-+            var _secondsDurationScrol2;
-+            const nextPeriod = value.seconds === 0 || value.seconds === 12 ? value.seconds : value.hours >= 12 ? 12 : 0;
++            var _secondsDurationScrol4;
++            const nextPeriod = value.hours >= 12 ? 12 : 0;
 +            setSelectedSeconds(nextPeriod);
-+            (_secondsDurationScrol2 = secondsDurationScrollRef.current) === null || _secondsDurationScrol2 === void 0 || _secondsDurationScrol2.setValue(nextPeriod, options);
++            (_secondsDurationScrol4 = secondsDurationScrollRef.current) === null || _secondsDurationScrol4 === void 0 || _secondsDurationScrol4.setValue(nextPeriod, options);
 +          }
          }
--        if (value.minutes) {
-+        if (value.minutes !== undefined) {
+         if (value.minutes) {
            var _minutesDurationScrol2;
-           setSelectedMinutes(value.minutes);
-           (_minutesDurationScrol2 = minutesDurationScrollRef.current) === null || _minutesDurationScrol2 === void 0 || _minutesDurationScrol2.setValue(value.minutes, options);
-         }
--        if (value.seconds) {
--          var _secondsDurationScrol2;
-+        if (value.seconds !== undefined && !shouldUseAmPmWheel) {
-+          var _secondsDurationScrol3;
-           setSelectedSeconds(value.seconds);
--          (_secondsDurationScrol2 = secondsDurationScrollRef.current) === null || _secondsDurationScrol2 === void 0 || _secondsDurationScrol2.setValue(value.seconds, options);
-+          (_secondsDurationScrol3 = secondsDurationScrollRef.current) === null || _secondsDurationScrol3 === void 0 || _secondsDurationScrol3.setValue(value.seconds, options);
-+        }
-+        if (value.seconds !== undefined && shouldUseAmPmWheel && value.hours === undefined) {
-+          var _secondsDurationScrol4;
-+          const nextPeriod = value.seconds >= 12 ? 12 : 0;
-+          setSelectedSeconds(nextPeriod);
-+          (_secondsDurationScrol4 = secondsDurationScrollRef.current) === null || _secondsDurationScrol4 === void 0 || _secondsDurationScrol4.setValue(nextPeriod, options);
-         }
-       },
-       latestDuration: {
-@@ -177,13 +194,14 @@ const TimerPicker = /*#__PURE__*/(0, _react.forwardRef)((props, ref) => {
+@@ -177,13 +188,14 @@ const TimerPicker = /*#__PURE__*/(0, _react.forwardRef)((props, ref) => {
      amLabel: amLabel,
      decelerationRate: decelerationRate,
      disableInfiniteScroll: disableInfiniteScroll,
@@ -178,15 +150,15 @@ index eda09ae..ae156f4 100644
      onDurationChange: setSelectedHours,
      padNumbersWithZero: padHoursWithZero,
      padWithNItems: safePadWithNItems,
-@@ -215,19 +233,23 @@ const TimerPicker = /*#__PURE__*/(0, _react.forwardRef)((props, ref) => {
-     ref: secondsDurationScrollRef,
+@@ -216,18 +228,22 @@ const TimerPicker = /*#__PURE__*/(0, _react.forwardRef)((props, ref) => {
      aggressivelyGetLatestDuration: aggressivelyGetLatestDuration,
      allowFontScaling: allowFontScaling,
-+    amLabel: shouldUseAmPmWheel ? amLabel : undefined,
      decelerationRate: decelerationRate,
-     disableInfiniteScroll: shouldUseAmPmWheel ? true : disableInfiniteScroll,
+-    disableInfiniteScroll: disableInfiniteScroll,
 -    initialValue: safeInitialValue.seconds,
 -    interval: secondInterval,
++    amLabel: shouldUseAmPmWheel ? amLabel : undefined,
++    disableInfiniteScroll: shouldUseAmPmWheel ? true : disableInfiniteScroll,
 +    initialValue: initialSecondsForWheel,
 +    interval: shouldUseAmPmWheel ? 12 : secondInterval,
 +    is12HourPicker: shouldUseAmPmWheel,
@@ -199,9 +171,11 @@ index eda09ae..ae156f4 100644
      onDurationChange: setSelectedSeconds,
      padNumbersWithZero: padSecondsWithZero,
      padWithNItems: safePadWithNItems,
+-    repeatNumbersNTimes: repeatSecondNumbersNTimes,
+-    repeatNumbersNTimesNotExplicitlySet: (props === null || props === void 0 ? void 0 : props.repeatSecondNumbersNTimes) === undefined,
 +    pmLabel: shouldUseAmPmWheel ? pmLabel : undefined,
-     repeatNumbersNTimes: shouldUseAmPmWheel ? 1 : repeatSecondNumbersNTimes,
-     repeatNumbersNTimesNotExplicitlySet: (props === null || props === void 0 ? void 0 : props.repeatSecondNumbersNTimes) === undefined,
++    repeatNumbersNTimes: shouldUseAmPmWheel ? 1 : repeatSecondNumbersNTimes,
++    repeatNumbersNTimesNotExplicitlySet: shouldUseAmPmWheel ? false : (props === null || props === void 0 ? void 0 : props.repeatSecondNumbersNTimes) === undefined,
 +    showAmPmOnly: shouldUseAmPmWheel,
      styles: styles,
      testID: "duration-scroll-second"
@@ -283,7 +257,7 @@ index d40209d..25b5961 100644
    }, /*#__PURE__*/React.createElement(Text, {
      allowFontScaling: allowFontScaling,
 diff --git a/node_modules/react-native-timer-picker/dist/module/components/TimerPicker/TimerPicker.js b/node_modules/react-native-timer-picker/dist/module/components/TimerPicker/TimerPicker.js
-index c26b503..c07fa02 100644
+index c26b503..5c20dd7 100644
 --- a/node_modules/react-native-timer-picker/dist/module/components/TimerPicker/TimerPicker.js
 +++ b/node_modules/react-native-timer-picker/dist/module/components/TimerPicker/TimerPicker.js
 @@ -49,6 +49,7 @@ const TimerPicker = /*#__PURE__*/forwardRef((props, ref) => {
@@ -310,7 +284,7 @@ index c26b503..c07fa02 100644
    useEffect(() => {
      onDurationChange === null || onDurationChange === void 0 || onDurationChange({
        days: selectedDays,
-@@ -103,35 +107,48 @@ const TimerPicker = /*#__PURE__*/forwardRef((props, ref) => {
+@@ -103,9 +107,9 @@ const TimerPicker = /*#__PURE__*/forwardRef((props, ref) => {
        reset: options => {
          var _daysDurationScrollRe, _hoursDurationScrollR, _minutesDurationScrol, _secondsDurationScrol;
          setSelectedDays(safeInitialValue.days);
@@ -322,52 +296,25 @@ index c26b503..c07fa02 100644
          (_daysDurationScrollRe = daysDurationScrollRef.current) === null || _daysDurationScrollRe === void 0 || _daysDurationScrollRe.reset(options);
          (_hoursDurationScrollR = hoursDurationScrollRef.current) === null || _hoursDurationScrollR === void 0 || _hoursDurationScrollR.reset(options);
          (_minutesDurationScrol = minutesDurationScrollRef.current) === null || _minutesDurationScrol === void 0 || _minutesDurationScrol.reset(options);
-         (_secondsDurationScrol = secondsDurationScrollRef.current) === null || _secondsDurationScrol === void 0 || _secondsDurationScrol.reset(options);
-       },
-       setValue: (value, options) => {
--        if (value.days) {
-+        if (value.days !== undefined) {
-           var _daysDurationScrollRe2;
-           setSelectedDays(value.days);
-           (_daysDurationScrollRe2 = daysDurationScrollRef.current) === null || _daysDurationScrollRe2 === void 0 || _daysDurationScrollRe2.setValue(value.days, options);
+@@ -119,8 +123,15 @@ const TimerPicker = /*#__PURE__*/forwardRef((props, ref) => {
          }
--        if (value.hours) {
-+        if (value.hours !== undefined) {
+         if (value.hours) {
            var _hoursDurationScrollR2;
 -          setSelectedHours(value.hours);
 -          (_hoursDurationScrollR2 = hoursDurationScrollRef.current) === null || _hoursDurationScrollR2 === void 0 || _hoursDurationScrollR2.setValue(value.hours, options);
-+          const nextHours = shouldUseAmPmWheel ? value.hours % 12 : value.hours;
-+          setSelectedHours(nextHours);
-+          (_hoursDurationScrollR2 = hoursDurationScrollRef.current) === null || _hoursDurationScrollR2 === void 0 || _hoursDurationScrollR2.setValue(nextHours, options);
++          const nextHoursForWheel = shouldUseAmPmWheel ? value.hours % 12 : value.hours;
++          setSelectedHours(nextHoursForWheel);
++          (_hoursDurationScrollR2 = hoursDurationScrollRef.current) === null || _hoursDurationScrollR2 === void 0 || _hoursDurationScrollR2.setValue(nextHoursForWheel, options);
 +          if (shouldUseAmPmWheel) {
-+            var _secondsDurationScrol2;
-+            const nextPeriod = value.seconds === 0 || value.seconds === 12 ? value.seconds : value.hours >= 12 ? 12 : 0;
++            var _secondsDurationScrol4;
++            const nextPeriod = value.hours >= 12 ? 12 : 0;
 +            setSelectedSeconds(nextPeriod);
-+            (_secondsDurationScrol2 = secondsDurationScrollRef.current) === null || _secondsDurationScrol2 === void 0 || _secondsDurationScrol2.setValue(nextPeriod, options);
++            (_secondsDurationScrol4 = secondsDurationScrollRef.current) === null || _secondsDurationScrol4 === void 0 || _secondsDurationScrol4.setValue(nextPeriod, options);
 +          }
          }
--        if (value.minutes) {
-+        if (value.minutes !== undefined) {
+         if (value.minutes) {
            var _minutesDurationScrol2;
-           setSelectedMinutes(value.minutes);
-           (_minutesDurationScrol2 = minutesDurationScrollRef.current) === null || _minutesDurationScrol2 === void 0 || _minutesDurationScrol2.setValue(value.minutes, options);
-         }
--        if (value.seconds) {
-+        if (value.seconds !== undefined && !shouldUseAmPmWheel) {
-           var _secondsDurationScrol2;
-           setSelectedSeconds(value.seconds);
-           (_secondsDurationScrol2 = secondsDurationScrollRef.current) === null || _secondsDurationScrol2 === void 0 || _secondsDurationScrol2.setValue(value.seconds, options);
-         }
-+        if (value.seconds !== undefined && shouldUseAmPmWheel && value.hours === undefined) {
-+          var _secondsDurationScrol3;
-+          const nextPeriod = value.seconds >= 12 ? 12 : 0;
-+          setSelectedSeconds(nextPeriod);
-+          (_secondsDurationScrol3 = secondsDurationScrollRef.current) === null || _secondsDurationScrol3 === void 0 || _secondsDurationScrol3.setValue(nextPeriod, options);
-+        }
-       },
-       latestDuration: {
-         days: (_daysDurationScrollRe3 = daysDurationScrollRef.current) === null || _daysDurationScrollRe3 === void 0 ? void 0 : _daysDurationScrollRe3.latestDuration,
-@@ -169,13 +186,14 @@ const TimerPicker = /*#__PURE__*/forwardRef((props, ref) => {
+@@ -169,13 +180,14 @@ const TimerPicker = /*#__PURE__*/forwardRef((props, ref) => {
      amLabel: amLabel,
      decelerationRate: decelerationRate,
      disableInfiniteScroll: disableInfiniteScroll,
@@ -385,15 +332,15 @@ index c26b503..c07fa02 100644
      onDurationChange: setSelectedHours,
      padNumbersWithZero: padHoursWithZero,
      padWithNItems: safePadWithNItems,
-@@ -207,19 +225,23 @@ const TimerPicker = /*#__PURE__*/forwardRef((props, ref) => {
-     ref: secondsDurationScrollRef,
+@@ -208,18 +220,22 @@ const TimerPicker = /*#__PURE__*/forwardRef((props, ref) => {
      aggressivelyGetLatestDuration: aggressivelyGetLatestDuration,
      allowFontScaling: allowFontScaling,
-+    amLabel: shouldUseAmPmWheel ? amLabel : undefined,
      decelerationRate: decelerationRate,
-     disableInfiniteScroll: shouldUseAmPmWheel ? true : disableInfiniteScroll,
+-    disableInfiniteScroll: disableInfiniteScroll,
 -    initialValue: safeInitialValue.seconds,
 -    interval: secondInterval,
++    amLabel: shouldUseAmPmWheel ? amLabel : undefined,
++    disableInfiniteScroll: shouldUseAmPmWheel ? true : disableInfiniteScroll,
 +    initialValue: initialSecondsForWheel,
 +    interval: shouldUseAmPmWheel ? 12 : secondInterval,
 +    is12HourPicker: shouldUseAmPmWheel,
@@ -406,9 +353,11 @@ index c26b503..c07fa02 100644
      onDurationChange: setSelectedSeconds,
      padNumbersWithZero: padSecondsWithZero,
      padWithNItems: safePadWithNItems,
+-    repeatNumbersNTimes: repeatSecondNumbersNTimes,
+-    repeatNumbersNTimesNotExplicitlySet: (props === null || props === void 0 ? void 0 : props.repeatSecondNumbersNTimes) === undefined,
 +    pmLabel: shouldUseAmPmWheel ? pmLabel : undefined,
-     repeatNumbersNTimes: shouldUseAmPmWheel ? 1 : repeatSecondNumbersNTimes,
-     repeatNumbersNTimesNotExplicitlySet: (props === null || props === void 0 ? void 0 : props.repeatSecondNumbersNTimes) === undefined,
++    repeatNumbersNTimes: shouldUseAmPmWheel ? 1 : repeatSecondNumbersNTimes,
++    repeatNumbersNTimesNotExplicitlySet: shouldUseAmPmWheel ? false : (props === null || props === void 0 ? void 0 : props.repeatSecondNumbersNTimes) === undefined,
 +    showAmPmOnly: shouldUseAmPmWheel,
      styles: styles,
      testID: "duration-scroll-second"
