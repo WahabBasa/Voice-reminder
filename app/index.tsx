@@ -1,64 +1,53 @@
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Dimensions,
-  Platform,
   Alert,
-  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
-import { useAction, useMutation } from "convex/react";
 import { useFocusEffect } from "@react-navigation/native";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useAction, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { colors } from "../lib/theme";
-import {
-  getReminders,
-  addReminder,
-  deleteReminder as deleteReminderStorage,
-  getTodaysHistory,
-  recordCompletion,
-  Reminder,
-  ReminderHistory,
-} from "../lib/storage";
-import { cancelReminder, scheduleReminder } from "../lib/notifications";
 import { readFileAsBase64 } from "../lib/convex";
-import ReminderCard from "../components/ReminderCard";
+import { cancelReminder, scheduleReminder } from "../lib/notifications";
+import { addReminder, deleteReminder as deleteReminderStorage, getReminders, recordCompletion, Reminder } from "../lib/storage";
 import RecordingOverlay from "../components/RecordingOverlay";
 
-const { width } = Dimensions.get("window");
+function formatCardTimestamp(isoString: string) {
+  const date = new Date(isoString);
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(date.getFullYear());
 
-const QUICK_ACTIONS = [
-  {
-    icon: "mic-outline" as const,
-    label: "Add\nReminder",
-    id: "add",
-    gradient: ["#4A90D9", "#3A7BC8"] as [string, string],
-  },
-  {
-    icon: "calendar-outline" as const,
-    label: "Calendar\nView",
-    id: "calendar",
-    gradient: ["#26A69A", "#00897B"] as [string, string],
-  },
-  {
-    icon: "time-outline" as const,
-    label: "History\nLog",
-    id: "history",
-    gradient: ["#EC407A", "#D81B60"] as [string, string],
-  },
-  {
-    icon: "create-outline" as const,
-    label: "Type\nReminder",
-    id: "type",
-    gradient: ["#FF7043", "#E64A19"] as [string, string],
-  },
-];
+  const hours24 = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const ampm = hours24 >= 12 ? "PM" : "AM";
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+
+  return `${dd}/${mm}/${yyyy}, ${hours12}:${minutes}${ampm}`;
+}
+
+function getDayBucket(isoString: string): "Today" | "Yesterday" | "Earlier" {
+  const date = new Date(isoString);
+  const now = new Date();
+
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const startOfYesterday = new Date(startOfToday);
+  startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+
+  if (date >= startOfToday) return "Today";
+  if (date >= startOfYesterday) return "Yesterday";
+  return "Earlier";
+}
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -67,16 +56,11 @@ export default function HomeScreen() {
 
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [showRecording, setShowRecording] = useState(false);
-  const [todaysHistory, setTodaysHistory] = useState<ReminderHistory[]>([]);
-  const [showNotifications, setShowNotifications] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const loadData = useCallback(async () => {
-    const [loadedReminders, history] = await Promise.all([
-      getReminders(),
-      getTodaysHistory(),
-    ]);
+    const loadedReminders = await getReminders();
     setReminders(loadedReminders);
-    setTodaysHistory(history);
   }, []);
 
   useFocusEffect(
@@ -84,36 +68,6 @@ export default function HomeScreen() {
       loadData();
     }, [loadData])
   );
-
-  const completedTodaySet = useMemo(() => {
-    const set = new Set<string>();
-    for (const entry of todaysHistory) {
-      if (entry.status === "completed") set.add(entry.reminderId);
-    }
-    return set;
-  }, [todaysHistory]);
-
-  const pendingReminders = useMemo(() => {
-    if (completedTodaySet.size === 0) return reminders;
-    return reminders.filter((reminder) => !completedTodaySet.has(reminder.id));
-  }, [reminders, completedTodaySet]);
-
-  const handleMarkDone = async (reminderId: string, reminderTitle: string) => {
-    await recordCompletion(reminderId, reminderTitle, "completed");
-    loadData();
-  };
-
-  const handleQuickAction = (id: string) => {
-    if (id === "add") {
-      setShowRecording(true);
-    } else if (id === "type") {
-      router.push("/reminder/new");
-    } else if (id === "calendar") {
-      router.push("/calendar");
-    } else if (id === "history") {
-      router.push("/history");
-    }
-  };
 
   const handleCloseRecording = () => {
     setShowRecording(false);
@@ -131,7 +85,6 @@ export default function HomeScreen() {
       const frequency = result.frequency === "weekly" ? "custom" : result.frequency;
       const days = frequency === "custom" ? (result.days || []) : [];
 
-      // Save to local storage
       const newReminder = await addReminder({
         convexId: result.id,
         title: result.title,
@@ -144,7 +97,6 @@ export default function HomeScreen() {
         soundRepeatCount: 1,
       });
 
-      // Schedule notification
       if (newReminder.audioUrl) {
         await scheduleReminder({
           id: newReminder.id,
@@ -160,14 +112,16 @@ export default function HomeScreen() {
       }
 
       setShowRecording(false);
-      loadData();
+      await loadData();
 
-      // Navigate to edit screen to review/modify
       router.push(`/reminder/edit?id=${newReminder.id}`);
     } catch (error) {
       console.error("[VR] Processing error:", error);
       setShowRecording(false);
-      Alert.alert("Error", "Failed to process your reminder. Check your internet connection and try again.");
+      Alert.alert(
+        "Error",
+        "Failed to process your reminder. Check your internet connection and try again."
+      );
     }
   };
 
@@ -197,166 +151,173 @@ export default function HomeScreen() {
   const handleDelete = (reminder: Reminder) => {
     Alert.alert("Delete Reminder", `Delete "${reminder.title}"?`, [
       { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => handleDeleteReminder(reminder),
-      },
+      { text: "Delete", style: "destructive", onPress: () => handleDeleteReminder(reminder) },
     ]);
   };
 
+  const handleMarkDone = async (reminderId: string, reminderTitle: string) => {
+    await recordCompletion(reminderId, reminderTitle, "completed");
+    loadData();
+  };
+
+  const handleReminderMenu = (reminder: Reminder) => {
+    Alert.alert(reminder.title, undefined, [
+      { text: "Edit", onPress: () => handleReminderPress(reminder) },
+      { text: "Mark done", onPress: () => handleMarkDone(reminder.id, reminder.title) },
+      { text: "Delete", style: "destructive", onPress: () => handleDelete(reminder) },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
+  const filteredReminders = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return reminders;
+    return reminders.filter((reminder) => {
+      const title = reminder.title.toLowerCase();
+      const description = (reminder.description || "").toLowerCase();
+      return title.includes(query) || description.includes(query);
+    });
+  }, [reminders, searchQuery]);
+
+  const remindersBySection = useMemo(() => {
+    const sections: Record<"Today" | "Yesterday" | "Earlier", Reminder[]> = {
+      Today: [],
+      Yesterday: [],
+      Earlier: [],
+    };
+
+    const sorted = [...filteredReminders].sort((a, b) => {
+      const aTime = new Date(a.createdAt).getTime();
+      const bTime = new Date(b.createdAt).getTime();
+      return bTime - aTime;
+    });
+
+    for (const reminder of sorted) {
+      sections[getDayBucket(reminder.createdAt)].push(reminder);
+    }
+
+    return sections;
+  }, [filteredReminders]);
+
   return (
     <View style={styles.container}>
-      <LinearGradient colors={colors.accentGradient} style={styles.header}>
-        <View style={styles.headerContent}>
-          <View style={styles.headerTop}>
-            <Text style={styles.headerTitle}>My Reminders</Text>
+      <View style={styles.header}>
+        <View style={styles.headerTop}>
+          <Text style={styles.headerTitle}>Voice Reminder</Text>
+          <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.proPill} activeOpacity={0.85}>
+              <Ionicons name="sparkles" size={14} color="white" style={styles.proIcon} />
+              <Text style={styles.proPillText}>PRO Version</Text>
+            </TouchableOpacity>
             <TouchableOpacity
-              style={styles.notificationButton}
-              onPress={() => setShowNotifications(true)}
+              style={styles.settingsButton}
+              onPress={() => router.push("/history")}
               activeOpacity={0.8}
             >
-              <Ionicons name="notifications-outline" size={24} color="white" />
-              {reminders.length > 0 && (
-                <View style={styles.notificationBadge}>
-                  <Text style={styles.notificationCount}>{reminders.length}</Text>
-                </View>
-              )}
+              <Ionicons name="settings-outline" size={22} color={colors.textPrimary} />
             </TouchableOpacity>
           </View>
         </View>
-      </LinearGradient>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.quickActionsContainer}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
-          <View style={styles.quickActionsGrid}>
-            {QUICK_ACTIONS.map((action) => (
-              <TouchableOpacity
-                key={action.id}
-                style={styles.actionButton}
-                onPress={() => handleQuickAction(action.id)}
-                activeOpacity={0.8}
-              >
-                <LinearGradient colors={action.gradient} style={styles.actionGradient}>
-                  <View style={styles.actionContent}>
-                    <View style={styles.actionIcon}>
-                      <Ionicons name={action.icon} size={28} color="white" />
-                    </View>
-                    <Text style={styles.actionLabel}>{action.label}</Text>
-                  </View>
-                </LinearGradient>
-              </TouchableOpacity>
-            ))}
-          </View>
+        <View style={styles.searchRow}>
+          <Ionicons
+            name="search"
+            size={16}
+            color={colors.textSecondary}
+            style={styles.searchIcon}
+          />
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search"
+            placeholderTextColor={colors.textSecondary}
+            style={styles.searchInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+            clearButtonMode="while-editing"
+          />
         </View>
 
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Today's Schedule</Text>
-            <TouchableOpacity onPress={() => router.push("/calendar")}>
-              <Text style={styles.seeAllButton}>See All</Text>
-            </TouchableOpacity>
+        <View style={styles.filtersRow}>
+          <View style={styles.filterPill}>
+            <Text style={styles.filterPillText}>All</Text>
           </View>
+        </View>
+      </View>
 
-          {(() => {
-            if (pendingReminders.length === 0) {
-              return (
-                <View style={styles.emptyState}>
-                  <Ionicons name="notifications-outline" size={48} color="#ccc" />
-                  <Text style={styles.emptyStateText}>
-                    {reminders.length > 0 ? "All done for today!" : "No reminders scheduled"}
-                  </Text>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        {(["Today", "Yesterday", "Earlier"] as const).map((label) => {
+          const items = remindersBySection[label];
+          if (items.length === 0) return null;
+          return (
+            <View key={label} style={styles.section}>
+              <Text style={styles.sectionTitle}>{label}</Text>
+              {items.map((reminder) => (
+                <View key={reminder.id} style={styles.card}>
                   <TouchableOpacity
-                    style={styles.addReminderButton}
-                    onPress={() => setShowRecording(true)}
+                    style={styles.cardMain}
+                    onPress={() => handleReminderPress(reminder)}
+                    activeOpacity={0.8}
                   >
-                    <Text style={styles.addReminderButtonText}>Add Reminder</Text>
+                    <View style={styles.cardIcon}>
+                      <Ionicons name="mic-outline" size={18} color={colors.accent} />
+                    </View>
+                    <View style={styles.cardText}>
+                      <Text style={styles.cardTitle} numberOfLines={1}>
+                        {reminder.title}
+                      </Text>
+                      <Text style={styles.cardSubtitle} numberOfLines={1}>
+                        {reminder.description || "No description"}
+                      </Text>
+                      <Text style={styles.cardMeta} numberOfLines={1}>
+                        {formatCardTimestamp(reminder.createdAt)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.cardMenu}
+                    onPress={() => handleReminderMenu(reminder)}
+                    hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+                  >
+                    <Ionicons name="ellipsis-horizontal" size={18} color="#9aa0a6" />
                   </TouchableOpacity>
                 </View>
-              );
-            }
-            return pendingReminders.map((reminder) => (
-              <ReminderCard
-                key={reminder.id}
-                id={reminder.id}
-                title={reminder.title}
-                time={reminder.time}
-                frequency={reminder.frequency}
-                days={reminder.days}
-                isCompleted={false}
-                onPress={() => handleReminderPress(reminder)}
-                onDelete={() => handleDelete(reminder)}
-                onMarkDone={() => handleMarkDone(reminder.id, reminder.title)}
-              />
-            ));
-          })()}
-        </View>
+              ))}
+            </View>
+          );
+        })}
+
+        {filteredReminders.length === 0 && (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>
+              {reminders.length === 0 ? "No reminders yet" : "No results"}
+            </Text>
+            <Text style={styles.emptySubtitle}>
+              {reminders.length === 0
+                ? "Tap the mic to create your first reminder."
+                : "Try a different search."}
+            </Text>
+          </View>
+        )}
       </ScrollView>
+
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => setShowRecording(true)}
+        activeOpacity={0.9}
+      >
+        <Ionicons name="mic" size={26} color="white" />
+      </TouchableOpacity>
 
       <RecordingOverlay
         visible={showRecording}
         onClose={handleCloseRecording}
         onRecordingComplete={handleRecordingComplete}
       />
-
-      <Modal
-        visible={showNotifications}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setShowNotifications(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity
-            style={styles.backdrop}
-            activeOpacity={1}
-            onPress={() => setShowNotifications(false)}
-          />
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Notifications</Text>
-              <TouchableOpacity
-                onPress={() => setShowNotifications(false)}
-                style={styles.modalClose}
-              >
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </View>
-
-            {reminders.length === 0 ? (
-              <View style={styles.modalEmpty}>
-                <Ionicons name="notifications-off-outline" size={48} color="#ccc" />
-                <Text style={styles.modalEmptyText}>No reminders scheduled</Text>
-              </View>
-            ) : (
-              <ScrollView showsVerticalScrollIndicator={false}>
-                {reminders.map((reminder) => (
-                  <View key={reminder.id} style={styles.notificationItem}>
-                    <View style={styles.notificationIcon}>
-                      <Ionicons name="notifications" size={22} color={colors.accent} />
-                    </View>
-                    <View style={styles.notificationContent}>
-                      <Text style={styles.notificationTitle} numberOfLines={1}>
-                        {reminder.title}
-                      </Text>
-                      <Text style={styles.notificationSubtitle} numberOfLines={2}>
-                        {reminder.description || "No description"}
-                      </Text>
-                      <Text style={styles.notificationTime}>
-                        {reminder.time} · {reminder.frequency === "custom" && reminder.days?.length
-                          ? reminder.days.join(", ")
-                          : reminder.frequency === "daily"
-                            ? "Daily"
-                            : "Once"}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -367,211 +328,175 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   header: {
-    paddingTop: Platform.OS === "ios" ? 60 : 45,
-    paddingBottom: 25,
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
-  },
-  headerContent: {
+    paddingTop: Platform.OS === "ios" ? 60 : 26,
     paddingHorizontal: 20,
+    paddingBottom: 14,
   },
   headerTop: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "white",
-  },
-  notificationButton: {
-    position: "relative",
-    padding: 8,
-    backgroundColor: "rgba(255, 255, 255, 0.15)",
-    borderRadius: 12,
-  },
-  notificationBadge: {
-    position: "absolute",
-    top: -4,
-    right: -4,
-    backgroundColor: "#FF5252",
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: colors.accent,
-    paddingHorizontal: 4,
-  },
-  notificationCount: {
-    color: "white",
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.35)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 20,
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  modalCard: {
-    width: "100%",
-    backgroundColor: "white",
-    borderRadius: 18,
-    padding: 18,
-    maxHeight: "70%",
-    elevation: 6,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-  },
-  modalHeader: {
-    flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#333",
-  },
-  modalClose: {
-    padding: 6,
-  },
-  modalEmpty: {
-    alignItems: "center",
-    paddingVertical: 30,
-  },
-  modalEmptyText: {
-    color: "#666",
-    marginTop: 10,
-    fontSize: 16,
-  },
-  notificationItem: {
-    flexDirection: "row",
-    padding: 14,
-    borderRadius: 14,
-    backgroundColor: "#f7f7f7",
     marginBottom: 10,
   },
-  notificationIcon: {
-    width: 40,
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  proPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    marginRight: 10,
+  },
+  proPillText: {
+    color: "white",
+    fontWeight: "700",
+    fontSize: 13,
+  },
+  proIcon: {
+    marginRight: 6,
+  },
+  settingsButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#f1f3f4",
+  },
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
     height: 40,
     borderRadius: 12,
-    backgroundColor: colors.accentLight,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
-  },
-  notificationContent: {
-    flex: 1,
-  },
-  notificationTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#1a1a1a",
-  },
-  notificationSubtitle: {
-    fontSize: 14,
-    color: "#555",
-    marginTop: 4,
-  },
-  notificationTime: {
-    fontSize: 12,
-    color: "#888",
+    backgroundColor: "#f1f3f4",
     marginTop: 6,
+  },
+  searchInput: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: 15,
+    paddingVertical: 0,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  filtersRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 10,
+  },
+  filterPill: {
+    backgroundColor: colors.accent,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  filterPillText: {
+    color: "white",
+    fontWeight: "700",
+    fontSize: 13,
   },
   content: {
     flex: 1,
-    paddingTop: 20,
   },
-  quickActionsContainer: {
+  contentContainer: {
     paddingHorizontal: 20,
-    marginBottom: 25,
-  },
-  quickActionsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-    marginTop: 15,
-  },
-  actionButton: {
-    width: (width - 52) / 2,
-    height: 110,
-    borderRadius: 16,
-    overflow: "hidden",
-  },
-  actionGradient: {
-    flex: 1,
-    padding: 15,
-  },
-  actionContent: {
-    flex: 1,
-    justifyContent: "space-between",
-  },
-  actionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  actionLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "white",
-    marginTop: 8,
+    paddingTop: 8,
+    paddingBottom: 120,
   },
   section: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 15,
+    marginTop: 14,
   },
   sectionTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "700",
     color: colors.textPrimary,
-    marginBottom: 5,
+    marginBottom: 10,
   },
-  seeAllButton: {
-    color: colors.accent,
-    fontWeight: "600",
+  card: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f1f3f4",
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+  },
+  cardMain: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  cardIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: colors.accentLight,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  cardText: {
+    flex: 1,
+  },
+  cardTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.textPrimary,
+  },
+  cardSubtitle: {
+    marginTop: 2,
+    fontSize: 13,
+    color: "#596069",
+  },
+  cardMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#9aa0a6",
+  },
+  cardMenu: {
+    paddingLeft: 10,
+    paddingVertical: 4,
+  },
+  fab: {
+    position: "absolute",
+    alignSelf: "center",
+    bottom: Platform.OS === "ios" ? 28 : 18,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
   },
   emptyState: {
+    marginTop: 26,
+    paddingVertical: 18,
     alignItems: "center",
-    padding: 30,
-    backgroundColor: "white",
-    borderRadius: 16,
-    marginTop: 10,
   },
-  emptyStateText: {
+  emptyTitle: {
     fontSize: 16,
-    color: "#666",
-    marginTop: 10,
-    marginBottom: 20,
+    fontWeight: "800",
+    color: colors.textPrimary,
   },
-  addReminderButton: {
-    backgroundColor: colors.accent,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-  },
-  addReminderButtonText: {
-    color: "white",
-    fontWeight: "600",
+  emptySubtitle: {
+    marginTop: 6,
+    fontSize: 13,
+    color: colors.textSecondary,
   },
 });
