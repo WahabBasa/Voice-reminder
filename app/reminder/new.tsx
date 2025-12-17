@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
+  InteractionManager,
   Platform,
   Alert,
 } from "react-native";
@@ -13,7 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { Ionicons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { TimerPickerModal } from "react-native-timer-picker";
 import { colors, scaleFontSize } from "../../lib/theme";
@@ -29,9 +30,9 @@ const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: 
 ];
 
 const FREQUENCIES = [
-  { value: "once", label: "Once", icon: "sunny-outline" as const },
-  { value: "daily", label: "Daily", icon: "sync-outline" as const },
-  { value: "custom", label: "Custom", icon: "calendar-outline" as const },
+  { value: "once", label: "Once", icon: "sun" as const },
+  { value: "daily", label: "Daily", icon: "refresh-cw" as const },
+  { value: "custom", label: "Custom", icon: "calendar" as const },
 ];
 
 export default function NewReminderScreen() {
@@ -97,8 +98,11 @@ export default function NewReminderScreen() {
         soundRepeatCount,
       });
 
-      if (newReminder.audioUrl) {
-        await scheduleReminder({
+      router.back();
+
+      InteractionManager.runAfterInteractions(() => {
+        if (!newReminder.audioUrl) return;
+        scheduleReminder({
           id: newReminder.id,
           title: newReminder.title,
           description: newReminder.description,
@@ -108,14 +112,10 @@ export default function NewReminderScreen() {
           audioUrl: newReminder.audioUrl,
           soundRepeatMode,
           soundRepeatCount,
+        }).catch((e) => {
+          console.log("[VR] Failed to schedule reminder:", e);
         });
-      }
-
-      Alert.alert(
-        "Created",
-        "Reminder created and voice generated.",
-        [{ text: "OK", onPress: () => router.back() }]
-      );
+      });
     } catch (error) {
       console.error("[VR] Create error:", error);
       Alert.alert("Error", "Failed to create reminder");
@@ -128,7 +128,7 @@ export default function NewReminderScreen() {
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
-          <Ionicons name="close" size={28} color="#333" />
+          <Feather name="x" size={28} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>New Reminder</Text>
         <View style={{ width: 40 }} />
@@ -170,7 +170,7 @@ export default function NewReminderScreen() {
                     frequency === f.value && styles.selectedOptionIcon,
                   ]}
                 >
-                  <Ionicons
+                  <Feather
                     name={f.icon}
                     size={24}
                     color={frequency === f.value ? "white" : "#666"}
@@ -205,10 +205,10 @@ export default function NewReminderScreen() {
             onPress={() => setShowTimePicker(true)}
           >
             <View style={styles.timeIconContainer}>
-              <Ionicons name="time-outline" size={20} color={colors.accent} />
+              <Feather name="clock" size={20} color={colors.accent} />
             </View>
             <Text style={styles.timeButtonText}>{formatTime(time)}</Text>
-            <Ionicons name="chevron-forward" size={20} color="#666" />
+            <Feather name="chevron-right" size={20} color="#666" />
           </TouchableOpacity>
 
           {showTimePicker ? (
@@ -291,7 +291,7 @@ export default function NewReminderScreen() {
 
         {/* Info Card */}
         <View style={styles.infoCard}>
-          <Ionicons name="information-circle-outline" size={20} color={colors.accent} />
+          <Feather name="info" size={20} color={colors.accent} />
           <Text style={styles.infoText}>
             This will generate a spoken reminder and schedule it as a notification.
           </Text>

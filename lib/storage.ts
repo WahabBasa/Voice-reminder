@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const REMINDERS_KEY = "@reminders";
 const HISTORY_KEY = "@reminder_history";
+const MAX_HISTORY_ENTRIES = 1000;
 
 // Reminder type (local storage version)
 export interface Reminder {
@@ -147,6 +148,9 @@ export async function recordCompletion(
       status,
     };
     history.push(newEntry);
+    if (history.length > MAX_HISTORY_ENTRIES) {
+      history.splice(0, history.length - MAX_HISTORY_ENTRIES);
+    }
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   } catch (error) {
     console.error("Error recording completion:", error);

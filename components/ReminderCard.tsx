@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, Pressable, TouchableOpacity } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -91,7 +91,7 @@ export default function ReminderCard({
     <View style={styles.container}>
       <Animated.View style={[styles.deleteAction, deleteStyle]}>
         <Pressable onPress={handleDelete} style={styles.deleteButton}>
-          <Ionicons name="trash" size={24} color="#fff" />
+          <Feather name="trash-2" size={24} color="#fff" />
         </Pressable>
       </Animated.View>
 
@@ -105,7 +105,7 @@ export default function ReminderCard({
             ]}
           >
             <View style={styles.iconBadge}>
-              <Ionicons name="notifications" size={24} color={colors.accent} />
+              <Feather name="bell" size={24} color={colors.accent} />
             </View>
 
             <View style={styles.infoContainer}>
@@ -114,14 +114,14 @@ export default function ReminderCard({
               </Text>
               <Text style={styles.frequencyText}>{getFrequencyLabel()} at {time}</Text>
               <View style={styles.timeRow}>
-                <Ionicons name="time-outline" size={16} color="#666" />
+                <Feather name="clock" size={16} color="#666" />
                 <Text style={styles.nextText}>{nextTriggerStr}</Text>
               </View>
             </View>
 
             {isCompleted ? (
               <View style={styles.doneBadge}>
-                <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
+                <Feather name="check-circle" size={20} color="#4CAF50" />
                 <Text style={styles.doneText}>Done</Text>
               </View>
             ) : (

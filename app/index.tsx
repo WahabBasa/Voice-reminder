@@ -1,25 +1,34 @@
 import { useCallback, useMemo, useState } from "react";
 import {
   Alert,
+  InteractionManager,
   Platform,
-  ScrollView,
+  SectionList,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
-import { Ionicons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useAction, useMutation } from "convex/react";
+import { useAction } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { colors, scaleFontSize } from "../lib/theme";
 import { readFileAsBase64 } from "../lib/convex";
-import { cancelReminder, scheduleReminder } from "../lib/notifications";
-import { addReminder, deleteReminder as deleteReminderStorage, getReminders, recordCompletion, Reminder } from "../lib/storage";
+import { scheduleReminder } from "../lib/notifications";
+import {
+  addReminder,
+  getHistory,
+  getReminders,
+  recordCompletion,
+  Reminder,
+  ReminderHistory,
+} from "../lib/storage";
 import RecordingOverlay from "../components/RecordingOverlay";
+
+type HomeView = "all" | "completed";
 
 function formatCardTimestamp(isoString: string) {
   const date = new Date(isoString);
@@ -53,21 +62,28 @@ function getDayBucket(isoString: string): "Today" | "Yesterday" | "Earlier" {
 export default function HomeScreen() {
   const router = useRouter();
   const processVoiceReminder = useAction(api.actions.processVoiceReminder);
-  const removeConvexReminder = useMutation(api.reminders.remove);
   const insets = useSafeAreaInsets();
 
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [history, setHistory] = useState<ReminderHistory[]>([]);
   const [showRecording, setShowRecording] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedView, setSelectedView] = useState<HomeView>("all");
 
   const loadData = useCallback(async () => {
-    const loadedReminders = await getReminders();
+    const [loadedReminders, loadedHistory] = await Promise.all([
+      getReminders(),
+      getHistory(),
+    ]);
     setReminders(loadedReminders);
+    setHistory(loadedHistory);
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
+      const task = InteractionManager.runAfterInteractions(() => {
+        loadData();
+      });
+      return () => task.cancel();
     }, [loadData])
   );
 
@@ -99,8 +115,14 @@ export default function HomeScreen() {
         soundRepeatCount: 1,
       });
 
-      if (newReminder.audioUrl) {
-        await scheduleReminder({
+      setShowRecording(false);
+      setReminders((prev) => [newReminder, ...prev]);
+
+      router.push(`/reminder/edit?id=${newReminder.id}`);
+
+      InteractionManager.runAfterInteractions(() => {
+        if (!newReminder.audioUrl) return;
+        scheduleReminder({
           id: newReminder.id,
           title: newReminder.title,
           description: newReminder.description,
@@ -110,13 +132,10 @@ export default function HomeScreen() {
           audioUrl: newReminder.audioUrl,
           soundRepeatMode: newReminder.soundRepeatMode,
           soundRepeatCount: newReminder.soundRepeatCount,
+        }).catch((e) => {
+          console.log("[VR] Failed to schedule reminder:", e);
         });
-      }
-
-      setShowRecording(false);
-      await loadData();
-
-      router.push(`/reminder/edit?id=${newReminder.id}`);
+      });
     } catch (error) {
       console.error("[VR] Processing error:", error);
       setShowRecording(false);
@@ -127,59 +146,59 @@ export default function HomeScreen() {
     }
   };
 
-  const handleReminderPress = (reminder: Reminder) => {
-    router.push(`/reminder/edit?id=${reminder.id}`);
-  };
+  const handleReminderPress = useCallback(
+    (reminder: Reminder) => {
+      router.push(`/reminder/edit?id=${reminder.id}`);
+    },
+    [router]
+  );
 
-  const handleDeleteReminder = async (reminder: Reminder) => {
-    try {
-      await cancelReminder(reminder.id);
-    } catch (e) {
-      console.log("[VR] Failed to cancel notification:", e);
-    }
+  const handleMarkDone = useCallback(
+    (reminderId: string, reminderTitle: string) => {
+      const optimisticEntry: ReminderHistory = {
+        id: Math.random().toString(36).slice(2, 11),
+        reminderId,
+        reminderTitle,
+        timestamp: new Date().toISOString(),
+        status: "completed",
+      };
 
-    if (reminder.convexId) {
-      try {
-        await removeConvexReminder({ id: reminder.convexId as any });
-      } catch (e) {
-        console.log("[VR] Failed to delete Convex reminder:", e);
-      }
-    }
+      setHistory((prev) => [...prev, optimisticEntry]);
 
-    await deleteReminderStorage(reminder.id);
-    loadData();
-  };
+      recordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
+        console.log("[VR] Failed to record completion:", e);
+      });
+    },
+    []
+  );
 
-  const handleDelete = (reminder: Reminder) => {
-    Alert.alert("Delete Reminder", `Delete "${reminder.title}"?`, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => handleDeleteReminder(reminder) },
-    ]);
-  };
-
-  const handleMarkDone = async (reminderId: string, reminderTitle: string) => {
-    await recordCompletion(reminderId, reminderTitle, "completed");
-    loadData();
-  };
-
-  const handleReminderMenu = (reminder: Reminder) => {
-    Alert.alert(reminder.title, undefined, [
-      { text: "Edit", onPress: () => handleReminderPress(reminder) },
-      { text: "Mark done", onPress: () => handleMarkDone(reminder.id, reminder.title) },
-      { text: "Delete", style: "destructive", onPress: () => handleDelete(reminder) },
-      { text: "Cancel", style: "cancel" },
-    ]);
-  };
+  const completedTodayReminderIds = useMemo(() => {
+    const today = new Date().toDateString();
+    return new Set(
+      history
+        .filter(
+          (entry) =>
+            entry.status === "completed" &&
+            new Date(entry.timestamp).toDateString() === today
+        )
+        .map((entry) => entry.reminderId)
+    );
+  }, [history]);
 
   const filteredReminders = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return reminders;
-    return reminders.filter((reminder) => {
-      const title = reminder.title.toLowerCase();
-      const description = (reminder.description || "").toLowerCase();
-      return title.includes(query) || description.includes(query);
-    });
-  }, [reminders, searchQuery]);
+    const incompleteReminders = reminders.filter(
+      (reminder) => !completedTodayReminderIds.has(reminder.id)
+    );
+    return incompleteReminders;
+  }, [completedTodayReminderIds, reminders]);
+
+  const remindersById = useMemo(() => {
+    return new Map(reminders.map((reminder) => [reminder.id, reminder]));
+  }, [reminders]);
+
+  const filteredCompletedHistory = useMemo(() => {
+    return history.filter((entry) => entry.status === "completed");
+  }, [history]);
 
   const remindersBySection = useMemo(() => {
     const sections: Record<"Today" | "Yesterday" | "Earlier", Reminder[]> = {
@@ -201,114 +220,257 @@ export default function HomeScreen() {
     return sections;
   }, [filteredReminders]);
 
+  const completedBySection = useMemo(() => {
+    const sections: Record<"Today" | "Yesterday" | "Earlier", ReminderHistory[]> =
+      {
+        Today: [],
+        Yesterday: [],
+        Earlier: [],
+      };
+
+    const sorted = [...filteredCompletedHistory].sort((a, b) => {
+      const aTime = new Date(a.timestamp).getTime();
+      const bTime = new Date(b.timestamp).getTime();
+      return bTime - aTime;
+    });
+
+    for (const entry of sorted) {
+      sections[getDayBucket(entry.timestamp)].push(entry);
+    }
+
+    return sections;
+  }, [filteredCompletedHistory]);
+
+  const handleCompletedPress = useCallback(
+    (entry: ReminderHistory) => {
+      const reminder = remindersById.get(entry.reminderId);
+      if (!reminder) return;
+      router.push(`/reminder/edit?id=${reminder.id}`);
+    },
+    [remindersById, router]
+  );
+
+  const reminderSections = useMemo(() => {
+    return (["Today", "Yesterday", "Earlier"] as const)
+      .map((title) => ({ title, data: remindersBySection[title] }))
+      .filter((section) => section.data.length > 0);
+  }, [remindersBySection]);
+
+  const completedSections = useMemo(() => {
+    return (["Today", "Yesterday", "Earlier"] as const)
+      .map((title) => ({ title, data: completedBySection[title] }))
+      .filter((section) => section.data.length > 0);
+  }, [completedBySection]);
+
+  const renderSectionHeader = useCallback(
+    ({ section }: { section: { title: string } }) => {
+      return (
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>{section.title}</Text>
+        </View>
+      );
+    },
+    []
+  );
+
+  const renderReminderItem = useCallback(
+    ({ item }: { item: Reminder }) => {
+      return (
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.cardMain}
+            onPress={() => handleReminderPress(item)}
+            activeOpacity={0.8}
+          >
+            <View style={styles.cardIcon}>
+              <Feather name="mic" size={18} color={colors.accent} />
+            </View>
+            <View style={styles.cardText}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {item.title}
+              </Text>
+              <Text style={styles.cardSubtitle} numberOfLines={1}>
+                {item.description || "No description"}
+              </Text>
+              <Text style={styles.cardMeta} numberOfLines={1}>
+                {formatCardTimestamp(item.createdAt)}
+              </Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.checkButton}
+            onPress={() => handleMarkDone(item.id, item.title)}
+            hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={`Mark "${item.title}" as completed`}
+          >
+            <View style={styles.checkCircle} />
+          </TouchableOpacity>
+        </View>
+      );
+    },
+    [handleMarkDone, handleReminderPress]
+  );
+
+  const renderCompletedItem = useCallback(
+    ({ item }: { item: ReminderHistory }) => {
+      const reminder = remindersById.get(item.reminderId);
+      const description = reminder?.description || "Completed reminder";
+      return (
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.cardMain}
+            onPress={() => handleCompletedPress(item)}
+            activeOpacity={reminder ? 0.8 : 1}
+          >
+            <View style={styles.cardIcon}>
+              <Feather name="check" size={18} color={colors.accent} />
+            </View>
+            <View style={styles.cardText}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {item.reminderTitle}
+              </Text>
+              <Text style={styles.cardSubtitle} numberOfLines={1}>
+                {description}
+              </Text>
+              <Text style={styles.cardMeta} numberOfLines={1}>
+                {formatCardTimestamp(item.timestamp)}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      );
+    },
+    [handleCompletedPress, remindersById]
+  );
+
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.header}>
         <View style={styles.headerTop}>
-          <Text style={styles.headerTitle}>Voice Reminder</Text>
-          <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.proPill} activeOpacity={0.85}>
-              <Ionicons name="sparkles" size={14} color="white" style={styles.proIcon} />
-              <Text style={styles.proPillText}>PRO Version</Text>
-            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Voice Reminder</Text>
+            <View style={styles.headerActions}>
+              <TouchableOpacity style={styles.proPill} activeOpacity={0.85}>
+                <Feather
+                  name="zap"
+                  size={14}
+                  color="white"
+                  style={styles.proIcon}
+                />
+                <Text style={styles.proPillText}>PRO Version</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.settingsButton}
+                onPress={() => router.push("/settings")}
+                activeOpacity={0.8}
+              >
+                <Feather name="settings" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.filtersRow}>
             <TouchableOpacity
-              style={styles.settingsButton}
-              onPress={() => router.push("/history")}
-              activeOpacity={0.8}
+              style={[
+                styles.filterPill,
+              selectedView === "all" && styles.filterPillActive,
+            ]}
+            onPress={() => setSelectedView("all")}
+            activeOpacity={0.85}
+          >
+            <Text
+              style={[
+                styles.filterPillText,
+                selectedView === "all" && styles.filterPillTextActive,
+              ]}
             >
-              <Ionicons name="settings-outline" size={22} color={colors.textPrimary} />
-            </TouchableOpacity>
-          </View>
-        </View>
+              All
+            </Text>
+          </TouchableOpacity>
 
-        <View style={styles.searchRow}>
-          <Ionicons
-            name="search"
-            size={16}
-            color={colors.textSecondary}
-            style={styles.searchIcon}
-          />
-          <TextInput
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder="Search"
-            placeholderTextColor={colors.textSecondary}
-            style={styles.searchInput}
-            autoCapitalize="none"
-            autoCorrect={false}
-            clearButtonMode="while-editing"
-          />
-        </View>
-
-        <View style={styles.filtersRow}>
-          <View style={styles.filterPill}>
-            <Text style={styles.filterPillText}>All</Text>
-          </View>
+          <TouchableOpacity
+            style={[
+              styles.filterPill,
+              selectedView === "completed" && styles.filterPillActive,
+            ]}
+            onPress={() => setSelectedView("completed")}
+            activeOpacity={0.85}
+          >
+            <Text
+              style={[
+                styles.filterPillText,
+                selectedView === "completed" && styles.filterPillTextActive,
+              ]}
+            >
+              Completed
+            </Text>
+          </TouchableOpacity>
         </View>
       </View>
 
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={[
-          styles.contentContainer,
-          { paddingBottom: 120 + insets.bottom },
-        ]}
-        showsVerticalScrollIndicator={false}
-      >
-        {(["Today", "Yesterday", "Earlier"] as const).map((label) => {
-          const items = remindersBySection[label];
-          if (items.length === 0) return null;
-          return (
-            <View key={label} style={styles.section}>
-              <Text style={styles.sectionTitle}>{label}</Text>
-              {items.map((reminder) => (
-                <View key={reminder.id} style={styles.card}>
-                  <TouchableOpacity
-                    style={styles.cardMain}
-                    onPress={() => handleReminderPress(reminder)}
-                    activeOpacity={0.8}
-                  >
-                    <View style={styles.cardIcon}>
-                      <Ionicons name="mic-outline" size={18} color={colors.accent} />
-                    </View>
-                    <View style={styles.cardText}>
-                      <Text style={styles.cardTitle} numberOfLines={1}>
-                        {reminder.title}
-                      </Text>
-                      <Text style={styles.cardSubtitle} numberOfLines={1}>
-                        {reminder.description || "No description"}
-                      </Text>
-                      <Text style={styles.cardMeta} numberOfLines={1}>
-                        {formatCardTimestamp(reminder.createdAt)}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.cardMenu}
-                    onPress={() => handleReminderMenu(reminder)}
-                    hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
-                  >
-                    <Ionicons name="ellipsis-horizontal" size={18} color="#9aa0a6" />
-                  </TouchableOpacity>
-                </View>
-              ))}
+      {selectedView === "all" ? (
+        <SectionList
+          style={styles.content}
+          contentContainerStyle={[
+            styles.contentContainer,
+            { paddingBottom: 120 + insets.bottom },
+          ]}
+          sections={reminderSections}
+          keyExtractor={(item) => item.id}
+          renderSectionHeader={renderSectionHeader}
+          renderItem={renderReminderItem}
+          stickySectionHeadersEnabled={false}
+          showsVerticalScrollIndicator={false}
+          removeClippedSubviews={Platform.OS === "android"}
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
+          windowSize={7}
+          updateCellsBatchingPeriod={16}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>
+                {reminders.length === 0 ? "No reminders yet" : "All done for today!"}
+              </Text>
+              <Text style={styles.emptySubtitle}>
+                {reminders.length === 0
+                  ? "Tap the mic to create your first reminder."
+                  : "Check the Completed tab to review what you finished."}
+              </Text>
             </View>
-          );
-        })}
-
-        {filteredReminders.length === 0 && (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>
-              {reminders.length === 0 ? "No reminders yet" : "No results"}
-            </Text>
-            <Text style={styles.emptySubtitle}>
-              {reminders.length === 0
-                ? "Tap the mic to create your first reminder."
-                : "Try a different search."}
-            </Text>
-          </View>
-        )}
-      </ScrollView>
+          }
+        />
+      ) : (
+        <SectionList
+          style={styles.content}
+          contentContainerStyle={[
+            styles.contentContainer,
+            { paddingBottom: 120 + insets.bottom },
+          ]}
+          sections={completedSections}
+          keyExtractor={(item) => item.id}
+          renderSectionHeader={renderSectionHeader}
+          renderItem={renderCompletedItem}
+          stickySectionHeadersEnabled={false}
+          showsVerticalScrollIndicator={false}
+          removeClippedSubviews={Platform.OS === "android"}
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
+          windowSize={7}
+          updateCellsBatchingPeriod={16}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>
+                {history.length === 0 ? "No history yet" : "No completed reminders"}
+              </Text>
+              <Text style={styles.emptySubtitle}>
+                {history.length === 0
+                  ? "Mark reminders done to see them here."
+                  : "No completed reminders found."}
+              </Text>
+            </View>
+          }
+        />
+      )}
 
       <TouchableOpacity
         style={[
@@ -318,7 +480,7 @@ export default function HomeScreen() {
         onPress={() => setShowRecording(true)}
         activeOpacity={0.9}
       >
-        <Ionicons name="mic" size={26} color="white" />
+        <Feather name="mic" size={26} color="white" />
       </TouchableOpacity>
 
       <RecordingOverlay
@@ -380,39 +542,28 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#f1f3f4",
   },
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: "#f1f3f4",
-    marginTop: 6,
-  },
-  searchInput: {
-    flex: 1,
-    color: colors.textPrimary,
-    fontSize: scaleFontSize(16),
-    paddingVertical: 0,
-  },
-  searchIcon: {
-    marginRight: 8,
-  },
   filtersRow: {
     flexDirection: "row",
     alignItems: "center",
     marginTop: 10,
   },
   filterPill: {
-    backgroundColor: colors.accent,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
+    backgroundColor: "#f1f3f4",
+    marginRight: 10,
+  },
+  filterPillActive: {
+    backgroundColor: colors.accent,
   },
   filterPillText: {
-    color: "white",
     fontWeight: "700",
     fontSize: scaleFontSize(14),
+    color: colors.textPrimary,
+  },
+  filterPillTextActive: {
+    color: "white",
   },
   content: {
     flex: 1,
@@ -423,6 +574,9 @@ const styles = StyleSheet.create({
     paddingBottom: 120,
   },
   section: {
+    marginTop: 14,
+  },
+  sectionHeader: {
     marginTop: 14,
   },
   sectionTitle: {
@@ -472,9 +626,19 @@ const styles = StyleSheet.create({
     fontSize: scaleFontSize(13),
     color: "#9aa0a6",
   },
-  cardMenu: {
+  checkButton: {
     paddingLeft: 10,
     paddingVertical: 4,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  checkCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: "#c7cdd3",
+    backgroundColor: "transparent",
   },
   fab: {
     position: "absolute",

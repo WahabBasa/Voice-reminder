@@ -6,13 +6,14 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
+  InteractionManager,
   Platform,
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useMutation } from "convex/react";
-import { Ionicons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { TimerPickerModal } from "react-native-timer-picker";
 import Slider from "@react-native-community/slider";
@@ -36,9 +37,9 @@ const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: 
 ];
 
 const FREQUENCIES = [
-  { value: "once", label: "Once", icon: "sunny-outline" as const },
-  { value: "daily", label: "Daily", icon: "sync-outline" as const },
-  { value: "custom", label: "Custom", icon: "calendar-outline" as const },
+  { value: "once", label: "Once", icon: "sun" as const },
+  { value: "daily", label: "Daily", icon: "refresh-cw" as const },
+  { value: "custom", label: "Custom", icon: "calendar" as const },
 ];
 
 export default function EditReminderScreen() {
@@ -150,38 +151,56 @@ export default function EditReminderScreen() {
     };
 
     try {
-      if (reminder.convexId) {
-        await updateConvexReminder({
-          id: reminder.convexId as any,
-          title,
-          description,
-          time: timeStr,
-          frequency,
-          days: frequency === "custom" ? days : undefined,
-          soundRepeatMode,
-          soundRepeatCount,
-        });
-      }
-
       await updateReminderStorage(updatedReminder);
-
-      // Reschedule notification
-      await cancelReminder(reminder.id);
-      if (reminder.audioUrl) {
-        await scheduleReminder({
-          id: reminder.id,
-          title,
-          description,
-          time: timeStr,
-          frequency,
-          days: frequency === "custom" ? days : [],
-          audioUrl: reminder.audioUrl,
-          soundRepeatMode,
-          soundRepeatCount,
-        });
-      }
-
       router.back();
+
+      const reminderId = reminder.id;
+      const convexId = reminder.convexId;
+      const audioUrl = reminder.audioUrl;
+      const scheduleDays = frequency === "custom" ? days : [];
+
+      InteractionManager.runAfterInteractions(() => {
+        if (convexId) {
+          updateConvexReminder({
+            id: convexId as any,
+            title,
+            description,
+            time: timeStr,
+            frequency,
+            days: frequency === "custom" ? days : undefined,
+            soundRepeatMode,
+            soundRepeatCount,
+          }).catch((e) => {
+            console.log("[VR] Failed to update Convex reminder:", e);
+          });
+        }
+
+        (async () => {
+          try {
+            await cancelReminder(reminderId);
+          } catch (e) {
+            console.log("[VR] Failed to cancel notification:", e);
+          }
+
+          if (!audioUrl) return;
+
+          try {
+            await scheduleReminder({
+              id: reminderId,
+              title,
+              description,
+              time: timeStr,
+              frequency,
+              days: scheduleDays,
+              audioUrl,
+              soundRepeatMode,
+              soundRepeatCount,
+            });
+          } catch (e) {
+            console.log("[VR] Failed to schedule reminder:", e);
+          }
+        })();
+      });
     } catch (error) {
       console.error("[VR] Save error:", error);
       Alert.alert("Error", "Failed to save reminder");
@@ -197,21 +216,30 @@ export default function EditReminderScreen() {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
+          const reminderId = reminder.id;
+          const convexId = reminder.convexId;
+
           try {
-            await cancelReminder(reminder.id);
+            await deleteReminderStorage(reminderId);
           } catch (e) {
-            console.log("[VR] Failed to cancel notification:", e);
+            console.log("[VR] Failed to delete reminder:", e);
+            Alert.alert("Error", "Failed to delete reminder");
+            return;
           }
 
-          if (reminder.convexId) {
-            try {
-              await removeConvexReminder({ id: reminder.convexId as any });
-            } catch (e) {
-              console.log("[VR] Failed to delete Convex reminder:", e);
-            }
-          }
-          await deleteReminderStorage(reminder.id);
           router.back();
+
+          InteractionManager.runAfterInteractions(() => {
+            cancelReminder(reminderId).catch((e) => {
+              console.log("[VR] Failed to cancel notification:", e);
+            });
+
+            if (convexId) {
+              removeConvexReminder({ id: convexId as any }).catch((e) => {
+                console.log("[VR] Failed to delete Convex reminder:", e);
+              });
+            }
+          });
         },
       },
     ]);
@@ -248,7 +276,7 @@ export default function EditReminderScreen() {
       <View style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
-            <Ionicons name="close" size={28} color="#333" />
+            <Feather name="x" size={28} color="#333" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Loading...</Text>
           <View style={{ width: 40 }} />
@@ -261,11 +289,11 @@ export default function EditReminderScreen() {
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
-          <Ionicons name="close" size={28} color="#333" />
+          <Feather name="x" size={28} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit Reminder</Text>
         <TouchableOpacity onPress={handleDelete} style={styles.deleteHeaderButton}>
-          <Ionicons name="trash-outline" size={24} color="#FF5252" />
+          <Feather name="trash-2" size={24} color="#FF5252" />
         </TouchableOpacity>
       </View>
 
@@ -304,7 +332,7 @@ export default function EditReminderScreen() {
                     frequency === f.value && styles.selectedOptionIcon,
                   ]}
                 >
-                  <Ionicons
+                  <Feather
                     name={f.icon}
                     size={24}
                     color={frequency === f.value ? "white" : "#666"}
@@ -339,10 +367,10 @@ export default function EditReminderScreen() {
             onPress={() => setShowTimePicker(true)}
           >
             <View style={styles.timeIconContainer}>
-              <Ionicons name="time-outline" size={20} color={colors.accent} />
+              <Feather name="clock" size={20} color={colors.accent} />
             </View>
             <Text style={styles.timeButtonText}>{formatTime(time)}</Text>
-            <Ionicons name="chevron-forward" size={20} color="#666" />
+            <Feather name="chevron-right" size={20} color="#666" />
           </TouchableOpacity>
 
           {showTimePicker ? (
@@ -418,12 +446,12 @@ export default function EditReminderScreen() {
                   </Text>
                 </View>
                 <TouchableOpacity style={styles.playButton} onPress={handlePlayPreview}>
-                  <Ionicons name={isPlaying ? "stop" : "play"} size={24} color="#fff" />
+                  <Feather name={isPlaying ? "square" : "play"} size={24} color="#fff" />
                 </TouchableOpacity>
               </View>
 
               <View style={styles.volumeContainer}>
-                <Ionicons name="volume-low" size={18} color="#666" />
+                <Feather name="volume-1" size={18} color="#666" />
                 <Slider
                   style={styles.slider}
                   minimumValue={0}
@@ -439,7 +467,7 @@ export default function EditReminderScreen() {
                   maximumTrackTintColor="#ddd"
                   thumbTintColor={colors.accent}
                 />
-                <Ionicons name="volume-high" size={18} color="#666" />
+                <Feather name="volume-2" size={18} color="#666" />
               </View>
             </View>
           </View>

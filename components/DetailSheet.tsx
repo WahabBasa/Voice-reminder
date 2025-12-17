@@ -8,7 +8,7 @@ import {
   Dimensions,
 } from "react-native";
 import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { Ionicons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import Slider from "@react-native-community/slider";
 import { Audio } from "expo-av";
@@ -46,9 +46,9 @@ interface DetailSheetProps {
 }
 
 const FREQUENCIES = [
-  { value: "once", label: "Once", icon: "sunny-outline" as const },
-  { value: "daily", label: "Daily", icon: "sync-outline" as const },
-  { value: "custom", label: "Custom", icon: "calendar-outline" as const },
+  { value: "once", label: "Once", icon: "sun" as const },
+  { value: "daily", label: "Daily", icon: "refresh-cw" as const },
+  { value: "custom", label: "Custom", icon: "calendar" as const },
 ];
 
 const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
@@ -250,7 +250,7 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
                           frequency === f.value && styles.selectedOptionIcon,
                         ]}
                       >
-                        <Ionicons
+                        <Feather
                           name={f.icon}
                           size={24}
                           color={frequency === f.value ? "white" : "#666"}
@@ -288,10 +288,10 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
                   onPress={() => setShowTimePicker(true)}
                 >
                   <View style={styles.timeIconContainer}>
-                    <Ionicons name="time-outline" size={20} color={colors.accent} />
+                    <Feather name="clock" size={20} color={colors.accent} />
                   </View>
                   <Text style={styles.timeButtonText}>{formatTime(time)}</Text>
-                  <Ionicons name="chevron-forward" size={20} color="#666" />
+                  <Feather name="chevron-right" size={20} color="#666" />
                 </TouchableOpacity>
 
                 {showTimePicker ? (
@@ -373,16 +373,12 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
                         style={styles.playButton}
                         onPress={handlePlayPreview}
                       >
-                        <Ionicons
-                          name={isPlaying ? "stop" : "play"}
-                          size={24}
-                          color="#fff"
-                        />
+                        <Feather name={isPlaying ? "square" : "play"} size={24} color="#fff" />
                       </TouchableOpacity>
                     </View>
 
                     <View style={styles.volumeContainer}>
-                      <Ionicons name="volume-low" size={18} color="#666" />
+                      <Feather name="volume-1" size={18} color="#666" />
                       <Slider
                         style={styles.slider}
                         minimumValue={0}
@@ -398,7 +394,7 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
                         maximumTrackTintColor="#ddd"
                         thumbTintColor={colors.accent}
                       />
-                      <Ionicons name="volume-high" size={18} color="#666" />
+                      <Feather name="volume-2" size={18} color="#666" />
                     </View>
                   </View>
                 </View>
@@ -450,7 +446,7 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
                     style={styles.deleteButton}
                     onPress={() => onDelete(reminder.id)}
                   >
-                    <Ionicons name="trash-outline" size={20} color="#FF5252" />
+                    <Feather name="trash-2" size={20} color="#FF5252" />
                     <Text style={styles.deleteButtonText}>Delete Reminder</Text>
                   </TouchableOpacity>
                 )}

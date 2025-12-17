@@ -10,7 +10,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { colors, scaleFontSize } from "../lib/theme";
 import {
@@ -202,7 +202,7 @@ export default function RecordingOverlay({
           <Text style={styles.title}>New Recording</Text>
 
           <View style={styles.proRow}>
-            <Ionicons name="sparkles" size={14} color={colors.accent} />
+            <Feather name="zap" size={14} color={colors.accent} />
             <Text style={styles.proText}>Get Pro for recordings over 1 minute</Text>
           </View>
 
@@ -245,7 +245,7 @@ export default function RecordingOverlay({
               disabled={state === "processing"}
               activeOpacity={0.8}
             >
-              <Ionicons name="trash-outline" size={22} color="#7a7f86" />
+              <Feather name="trash-2" size={22} color="#7a7f86" />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -261,8 +261,8 @@ export default function RecordingOverlay({
               {state === "processing" ? (
                 <ActivityIndicator size="large" color="#fff" />
               ) : (
-                <Ionicons
-                  name={state === "recording" || state === "paused" ? "stop" : "mic"}
+                <Feather
+                  name={state === "recording" || state === "paused" ? "square" : "mic"}
                   size={30}
                   color="#fff"
                 />
@@ -275,7 +275,7 @@ export default function RecordingOverlay({
               disabled={state === "processing" || state === "idle"}
               activeOpacity={0.8}
             >
-              <Ionicons
+              <Feather
                 name={state === "paused" ? "play" : "pause"}
                 size={22}
                 color={state === "processing" || state === "idle" ? "#b9bcc1" : "#7a7f86"}
