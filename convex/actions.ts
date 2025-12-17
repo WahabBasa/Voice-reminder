@@ -57,6 +57,20 @@ function booleanEnv(name: string, fallback: boolean): boolean {
   return fallback;
 }
 
+function normalizeReminderDescription(input: unknown): string {
+  const text = String(input ?? "").trim();
+  if (!text) return "";
+
+  // Strip common greetings the model/user might include at the start.
+  // Examples: "Hey!", "Hey there,", "Hello -", "Hi:"
+  const withoutGreeting = text.replace(
+    /^(hey|hi|hello)\b(?:\s+(there|friend))?[\s,:\-!]+/i,
+    ""
+  );
+
+  return withoutGreeting.trim();
+}
+
 let cachedResembleProjectUuid: string | null = null;
 
 async function getResembleProjectUuid(apiKey: string): Promise<string> {
@@ -224,6 +238,11 @@ export const processVoiceReminder = action({
   "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom)
 }
 
+IMPORTANT - Intent + tone rules:
+- Keep the exact intent of the user's request (do not add new meaning, tasks, or extra context).
+- Do not add greetings or filler like "Hey", "Hi", "Hello", "Hey there" at the start of the description.
+- Keep the description short, direct, and reminder-like.
+
 IMPORTANT - Time parsing rules:
 - Speech-to-text often transcribes times with spaces instead of colons
 - "10 4 p.m." means 10:04 PM = "22:04"
@@ -244,13 +263,14 @@ The description should be a friendly reminder message like "Time to take your me
     });
 
     const parsed = JSON.parse(completion.choices[0].message.content || "{}");
+    const description = normalizeReminderDescription(parsed.description);
 
     const rawFrequency = String(parsed.frequency || "once").toLowerCase();
     const frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
     const days = frequency === "custom" ? (parsed.days as string[] | undefined) : undefined;
 
     // 3. Generate TTS
-    const ttsText = `Hey! ${parsed.description}`;
+    const ttsText = description || String(parsed.description ?? "");
     const ttsBuffer = await synthesizeReminderTts({
       text: ttsText,
       title: parsed.title as string,
@@ -265,7 +285,7 @@ The description should be a friendly reminder message like "Time to take your me
       internal.reminders.create,
       {
         title: parsed.title as string,
-        description: parsed.description as string,
+        description,
         time: parsed.time as string,
         frequency,
         days,
@@ -280,7 +300,7 @@ The description should be a friendly reminder message like "Time to take your me
     return {
       id: reminderId as string,
       title: parsed.title as string,
-      description: parsed.description as string,
+      description,
       time: parsed.time as string,
       frequency,
       days,
@@ -305,7 +325,8 @@ export const processTextReminder = action({
     const frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
     const days = frequency === "custom" ? args.days : undefined;
 
-    const ttsText = `Hey! ${args.description}`;
+    const normalizedDescription = normalizeReminderDescription(args.description);
+    const ttsText = normalizedDescription || args.description;
     const ttsBuffer = await synthesizeReminderTts({
       text: ttsText,
       title: args.title,
@@ -317,7 +338,7 @@ export const processTextReminder = action({
       internal.reminders.create,
       {
         title: args.title,
-        description: args.description,
+        description: normalizedDescription || args.description,
         time: args.time,
         frequency,
         days,
