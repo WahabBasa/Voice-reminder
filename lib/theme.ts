@@ -78,3 +78,18 @@ export const borderRadius = {
   lg: 16,
   full: 9999,
 };
+
+export function scaleFontSize(fontSize: number): number {
+  // Basic responsive scaling across different device widths (keeps RN fontScale behavior intact).
+  // Tuned for phones; clamped to avoid huge jumps on tablets.
+  // Base width chosen to match common mobile designs.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { Dimensions } = require("react-native") as typeof import("react-native");
+  const width = Dimensions.get("window").width;
+  const baseWidth = 375;
+  const raw = (fontSize * width) / baseWidth;
+  const scaled = Math.round(raw);
+  const min = Math.round(fontSize * 1.0);
+  const max = Math.round(fontSize * 1.25);
+  return Math.max(min, Math.min(max, scaled));
+}

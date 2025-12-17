@@ -6,19 +6,22 @@ import {
   ActivityIndicator,
   Modal,
   Platform,
-  ScrollView,
+  Pressable,
+  useWindowDimensions,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
-import { useState, useEffect, useRef } from "react";
-import { colors, spacing } from "../lib/theme";
+import { useMemo, useState, useEffect, useRef } from "react";
+import { colors, scaleFontSize } from "../lib/theme";
 import {
   requestMicrophonePermission,
   startRecording,
+  pauseRecording,
+  resumeRecording,
   stopRecording,
 } from "../lib/audio";
 
-type RecordingState = "idle" | "recording" | "processing";
+type RecordingState = "idle" | "recording" | "paused" | "processing";
 
 interface RecordingOverlayProps {
   visible: boolean;
@@ -31,18 +34,27 @@ export default function RecordingOverlay({
   onClose,
   onRecordingComplete,
 }: RecordingOverlayProps) {
+  const { height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [state, setState] = useState<RecordingState>("idle");
   const [duration, setDuration] = useState(0);
   const [permissionDenied, setPermissionDenied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const waveformTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [waveformHeights, setWaveformHeights] = useState<number[]>([]);
 
   useEffect(() => {
     if (!visible) {
       setState("idle");
       setDuration(0);
+      setWaveformHeights([]);
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
+      }
+      if (waveformTimerRef.current) {
+        clearInterval(waveformTimerRef.current);
+        waveformTimerRef.current = null;
       }
     }
   }, [visible]);
@@ -50,6 +62,7 @@ export default function RecordingOverlay({
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (waveformTimerRef.current) clearInterval(waveformTimerRef.current);
     };
   }, []);
 
@@ -59,16 +72,44 @@ export default function RecordingOverlay({
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const handleMicPress = async () => {
+  const startTimers = () => {
+    if (!timerRef.current) {
+      timerRef.current = setInterval(() => {
+        setDuration((d) => d + 1);
+      }, 1000);
+    }
+    if (!waveformTimerRef.current) {
+      waveformTimerRef.current = setInterval(() => {
+        setWaveformHeights((prev) => {
+          if (prev.length === 0) return prev;
+          const next = prev.map((h) => {
+            const jitter = (Math.random() - 0.5) * 0.4;
+            const clamped = Math.max(0.1, Math.min(1, h + jitter));
+            return clamped;
+          });
+          return next;
+        });
+      }, 140);
+    }
+  };
+
+  const stopTimers = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (waveformTimerRef.current) {
+      clearInterval(waveformTimerRef.current);
+      waveformTimerRef.current = null;
+    }
+  };
+
+  const handlePrimaryPress = async () => {
     if (state === "processing") return;
 
-    if (state === "recording") {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+    if (state === "recording" || state === "paused") {
+      stopTimers();
       const uri = await stopRecording();
-      setDuration(0);
 
       if (uri) {
         setState("processing");
@@ -84,10 +125,9 @@ export default function RecordingOverlay({
       }
       setPermissionDenied(false);
       await startRecording();
+      setWaveformHeights(Array.from({ length: 28 }, () => 0.4 + Math.random() * 0.6));
       setState("recording");
-      timerRef.current = setInterval(() => {
-        setDuration((d) => d + 1);
-      }, 1000);
+      startTimers();
     }
   };
 
@@ -97,98 +137,151 @@ export default function RecordingOverlay({
     }
   };
 
+  const handleDelete = async () => {
+    if (state === "processing") return;
+    if (state === "idle") {
+      onClose();
+      return;
+    }
+
+    stopTimers();
+    await stopRecording();
+    setDuration(0);
+    setState("idle");
+    onClose();
+  };
+
+  const handlePauseToggle = async () => {
+    if (state === "processing" || state === "idle") return;
+    if (state === "recording") {
+      stopTimers();
+      await pauseRecording();
+      setState("paused");
+      return;
+    }
+
+    await resumeRecording();
+    setState("recording");
+    startTimers();
+  };
+
   const getStatusText = () => {
     if (permissionDenied) return "Microphone access required";
     if (state === "processing") return "Creating your reminder...";
-    if (state === "recording") return "Listening... Tap to stop";
-    return "Tap to record";
+    if (state === "paused") return "Paused";
+    if (state === "recording") return "Listening...";
+    return "Tap the mic to start";
   };
+
+  const waveformBars = useMemo(() => {
+    if (waveformHeights.length === 0) {
+      return Array.from({ length: 28 }, () => 0.2);
+    }
+    return waveformHeights;
+  }, [waveformHeights]);
+
+  const sheetBottomOffset = useMemo(() => {
+    const base = Platform.OS === "ios" ? 28 : 18;
+    return base + Math.round(windowHeight * 0.05) + insets.bottom;
+  }, [windowHeight, insets.bottom]);
 
   return (
     <Modal
       visible={visible}
-      animationType="slide"
+      transparent
+      statusBarTranslucent
+      animationType="fade"
       onRequestClose={handleClose}
     >
-      <View style={styles.container}>
-        <LinearGradient
-          colors={colors.accentGradient}
-          style={styles.headerGradient}
-        />
+      <View style={styles.backdrop}>
+        <Pressable style={styles.backdropPressable} onPress={handleClose} />
 
-        <View style={styles.content}>
-          <View style={styles.header}>
-            <TouchableOpacity
-              onPress={handleClose}
-              style={styles.backButton}
-              disabled={state !== "idle"}
-            >
-              <Ionicons name="chevron-back" size={28} color={colors.accent} />
-            </TouchableOpacity>
-            <Text style={styles.headerTitle}>New Reminder</Text>
+        <View style={[styles.sheet, { marginBottom: sheetBottomOffset }]}>
+          <View style={styles.handleBar} />
+
+          <Text style={styles.title}>New Recording</Text>
+
+          <View style={styles.proRow}>
+            <Ionicons name="sparkles" size={14} color={colors.accent} />
+            <Text style={styles.proText}>Get Pro for recordings over 1 minute</Text>
           </View>
 
-          <ScrollView
-            style={styles.scrollContent}
-            contentContainerStyle={styles.scrollContainer}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={styles.micSection}>
-              <TouchableOpacity
+          <View style={styles.waveform}>
+            {waveformBars.map((height, idx) => (
+              <View
+                key={idx}
                 style={[
-                  styles.micButton,
-                  state === "recording" && styles.micButtonRecording,
-                  state === "processing" && styles.micButtonProcessing,
+                  styles.waveBar,
+                  {
+                    height: 14 + height * 34,
+                    opacity:
+                      state === "recording" || state === "paused" ? 1 : 0.35,
+                  },
                 ]}
-                onPress={handleMicPress}
-                activeOpacity={0.8}
-                disabled={state === "processing"}
-              >
-                {state === "processing" ? (
-                  <ActivityIndicator size="large" color="#fff" />
-                ) : (
-                  <Ionicons
-                    name={state === "recording" ? "stop" : "mic"}
-                    size={48}
-                    color="#fff"
-                  />
-                )}
-              </TouchableOpacity>
+              />
+            ))}
+          </View>
 
-              {state === "recording" && (
-                <Text style={styles.timer}>{formatDuration(duration)}</Text>
-              )}
+          <Text style={styles.transcript} numberOfLines={2}>
+            {getStatusText()}
+          </Text>
 
-              <Text style={styles.statusText}>{getStatusText()}</Text>
+          <View style={styles.timerPill}>
+            <View style={styles.timerDot} />
+            <Text style={styles.timerText}>{formatDuration(duration)}</Text>
+          </View>
+
+          {state === "processing" && (
+            <View style={styles.processingRow}>
+              <ActivityIndicator size="small" color={colors.textSecondary} />
+              <Text style={styles.processingText}>Processing…</Text>
             </View>
+          )}
 
-            {state === "idle" && !permissionDenied && (
-              <View style={styles.examplesCard}>
-                <Text style={styles.examplesTitle}>Try saying:</Text>
-                <View style={styles.exampleItem}>
-                  <Ionicons name="chatbubble-outline" size={18} color={colors.accent} />
-                  <Text style={styles.exampleText}>"Call mom tomorrow at 3pm"</Text>
-                </View>
-                <View style={styles.exampleItem}>
-                  <Ionicons name="chatbubble-outline" size={18} color={colors.accent} />
-                  <Text style={styles.exampleText}>"Take vitamins every morning at 9"</Text>
-                </View>
-                <View style={styles.exampleItem}>
-                  <Ionicons name="chatbubble-outline" size={18} color={colors.accent} />
-                  <Text style={styles.exampleText}>"Meeting on Monday at 2pm"</Text>
-                </View>
-              </View>
-            )}
+          <View style={styles.controlsRow}>
+            <TouchableOpacity
+              style={[styles.controlButton, styles.controlButtonGhost]}
+              onPress={handleDelete}
+              disabled={state === "processing"}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="trash-outline" size={22} color="#7a7f86" />
+            </TouchableOpacity>
 
-            {state === "processing" && (
-              <View style={styles.processingCard}>
-                <Text style={styles.processingTitle}>Processing your voice...</Text>
-                <Text style={styles.processingSubtitle}>
-                  Transcribing and creating your reminder
-                </Text>
-              </View>
-            )}
-          </ScrollView>
+            <TouchableOpacity
+              style={[
+                styles.primaryButton,
+                (state === "recording" || state === "paused") && styles.primaryButtonStop,
+                state === "processing" && styles.primaryButtonDisabled,
+              ]}
+              onPress={handlePrimaryPress}
+              disabled={state === "processing"}
+              activeOpacity={0.85}
+            >
+              {state === "processing" ? (
+                <ActivityIndicator size="large" color="#fff" />
+              ) : (
+                <Ionicons
+                  name={state === "recording" || state === "paused" ? "stop" : "mic"}
+                  size={30}
+                  color="#fff"
+                />
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.controlButton, styles.controlButtonGhost]}
+              onPress={handlePauseToggle}
+              disabled={state === "processing" || state === "idle"}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name={state === "paused" ? "play" : "pause"}
+                size={22}
+                color={state === "processing" || state === "idle" ? "#b9bcc1" : "#7a7f86"}
+              />
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>
@@ -196,141 +289,144 @@ export default function RecordingOverlay({
 }
 
 const styles = StyleSheet.create({
-  container: {
+  backdrop: {
     flex: 1,
-    backgroundColor: "#f8f9fa",
+    backgroundColor: "rgba(0, 0, 0, 0.25)",
+    justifyContent: "flex-end",
   },
-  headerGradient: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: Platform.OS === "ios" ? 140 : 120,
-  },
-  content: {
+  backdropPressable: {
     flex: 1,
-    paddingTop: Platform.OS === "ios" ? 50 : 30,
   },
-  header: {
+  sheet: {
+    backgroundColor: "white",
+    marginHorizontal: 16,
+    borderRadius: 28,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 18,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 22,
+    elevation: 10,
+  },
+  handleBar: {
+    width: 56,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: "#e7e9ec",
+    alignSelf: "center",
+    marginTop: 6,
+    marginBottom: 14,
+  },
+  title: {
+    fontSize: scaleFontSize(16),
+    fontWeight: "700",
+    color: colors.textPrimary,
+    textAlign: "center",
+  },
+  proRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 6,
+  },
+  proText: {
+    fontSize: scaleFontSize(13),
+    color: colors.textSecondary,
+    fontWeight: "500",
+  },
+  waveform: {
+    marginTop: 18,
+    height: 70,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "flex-end",
+    gap: 4,
+    paddingHorizontal: 6,
+  },
+  waveBar: {
+    width: 5,
+    borderRadius: 999,
+    backgroundColor: colors.accent,
+  },
+  transcript: {
+    marginTop: 12,
+    textAlign: "center",
+    fontSize: scaleFontSize(15),
+    color: colors.textPrimary,
+    fontWeight: "500",
+  },
+  timerPill: {
+    marginTop: 14,
+    alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    zIndex: 1,
+    gap: 8,
+    backgroundColor: "#f1f3f4",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "white",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: "white",
-    marginLeft: 15,
-  },
-  scrollContent: {
-    flex: 1,
-  },
-  scrollContainer: {
-    padding: 20,
-    alignItems: "center",
-  },
-  micSection: {
-    alignItems: "center",
-    marginTop: 40,
-    marginBottom: 40,
-  },
-  micButton: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: colors.accent,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: spacing.lg,
-    shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  micButtonRecording: {
+  timerDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: colors.destructive,
-    shadowColor: colors.destructive,
   },
-  micButtonProcessing: {
-    backgroundColor: colors.textSecondary,
-    shadowColor: colors.textSecondary,
-  },
-  timer: {
-    fontSize: 48,
-    fontWeight: "300",
-    color: colors.destructive,
-    marginBottom: spacing.sm,
+  timerText: {
+    fontSize: scaleFontSize(15),
+    color: colors.textPrimary,
+    fontWeight: "700",
     fontVariant: ["tabular-nums"],
   },
-  statusText: {
-    fontSize: 18,
+  processingRow: {
+    marginTop: 12,
+    flexDirection: "row",
+    alignSelf: "center",
+    alignItems: "center",
+    gap: 8,
+  },
+  processingText: {
     color: colors.textSecondary,
-    textAlign: "center",
+    fontSize: scaleFontSize(14),
+    fontWeight: "500",
   },
-  examplesCard: {
-    width: "100%",
-    backgroundColor: "white",
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  examplesTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#333",
-    marginBottom: 16,
-  },
-  exampleItem: {
+  controlsRow: {
+    marginTop: 18,
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 12,
+    justifyContent: "space-between",
   },
-  exampleText: {
-    fontSize: 15,
-    color: "#666",
-    fontStyle: "italic",
-    marginLeft: 10,
-  },
-  processingCard: {
-    width: "100%",
-    backgroundColor: "white",
-    borderRadius: 16,
-    padding: 24,
+  controlButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
+    justifyContent: "center",
   },
-  processingTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#333",
-    marginBottom: 8,
+  controlButtonGhost: {
+    backgroundColor: "#f1f3f4",
   },
-  processingSubtitle: {
-    fontSize: 14,
-    color: "#666",
-    textAlign: "center",
+  primaryButton: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.accent,
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  primaryButtonStop: {
+    backgroundColor: colors.accent,
+  },
+  primaryButtonDisabled: {
+    backgroundColor: "#9aa0a6",
+    shadowColor: "#9aa0a6",
   },
 });

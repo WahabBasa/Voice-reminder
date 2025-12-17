@@ -8,11 +8,12 @@ import {
   Platform,
   Alert,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "@react-navigation/native";
-import { colors } from "../lib/theme";
+import { colors, scaleFontSize } from "../lib/theme";
 import { getHistory, clearHistory, ReminderHistory } from "../lib/storage";
 
 type FilterType = "all" | "completed" | "missed";
@@ -83,7 +84,7 @@ export default function HistoryScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["bottom"]}>
       <LinearGradient
         colors={colors.accentGradient}
         style={styles.headerGradient}
@@ -247,7 +248,7 @@ export default function HistoryScreen() {
           <View style={{ height: 40 }} />
         </ScrollView>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -288,7 +289,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: scaleFontSize(28),
     fontWeight: "700",
     color: "white",
     marginLeft: 15,
@@ -314,7 +315,7 @@ const styles = StyleSheet.create({
     borderColor: colors.accent,
   },
   filterText: {
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
     fontWeight: "600",
     color: "#666",
   },
@@ -330,13 +331,13 @@ const styles = StyleSheet.create({
     paddingVertical: 60,
   },
   emptyTitle: {
-    fontSize: 20,
+    fontSize: scaleFontSize(20),
     fontWeight: "600",
     color: "#333",
     marginTop: 16,
   },
   emptyText: {
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
     color: "#666",
     marginTop: 8,
   },
@@ -344,7 +345,7 @@ const styles = StyleSheet.create({
     marginBottom: 25,
   },
   dateHeader: {
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     fontWeight: "600",
     color: "#666",
     marginBottom: 12,
@@ -374,13 +375,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   entryTitle: {
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     fontWeight: "600",
     color: "#333",
     marginBottom: 4,
   },
   entryTime: {
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
     color: "#666",
   },
   statusContainer: {
@@ -401,7 +402,7 @@ const styles = StyleSheet.create({
   },
   statusText: {
     marginLeft: 4,
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
     fontWeight: "600",
   },
   completedText: {
@@ -427,7 +428,7 @@ const styles = StyleSheet.create({
   },
   clearText: {
     color: "#FF5252",
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     fontWeight: "600",
     marginLeft: 8,
   },

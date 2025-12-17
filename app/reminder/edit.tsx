@@ -9,6 +9,7 @@ import {
   Platform,
   Alert,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useMutation } from "convex/react";
 import { Ionicons } from "@expo/vector-icons";
@@ -17,7 +18,7 @@ import { TimerPickerModal } from "react-native-timer-picker";
 import Slider from "@react-native-community/slider";
 import { Audio } from "expo-av";
 import { api } from "../../convex/_generated/api";
-import { colors, spacing } from "../../lib/theme";
+import { colors, scaleFontSize, spacing } from "../../lib/theme";
 import {
   getReminders,
   updateReminder as updateReminderStorage,
@@ -257,7 +258,7 @@ export default function EditReminderScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
           <Ionicons name="close" size={28} color="#333" />
@@ -475,9 +476,9 @@ export default function EditReminderScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={{ height: 50 }} />
+      <View style={{ height: 50 }} />
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -502,7 +503,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: scaleFontSize(18),
     fontWeight: "700",
     color: "#333",
   },
@@ -528,7 +529,7 @@ const styles = StyleSheet.create({
     marginBottom: 25,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: scaleFontSize(18),
     fontWeight: "700",
     color: "#1a1a1a",
     marginBottom: 15,
@@ -545,7 +546,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   mainInput: {
-    fontSize: 18,
+    fontSize: scaleFontSize(18),
     color: "#333",
     padding: 15,
   },
@@ -584,7 +585,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255, 255, 255, 0.2)",
   },
   optionLabel: {
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
     fontWeight: "600",
     color: "#333",
   },
@@ -618,7 +619,7 @@ const styles = StyleSheet.create({
   },
   timeButtonText: {
     flex: 1,
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     color: "#333",
   },
   repeatRow: {
@@ -640,7 +641,7 @@ const styles = StyleSheet.create({
     borderColor: colors.accent,
   },
   repeatChipText: {
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
     fontWeight: "600",
     color: "#444",
   },
@@ -671,7 +672,7 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   previewText: {
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
     fontStyle: "italic",
     color: "#333",
   },
@@ -707,7 +708,7 @@ const styles = StyleSheet.create({
   textArea: {
     minHeight: 100,
     padding: 15,
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     color: "#333",
   },
   footer: {
@@ -725,7 +726,7 @@ const styles = StyleSheet.create({
   },
   saveButtonText: {
     color: "white",
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     fontWeight: "700",
   },
   cancelButton: {
@@ -739,7 +740,7 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     color: "#666",
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     fontWeight: "600",
   },
 });

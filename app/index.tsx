@@ -9,12 +9,13 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useAction, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
-import { colors } from "../lib/theme";
+import { colors, scaleFontSize } from "../lib/theme";
 import { readFileAsBase64 } from "../lib/convex";
 import { cancelReminder, scheduleReminder } from "../lib/notifications";
 import { addReminder, deleteReminder as deleteReminderStorage, getReminders, recordCompletion, Reminder } from "../lib/storage";
@@ -53,6 +54,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const processVoiceReminder = useAction(api.actions.processVoiceReminder);
   const removeConvexReminder = useMutation(api.reminders.remove);
+  const insets = useSafeAreaInsets();
 
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [showRecording, setShowRecording] = useState(false);
@@ -200,7 +202,7 @@ export default function HomeScreen() {
   }, [filteredReminders]);
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <Text style={styles.headerTitle}>Voice Reminder</Text>
@@ -247,7 +249,10 @@ export default function HomeScreen() {
 
       <ScrollView
         style={styles.content}
-        contentContainerStyle={styles.contentContainer}
+        contentContainerStyle={[
+          styles.contentContainer,
+          { paddingBottom: 120 + insets.bottom },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {(["Today", "Yesterday", "Earlier"] as const).map((label) => {
@@ -306,7 +311,10 @@ export default function HomeScreen() {
       </ScrollView>
 
       <TouchableOpacity
-        style={styles.fab}
+        style={[
+          styles.fab,
+          { bottom: (Platform.OS === "ios" ? 28 : 18) + insets.bottom },
+        ]}
         onPress={() => setShowRecording(true)}
         activeOpacity={0.9}
       >
@@ -318,7 +326,7 @@ export default function HomeScreen() {
         onClose={handleCloseRecording}
         onRecordingComplete={handleRecordingComplete}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -339,7 +347,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   headerTitle: {
-    fontSize: 22,
+    fontSize: scaleFontSize(24),
     fontWeight: "700",
     color: colors.textPrimary,
   },
@@ -359,7 +367,7 @@ const styles = StyleSheet.create({
   proPillText: {
     color: "white",
     fontWeight: "700",
-    fontSize: 13,
+    fontSize: scaleFontSize(14),
   },
   proIcon: {
     marginRight: 6,
@@ -384,7 +392,7 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     color: colors.textPrimary,
-    fontSize: 15,
+    fontSize: scaleFontSize(16),
     paddingVertical: 0,
   },
   searchIcon: {
@@ -404,7 +412,7 @@ const styles = StyleSheet.create({
   filterPillText: {
     color: "white",
     fontWeight: "700",
-    fontSize: 13,
+    fontSize: scaleFontSize(14),
   },
   content: {
     flex: 1,
@@ -418,7 +426,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: scaleFontSize(20),
     fontWeight: "700",
     color: colors.textPrimary,
     marginBottom: 10,
@@ -450,18 +458,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   cardTitle: {
-    fontSize: 15,
+    fontSize: scaleFontSize(16),
     fontWeight: "800",
     color: colors.textPrimary,
   },
   cardSubtitle: {
     marginTop: 2,
-    fontSize: 13,
+    fontSize: scaleFontSize(14),
     color: "#596069",
   },
   cardMeta: {
     marginTop: 4,
-    fontSize: 12,
+    fontSize: scaleFontSize(13),
     color: "#9aa0a6",
   },
   cardMenu: {
@@ -490,13 +498,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   emptyTitle: {
-    fontSize: 16,
+    fontSize: scaleFontSize(17),
     fontWeight: "800",
     color: colors.textPrimary,
   },
   emptySubtitle: {
     marginTop: 6,
-    fontSize: 13,
+    fontSize: scaleFontSize(14),
     color: colors.textSecondary,
   },
 });

@@ -26,6 +26,16 @@ export async function startRecording(): Promise<void> {
   recording = newRecording;
 }
 
+export async function pauseRecording(): Promise<void> {
+  if (!recording) return;
+  await recording.pauseAsync();
+}
+
+export async function resumeRecording(): Promise<void> {
+  if (!recording) return;
+  await recording.startAsync();
+}
+
 export async function stopRecording(): Promise<string | null> {
   if (!recording) return null;
 

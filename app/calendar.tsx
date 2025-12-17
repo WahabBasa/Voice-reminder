@@ -7,11 +7,12 @@ import {
   ScrollView,
   Platform,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "@react-navigation/native";
-import { colors } from "../lib/theme";
+import { colors, scaleFontSize } from "../lib/theme";
 import {
   getReminders,
   getHistory,
@@ -207,7 +208,7 @@ export default function CalendarScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["bottom"]}>
       <LinearGradient
         colors={colors.accentGradient}
         style={styles.headerGradient}
@@ -284,7 +285,7 @@ export default function CalendarScreen() {
           </ScrollView>
         </View>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -325,7 +326,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: scaleFontSize(28),
     fontWeight: "700",
     color: "white",
     marginLeft: 15,
@@ -348,7 +349,7 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   monthText: {
-    fontSize: 18,
+    fontSize: scaleFontSize(18),
     fontWeight: "600",
     color: "#333",
   },
@@ -361,7 +362,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: "#666",
     fontWeight: "500",
-    fontSize: 12,
+    fontSize: scaleFontSize(13),
   },
   calendarWeek: {
     flexDirection: "row",
@@ -375,7 +376,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   dayText: {
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     color: "#333",
   },
   today: {
@@ -413,7 +414,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   scheduleTitle: {
-    fontSize: 20,
+    fontSize: scaleFontSize(20),
     fontWeight: "700",
     color: "#333",
     marginBottom: 15,
@@ -444,13 +445,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   reminderName: {
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     fontWeight: "600",
     color: "#333",
     marginBottom: 4,
   },
   reminderTime: {
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
     color: "#666",
   },
   markDoneButton: {
@@ -462,14 +463,14 @@ const styles = StyleSheet.create({
   markDoneText: {
     color: "white",
     fontWeight: "600",
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
   },
   emptyState: {
     alignItems: "center",
     padding: 40,
   },
   emptyText: {
-    fontSize: 16,
+    fontSize: scaleFontSize(16),
     color: "#666",
     marginTop: 10,
   },
