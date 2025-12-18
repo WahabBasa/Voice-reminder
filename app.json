@@ -33,7 +33,8 @@
       "expo-router",
       ["expo-av", {
         "microphonePermission": "Allow VoiceReminder to access your microphone to record voice reminders."
-      }]
+      }],
+      "./plugins/withNotifeeAndroidMaven"
     ]
   }
 }
