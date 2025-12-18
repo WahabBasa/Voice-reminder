@@ -39,7 +39,7 @@ export default function TimePicker({ value, onChange }: TimePickerProps) {
         wrapperHeight={150}
         wrapperWidth={70}
         itemHeight={50}
-        highlightColor="#e0e0e0"
+        highlightColor={colors.border}
         highlightBorderWidth={1}
       />
 
@@ -56,7 +56,7 @@ export default function TimePicker({ value, onChange }: TimePickerProps) {
         wrapperHeight={150}
         wrapperWidth={70}
         itemHeight={50}
-        highlightColor="#e0e0e0"
+        highlightColor={colors.border}
         highlightBorderWidth={1}
       />
 
@@ -69,7 +69,7 @@ export default function TimePicker({ value, onChange }: TimePickerProps) {
         wrapperHeight={150}
         wrapperWidth={60}
         itemHeight={50}
-        highlightColor="#e0e0e0"
+        highlightColor={colors.border}
         highlightBorderWidth={1}
       />
     </View>

@@ -272,13 +272,13 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
     justifyContent: "center",
     alignItems: "center",
   },
   headerTitle: {
     fontSize: scaleFontSize(20),
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.textPrimary,
   },
   headerSpacer: {
@@ -294,7 +294,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
     marginRight: 10,
   },
   filterPillActive: {
@@ -318,7 +318,7 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     fontSize: scaleFontSize(17),
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.textPrimary,
   },
   emptySubtitle: {
@@ -346,7 +346,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
     borderRadius: 18,
     paddingVertical: 12,
     paddingHorizontal: 12,
@@ -371,13 +371,13 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     fontSize: scaleFontSize(16),
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.textPrimary,
   },
   cardMeta: {
     marginTop: 4,
     fontSize: scaleFontSize(13),
-    color: "#9aa0a6",
+    color: colors.textTertiary,
   },
   statusBadge: {
     flexDirection: "row",

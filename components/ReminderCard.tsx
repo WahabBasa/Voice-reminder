@@ -168,7 +168,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: colors.border,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
@@ -198,12 +198,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#333",
+    color: colors.textHeading,
     marginBottom: 4,
   },
   frequencyText: {
     fontSize: 14,
-    color: "#666",
+    color: colors.textSecondary,
     marginBottom: 4,
   },
   timeRow: {
@@ -213,7 +213,7 @@ const styles = StyleSheet.create({
   nextText: {
     marginLeft: 5,
     fontSize: 14,
-    color: "#666",
+    color: colors.textSecondary,
   },
   doneButton: {
     paddingHorizontal: 14,

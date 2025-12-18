@@ -314,7 +314,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 5,
     borderRadius: 999,
-    backgroundColor: "#e7e9ec",
+    backgroundColor: colors.borderSubtle,
     alignSelf: "center",
     marginTop: 6,
     marginBottom: 14,
@@ -364,7 +364,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 999,
@@ -407,7 +407,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   controlButtonGhost: {
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
   },
   primaryButton: {
     width: 68,
@@ -426,7 +426,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   primaryButtonDisabled: {
-    backgroundColor: "#9aa0a6",
-    shadowColor: "#9aa0a6",
+    backgroundColor: colors.textTertiary,
+    shadowColor: colors.textTertiary,
   },
 });

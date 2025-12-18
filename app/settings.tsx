@@ -115,11 +115,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
   },
   headerTitle: {
     fontSize: scaleFontSize(20),
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.textPrimary,
   },
   headerSpacer: {
@@ -130,8 +130,8 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: scaleFontSize(14),
-    fontWeight: "800",
-    color: "#596069",
+    fontWeight: "700",
+    color: colors.textLabel,
     marginBottom: 10,
     textTransform: "uppercase",
     letterSpacing: 0.6,
@@ -140,7 +140,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
     borderRadius: 18,
     paddingVertical: 12,
     paddingHorizontal: 12,
@@ -165,12 +165,12 @@ const styles = StyleSheet.create({
   },
   rowTitle: {
     fontSize: scaleFontSize(16),
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.textPrimary,
   },
   rowSubtitle: {
     marginTop: 2,
     fontSize: scaleFontSize(13),
-    color: "#596069",
+    color: colors.textSecondary,
   },
 });

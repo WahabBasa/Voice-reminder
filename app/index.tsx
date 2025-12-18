@@ -1,12 +1,15 @@
 import { useCallback, useMemo, useState } from "react";
 import {
   Alert,
+  ActivityIndicator,
   InteractionManager,
+  LayoutAnimation,
   Platform,
   SectionList,
   StyleSheet,
   Text,
   TouchableOpacity,
+  UIManager,
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,6 +18,7 @@ import { useRouter } from "expo-router";
 import { useAction } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { colors, scaleFontSize } from "../lib/theme";
+import { formatReminderTime, getDueTimestamp, isOverdue } from "../lib/time";
 import { readFileAsBase64 } from "../lib/convex";
 import { scheduleReminder } from "../lib/notifications";
 import {
@@ -27,6 +31,7 @@ import {
 } from "../lib/storage";
 import RecordingOverlay from "../components/RecordingOverlay";
 import AppIcon from "../components/AppIcon";
+import { useToast } from "../components/ToastProvider";
 
 type HomeView = "all" | "completed";
 
@@ -63,23 +68,34 @@ export default function HomeScreen() {
   const router = useRouter();
   const processVoiceReminder = useAction(api.actions.processVoiceReminder);
   const insets = useSafeAreaInsets();
+  const toast = useToast();
 
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [history, setHistory] = useState<ReminderHistory[]>([]);
   const [showRecording, setShowRecording] = useState(false);
   const [selectedView, setSelectedView] = useState<HomeView>("all");
+  const [isLoading, setIsLoading] = useState(true);
 
   const loadData = useCallback(async () => {
-    const [loadedReminders, loadedHistory] = await Promise.all([
-      getReminders(),
-      getHistory(),
-    ]);
-    setReminders(loadedReminders);
-    setHistory(loadedHistory);
+    try {
+      setIsLoading(true);
+      const [loadedReminders, loadedHistory] = await Promise.all([
+        getReminders(),
+        getHistory(),
+      ]);
+      setReminders(loadedReminders);
+      setHistory(loadedHistory);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
   useFocusEffect(
     useCallback(() => {
+      if (Platform.OS === "android") {
+        UIManager.setLayoutAnimationEnabledExperimental?.(true);
+      }
+
       const task = InteractionManager.runAfterInteractions(() => {
         loadData();
       });
@@ -116,8 +132,10 @@ export default function HomeScreen() {
       });
 
       setShowRecording(false);
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setReminders((prev) => [newReminder, ...prev]);
 
+      toast.show({ title: "Reminder created", message: newReminder.title, type: "success" });
       router.push(`/reminder/edit?id=${newReminder.id}`);
 
       InteractionManager.runAfterInteractions(() => {
@@ -163,13 +181,16 @@ export default function HomeScreen() {
         status: "completed",
       };
 
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setHistory((prev) => [...prev, optimisticEntry]);
 
       recordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
         console.log("[VR] Failed to record completion:", e);
       });
+
+      toast.show({ title: "Marked as done", message: reminderTitle, type: "success" });
     },
-    []
+    [toast]
   );
 
   const completedTodayReminderIds = useMemo(() => {
@@ -275,6 +296,14 @@ export default function HomeScreen() {
 
   const renderReminderItem = useCallback(
     ({ item }: { item: Reminder }) => {
+      const dueTimestamp = getDueTimestamp(
+        { time: item.time, frequency: item.frequency, days: item.days },
+        new Date()
+      );
+      const overdue = isOverdue(dueTimestamp);
+      const dueColor = overdue ? colors.statusOverdue : colors.statusUpcoming;
+      const isRepeating = item.frequency !== "once";
+
       return (
         <View style={styles.card}>
           <TouchableOpacity
@@ -292,9 +321,20 @@ export default function HomeScreen() {
               <Text style={styles.cardSubtitle} numberOfLines={1}>
                 {item.description || "No description"}
               </Text>
-              <Text style={styles.cardMeta} numberOfLines={1}>
-                {formatCardTimestamp(item.createdAt)}
-              </Text>
+              <View style={styles.dueRow}>
+                <View style={[styles.dueDot, { backgroundColor: dueColor }]} />
+                <Text style={[styles.cardMeta, styles.dueText, { color: dueColor }]} numberOfLines={1}>
+                  {formatReminderTime(dueTimestamp)}
+                </Text>
+                {isRepeating && (
+                  <AppIcon
+                    name="refresh-cw"
+                    size={14}
+                    color={dueColor}
+                    style={styles.repeatIcon}
+                  />
+                )}
+              </View>
             </View>
           </TouchableOpacity>
           <TouchableOpacity
@@ -324,7 +364,7 @@ export default function HomeScreen() {
             activeOpacity={reminder ? 0.8 : 1}
           >
             <View style={styles.cardIcon}>
-              <AppIcon name="check" size={18} color={colors.textSecondary} />
+              <AppIcon name="check" size={18} color={colors.success} />
             </View>
             <View style={styles.cardText}>
               <Text style={styles.cardTitle} numberOfLines={1}>
@@ -423,14 +463,37 @@ export default function HomeScreen() {
           updateCellsBatchingPeriod={16}
           ListEmptyComponent={
             <View style={styles.emptyState}>
-              <Text style={styles.emptyTitle}>
-                {reminders.length === 0 ? "No reminders yet" : "All done for today!"}
-              </Text>
-              <Text style={styles.emptySubtitle}>
-                {reminders.length === 0
-                  ? "Tap the mic to create your first reminder."
-                  : "Check the Completed tab to review what you finished."}
-              </Text>
+              {isLoading ? (
+                <>
+                  <ActivityIndicator size="small" color={colors.textSecondary} />
+                  <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>
+                    Loading reminders...
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <View style={styles.emptyIcon}>
+                    <AppIcon name="mic" size={22} color={colors.textSecondary} />
+                  </View>
+                  <Text style={styles.emptyTitle}>
+                    {reminders.length === 0 ? "No reminders yet" : "All done for today!"}
+                  </Text>
+                  <Text style={styles.emptySubtitle}>
+                    {reminders.length === 0
+                      ? "Tap below to create your first reminder."
+                      : "Check the Completed tab to review what you finished."}
+                  </Text>
+                  {reminders.length === 0 && (
+                    <TouchableOpacity
+                      style={styles.emptyCta}
+                      onPress={() => setShowRecording(true)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.emptyCtaText}>Create a reminder</Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              )}
             </View>
           }
         />
@@ -454,29 +517,54 @@ export default function HomeScreen() {
           updateCellsBatchingPeriod={16}
           ListEmptyComponent={
             <View style={styles.emptyState}>
-              <Text style={styles.emptyTitle}>
-                {history.length === 0 ? "No history yet" : "No completed reminders"}
-              </Text>
-              <Text style={styles.emptySubtitle}>
-                {history.length === 0
-                  ? "Mark reminders done to see them here."
-                  : "No completed reminders found."}
-              </Text>
+              {isLoading ? (
+                <>
+                  <ActivityIndicator size="small" color={colors.textSecondary} />
+                  <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>
+                    Loading history...
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <View style={styles.emptyIcon}>
+                    <AppIcon name="check-circle" size={22} color={colors.textSecondary} />
+                  </View>
+                  <Text style={styles.emptyTitle}>
+                    {history.length === 0 ? "No history yet" : "No completed reminders"}
+                  </Text>
+                  <Text style={styles.emptySubtitle}>
+                    {history.length === 0
+                      ? "Mark reminders done to see them here."
+                      : "No completed reminders found."}
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.emptyCta, styles.emptyCtaGhost]}
+                    onPress={() => setSelectedView("all")}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[styles.emptyCtaText, styles.emptyCtaGhostText]}>
+                      Back to reminders
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           }
         />
       )}
 
-      <TouchableOpacity
-        style={[
-          styles.fab,
-          { bottom: (Platform.OS === "ios" ? 28 : 18) + insets.bottom },
-        ]}
-        onPress={() => setShowRecording(true)}
-        activeOpacity={0.9}
-      >
-        <AppIcon name="mic" size={26} color="white" />
-      </TouchableOpacity>
+      {selectedView === "all" && (
+        <TouchableOpacity
+          style={[
+            styles.fab,
+            { bottom: (Platform.OS === "ios" ? 28 : 18) + insets.bottom },
+          ]}
+          onPress={() => setShowRecording(true)}
+          activeOpacity={0.9}
+        >
+          <AppIcon name="mic" size={26} color="white" />
+        </TouchableOpacity>
+      )}
 
       <RecordingOverlay
         visible={showRecording}
@@ -535,7 +623,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
   },
   filtersRow: {
     flexDirection: "row",
@@ -546,7 +634,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
     marginRight: 10,
   },
   filterPillActive: {
@@ -583,7 +671,7 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#f1f3f4",
+    backgroundColor: colors.surface,
     borderRadius: 18,
     paddingVertical: 12,
     paddingHorizontal: 12,
@@ -608,18 +696,35 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     fontSize: scaleFontSize(16),
-    fontWeight: "800",
-    color: colors.textPrimary,
+    fontWeight: "700",
+    color: colors.textHeading,
   },
   cardSubtitle: {
     marginTop: 2,
     fontSize: scaleFontSize(14),
-    color: "#596069",
+    color: colors.textSecondary,
   },
   cardMeta: {
     marginTop: 4,
     fontSize: scaleFontSize(13),
-    color: "#9aa0a6",
+    color: colors.textTertiary,
+  },
+  dueRow: {
+    marginTop: 4,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  dueDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  dueText: {
+    flexShrink: 1,
+  },
+  repeatIcon: {
+    marginLeft: 8,
   },
   checkButton: {
     paddingLeft: 10,
@@ -632,7 +737,7 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 11,
     borderWidth: 2,
-    borderColor: "#c7cdd3",
+    borderColor: colors.outline,
     backgroundColor: "transparent",
   },
   fab: {
@@ -656,14 +761,42 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     alignItems: "center",
   },
+  emptyIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
   emptyTitle: {
     fontSize: scaleFontSize(17),
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.textPrimary,
   },
   emptySubtitle: {
     marginTop: 6,
     fontSize: scaleFontSize(14),
     color: colors.textSecondary,
+    textAlign: "center",
+  },
+  emptyCta: {
+    marginTop: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: colors.accent,
+  },
+  emptyCtaText: {
+    color: "white",
+    fontWeight: "700",
+    fontSize: scaleFontSize(14),
+  },
+  emptyCtaGhost: {
+    backgroundColor: colors.surface,
+  },
+  emptyCtaGhostText: {
+    color: colors.textPrimary,
   },
 });

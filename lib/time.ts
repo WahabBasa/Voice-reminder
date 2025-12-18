@@ -14,6 +14,102 @@ export interface ReminderSchedule {
   days?: string[]; // ["mon", "wed", "fri"]
 }
 
+const DAY_KEYS: Array<keyof typeof DAY_MAP> = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+function isSameDay(a: Date, b: Date): boolean {
+  return a.toDateString() === b.toDateString();
+}
+
+export function isOverdue(timestamp: number, now = Date.now()): boolean {
+  return timestamp < now;
+}
+
+export function getDueTimestamp(schedule: ReminderSchedule, nowDate = new Date()): number {
+  const [hours, minutes] = schedule.time.split(":").map(Number);
+  const now = nowDate;
+
+  if (schedule.frequency === "once") {
+    return getNextTriggerTime(schedule);
+  }
+
+  const todayTarget = new Date(now);
+  todayTarget.setHours(hours, minutes, 0, 0);
+
+  if (schedule.frequency === "daily") {
+    return todayTarget.getTime();
+  }
+
+  if (schedule.frequency === "weekly" || schedule.frequency === "custom") {
+    const todayKey = DAY_KEYS[now.getDay()];
+    const days = schedule.days?.map((d) => d.toLowerCase()) ?? [];
+    if (days.includes(todayKey)) {
+      return todayTarget.getTime();
+    }
+    return getNextTriggerTime(schedule);
+  }
+
+  return getNextTriggerTime(schedule);
+}
+
+function formatRelativeMinutes(minutes: number): string {
+  if (minutes === 1) return "1 minute";
+  return `${minutes} minutes`;
+}
+
+function formatRelativeHours(hours: number): string {
+  if (hours === 1) return "1 hour";
+  return `${hours} hours`;
+}
+
+function formatRelativeDays(days: number): string {
+  if (days === 1) return "1 day";
+  return `${days} days`;
+}
+
+export function formatReminderTime(timestamp: number, nowDate = new Date()): string {
+  const date = new Date(timestamp);
+  const now = nowDate;
+
+  const diffMs = date.getTime() - now.getTime();
+  const diffMinutes = Math.round(Math.abs(diffMs) / (60 * 1000));
+
+  if (diffMs < 0) {
+    if (diffMinutes < 60) {
+      return `${formatRelativeMinutes(Math.max(1, diffMinutes))} ago`;
+    }
+    const diffHours = Math.round(diffMinutes / 60);
+    if (diffHours < 24) {
+      return `${formatRelativeHours(Math.max(1, diffHours))} ago`;
+    }
+    const diffDays = Math.round(diffHours / 24);
+    return `${formatRelativeDays(Math.max(1, diffDays))} ago`;
+  }
+
+  if (diffMinutes < 60) {
+    return `in ${formatRelativeMinutes(Math.max(1, diffMinutes))}`;
+  }
+
+  const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  if (isSameDay(date, now)) {
+    return `Today at ${timeStr}`;
+  }
+  if (isSameDay(date, tomorrow)) {
+    return `Tomorrow at ${timeStr}`;
+  }
+
+  const daysAhead = Math.floor((date.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+  if (daysAhead >= 0 && daysAhead < 7) {
+    const dayName = date.toLocaleDateString([], { weekday: "long" });
+    return `${dayName} at ${timeStr}`;
+  }
+
+  const dateStr = date.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${dateStr} at ${timeStr}`;
+}
+
 export function getNextTriggerTime(schedule: ReminderSchedule): number {
   const [hours, minutes] = schedule.time.split(":").map(Number);
   const now = new Date();

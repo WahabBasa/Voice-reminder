@@ -34,7 +34,7 @@ export default function ScrollSelector<T extends string | number>({
   itemHeight = 50,
   wrapperHeight = 150,
   wrapperWidth = 80,
-  highlightColor = "#e0e0e0",
+  highlightColor = colors.border,
   highlightBorderWidth = 1,
   renderItem,
   loop = false,
@@ -242,7 +242,7 @@ const styles = StyleSheet.create({
   },
   itemText: {
     fontSize: 22,
-    color: "#999",
+    color: colors.textTertiary,
   },
   selectedItemText: {
     color: colors.textPrimary,

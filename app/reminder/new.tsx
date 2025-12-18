@@ -21,6 +21,7 @@ import { addReminder } from "../../lib/storage";
 import { scheduleReminder } from "../../lib/notifications";
 import DaySelector from "../../components/DaySelector";
 import AppIcon from "../../components/AppIcon";
+import { useToast } from "../../components/ToastProvider";
 
 const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: number }[] = [
   { label: "1x", mode: "count", count: 1 },
@@ -38,6 +39,7 @@ const FREQUENCIES = [
 export default function NewReminderScreen() {
   const router = useRouter();
   const processTextReminder = useAction(api.actions.processTextReminder);
+  const toast = useToast();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -98,6 +100,7 @@ export default function NewReminderScreen() {
         soundRepeatCount,
       });
 
+      toast.show({ title: "Reminder created", message: newReminder.title, type: "success" });
       router.back();
 
       InteractionManager.runAfterInteractions(() => {
@@ -128,7 +131,7 @@ export default function NewReminderScreen() {
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
-          <AppIcon name="x" size={28} color="#333" />
+          <AppIcon name="x" size={28} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>New Reminder</Text>
         <View style={{ width: 40 }} />
@@ -145,7 +148,7 @@ export default function NewReminderScreen() {
               value={title}
               onChangeText={setTitle}
               placeholder="Reminder Title"
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.textTertiary}
               autoFocus
             />
           </View>
@@ -281,7 +284,7 @@ export default function NewReminderScreen() {
               value={description}
               onChangeText={setDescription}
               placeholder="Add notes or details..."
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.textTertiary}
               multiline
               numberOfLines={3}
               textAlignVertical="top"
@@ -326,7 +329,7 @@ export default function NewReminderScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f8f9fa",
+    backgroundColor: colors.background,
   },
   header: {
     flexDirection: "row",
@@ -335,7 +338,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingTop: Platform.OS === "ios" ? 50 : 15,
     paddingBottom: 10,
-    backgroundColor: "#f8f9fa",
+    backgroundColor: colors.background,
   },
   closeButton: {
     width: 40,
@@ -346,12 +349,12 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: scaleFontSize(18),
     fontWeight: "700",
-    color: "#333",
+    color: colors.textPrimary,
   },
   handleBar: {
     width: 40,
     height: 4,
-    backgroundColor: "#ddd",
+    backgroundColor: colors.borderSubtle,
     borderRadius: 2,
     alignSelf: "center",
     marginBottom: 15,
@@ -366,14 +369,14 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: scaleFontSize(18),
     fontWeight: "700",
-    color: "#1a1a1a",
+    color: colors.textPrimary,
     marginBottom: 15,
   },
   inputContainer: {
-    backgroundColor: "white",
+    backgroundColor: colors.card,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: colors.border,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
@@ -382,7 +385,7 @@ const styles = StyleSheet.create({
   },
   mainInput: {
     fontSize: scaleFontSize(18),
-    color: "#333",
+    color: colors.textPrimary,
     padding: 15,
   },
   optionsGrid: {
@@ -391,12 +394,12 @@ const styles = StyleSheet.create({
   },
   optionCard: {
     flex: 1,
-    backgroundColor: "white",
+    backgroundColor: colors.card,
     borderRadius: 16,
     padding: 15,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: colors.border,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
@@ -411,7 +414,7 @@ const styles = StyleSheet.create({
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: "#f5f5f5",
+    backgroundColor: colors.surfaceAlt,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 10,
@@ -422,7 +425,7 @@ const styles = StyleSheet.create({
   optionLabel: {
     fontSize: scaleFontSize(14),
     fontWeight: "600",
-    color: "#333",
+    color: colors.textPrimary,
   },
   selectedOptionLabel: {
     color: "white",
@@ -438,8 +441,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
-    backgroundColor: "white",
+    borderColor: colors.border,
+    backgroundColor: colors.card,
   },
   repeatChipActive: {
     backgroundColor: colors.accentLight,
@@ -448,26 +451,26 @@ const styles = StyleSheet.create({
   repeatChipText: {
     fontSize: scaleFontSize(14),
     fontWeight: "600",
-    color: "#444",
+    color: colors.textPrimary,
   },
   repeatChipTextActive: {
     color: colors.accent,
   },
   timePickerWrapper: {
-    backgroundColor: "white",
+    backgroundColor: colors.card,
     borderRadius: 16,
     padding: 15,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: colors.border,
   },
   timeButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "white",
+    backgroundColor: colors.card,
     borderRadius: 16,
     padding: 15,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: colors.border,
   },
   timeIconContainer: {
     width: 40,
@@ -481,13 +484,13 @@ const styles = StyleSheet.create({
   timeButtonText: {
     flex: 1,
     fontSize: scaleFontSize(16),
-    color: "#333",
+    color: colors.textPrimary,
   },
   textAreaContainer: {
-    backgroundColor: "white",
+    backgroundColor: colors.card,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: colors.border,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
@@ -498,7 +501,7 @@ const styles = StyleSheet.create({
     minHeight: 100,
     padding: 15,
     fontSize: scaleFontSize(16),
-    color: "#333",
+    color: colors.textPrimary,
   },
   infoCard: {
     flexDirection: "row",
@@ -512,7 +515,7 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 10,
     fontSize: scaleFontSize(14),
-    color: "#666",
+    color: colors.textSecondary,
   },
   footer: {
     marginTop: 10,
@@ -539,13 +542,13 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: colors.border,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "white",
+    backgroundColor: colors.card,
   },
   cancelButtonText: {
-    color: "#666",
+    color: colors.textSecondary,
     fontSize: scaleFontSize(16),
     fontWeight: "600",
   },
