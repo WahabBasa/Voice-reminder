@@ -4,6 +4,7 @@
 
 **ALWAYS RUN THESE CHECKS BEFORE DEVELOPMENT:**
 
+0. **Pull Latest First (recommended)** - Run `git pull --ff-only` before creating today's devlog (devlogs are in git now)
 1. **Check Current Date/Time** - Run `Get-Date -Format "yyyy-MM-dd HH:mm"` (PowerShell)
 2. **Check Today's Devlog** - Look for `updates/YYYY-MM-DD_devlog.md`
 3. **Create Devlog if Missing** - If no devlog exists for today, create `updates/YYYY-MM-DD_devlog.md`
@@ -23,6 +24,24 @@
 | **GitHub Repo** | https://github.com/WahabBasa/Voice-reminder |
 
 ---
+
+## dY"? Current Machine Setup (DELL Win10)
+
+This repo is currently checked out at:
+- `C:\Users\DELL\Desktop\Abdul Wahab\Other Work\Voice-reminder`
+
+Project plan recommends a shorter path to avoid Windows path-length issues:
+- `C:\Dev\VR`
+
+**What is set up on this machine:**
+- Git is installed
+- Node is managed via NVM for Windows; repo requires Node `22.5.1` (see `.nvmrc`)
+- Local env file exists: `.env.local` (Convex URL + deployment)
+
+**Known limitations / gotchas on this machine:**
+- PowerShell blocks `npm` / `npx` `.ps1` shims (scripts disabled). Use `npm.cmd` / `npx.cmd` (or run from `cmd.exe`).
+- Android toolchain is not set up here (no Android Studio/SDK/adb). Java installed is 8; Android builds typically need a newer JDK (17).
+- Plan: run the Android app on the other machine for now.
 
 ## 📝 Devlog Writing Guidelines
 
@@ -90,6 +109,10 @@ Running on Samsung SM_G955F. Two tabs, both working.
 ## 🔧 Development Commands
 
 ```bash
+# If PowerShell blocks npm/npx, use npm.cmd/npx.cmd:
+# npm.cmd ci
+# npx.cmd convex dev
+
 # Start development (Metro + Android)
 npx expo start --dev-client --android
 
