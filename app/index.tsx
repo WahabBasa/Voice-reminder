@@ -11,7 +11,6 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
-import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useAction } from "convex/react";
 import { api } from "../convex/_generated/api";
@@ -27,6 +26,7 @@ import {
   ReminderHistory,
 } from "../lib/storage";
 import RecordingOverlay from "../components/RecordingOverlay";
+import AppIcon from "../components/AppIcon";
 
 type HomeView = "all" | "completed";
 
@@ -283,7 +283,7 @@ export default function HomeScreen() {
             activeOpacity={0.8}
           >
             <View style={styles.cardIcon}>
-              <Feather name="mic" size={18} color={colors.accent} />
+              <AppIcon name="mic" size={18} color={colors.textSecondary} />
             </View>
             <View style={styles.cardText}>
               <Text style={styles.cardTitle} numberOfLines={1}>
@@ -324,7 +324,7 @@ export default function HomeScreen() {
             activeOpacity={reminder ? 0.8 : 1}
           >
             <View style={styles.cardIcon}>
-              <Feather name="check" size={18} color={colors.accent} />
+              <AppIcon name="check" size={18} color={colors.textSecondary} />
             </View>
             <View style={styles.cardText}>
               <Text style={styles.cardTitle} numberOfLines={1}>
@@ -351,12 +351,7 @@ export default function HomeScreen() {
             <Text style={styles.headerTitle}>Voice Reminder</Text>
             <View style={styles.headerActions}>
               <TouchableOpacity style={styles.proPill} activeOpacity={0.85}>
-                <Feather
-                  name="zap"
-                  size={14}
-                  color="white"
-                  style={styles.proIcon}
-                />
+                <AppIcon name="zap" size={14} color="white" style={styles.proIcon} />
                 <Text style={styles.proPillText}>PRO Version</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -364,7 +359,7 @@ export default function HomeScreen() {
                 onPress={() => router.push("/settings")}
                 activeOpacity={0.8}
               >
-                <Feather name="settings" size={22} color={colors.textPrimary} />
+                <AppIcon name="settings" size={22} color={colors.textPrimary} />
               </TouchableOpacity>
             </View>
           </View>
@@ -480,7 +475,7 @@ export default function HomeScreen() {
         onPress={() => setShowRecording(true)}
         activeOpacity={0.9}
       >
-        <Feather name="mic" size={26} color="white" />
+        <AppIcon name="mic" size={26} color="white" />
       </TouchableOpacity>
 
       <RecordingOverlay
@@ -603,7 +598,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 12,
-    backgroundColor: colors.accentLight,
+    backgroundColor: colors.muted,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,

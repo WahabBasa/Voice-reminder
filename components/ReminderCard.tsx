@@ -1,5 +1,4 @@
 import { View, Text, StyleSheet, Pressable, TouchableOpacity } from "react-native";
-import { Feather } from "@expo/vector-icons";
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -8,6 +7,7 @@ import Animated, {
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { colors, spacing } from "../lib/theme";
 import { formatNextTrigger, getNextTriggerTime } from "../lib/time";
+import AppIcon from "./AppIcon";
 
 interface ReminderCardProps {
   id: string;
@@ -91,7 +91,7 @@ export default function ReminderCard({
     <View style={styles.container}>
       <Animated.View style={[styles.deleteAction, deleteStyle]}>
         <Pressable onPress={handleDelete} style={styles.deleteButton}>
-          <Feather name="trash-2" size={24} color="#fff" />
+          <AppIcon name="trash-2" size={24} color="#fff" />
         </Pressable>
       </Animated.View>
 
@@ -105,7 +105,7 @@ export default function ReminderCard({
             ]}
           >
             <View style={styles.iconBadge}>
-              <Feather name="bell" size={24} color={colors.accent} />
+              <AppIcon name="bell" size={24} color={colors.textSecondary} />
             </View>
 
             <View style={styles.infoContainer}>
@@ -114,14 +114,14 @@ export default function ReminderCard({
               </Text>
               <Text style={styles.frequencyText}>{getFrequencyLabel()} at {time}</Text>
               <View style={styles.timeRow}>
-                <Feather name="clock" size={16} color="#666" />
+                <AppIcon name="clock" size={16} color={colors.textSecondary} />
                 <Text style={styles.nextText}>{nextTriggerStr}</Text>
               </View>
             </View>
 
             {isCompleted ? (
               <View style={styles.doneBadge}>
-                <Feather name="check-circle" size={20} color="#4CAF50" />
+                <AppIcon name="check-circle" size={20} color="#4CAF50" />
                 <Text style={styles.doneText}>Done</Text>
               </View>
             ) : (
@@ -187,7 +187,7 @@ const styles = StyleSheet.create({
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: colors.accentLight,
+    backgroundColor: colors.muted,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 15,

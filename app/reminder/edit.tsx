@@ -13,7 +13,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useMutation } from "convex/react";
-import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { TimerPickerModal } from "react-native-timer-picker";
 import Slider from "@react-native-community/slider";
@@ -28,6 +27,7 @@ import {
 } from "../../lib/storage";
 import { cancelReminder, scheduleReminder } from "../../lib/notifications";
 import DaySelector from "../../components/DaySelector";
+import AppIcon from "../../components/AppIcon";
 
 const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: number }[] = [
   { label: "1x", mode: "count", count: 1 },
@@ -276,7 +276,7 @@ export default function EditReminderScreen() {
       <View style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
-            <Feather name="x" size={28} color="#333" />
+            <AppIcon name="x" size={28} color="#333" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Loading...</Text>
           <View style={{ width: 40 }} />
@@ -289,11 +289,11 @@ export default function EditReminderScreen() {
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
-          <Feather name="x" size={28} color="#333" />
+          <AppIcon name="x" size={28} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit Reminder</Text>
         <TouchableOpacity onPress={handleDelete} style={styles.deleteHeaderButton}>
-          <Feather name="trash-2" size={24} color="#FF5252" />
+          <AppIcon name="trash-2" size={24} color="#FF5252" />
         </TouchableOpacity>
       </View>
 
@@ -332,10 +332,10 @@ export default function EditReminderScreen() {
                     frequency === f.value && styles.selectedOptionIcon,
                   ]}
                 >
-                  <Feather
+                  <AppIcon
                     name={f.icon}
                     size={24}
-                    color={frequency === f.value ? "white" : "#666"}
+                    color={frequency === f.value ? "white" : colors.textSecondary}
                   />
                 </View>
                 <Text
@@ -367,10 +367,10 @@ export default function EditReminderScreen() {
             onPress={() => setShowTimePicker(true)}
           >
             <View style={styles.timeIconContainer}>
-              <Feather name="clock" size={20} color={colors.accent} />
+              <AppIcon name="clock" size={20} color={colors.textSecondary} />
             </View>
             <Text style={styles.timeButtonText}>{formatTime(time)}</Text>
-            <Feather name="chevron-right" size={20} color="#666" />
+            <AppIcon name="chevron-right" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
 
           {showTimePicker ? (
@@ -446,12 +446,12 @@ export default function EditReminderScreen() {
                   </Text>
                 </View>
                 <TouchableOpacity style={styles.playButton} onPress={handlePlayPreview}>
-                  <Feather name={isPlaying ? "square" : "play"} size={24} color="#fff" />
+                  <AppIcon name={isPlaying ? "square" : "play"} size={24} color="#fff" />
                 </TouchableOpacity>
               </View>
 
               <View style={styles.volumeContainer}>
-                <Feather name="volume-1" size={18} color="#666" />
+                <AppIcon name="volume-1" size={18} color={colors.textSecondary} />
                 <Slider
                   style={styles.slider}
                   minimumValue={0}
@@ -467,7 +467,7 @@ export default function EditReminderScreen() {
                   maximumTrackTintColor="#ddd"
                   thumbTintColor={colors.accent}
                 />
-                <Feather name="volume-2" size={18} color="#666" />
+                <AppIcon name="volume-2" size={18} color={colors.textSecondary} />
               </View>
             </View>
           </View>

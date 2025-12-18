@@ -625,3 +625,201 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 - [ ] Reminder categories/tags
 - [ ] Widget for home screen
 - [ ] Watch app companion
+
+---
+
+# Detailed Plan: UI Polish & Product Improvements
+
+## Phase 1: Quick Wins (Today - 1-2 hours)
+
+### Task 1: Icon Library Swap (30-45 mins)
+**What you're doing:** Replace those AI-looking light blue icons with professional ones
+
+**Steps:**
+1. Choose an icon library:
+   - **Lucide** (recommendation — clean, modern, huge selection)
+   - Heroicons (great set, but React Native usage varies)
+   - Phosphor Icons (more playful)
+
+2. Install it (React Native / Expo):
+   ```
+   npm install lucide-react-native
+   ```
+
+3. Find and replace each icon in your app:
+   - Open each component with icons
+   - Replace the current icon with the Lucide equivalent
+   - Remove the light blue color, use neutral colors (e.g. gray-600, gray-700 equivalents in `lib/theme.ts`)
+
+4. Test each screen to make sure nothing broke
+
+**Outcome:** App immediately looks more professional
+
+---
+
+### Task 2: Typography Cleanup (30-45 mins)
+**What you're doing:** Fix text hierarchy and colors
+
+**Steps:**
+1. Define your text color palette:
+   - Headings: gray-900 or black
+   - Body text: gray-700 or gray-800
+   - Secondary text: gray-500 or gray-600
+   - Remove all light blue text unless it's specifically for links/actions
+
+2. Go through each screen and update:
+   - Reminder titles → darker, bolder
+   - Timestamps/metadata → gray-500
+   - Button text → high contrast
+
+3. Check font weights:
+   - Titles: font-semibold or font-bold
+   - Body: font-normal or font-medium
+   - Labels: font-medium
+
+**Outcome:** Text is readable and has proper hierarchy
+
+---
+
+## Phase 2: Functional Improvements (Tomorrow - 3-4 hours)
+
+### Task 3: Reminder Status Indicators (2-3 hours)
+**What you're doing:** Show when reminders are due or overdue
+
+**Steps:**
+
+**Part A: Create the date formatting logic (45 mins)**
+1. Create a utility function `formatReminderTime(dueDate)`:
+   - If due in < 1 hour: "in 45 minutes"
+   - If due today: "in 3 hours" or "Today at 2:30 PM"
+   - If due tomorrow: "Tomorrow at 10:00 AM"
+   - If due this week: "Wednesday at 3:00 PM"
+   - If overdue: "2 days ago" (in red)
+
+2. Create a function `isOverdue(dueDate)`:
+   - Returns true if dueDate < current time
+
+**Part B: Update reminder list UI (1 hour)**
+1. Find your reminder list item component
+2. Add the time indicator below or next to the reminder title (React Native `Text`):
+   ```
+   <Text style={styles.metaText}>
+     {formatReminderTime(reminder.dueDate)}
+   </Text>
+   ```
+
+3. Add conditional styling for overdue:
+   ```
+   <Text style={[styles.metaText, isOverdue(reminder.dueDate) && styles.overdueMetaText]}>
+     {formatReminderTime(reminder.dueDate)}
+   </Text>
+   ```
+
+**Part C: Add visual indicators (30 mins)**
+1. For overdue reminders, add a red dot or warning icon
+2. For upcoming reminders (< 1 hour), maybe add a yellow/orange dot
+3. Consider sorting: overdue → upcoming → future
+
+**Part D: Test thoroughly (30 mins)**
+1. Create test reminders at different times:
+   - One 5 minutes from now
+   - One tomorrow
+   - One in the past (overdue)
+   - One next week
+
+2. Verify formatting looks good for all cases
+3. Check that colors are accessible and readable
+
+**Outcome:** Users can see at a glance which reminders need attention
+
+---
+
+## Phase 3: Polish & Refinement (Day 3 - 2-3 hours)
+
+### Task 4: Overall UI Consistency Pass (1.5 hours)
+**What you're doing:** Make sure everything feels cohesive
+
+**Steps:**
+1. **Color audit:**
+   - Go through every screen
+   - Document what colors you're using where
+   - Make sure you're consistent (same accent color for all buttons, same gray for all secondary text, etc.)
+
+2. **Spacing audit:**
+   - Check padding/margins are consistent
+   - Reminder items should have same spacing
+   - Buttons should have same padding
+
+3. **Component states:**
+   - Active/pressed states
+   - Disabled states (if applicable)
+
+### Task 5: Little Details (1 hour)
+**What you're doing:** Add micro-improvements
+
+**Ideas to consider:**
+- Empty states: What shows when there are no reminders?
+- Loading states: What shows while voice is processing?
+- Success feedback: Quick confirmation when reminder is created
+- Smooth animations: Fade in new reminders, slide out deleted ones
+
+---
+
+## Phase 4: Voice Delay Investigation (Optional - Day 4)
+
+**Only do this if users actually complain about the delay**
+
+### Task 6: Optimize Voice Processing (2-3 hours)
+**What you're doing:** Reduce the perceived 1-2 second delay
+
+**Steps to investigate:**
+1. Add logs to measure where time is spent:
+   - Time from voice input stop → transcription start
+   - Time for transcription
+   - Time from transcription → reminder creation
+
+2. Possible optimizations:
+   - Show "Processing..." immediately when user stops talking
+   - Stream transcription results (if your API supports it)
+   - Show partial results while processing
+   - Pre-process or cache common reminder patterns
+
+3. Set realistic expectations:
+   - If transcription takes ~800ms and there's nothing you can do about it, that's fine
+   - Focus on *perceived* speed with good loading indicators
+
+**Outcome:** Either you shave off time, or you confirm the delay is acceptable with better UI feedback
+
+---
+
+## Timeline Summary
+
+**Day 1 (Today):**
+- Icon library swap ✓
+- Typography cleanup ✓
+- **Time: 1-2 hours**
+
+**Day 2:**
+- Reminder status indicators (all parts)
+- **Time: 3-4 hours**
+
+**Day 3:**
+- UI consistency pass
+- Polish & details
+- **Time: 2-3 hours**
+
+**Day 4 (Optional):**
+- Voice delay optimization (only if needed)
+- **Time: 2-3 hours**
+
+**Total: ~8-10 hours of focused work**
+
+---
+
+## After This is Done
+
+**Then and only then**, circle back to:
+- Domain email setup
+- Developer accounts
+- RevenueCat integration
+- App store submission prep

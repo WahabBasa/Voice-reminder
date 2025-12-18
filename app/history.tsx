@@ -10,10 +10,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Feather } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { colors, scaleFontSize } from "../lib/theme";
 import { getHistory, clearHistory, ReminderHistory } from "../lib/storage";
+import AppIcon from "../components/AppIcon";
 
 type FilterType = "all" | "completed" | "missed";
 
@@ -116,7 +116,7 @@ export default function HistoryScreen() {
       <View style={styles.card}>
         <View style={styles.cardMain}>
           <View style={styles.cardIcon}>
-            <Feather
+            <AppIcon
               name={item.status === "completed" ? "check" : "x"}
               size={18}
               color={item.status === "completed" ? "#4CAF50" : "#F44336"}
@@ -134,12 +134,12 @@ export default function HistoryScreen() {
 
         {item.status === "completed" ? (
           <View style={[styles.statusBadge, styles.completedBadge]}>
-            <Feather name="check-circle" size={16} color="#4CAF50" />
+            <AppIcon name="check-circle" size={16} color="#4CAF50" />
             <Text style={[styles.statusText, styles.completedText]}>Done</Text>
           </View>
         ) : (
           <View style={[styles.statusBadge, styles.missedBadge]}>
-            <Feather name="x-circle" size={16} color="#F44336" />
+            <AppIcon name="x-circle" size={16} color="#F44336" />
             <Text style={[styles.statusText, styles.missedText]}>Missed</Text>
           </View>
         )}
@@ -178,7 +178,7 @@ export default function HistoryScreen() {
           style={styles.backButton}
           activeOpacity={0.85}
         >
-          <Feather name="chevron-left" size={26} color={colors.textPrimary} />
+          <AppIcon name="chevron-left" size={26} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>History</Text>
         <View style={styles.headerSpacer} />
@@ -244,7 +244,7 @@ export default function HistoryScreen() {
                 onPress={handleClearHistory}
                 activeOpacity={0.85}
               >
-                <Feather name="trash-2" size={18} color="#FF5252" />
+                <AppIcon name="trash-2" size={18} color="#FF5252" />
                 <Text style={styles.clearText}>Clear History</Text>
               </TouchableOpacity>
             </View>
@@ -361,7 +361,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 12,
-    backgroundColor: colors.accentLight,
+    backgroundColor: colors.muted,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,

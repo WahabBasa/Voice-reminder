@@ -2,10 +2,10 @@ import { useMemo } from "react";
 import { Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Feather } from "@expo/vector-icons";
 import * as Linking from "expo-linking";
 import Constants from "expo-constants";
 import { colors, scaleFontSize } from "../lib/theme";
+import AppIcon from "../components/AppIcon";
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -33,7 +33,7 @@ export default function SettingsScreen() {
           style={styles.backButton}
           activeOpacity={0.85}
         >
-          <Feather name="chevron-left" size={26} color={colors.textPrimary} />
+          <AppIcon name="chevron-left" size={26} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
         <View style={styles.headerSpacer} />
@@ -49,14 +49,14 @@ export default function SettingsScreen() {
         >
           <View style={styles.rowLeft}>
             <View style={styles.rowIcon}>
-              <Feather name="bell" size={18} color={colors.accent} />
+              <AppIcon name="bell" size={18} color={colors.textSecondary} />
             </View>
             <View>
               <Text style={styles.rowTitle}>Notifications</Text>
               <Text style={styles.rowSubtitle}>Open system settings</Text>
             </View>
           </View>
-          <Feather name="chevron-right" size={18} color="#9aa0a6" />
+          <AppIcon name="chevron-right" size={18} color={colors.textSecondary} />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -66,14 +66,14 @@ export default function SettingsScreen() {
         >
           <View style={styles.rowLeft}>
             <View style={styles.rowIcon}>
-              <Feather name="clock" size={18} color={colors.accent} />
+              <AppIcon name="clock" size={18} color={colors.textSecondary} />
             </View>
             <View>
               <Text style={styles.rowTitle}>History</Text>
               <Text style={styles.rowSubtitle}>Completed and missed reminders</Text>
             </View>
           </View>
-          <Feather name="chevron-right" size={18} color="#9aa0a6" />
+          <AppIcon name="chevron-right" size={18} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
@@ -83,7 +83,7 @@ export default function SettingsScreen() {
         <View style={[styles.row, styles.rowStatic]}>
           <View style={styles.rowLeft}>
             <View style={styles.rowIcon}>
-              <Feather name="info" size={18} color={colors.accent} />
+              <AppIcon name="info" size={18} color={colors.textSecondary} />
             </View>
             <View>
               <Text style={styles.rowTitle}>Voice Reminder</Text>
@@ -158,7 +158,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 12,
-    backgroundColor: colors.accentLight,
+    backgroundColor: colors.muted,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -174,4 +174,3 @@ const styles = StyleSheet.create({
     color: "#596069",
   },
 });
-
