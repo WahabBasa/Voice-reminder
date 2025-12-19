@@ -20,6 +20,8 @@ import { api } from "../../convex/_generated/api";
 import AppIcon from "../../components/AppIcon";
 import DatePickerModal from "../../components/DatePickerModal";
 import DaySelector from "../../components/DaySelector";
+import SoundRepeatModal from "../../components/SoundRepeatModal";
+import RepeatTaskModal from "../../components/RepeatTaskModal";
 import { cancelReminder, scheduleReminder } from "../../lib/notifications";
 import {
   deleteReminder as deleteReminderStorage,
@@ -31,8 +33,11 @@ import { colors, scaleFontSize } from "../../lib/theme";
 
 const FREQUENCIES = [
   { value: "once", label: "Once" },
+  { value: "hour", label: "Hourly" },
   { value: "daily", label: "Daily" },
-  { value: "custom", label: "Custom" },
+  { value: "custom", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+  { value: "yearly", label: "Yearly" },
 ];
 
 type SettingsRowProps = {
@@ -96,6 +101,8 @@ export default function EditReminderScreen() {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showDaysPicker, setShowDaysPicker] = useState(false);
+  const [showSoundRepeatModal, setShowSoundRepeatModal] = useState(false);
+  const [showRepeatTaskModal, setShowRepeatTaskModal] = useState(false);
 
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -224,63 +231,37 @@ export default function EditReminderScreen() {
   };
 
   const openFrequencyPicker = () => {
-    Alert.alert("Repeat", "How often should this reminder run?", [
-      {
-        text: "Once",
-        onPress: () => {
-          setFrequency("once");
-          setShowDaysPicker(false);
-        },
-      },
-      {
-        text: "Daily",
-        onPress: () => {
-          setFrequency("daily");
-          setShowDaysPicker(false);
-        },
-      },
-      {
-        text: "Custom days",
-        onPress: () => {
-          setFrequency("custom");
-          setShowDaysPicker(true);
-        },
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    setShowRepeatTaskModal(true);
   };
 
   const openSoundRepeatPicker = () => {
-    Alert.alert("Sound repeats", "How many times should the reminder sound play?", [
-      {
-        text: "1x",
-        onPress: () => {
-          setSoundRepeatMode("count");
-          setSoundRepeatCount(1);
-        },
-      },
-      {
-        text: "2x",
-        onPress: () => {
-          setSoundRepeatMode("count");
-          setSoundRepeatCount(2);
-        },
-      },
-      {
-        text: "3x",
-        onPress: () => {
-          setSoundRepeatMode("count");
-          setSoundRepeatCount(3);
-        },
-      },
-      {
-        text: "Until stopped",
-        onPress: () => {
-          setSoundRepeatMode("until_stopped");
-        },
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    setShowSoundRepeatModal(true);
+  };
+
+  const handleRepeatConfirm = (data: {
+    enabled: boolean;
+    frequency: any;
+    interval: number;
+    days?: string[];
+    endDate?: string;
+  }) => {
+    if (!data.enabled) {
+      setFrequency("once");
+    } else {
+      setFrequency(data.frequency === "weekly" ? "custom" : data.frequency);
+      if (data.days) setDays(data.days);
+    }
+    setShowRepeatTaskModal(false);
+  };
+
+  const handleSoundRepeatConfirm = (value: string | number) => {
+    if (value === "until_stopped") {
+      setSoundRepeatMode("until_stopped");
+    } else {
+      setSoundRepeatMode("count");
+      setSoundRepeatCount(value as number);
+    }
+    setShowSoundRepeatModal(false);
   };
 
   const handleSave = async () => {
@@ -551,6 +532,25 @@ export default function EditReminderScreen() {
             setDueDate(data.date);
             setShowDatePicker(false);
           }}
+        />
+
+        <SoundRepeatModal
+          visible={showSoundRepeatModal}
+          initialValue={soundRepeatMode === "until_stopped" ? "until_stopped" : soundRepeatCount}
+          onCancel={() => setShowSoundRepeatModal(false)}
+          onConfirm={handleSoundRepeatConfirm}
+        />
+
+        <RepeatTaskModal
+          visible={showRepeatTaskModal}
+          initialRepeatEnabled={frequency !== "once"}
+          initialFrequency={
+            frequency === "custom" ? "weekly" : (frequency === "once" ? "daily" : (frequency as any))
+          }
+          initialInterval={1}
+          initialDays={days}
+          onCancel={() => setShowRepeatTaskModal(false)}
+          onConfirm={handleRepeatConfirm}
         />
 
         <View style={{ height: 26 }} />
