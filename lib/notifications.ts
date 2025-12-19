@@ -79,7 +79,8 @@ export async function createReminderChannel(
 }
 
 export async function scheduleReminder(
-  reminder: ReminderNotification
+  reminder: ReminderNotification,
+  _options?: { traceId?: string }
 ): Promise<void> {
   const hasPermission = await requestNotificationPermission();
   if (!hasPermission) {

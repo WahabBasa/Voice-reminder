@@ -1,15 +1,19 @@
 import type { ComponentType } from "react";
 import {
+  ArrowLeft,
   Bell,
   Calendar,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleCheck,
   CircleX,
   Clock,
+  FileText,
   Info,
   Mic,
+  MoreVertical,
   Pause,
   Play,
   RefreshCw,
@@ -32,15 +36,19 @@ type BaseIconProps = {
 };
 
 export type AppIconName =
+  | "arrow-left"
   | "bell"
   | "calendar"
   | "check"
   | "check-circle"
+  | "chevron-down"
   | "chevron-left"
   | "chevron-right"
   | "clock"
+  | "file-text"
   | "info"
   | "mic"
+  | "more-vertical"
   | "pause"
   | "play"
   | "refresh-cw"
@@ -55,15 +63,19 @@ export type AppIconName =
   | "zap";
 
 const iconByName: Record<AppIconName, ComponentType<BaseIconProps>> = {
+  "arrow-left": ArrowLeft,
   bell: Bell,
   calendar: Calendar,
   check: Check,
   "check-circle": CircleCheck,
+  "chevron-down": ChevronDown,
   "chevron-left": ChevronLeft,
   "chevron-right": ChevronRight,
   clock: Clock,
+  "file-text": FileText,
   info: Info,
   mic: Mic,
+  "more-vertical": MoreVertical,
   pause: Pause,
   play: Play,
   "refresh-cw": RefreshCw,
