@@ -204,7 +204,7 @@ async function synthesizeReminderTts(args: { text: string; title?: string }): Pr
 }
 
 export const processVoiceReminder = action({
-  args: { audioBase64: v.string() },
+  args: { audioBase64: v.string(), traceId: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,

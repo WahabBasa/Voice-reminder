@@ -1,21 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   InteractionManager,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation } from "convex/react";
 import { LinearGradient } from "expo-linear-gradient";
 import { Audio } from "expo-av";
 import { TimerPickerModal } from "react-native-timer-picker";
+import BottomSheet, { BottomSheetScrollView, BottomSheetBackdrop } from "@gorhom/bottom-sheet";
 import { api } from "../../convex/_generated/api";
 import AppIcon from "../../components/AppIcon";
 import DatePickerModal from "../../components/DatePickerModal";
@@ -86,6 +85,9 @@ export default function EditReminderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const updateConvexReminder = useMutation(api.reminders.update);
   const removeConvexReminder = useMutation(api.reminders.remove);
+
+  const bottomSheetRef = useRef<BottomSheet>(null);
+  const snapPoints = useMemo(() => ["60%", "95%"], []);
 
   const [reminder, setReminder] = useState<Reminder | null>(null);
   const [title, setTitle] = useState("");
@@ -382,18 +384,6 @@ export default function EditReminderScreen() {
     ]);
   };
 
-  const handleBack = () => {
-    if (!hasChanges()) {
-      router.back();
-      return;
-    }
-
-    Alert.alert("Discard changes?", "You have unsaved edits.", [
-      { text: "Keep editing", style: "cancel" },
-      { text: "Discard", style: "destructive", onPress: () => router.back() },
-    ]);
-  };
-
   const openOptionsMenu = () => {
     const options: Array<{text: string; style?: "cancel" | "destructive"; onPress?: () => void}> = [
       { text: "Cancel", style: "cancel" },
@@ -412,150 +402,179 @@ export default function EditReminderScreen() {
     Alert.alert("Options", undefined, options);
   };
 
+  const renderBackdrop = useCallback(
+    (props: any) => (
+      <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} opacity={0.5} />
+    ),
+    []
+  );
+
+  const handleSheetChange = useCallback(
+    (index: number) => {
+      if (index === -1) {
+        router.back();
+      }
+    },
+    [router]
+  );
+
   if (!reminder) {
     return (
-      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.headerIconButton}>
-            <AppIcon name="arrow-left" size={24} color={stylesVars.headerText} />
-          </TouchableOpacity>
-          <View style={styles.headerIconButton} />
-        </View>
-        <View style={styles.loadingBody}>
-          <Text style={styles.loadingText}>Loading...</Text>
-        </View>
-      </SafeAreaView>
+      <View style={styles.sheetContainer}>
+        <BottomSheet
+          ref={bottomSheetRef}
+          snapPoints={snapPoints}
+          index={0}
+          enablePanDownToClose
+          backdropComponent={renderBackdrop}
+          onChange={handleSheetChange}
+          handleIndicatorStyle={styles.handleIndicator}
+          backgroundStyle={styles.sheetBackground}
+        >
+          <View style={styles.loadingBody}>
+            <Text style={styles.loadingText}>Loading...</Text>
+          </View>
+        </BottomSheet>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={handleBack} style={styles.headerIconButton}>
-          <AppIcon name="arrow-left" size={24} color={stylesVars.headerText} />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={openOptionsMenu} style={styles.headerIconButton} activeOpacity={0.7}>
-          <AppIcon name="more-vertical" size={24} color={stylesVars.headerText} />
-        </TouchableOpacity>
-      </View>
+    <View style={styles.sheetContainer}>
+      <BottomSheet
+        ref={bottomSheetRef}
+        snapPoints={snapPoints}
+        index={0}
+        enablePanDownToClose
+        backdropComponent={renderBackdrop}
+        onChange={handleSheetChange}
+        handleIndicatorStyle={styles.handleIndicator}
+        backgroundStyle={styles.sheetBackground}
+      >
+        <BottomSheetScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <View style={styles.sheetHeader}>
+            <TouchableOpacity style={styles.topChip} onPress={openFrequencyPicker} activeOpacity={0.7}>
+              <Text style={styles.topChipText}>{frequencyLabel}</Text>
+              <AppIcon name="chevron-down" size={16} color={stylesVars.iconColor} />
+            </TouchableOpacity>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <TouchableOpacity style={styles.topChip} onPress={openFrequencyPicker} activeOpacity={0.7}>
-          <Text style={styles.topChipText}>{frequencyLabel}</Text>
-          <AppIcon name="chevron-down" size={16} color={stylesVars.iconColor} />
-        </TouchableOpacity>
+            <TouchableOpacity onPress={openOptionsMenu} style={styles.moreButton} activeOpacity={0.7}>
+              <AppIcon name="more-vertical" size={24} color={stylesVars.headerText} />
+            </TouchableOpacity>
+          </View>
 
-        <TextInput
-          style={styles.titleInput}
-          value={title}
-          onChangeText={setTitle}
-          placeholder="Reminder"
-          placeholderTextColor={stylesVars.mutedText}
-        />
-
-        {reminder.audioUrl ? (
-          <TouchableOpacity style={styles.playVoice} onPress={handlePlayPreview} activeOpacity={0.7}>
-            <AppIcon name={isPlaying ? "square" : "play"} size={20} color={stylesVars.iconColor} />
-            <Text style={styles.playVoiceText}>{isPlaying ? "Stop voice" : "Play voice"}</Text>
-          </TouchableOpacity>
-        ) : null}
-
-        <View style={styles.rowList}>
-          <SettingsRow
-            icon="clock"
-            label="Time"
-            value={formatTime(time).toLowerCase()}
-            onPress={() => setShowTimePicker(true)}
+          <TextInput
+            style={styles.titleInput}
+            value={title}
+            onChangeText={setTitle}
+            placeholder="Reminder"
+            placeholderTextColor={stylesVars.mutedText}
           />
-          <SettingsRow icon="refresh-cw" label="Repeat Task" value={frequencyLabel} onPress={openFrequencyPicker} />
 
-          {frequency === "custom" ? (
-            <>
-              <SettingsRow icon="calendar" label="Days" value={daysLabel} onPress={() => setShowDaysPicker((v) => !v)} />
-              {showDaysPicker ? (
-                <View style={styles.daysPicker}>
-                  <DaySelector selectedDays={days} onToggle={handleDayToggle} />
-                </View>
-              ) : null}
-            </>
+          {reminder.audioUrl ? (
+            <TouchableOpacity style={styles.playVoice} onPress={handlePlayPreview} activeOpacity={0.7}>
+              <AppIcon name={isPlaying ? "square" : "play"} size={20} color={stylesVars.iconColor} />
+              <Text style={styles.playVoiceText}>{isPlaying ? "Stop voice" : "Play voice"}</Text>
+            </TouchableOpacity>
           ) : null}
 
-          <SettingsRow
-            icon="volume-2"
-            label="Sound repeats"
-            value={soundRepeatLabel}
-            onPress={openSoundRepeatPicker}
-          />
-          <SettingsRow
-            icon="calendar"
-            label="Due Date"
-            value={dueDateLabel}
-            isAction={!dueDateLabel}
-            onPress={() => setShowDatePicker(true)}
-          />
-        </View>
+          <View style={styles.rowList}>
+            <SettingsRow
+              icon="clock"
+              label="Time"
+              value={formatTime(time).toLowerCase()}
+              onPress={() => setShowTimePicker(true)}
+            />
+            <SettingsRow icon="refresh-cw" label="Repeat Task" value={frequencyLabel} onPress={openFrequencyPicker} />
 
-        {showTimePicker ? (
-          <TimerPickerModal
-            closeOnOverlayPress
-            LinearGradient={LinearGradient}
-            hideDays
-            visible={showTimePicker}
-            setIsVisible={setShowTimePicker}
-            modalTitle="Select time"
-            onCancel={() => setShowTimePicker(false)}
-            amLabel="AM"
-            initialValue={{
-              hours: time.getHours(),
-              minutes: time.getMinutes(),
+            {frequency === "custom" ? (
+              <>
+                <SettingsRow icon="calendar" label="Days" value={daysLabel} onPress={() => setShowDaysPicker((v) => !v)} />
+                {showDaysPicker ? (
+                  <View style={styles.daysPicker}>
+                    <DaySelector selectedDays={days} onToggle={handleDayToggle} />
+                  </View>
+                ) : null}
+              </>
+            ) : null}
+
+            <SettingsRow
+              icon="volume-2"
+              label="Sound repeats"
+              value={soundRepeatLabel}
+              onPress={openSoundRepeatPicker}
+            />
+            <SettingsRow
+              icon="calendar"
+              label="Due Date"
+              value={dueDateLabel}
+              isAction={!dueDateLabel}
+              onPress={() => setShowDatePicker(true)}
+            />
+          </View>
+
+          {showTimePicker ? (
+            <TimerPickerModal
+              closeOnOverlayPress
+              LinearGradient={LinearGradient}
+              hideDays
+              visible={showTimePicker}
+              setIsVisible={setShowTimePicker}
+              modalTitle="Select time"
+              onCancel={() => setShowTimePicker(false)}
+              amLabel="AM"
+              initialValue={{
+                hours: time.getHours(),
+                minutes: time.getMinutes(),
+              }}
+              onConfirm={({ hours, minutes, seconds }) => {
+                const isPm = (seconds ?? 0) >= 12;
+                const hour24 = (hours % 12) + (isPm ? 12 : 0);
+                const next = new Date(time);
+                next.setHours(hour24, minutes, 0, 0);
+                setTime(next);
+                setShowTimePicker(false);
+              }}
+              pmLabel="PM"
+              styles={{ theme: "light" }}
+              useAmPmWheel
+              use12HourPicker
+            />
+          ) : null}
+
+          <DatePickerModal
+            visible={showDatePicker}
+            initialDate={dueDate}
+            onCancel={() => setShowDatePicker(false)}
+            onConfirm={(data) => {
+              setDueDate(data.date);
+              setShowDatePicker(false);
             }}
-            onConfirm={({ hours, minutes, seconds }) => {
-              const isPm = (seconds ?? 0) >= 12;
-              const hour24 = (hours % 12) + (isPm ? 12 : 0);
-              const next = new Date(time);
-              next.setHours(hour24, minutes, 0, 0);
-              setTime(next);
-              setShowTimePicker(false);
-            }}
-            pmLabel="PM"
-            styles={{ theme: "light" }}
-            useAmPmWheel
-            use12HourPicker
           />
-        ) : null}
 
-        <DatePickerModal
-          visible={showDatePicker}
-          initialDate={dueDate}
-          onCancel={() => setShowDatePicker(false)}
-          onConfirm={(data) => {
-            setDueDate(data.date);
-            setShowDatePicker(false);
-          }}
-        />
+          <SoundRepeatModal
+            visible={showSoundRepeatModal}
+            initialValue={soundRepeatMode === "until_stopped" ? "until_stopped" : soundRepeatCount}
+            onCancel={() => setShowSoundRepeatModal(false)}
+            onConfirm={handleSoundRepeatConfirm}
+          />
 
-        <SoundRepeatModal
-          visible={showSoundRepeatModal}
-          initialValue={soundRepeatMode === "until_stopped" ? "until_stopped" : soundRepeatCount}
-          onCancel={() => setShowSoundRepeatModal(false)}
-          onConfirm={handleSoundRepeatConfirm}
-        />
+          <RepeatTaskModal
+            visible={showRepeatTaskModal}
+            initialRepeatEnabled={frequency !== "once"}
+            initialFrequency={
+              frequency === "custom" ? "weekly" : (frequency === "once" ? "daily" : (frequency as any))
+            }
+            initialInterval={1}
+            initialDays={days}
+            onCancel={() => setShowRepeatTaskModal(false)}
+            onConfirm={handleRepeatConfirm}
+          />
 
-        <RepeatTaskModal
-          visible={showRepeatTaskModal}
-          initialRepeatEnabled={frequency !== "once"}
-          initialFrequency={
-            frequency === "custom" ? "weekly" : (frequency === "once" ? "daily" : (frequency as any))
-          }
-          initialInterval={1}
-          initialDays={days}
-          onCancel={() => setShowRepeatTaskModal(false)}
-          onConfirm={handleRepeatConfirm}
-        />
-
-        <View style={{ height: 26 }} />
-      </ScrollView>
-    </SafeAreaView>
+          <View style={{ height: 40 }} />
+        </BottomSheetScrollView>
+      </BottomSheet>
+    </View>
   );
 }
 
@@ -571,6 +590,31 @@ const stylesVars = {
 };
 
 const styles = StyleSheet.create({
+  sheetContainer: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
+  sheetBackground: {
+    backgroundColor: stylesVars.bg,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+  },
+  handleIndicator: {
+    backgroundColor: "#e0e0e0",
+    width: 36,
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  moreButton: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   container: {
     flex: 1,
     backgroundColor: stylesVars.bg,

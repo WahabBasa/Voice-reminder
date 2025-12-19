@@ -120,7 +120,7 @@ export default function HomeScreen() {
       });
 
       const tAction = Date.now();
-      const result = await processVoiceReminder({ audioBase64: base64, traceId } as any);
+      const result = await processVoiceReminder({ audioBase64: base64, traceId });
       perfLog(traceId, "device.processing", "processVoiceReminder_done", {
         ms: Date.now() - tAction,
       });
@@ -337,9 +337,6 @@ export default function HomeScreen() {
             onPress={() => handleReminderPress(item)}
             activeOpacity={0.8}
           >
-            <View style={styles.cardIcon}>
-              <AppIcon name="mic" size={18} color={colors.textSecondary} />
-            </View>
             <View style={styles.cardText}>
               <Text style={styles.cardTitle} numberOfLines={1}>
                 {item.title}

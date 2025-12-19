@@ -28,8 +28,8 @@ export default function RootLayout() {
               <Stack.Screen
                 name="reminder/edit"
                 options={{
-                  animation: "slide_from_bottom",
-                  presentation: "modal",
+                  animation: "fade",
+                  presentation: "transparentModal",
                 }}
               />
               <Stack.Screen
