@@ -32,6 +32,7 @@ import {
 import RecordingOverlay from "../components/RecordingOverlay";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
+import { perfLog } from "../lib/perf";
 
 type HomeView = "all" | "completed";
 
@@ -107,10 +108,26 @@ export default function HomeScreen() {
     setShowRecording(false);
   };
 
-  const handleRecordingComplete = async (audioUri: string) => {
+  const handleRecordingComplete = async (audioUri: string, traceId: string) => {
     try {
+      perfLog(traceId, "device.processing", "handleRecordingComplete_start", { audioUri });
+
+      const tBase64 = Date.now();
       const base64 = await readFileAsBase64(audioUri);
-      const result = await processVoiceReminder({ audioBase64: base64 });
+      perfLog(traceId, "device.processing", "audio_base64_done", {
+        ms: Date.now() - tBase64,
+        base64Chars: base64.length,
+      });
+
+      const tAction = Date.now();
+      const result = await processVoiceReminder({ audioBase64: base64, traceId } as any);
+      perfLog(traceId, "device.processing", "processVoiceReminder_done", {
+        ms: Date.now() - tAction,
+      });
+
+      if ((result as any)?.perf) {
+        perfLog(traceId, "device.processing", "convex_perf", (result as any).perf);
+      }
 
       if (!result.audioUrl) {
         throw new Error("Failed to get audio URL");
@@ -119,6 +136,7 @@ export default function HomeScreen() {
       const frequency = result.frequency === "weekly" ? "custom" : result.frequency;
       const days = frequency === "custom" ? (result.days || []) : [];
 
+      const tLocal = Date.now();
       const newReminder = await addReminder({
         convexId: result.id,
         title: result.title,
@@ -130,6 +148,10 @@ export default function HomeScreen() {
         soundRepeatMode: "count",
         soundRepeatCount: 1,
       });
+      perfLog(traceId, "device.processing", "local_addReminder_done", {
+        ms: Date.now() - tLocal,
+        reminderId: newReminder.id,
+      });
 
       setShowRecording(false);
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -140,6 +162,7 @@ export default function HomeScreen() {
 
       InteractionManager.runAfterInteractions(() => {
         if (!newReminder.audioUrl) return;
+        perfLog(traceId, "device.notifications", "scheduleReminder_start");
         scheduleReminder({
           id: newReminder.id,
           title: newReminder.title,
@@ -150,8 +173,11 @@ export default function HomeScreen() {
           audioUrl: newReminder.audioUrl,
           soundRepeatMode: newReminder.soundRepeatMode,
           soundRepeatCount: newReminder.soundRepeatCount,
-        }).catch((e) => {
+        }, { traceId }).catch((e) => {
           console.log("[VR] Failed to schedule reminder:", e);
+          perfLog(traceId, "device.notifications", "scheduleReminder_error", {
+            error: String(e),
+          });
         });
       });
     } catch (error) {

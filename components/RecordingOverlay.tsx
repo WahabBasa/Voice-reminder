@@ -20,13 +20,14 @@ import {
   resumeRecording,
   stopRecording,
 } from "../lib/audio";
+import { createTraceId, perfLog } from "../lib/perf";
 
 type RecordingState = "idle" | "recording" | "paused" | "processing";
 
 interface RecordingOverlayProps {
   visible: boolean;
   onClose: () => void;
-  onRecordingComplete: (audioUri: string) => void;
+  onRecordingComplete: (audioUri: string, traceId: string) => void;
 }
 
 export default function RecordingOverlay({
@@ -42,12 +43,14 @@ export default function RecordingOverlay({
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const waveformTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [waveformHeights, setWaveformHeights] = useState<number[]>([]);
+  const traceIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!visible) {
       setState("idle");
       setDuration(0);
       setWaveformHeights([]);
+      traceIdRef.current = null;
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
@@ -108,23 +111,48 @@ export default function RecordingOverlay({
     if (state === "processing") return;
 
     if (state === "recording" || state === "paused") {
+      const traceId = traceIdRef.current ?? createTraceId("vr");
+      traceIdRef.current = traceId;
+      const tStopTap = Date.now();
+      perfLog(traceId, "device.recording", "stop_tap");
+
       stopTimers();
-      const uri = await stopRecording();
+      const uri = await stopRecording().finally(() => {
+        perfLog(traceId, "device.recording", "stopRecording_done", {
+          ms: Date.now() - tStopTap,
+        });
+      });
 
       if (uri) {
         setState("processing");
-        onRecordingComplete(uri);
+        perfLog(traceId, "device.recording", "uri_ready");
+        onRecordingComplete(uri, traceId);
       } else {
+        perfLog(traceId, "device.recording", "stop_no_uri");
         setState("idle");
       }
     } else {
+      const traceId = createTraceId("vr");
+      traceIdRef.current = traceId;
+      perfLog(traceId, "device.recording", "start_tap");
+
+      const tPerm = Date.now();
       const status = await requestMicrophonePermission();
+      perfLog(traceId, "device.recording", "micPermission_done", {
+        ms: Date.now() - tPerm,
+        status,
+      });
       if (status !== "granted") {
         setPermissionDenied(true);
         return;
       }
       setPermissionDenied(false);
+
+      const tStart = Date.now();
       await startRecording();
+      perfLog(traceId, "device.recording", "startRecording_done", {
+        ms: Date.now() - tStart,
+      });
       setWaveformHeights(Array.from({ length: 28 }, () => 0.4 + Math.random() * 0.6));
       setState("recording");
       startTimers();

@@ -32,7 +32,7 @@ A voice-based reminder app where users speak what they want to be reminded of, a
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  2. CONVEX BACKEND                                          │
-│     - Receives audio → Whisper STT → text                   │
+│     - Receives audio -> Whisper STT -> text                   │
 │     - GPT parses: title, time, frequency                    │
 │     - ElevenLabs TTS generates audio file                    │
 │     - Returns structured data + audio URL                   │
@@ -159,7 +159,7 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 
 ## Phase 3: Convex Backend + OpenAI Integration ✅ COMPLETED
 
-**Goal:** Process audio → get transcription, parsed reminder, and TTS audio
+**Goal:** Process audio -> get transcription, parsed reminder, and TTS audio
 
 **Status:** Completed on 2025-12-16
 
@@ -465,10 +465,10 @@ This requires `expo prebuild` or a config plugin.
    ```
 
 2. **Error Handling**
-   - Network error during upload → retry button
-   - OpenAI API error → user-friendly message
-   - Invalid reminder format → "try again" prompt
-   - Storage full → warning message
+   - Network error during upload -> retry button
+   - OpenAI API error -> user-friendly message
+   - Invalid reminder format -> "try again" prompt
+   - Storage full -> warning message
 
 3. **App Restart Recovery**
    ```typescript
@@ -501,11 +501,11 @@ This requires `expo prebuild` or a config plugin.
    - Show offline indicator
 
 ### Test Checklist
-- [ ] Deny mic permission → graceful message
-- [ ] Deny notification permission → graceful message
-- [ ] Network offline during recording → error + retry
-- [ ] Kill app, restart → reminders still scheduled
-- [ ] Force close during recording → no crash/data loss
+- [ ] Deny mic permission -> graceful message
+- [ ] Deny notification permission -> graceful message
+- [ ] Network offline during recording -> error + retry
+- [ ] Kill app, restart -> reminders still scheduled
+- [ ] Force close during recording -> no crash/data loss
 
 ---
 
@@ -602,7 +602,7 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 ## Known Issues (To Address)
 
 - [ ] **TTS volume too low** - reminder audio may be quiet; consider normalization or adjusting voice settings
-- [ ] **Processing is slow** - Whisper → GPT → TTS chain takes several seconds; consider streaming or showing progress steps
+- [ ] **Processing is slow** - Whisper -> GPT -> TTS chain takes several seconds; consider streaming or showing progress steps
 
 ---
 
@@ -630,14 +630,28 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 
 # Detailed Plan: UI Polish & Product Improvements
 
+## How to Use This Plan (read this first)
+
+For each task below:
+1. Start by answering the **Clarifying Questions** for that task (write the answers in today's devlog).
+2. If anything is unclear, stop and ask before implementing (don't guess).
+3. When done, update the devlog with: what changed, what broke, what fixed it, and files touched.
+
+---
+
 ## Phase 1: Quick Wins (Today - 1-2 hours)
 
 ### Task 1: Icon Library Swap (30-45 mins)
 **What you're doing:** Replace those AI-looking light blue icons with professional ones
 
+**Clarifying Questions (ask first):**
+- Which icon set do we want to standardize on (Lucide / Phosphor / Heroicons)?
+- Outline-only, filled-only, or mixed?
+- Where should icon color come from (theme file vs inline)?
+
 **Steps:**
 1. Choose an icon library:
-   - **Lucide** (recommendation — clean, modern, huge selection)
+   - **Lucide** (recommendation - clean, modern, huge selection)
    - Heroicons (great set, but React Native usage varies)
    - Phosphor Icons (more playful)
 
@@ -660,6 +674,11 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 ### Task 2: Typography Cleanup (30-45 mins)
 **What you're doing:** Fix text hierarchy and colors
 
+**Clarifying Questions (ask first):**
+- Is there a single "theme source of truth" for colors/typography (e.g. `lib/theme.ts`), or are styles mostly inline?
+- Are we supporting dark mode right now, or only light mode?
+- What is the intended accent color (so we don't accidentally use light blue everywhere)?
+
 **Steps:**
 1. Define your text color palette:
    - Headings: gray-900 or black
@@ -668,9 +687,9 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
    - Remove all light blue text unless it's specifically for links/actions
 
 2. Go through each screen and update:
-   - Reminder titles → darker, bolder
-   - Timestamps/metadata → gray-500
-   - Button text → high contrast
+   - Reminder titles -> darker, bolder
+   - Timestamps/metadata -> gray-500
+   - Button text -> high contrast
 
 3. Check font weights:
    - Titles: font-semibold or font-bold
@@ -685,6 +704,12 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 
 ### Task 3: Reminder Status Indicators (2-3 hours)
 **What you're doing:** Show when reminders are due or overdue
+
+**Clarifying Questions (ask first):**
+- What field is the due time in the reminder model (name + type)? (e.g. `dueDate` as ISO string / ms timestamp)
+- Should overdue reminders always sort to the top?
+- Do we want relative time ("in 45 minutes") or absolute time ("Today at 2:30 PM"), or both?
+- For now, is device timezone good enough (POC), or do we need timezone-aware behavior?
 
 **Steps:**
 
@@ -718,7 +743,7 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 **Part C: Add visual indicators (30 mins)**
 1. For overdue reminders, add a red dot or warning icon
 2. For upcoming reminders (< 1 hour), maybe add a yellow/orange dot
-3. Consider sorting: overdue → upcoming → future
+3. Consider sorting: overdue -> upcoming -> future
 
 **Part D: Test thoroughly (30 mins)**
 1. Create test reminders at different times:
@@ -739,6 +764,10 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 ### Task 4: Overall UI Consistency Pass (1.5 hours)
 **What you're doing:** Make sure everything feels cohesive
 
+**Clarifying Questions (ask first):**
+- What's the target "look" for the app (minimal, playful, iOS-like, etc.)?
+- Any screens that should intentionally look different, or should everything match?
+
 **Steps:**
 1. **Color audit:**
    - Go through every screen
@@ -757,6 +786,10 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 ### Task 5: Little Details (1 hour)
 **What you're doing:** Add micro-improvements
 
+**Clarifying Questions (ask first):**
+- What are the top 1-2 micro-improvements to prioritize (empty state vs loading vs success feedback)?
+- Do we want animations everywhere, or only on key actions (create/delete)?
+
 **Ideas to consider:**
 - Empty states: What shows when there are no reminders?
 - Loading states: What shows while voice is processing?
@@ -772,11 +805,16 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 ### Task 6: Optimize Voice Processing (2-3 hours)
 **What you're doing:** Reduce the perceived 1-2 second delay
 
+**Clarifying Questions (ask first):**
+- Are users actually complaining about speed, or is this just a nice-to-have?
+- Is the goal "actually faster" or "feels faster" (better progress + optimistic UI)?
+- Are we okay adding extra logs during dev (and removing/guarding later)?
+
 **Steps to investigate:**
 1. Add logs to measure where time is spent:
-   - Time from voice input stop → transcription start
+   - Time from voice input stop -> transcription start
    - Time for transcription
-   - Time from transcription → reminder creation
+   - Time from transcription -> reminder creation
 
 2. Possible optimizations:
    - Show "Processing..." immediately when user stops talking
@@ -795,8 +833,8 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 ## Timeline Summary
 
 **Day 1 (Today):**
-- Icon library swap ✓
-- Typography cleanup ✓
+- Icon library swap ✅
+- Typography cleanup ✅
 - **Time: 1-2 hours**
 
 **Day 2:**
@@ -816,10 +854,339 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 
 ---
 
-## After This is Done
+---
+
+# Product-Only Development Plan (Extended Roadmap)
+
+Keep this section focused on product features (what the user sees/feels). When a task needs clarification, ask the questions first.
+
+---
+
+## PHASE 1: Performance & Speed - Week 1 (6-8 hours)
+
+### Day 1: Faster Reminder Creation (2-3 hours)
+
+**Goal:** Reduce delay when creating voice reminders
+
+**Clarifying Questions (ask first):**
+- Where does the delay feel worst (after stopping recording, after tapping create, or before it appears in the list)?
+- Is the goal "actually faster" or "feels faster" (better progress + optimistic UI)?
+- Should the reminder appear immediately (optimistic UI) or only after the save completes?
+
+**Steps:**
+1. **Identify the bottleneck (30 mins)**
+   - Add timing logs to measure:
+     - Voice recording stop -> transcription start
+     - Transcription duration
+     - Transcription -> reminder save
+   - Find where the 1-2 second delay happens
+2. **Optimize transcription flow (1 hour)**
+   - Start processing immediately when user stops speaking
+   - Show immediate feedback ("Processing...")
+   - Consider pre-loading/warming up the transcription service
+3. **Optimize reminder creation (30 mins)**
+   - Ensure database write is fast
+   - Don't block the UI on non-critical work
+   - Optimistically show the reminder in UI before save completes (if we choose this)
+4. **Add better loading states (30 mins)**
+   - Show visual feedback immediately
+   - Animate the processing state
+   - Makes perceived speed feel faster even if actual speed is same
+
+**Expected outcome:** Reminder creation feels instant or near-instant
+
+---
+
+### Day 2: Fast Navigation & Transitions (2-3 hours)
+
+**Goal:** Smooth, fast screen transitions
+
+**Clarifying Questions (ask first):**
+- Which transitions feel slow/janky right now (name the exact screens)?
+- Are we testing on an actual device (preferred) or only emulator?
+- Do we want faster "no animations" or smooth animations that still feel fast?
+
+**Steps:**
+1. **Audit current navigation (30 mins)**
+   - Test every screen transition
+   - Note which ones feel slow or janky
+   - Measure frame rates if possible
+2. **Optimize React Native navigation (1 hour)**
+   - Optimize heavy components with `React.memo`
+   - Remove unnecessary re-renders
+3. **Add smooth transitions (1 hour)**
+   - Use native-feeling animations (avoid janky JavaScript-based work)
+   - Set appropriate transition timing
+   - Ensure animations are 60fps
+   - Test on actual device (not just simulator)
+4. **Optimize list rendering (30 mins)**
+   - If reminder list is slow: use `FlatList` with proper optimization
+   - Add `keyExtractor`, `getItemLayout` if possible
+   - Implement `removeClippedSubviews` if needed
+
+**Expected outcome:** All navigation feels instant and smooth
+
+---
+
+## PHASE 2: Bottom Sheet & Animations - Week 1 (3-4 hours)
+
+### Day 3: Bottom Sheet Behavior (1-1.5 hours)
+
+**Goal:** Bottom sheet opens to 60-70% height, not full screen
+
+**Clarifying Questions (ask first):**
+- Where is the bottom sheet/modal defined (file/component)?
+- Which bottom sheet library/component are we using (if any)?
+- Should the user be able to drag it to full screen, or should 70% be the max?
+
+**Steps:**
+1. **Locate bottom sheet component (15 mins)**
+   - Find where your bottom sheet/modal is defined
+   - Identify which library you're using (if any)
+2. **Set snap point to 60-70% (30 mins)**
+   - Update `snapPoints` or height configuration
+   - Test on different screen sizes
+   - Ensure it looks good on small and large phones
+3. **Adjust styling (15 mins)**
+   - Add rounded corners at top if needed
+   - Ensure background dimming works properly
+   - Add drag indicator at top
+4. **Test interaction (15 mins)**
+   - Can still drag to full screen if user wants
+   - Swipe down to dismiss works properly
+   - Content doesn't get cut off at 70%
+
+**Expected outcome:** Bottom sheet feels less intrusive, better UX
+
+---
+
+### Day 3-4: Delete Animations + Fast Cancel (1.5-2 hours)
+
+**Goal:** Smooth delete animations and instant voice cancel
+
+**Clarifying Questions (ask first):**
+- On delete: do we want an "Undo" option or instant delete?
+- On cancel: should it be instant every time, or ask "Are you sure?" sometimes?
+- Where should cancel appear (during recording only, also during processing)?
+
+**Steps:**
+1. **Add delete animation (1 hour)**
+   - When reminder is deleted: fade out + slide out
+   - Use React Native Animated or Reanimated
+   - Animation should be quick (200-300ms)
+   - Remove from list after animation completes
+2. **Fast cancel for voice reminder (30 mins)**
+   - Add cancel button during voice recording
+   - Immediately stop recording when pressed
+   - Discard audio instantly
+   - Return to previous screen with no delay
+3. **Polish transitions (30 mins)**
+   - Ensure cancel feels instant (no "are you sure?" unless appropriate)
+   - Add subtle feedback when cancelled
+   - Test repeatedly to ensure it never feels laggy
+
+**Expected outcome:** Deleting and cancelling feel responsive and polished
+
+---
+
+## PHASE 3: Edit Page Improvements - Week 2 (3-4 hours)
+
+### Day 5-6: Voice Reminder Regeneration in Edit Page (3-4 hours)
+
+**Goal:** User can regenerate voice reminder from edit page
+
+**Clarifying Questions (ask first):**
+- Should regeneration support: (A) re-record voice, (B) generate voice from edited text, or both?
+- If a reminder already has audio, do we overwrite it or keep the old one somewhere?
+- If generation fails, what should the UI do (retry, keep old audio, show error)?
+
+**Steps:**
+1. **Design the UI flow (30 mins)**
+   - Add "Regenerate voice reminder" button on edit page
+   - Show current voice reminder (if exists)
+   - Allow user to re-record or generate from text
+2. **Implement regeneration logic (1.5 hours)**
+   - When user clicks regenerate:
+     - Option 1: Record new voice note
+     - Option 2: Generate voice from edited text (if using TTS)
+   - Save new voice reminder
+   - Replace old one
+   - Update reminder in database
+3. **Handle edge cases (30 mins)**
+   - What if no voice reminder exists originally?
+   - What if user cancels mid-regeneration?
+   - What if generation fails?
+4. **Copy edit page UI from todo app (1 hour)**
+   - Reference your todo app
+   - Copy the layout/styling
+   - Adapt to reminder context
+   - Ensure consistency with rest of app
+
+**Expected outcome:** Users can update voice reminders after creation
+
+---
+
+## PHASE 4: UI Polish - Week 2-3 (4-5 hours)
+
+### Day 7: Copy Bottom Sheet UI from Todo App (1.5-2 hours)
+
+**Goal:** Better looking bottom sheet
+
+**Clarifying Questions (ask first):**
+- Where is the todo app reference (repo/path) so we can copy the exact UI?
+- Do we want an exact clone, or just the same "style" adapted to this app?
+
+**Steps:**
+1. **Study todo app bottom sheet (15 mins)**
+   - Note layout, spacing, colors
+   - Screenshot for reference
+2. **Replicate styling (1 hour)**
+   - Copy header design
+   - Copy button styles
+   - Copy spacing and padding
+   - Adapt colors to your app's theme
+3. **Test and refine (30 mins)**
+   - Ensure it works on all screen sizes
+   - Looks good in light/dark mode (if applicable)
+
+**Expected outcome:** Professional-looking bottom sheet
+
+---
+
+### Day 8: Copy Calendar UI from Todo App (2-3 hours)
+
+**Goal:** Better date picker for reminders
+
+**Clarifying Questions (ask first):**
+- Does the todo app use a calendar library or a custom calendar?
+- Do we need time picking in the same UI, or separate?
+- Is this only for one-time reminders, or also recurring reminders?
+
+**Steps:**
+1. **Study todo app calendar (30 mins)**
+   - Note layout, interaction patterns
+   - How dates are displayed
+   - How selection works
+2. **Implement calendar UI (1.5-2 hours)**
+   - If todo app uses a library: use same library
+   - If custom: replicate the design
+   - Integrate with reminder date selection
+   - Add time picker if needed
+3. **Test interaction (30 mins)**
+   - Easy to select dates
+   - Clear which date is selected
+   - Works smoothly with keyboard
+
+**Expected outcome:** Intuitive date selection for reminders
+
+---
+
+## TOTAL TIMELINE: 2-3 weeks (16-24 hours of work)
+
+### Week 1
+- Fast reminder creation
+- Fast navigation
+- Bottom sheet at 60-70%
+- Delete animations + fast cancel
+
+### Week 2
+- Voice reminder regeneration
+- Bottom sheet UI polish
+- Calendar UI polish
+
+### Week 3 (Buffer)
+- Bug fixes
+- Final testing
+- Polish anything that feels off
+
+---
+
+## After This Is Done (Later Stages)
 
 **Then and only then**, circle back to:
-- Domain email setup
-- Developer accounts
-- RevenueCat integration
-- App store submission prep
+
+### Task 1: Onboarding flow (simple)
+
+**Goal:** New users understand the app in under 30 seconds.
+
+**Clarifying Questions (ask first):**
+- Onboarding format: 1 screen or 2-3 swipe screens?
+- Can users skip onboarding?
+- When do we mark onboarding complete (local flag vs user account)?
+
+**Steps:**
+1. Add onboarding screen(s) explaining: what the app does + the next action.
+2. Ask for key permissions at the right time (mic + notifications).
+3. Store a "seen onboarding" flag and route accordingly.
+
+---
+
+### Task 2: User accounts + Settings changes
+
+**Goal:** Settings has an Account area and a clear path to Plan/Payments.
+
+**Clarifying Questions (ask first):**
+- Which auth solution are we using (Clerk + Convex, or something else)?
+- What account actions are needed first (sign in/out only, or profile too)?
+
+**Steps:**
+1. Add an "Account" section in Settings (sign in/out, user info).
+2. Add a "Plan/Payments" row that routes to the Payments/Pro page.
+
+---
+
+### Task 3: Paywall (simple, best-practice)
+
+**Goal:** A good-looking paywall that converts.
+
+**Clarifying Questions (ask first):**
+- What are the Pro features (exact list)?
+- Plans: monthly + yearly, or just one?
+- Trial: yes/no?
+
+**Steps:**
+1. Build a paywall UI (benefits list + strong CTA + restore + terms/privacy).
+2. Gate Pro-only features so paywall appears at the right moment.
+
+---
+
+### Task 4: Payments / Pro page (plan selection)
+
+**Goal:** A page users can reach anytime to see plans and upgrade.
+
+**Clarifying Questions (ask first):**
+- Is this the same screen as the paywall, or separate?
+- Where do we redirect after purchase (back to Settings, or back to previous screen)?
+
+**Steps:**
+1. Create a Payments/Pro page with plan cards and current subscription status.
+2. Link to it from Settings and from paywall CTAs.
+
+---
+
+### Task 5: RevenueCat integration
+
+**Goal:** Purchases work reliably and are restorable.
+
+**Clarifying Questions (ask first):**
+- Which platforms are in scope first (Android only, or iOS too)?
+- Product IDs and plan names?
+
+**Steps:**
+1. Integrate RevenueCat and wire it to Paywall + Pro page.
+2. Implement "restore purchases".
+
+---
+
+### Task 6: Release + submission prep
+
+**Goal:** Build a real installable app and prepare for store submission.
+
+**Clarifying Questions (ask first):**
+- Are we shipping Android first, or both Android + iOS?
+- Do we need a custom domain/email now, or later?
+
+**Steps:**
+1. Developer accounts.
+2. App store submission prep.
+3. Domain email setup (optional).
