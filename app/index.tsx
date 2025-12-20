@@ -12,6 +12,16 @@ import {
   UIManager,
   View,
 } from "react-native";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  runOnJS,
+  Easing,
+  FadeOut,
+  SlideOutLeft,
+  Layout,
+} from "react-native-reanimated";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
@@ -20,9 +30,10 @@ import { api } from "../convex/_generated/api";
 import { colors, scaleFontSize } from "../lib/theme";
 import { formatReminderTime, getDueTimestamp, isOverdue } from "../lib/time";
 import { readFileAsBase64 } from "../lib/convex";
-import { scheduleReminder } from "../lib/notifications";
+import { cancelReminder, scheduleReminder } from "../lib/notifications";
 import {
   addReminder,
+  deleteReminder as deleteReminderStorage,
   getHistory,
   getReminders,
   recordCompletion,
@@ -30,10 +41,12 @@ import {
   ReminderHistory,
 } from "../lib/storage";
 import RecordingOverlay from "../components/RecordingOverlay";
+import SwipeableCard from "../components/SwipeableCard";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
 import { perfLog } from "../lib/perf";
 import NetInfo from "@react-native-community/netinfo";
+import { useMutation } from "convex/react";
 
 type HomeView = "all" | "completed";
 
@@ -69,6 +82,7 @@ function getDayBucket(isoString: string): "Today" | "Yesterday" | "Earlier" {
 export default function HomeScreen() {
   const router = useRouter();
   const processVoiceReminder = useAction(api.actions.processVoiceReminder);
+  const removeConvexReminder = useMutation(api.reminders.remove);
   const insets = useSafeAreaInsets();
   const toast = useToast();
 
@@ -80,6 +94,11 @@ export default function HomeScreen() {
   const cancelledRef = useRef(false);
   const [isConnected, setIsConnected] = useState(true);
   const [showOfflineMessage, setShowOfflineMessage] = useState(false);
+
+  // Multi-select state
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showSelectMenu, setShowSelectMenu] = useState(false);
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
@@ -225,27 +244,171 @@ export default function HomeScreen() {
     [router]
   );
 
+  // Track items currently exiting (being marked done)
+  const [exitingIds, setExitingIds] = useState<Set<string>>(new Set());
+
   const handleMarkDone = useCallback(
     (reminderId: string, reminderTitle: string) => {
-      const optimisticEntry: ReminderHistory = {
-        id: Math.random().toString(36).slice(2, 11),
-        reminderId,
-        reminderTitle,
-        timestamp: new Date().toISOString(),
-        status: "completed",
-      };
+      // Mark as exiting to trigger animation
+      setExitingIds((prev) => new Set(prev).add(reminderId));
 
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setHistory((prev) => [...prev, optimisticEntry]);
+      // Delay actual state update to let animation play
+      setTimeout(() => {
+        const optimisticEntry: ReminderHistory = {
+          id: Math.random().toString(36).slice(2, 11),
+          reminderId,
+          reminderTitle,
+          timestamp: new Date().toISOString(),
+          status: "completed",
+        };
 
-      recordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
-        console.log("[VR] Failed to record completion:", e);
-      });
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setHistory((prev) => [...prev, optimisticEntry]);
+        setExitingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(reminderId);
+          return next;
+        });
 
-      toast.show({ title: "Marked as done", message: reminderTitle, type: "success" });
+        recordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
+          console.log("[VR] Failed to record completion:", e);
+        });
+
+        toast.show({ title: "Marked as done", message: reminderTitle, type: "success" });
+      }, 250); // Match animation duration
     },
     [toast]
   );
+
+  const handleDelete = useCallback(
+    async (reminder: Reminder) => {
+      const reminderId = reminder.id;
+      const convexId = reminder.convexId;
+
+      // Optimistically remove from UI
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setReminders((prev) => prev.filter((r) => r.id !== reminderId));
+
+      // Delete from local storage
+      try {
+        await deleteReminderStorage(reminderId);
+      } catch (e) {
+        console.log("[VR] Failed to delete reminder from storage:", e);
+      }
+
+      // Cancel notification
+      cancelReminder(reminderId).catch((e) => {
+        console.log("[VR] Failed to cancel notification:", e);
+      });
+
+      // Delete from Convex
+      if (convexId) {
+        removeConvexReminder({ id: convexId as any }).catch((e) => {
+          console.log("[VR] Failed to delete Convex reminder:", e);
+        });
+      }
+
+      toast.show({ title: "Deleted", message: reminder.title, type: "info" });
+    },
+    [removeConvexReminder, toast]
+  );
+
+  // Multi-select handlers
+  const toggleSelection = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    // Get incomplete reminder IDs (same logic as filteredReminders)
+    const today = new Date().toDateString();
+    const completedToday = new Set(
+      history
+        .filter((e) => e.status === "completed" && new Date(e.timestamp).toDateString() === today)
+        .map((e) => e.reminderId)
+    );
+    const allIds = reminders.filter((r) => !completedToday.has(r.id)).map((r) => r.id);
+    setSelectedIds(new Set(allIds));
+    setIsSelectMode(true);
+    setShowSelectMenu(false);
+  }, [reminders, history]);
+
+  const enterSelectMode = useCallback(() => {
+    setIsSelectMode(true);
+    setShowSelectMenu(false);
+  }, []);
+
+  const exitSelectMode = useCallback(() => {
+    setIsSelectMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+
+    const toDelete = reminders.filter((r) => selectedIds.has(r.id));
+
+    // Optimistically remove from UI
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setReminders((prev) => prev.filter((r) => !selectedIds.has(r.id)));
+    exitSelectMode();
+
+    // Delete each reminder
+    for (const reminder of toDelete) {
+      try {
+        await deleteReminderStorage(reminder.id);
+      } catch (e) {
+        console.log("[VR] Failed to delete reminder:", e);
+      }
+      cancelReminder(reminder.id).catch(() => { });
+      if (reminder.convexId) {
+        removeConvexReminder({ id: reminder.convexId as any }).catch(() => { });
+      }
+    }
+
+    toast.show({
+      title: "Deleted",
+      message: `${toDelete.length} reminder${toDelete.length > 1 ? "s" : ""} deleted`,
+      type: "info",
+    });
+  }, [selectedIds, reminders, removeConvexReminder, toast, exitSelectMode]);
+
+  const handleBulkDone = useCallback(() => {
+    if (selectedIds.size === 0) return;
+
+    const toMark = reminders.filter((r) => selectedIds.has(r.id));
+
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+
+    const newEntries: ReminderHistory[] = toMark.map((r) => ({
+      id: Math.random().toString(36).slice(2, 11),
+      reminderId: r.id,
+      reminderTitle: r.title,
+      timestamp: new Date().toISOString(),
+      status: "completed" as const,
+    }));
+
+    setHistory((prev) => [...prev, ...newEntries]);
+    exitSelectMode();
+
+    // Record completions
+    for (const reminder of toMark) {
+      recordCompletion(reminder.id, reminder.title, "completed").catch(() => { });
+    }
+
+    toast.show({
+      title: "Marked as done",
+      message: `${toMark.length} reminder${toMark.length > 1 ? "s" : ""} completed`,
+      type: "success",
+    });
+  }, [selectedIds, reminders, toast, exitSelectMode]);
 
   const completedTodayReminderIds = useMemo(() => {
     const today = new Date().toDateString();
@@ -358,49 +521,80 @@ export default function HomeScreen() {
       const dueColor = overdue ? colors.statusOverdue : colors.statusUpcoming;
       const isRepeating = item.frequency !== "once";
 
+      const isExiting = exitingIds.has(item.id);
+
       return (
-        <View style={styles.card}>
-          <TouchableOpacity
-            style={styles.cardMain}
-            onPress={() => handleReminderPress(item)}
-            activeOpacity={0.8}
-          >
-            <View style={styles.cardText}>
-              <Text style={styles.cardTitle} numberOfLines={1}>
-                {item.title}
-              </Text>
-              <Text style={styles.cardSubtitle} numberOfLines={1}>
-                {item.description || "No description"}
-              </Text>
-              <View style={styles.dueRow}>
-                <View style={[styles.dueDot, { backgroundColor: dueColor }]} />
-                <Text style={[styles.cardMeta, styles.dueText, { color: dueColor }]} numberOfLines={1}>
-                  {formatReminderTime(dueTimestamp)}
+        <SwipeableCard
+          id={item.id}
+          isExiting={isExiting}
+          onDelete={() => handleDelete(item)}
+        >
+          <View style={styles.cardInner}>
+            <TouchableOpacity
+              style={[styles.cardMain, isExiting && { opacity: 0.5 }]}
+              onPress={() => handleReminderPress(item)}
+              activeOpacity={0.8}
+              disabled={isExiting}
+            >
+              <View style={styles.cardText}>
+                <Text style={styles.cardTitle} numberOfLines={1}>
+                  {item.title}
                 </Text>
-                {isRepeating && (
-                  <AppIcon
-                    name="refresh-cw"
-                    size={14}
-                    color={dueColor}
-                    style={styles.repeatIcon}
-                  />
-                )}
+                <Text style={styles.cardSubtitle} numberOfLines={1}>
+                  {item.description || "No description"}
+                </Text>
+                <View style={styles.dueRow}>
+                  <View style={[styles.dueDot, { backgroundColor: dueColor }]} />
+                  <Text style={[styles.cardMeta, styles.dueText, { color: dueColor }]} numberOfLines={1}>
+                    {formatReminderTime(dueTimestamp)}
+                  </Text>
+                  {isRepeating && (
+                    <AppIcon
+                      name="refresh-cw"
+                      size={14}
+                      color={dueColor}
+                      style={styles.repeatIcon}
+                    />
+                  )}
+                </View>
               </View>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.checkButton}
-            onPress={() => handleMarkDone(item.id, item.title)}
-            hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel={`Mark "${item.title}" as completed`}
-          >
-            <View style={styles.checkCircle} />
-          </TouchableOpacity>
-        </View>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.checkButton}
+              onPress={() => {
+                if (isSelectMode) {
+                  toggleSelection(item.id);
+                } else {
+                  handleMarkDone(item.id, item.title);
+                }
+              }}
+              hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isSelectMode
+                  ? `${selectedIds.has(item.id) ? "Deselect" : "Select"} "${item.title}"`
+                  : `Mark "${item.title}" as completed`
+              }
+              disabled={isExiting}
+            >
+              <Animated.View
+                style={[
+                  styles.checkCircle,
+                  isExiting && { backgroundColor: colors.success, borderColor: colors.success },
+                  isSelectMode && selectedIds.has(item.id) && { backgroundColor: colors.accent, borderColor: colors.accent },
+                ]}
+              >
+                {isExiting && <AppIcon name="check" size={14} color="white" />}
+                {isSelectMode && selectedIds.has(item.id) && !isExiting && (
+                  <AppIcon name="check" size={14} color="white" />
+                )}
+              </Animated.View>
+            </TouchableOpacity>
+          </View>
+        </SwipeableCard>
       );
     },
-    [handleMarkDone, handleReminderPress]
+    [exitingIds, handleDelete, handleMarkDone, handleReminderPress, isSelectMode, selectedIds, toggleSelection]
   );
 
   const renderCompletedItem = useCallback(
@@ -456,42 +650,98 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.filtersRow}>
-          <TouchableOpacity
-            style={[
-              styles.filterPill,
-              selectedView === "all" && styles.filterPillActive,
-            ]}
-            onPress={() => setSelectedView("all")}
-            activeOpacity={0.85}
-          >
-            <Text
+          <View style={styles.filtersLeft}>
+            <TouchableOpacity
               style={[
-                styles.filterPillText,
-                selectedView === "all" && styles.filterPillTextActive,
+                styles.filterPill,
+                selectedView === "all" && styles.filterPillActive,
               ]}
+              onPress={() => setSelectedView("all")}
+              activeOpacity={0.85}
             >
-              All
-            </Text>
-          </TouchableOpacity>
+              <Text
+                style={[
+                  styles.filterPillText,
+                  selectedView === "all" && styles.filterPillTextActive,
+                ]}
+              >
+                All
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[
-              styles.filterPill,
-              selectedView === "completed" && styles.filterPillActive,
-            ]}
-            onPress={() => setSelectedView("completed")}
-            activeOpacity={0.85}
-          >
-            <Text
+            <TouchableOpacity
               style={[
-                styles.filterPillText,
-                selectedView === "completed" && styles.filterPillTextActive,
+                styles.filterPill,
+                selectedView === "completed" && styles.filterPillActive,
               ]}
+              onPress={() => setSelectedView("completed")}
+              activeOpacity={0.85}
             >
-              Completed
-            </Text>
-          </TouchableOpacity>
+              <Text
+                style={[
+                  styles.filterPillText,
+                  selectedView === "completed" && styles.filterPillTextActive,
+                ]}
+              >
+                Completed
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Three-dot menu or Cancel button */}
+          {selectedView === "all" && (
+            isSelectMode ? (
+              <TouchableOpacity
+                style={styles.cancelSelectButton}
+                onPress={exitSelectMode}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.cancelSelectText}>Cancel</Text>
+              </TouchableOpacity>
+            ) : (
+              <View>
+                <TouchableOpacity
+                  style={styles.moreButton}
+                  onPress={() => setShowSelectMenu(!showSelectMenu)}
+                  activeOpacity={0.8}
+                >
+                  <AppIcon name="more-vertical" size={20} color={colors.textSecondary} />
+                </TouchableOpacity>
+
+                {/* Dropdown menu */}
+                {showSelectMenu && (
+                  <View style={styles.selectMenu}>
+                    <TouchableOpacity
+                      style={styles.selectMenuItem}
+                      onPress={enterSelectMode}
+                      activeOpacity={0.8}
+                    >
+                      <AppIcon name="square" size={18} color={colors.textPrimary} />
+                      <Text style={styles.selectMenuText}>Select</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.selectMenuItem}
+                      onPress={selectAll}
+                      activeOpacity={0.8}
+                    >
+                      <AppIcon name="check-circle" size={18} color={colors.textPrimary} />
+                      <Text style={styles.selectMenuText}>Select All</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            )
+          )}
         </View>
+
+        {/* Selection mode indicator bar */}
+        {isSelectMode && (
+          <View style={styles.selectionBar}>
+            <Text style={styles.selectionCount}>
+              {selectedIds.size} selected
+            </Text>
+          </View>
+        )}
       </View>
 
       {selectedView === "all" ? (
@@ -615,22 +865,45 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
           )}
-          <TouchableOpacity
-            style={[
-              styles.fab,
-              { bottom: (Platform.OS === "ios" ? 28 : 18) + insets.bottom },
-            ]}
-            onPress={() => {
-              if (!isConnected) {
-                setShowOfflineMessage(true);
-                return;
-              }
-              setShowRecording(true);
-            }}
-            activeOpacity={0.9}
-          >
-            <AppIcon name="mic" size={26} color="white" />
-          </TouchableOpacity>
+
+          {/* Bulk Action Bar in Selection Mode */}
+          {isSelectMode && selectedIds.size > 0 ? (
+            <View style={[styles.bulkActionBar, { paddingBottom: insets.bottom + 16 }]}>
+              <TouchableOpacity
+                style={styles.bulkActionButton}
+                onPress={handleBulkDelete}
+                activeOpacity={0.8}
+              >
+                <AppIcon name="trash-2" size={20} color={colors.destructive} />
+                <Text style={[styles.bulkActionText, { color: colors.destructive }]}>Delete</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.bulkActionButton, styles.bulkActionPrimary]}
+                onPress={handleBulkDone}
+                activeOpacity={0.8}
+              >
+                <AppIcon name="check" size={20} color="white" />
+                <Text style={[styles.bulkActionText, { color: "white" }]}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          ) : !isSelectMode && (
+            <TouchableOpacity
+              style={[
+                styles.fab,
+                { bottom: (Platform.OS === "ios" ? 28 : 18) + insets.bottom },
+              ]}
+              onPress={() => {
+                if (!isConnected) {
+                  setShowOfflineMessage(true);
+                  return;
+                }
+                setShowRecording(true);
+              }}
+              activeOpacity={0.9}
+            >
+              <AppIcon name="mic" size={26} color="white" />
+            </TouchableOpacity>
+          )}
         </>
       )}
 
@@ -746,6 +1019,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     marginBottom: 10,
   },
+  cardInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+  },
   cardMain: {
     flex: 1,
     flexDirection: "row",
@@ -808,6 +1087,8 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.outline,
     backgroundColor: "transparent",
+    justifyContent: "center",
+    alignItems: "center",
   },
   fab: {
     position: "absolute",
@@ -888,5 +1169,102 @@ const styles = StyleSheet.create({
     fontSize: scaleFontSize(14),
     fontWeight: "500",
     color: colors.textSecondary,
+  },
+  // Multi-select mode styles
+  filtersLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  moreButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cancelSelectButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  cancelSelectText: {
+    fontWeight: "600",
+    fontSize: scaleFontSize(14),
+    color: colors.accent,
+  },
+  selectMenu: {
+    position: "absolute",
+    top: 40,
+    right: 0,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingVertical: 8,
+    minWidth: 140,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+    zIndex: 100,
+  },
+  selectMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  selectMenuText: {
+    fontSize: scaleFontSize(14),
+    fontWeight: "500",
+    color: colors.textPrimary,
+  },
+  selectionBar: {
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    backgroundColor: colors.accent + "15",
+  },
+  selectionCount: {
+    fontSize: scaleFontSize(14),
+    fontWeight: "600",
+    color: colors.accent,
+  },
+  // Bulk action bar styles
+  bulkActionBar: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    paddingTop: 16,
+    paddingHorizontal: 20,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: -2 },
+    elevation: 8,
+  },
+  bulkActionButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+    marginHorizontal: 6,
+    backgroundColor: colors.muted,
+  },
+  bulkActionPrimary: {
+    backgroundColor: colors.accent,
+  },
+  bulkActionText: {
+    fontSize: scaleFontSize(15),
+    fontWeight: "700",
   },
 });

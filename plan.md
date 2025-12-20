@@ -193,17 +193,15 @@ Fixed text hierarchy:
 2. **Spacing audit** - Check padding/margins are consistent
 3. **Component states** - Active/pressed/disabled states
 
-### Task 5: Little Details 🟡 IN PROGRESS
-**Status:** Started on 2025-12-18
+### Task 5: Little Details ✅ COMPLETED
+**Status:** Completed on 2025-12-20
 
 **Done:**
 - Success feedback: toast system ("Reminder created", "Marked as done")
 - Empty states: All + Completed tabs with clear CTAs
 - Loading state: basic list loading indicator
 - Small list animations: layout animation on create + mark done
-
-**Remaining:**
-- Smooth delete animations (fade out + slide)
+- Smooth delete animations: fade out + checkmark fill on mark-done
 
 ### Task 6: Voice Delay Investigation (Optional)
 **What:** Reduce perceived 1-2 second delay
