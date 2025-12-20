@@ -11,7 +11,7 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 | Component | Technology | Why |
 |-----------|------------|-----|
 | Frontend | Expo (React Native) | Cross-platform, fast development |
-| Backend | Convex | Real-time sync, file storage, serverless functions |
+| Backend | Convex | AI processing (Whisper/GPT/TTS), file storage |
 | Notifications | Notifee | Custom sounds work in background (expo-notifications has bugs) |
 | Audio Recording | expo-av | Native audio recording |
 | STT | OpenAI Whisper | Accurate speech-to-text |
@@ -324,12 +324,13 @@ if (settings.authorizationStatus < 1) {
 ### Task 3: App Restart Recovery
 
 ```typescript
+// Reminders are stored locally - re-sync notifications on app launch
 async function syncReminders() {
-  const dbReminders = await getRemindersQuery();
+  const localReminders = await getLocalReminders(); // From AsyncStorage/SQLite
   const scheduledIds = await notifee.getTriggerNotificationIds();
   
-  for (const reminder of dbReminders) {
-    if (!scheduledIds.includes(`reminder_${reminder._id}`)) {
+  for (const reminder of localReminders) {
+    if (!scheduledIds.includes(`reminder_${reminder.id}`)) {
       await scheduleReminder(reminder);
     }
   }
@@ -362,83 +363,348 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
 
 ## Phase 11: Monetization & Release
 
-**Goal:** User accounts, payments, and app store release
+**Goal:** Payments, paywall, onboarding, and app store release
 
-### Task 1: Onboarding Flow
+### Architecture Decision: Local-First
 
-**Goal:** New users understand the app in under 30 seconds
+**Reminders are stored locally on device, not in Convex.**
+
+- Convex is ONLY used for processing (Whisper → GPT → TTS)
+- After processing, reminder data is stored locally (AsyncStorage/SQLite)
+- This enables full offline functionality
+- No user accounts required for core app functionality
+
+### Dependency Chain (Simplified)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. REVENUECAT (Anonymous Mode)                             │
+│     - Uses device-generated ID + App Store/Play Store       │
+│     - No Clerk required                                     │
+│     - Purchases restored via store account (Google/Apple)   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  2. PAYWALL (Gate Features)                                 │
+│     - Check local reminder count (AsyncStorage)             │
+│     - Check RevenueCat subscription status                  │
+│     - Show paywall when limit reached                       │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  3. ONBOARDING (Permissions + Value)                        │
+│     - Show app value proposition                            │
+│     - Request mic + notification permissions                │
+│     - No sign-in required                                   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  4. RELEASE (Store Submission)                              │
+│     - Build production app                                  │
+│     - Submit to Play Store / App Store                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Task 1: RevenueCat Integration (The First Domino) 🎯
+
+**Goal:** Purchases work reliably and are restorable
+
+**Why first:** Everything else (paywall, gating) needs to know subscription status.
+
+**Key insight:** RevenueCat works in **anonymous mode**. The App Store/Play Store tracks who bought what—not your backend. Users restore purchases via their store account.
 
 **Clarifying Questions:**
-- Onboarding format: 1 screen or 2-3 swipe screens?
-- Can users skip onboarding?
-- When do we mark onboarding complete (local flag vs user account)?
+- [ ] Which platforms first? Android only, or iOS too?
+- [ ] Product IDs and plan names (monthly/yearly)?
+- [ ] Free tier limit? (e.g., 5 reminders free, unlimited with Pro)
 
-**Steps:**
-1. Add onboarding screen(s) explaining: what the app does + next action
-2. Ask for key permissions at the right time (mic + notifications)
-3. Store a "seen onboarding" flag and route accordingly
+#### Step 1.1: Create RevenueCat Account (10 min)
+1. Go to [revenuecat.com](https://www.revenuecat.com/)
+2. Create a project "VoiceReminder"
+3. Add Android app (package name from `app.json`)
+4. Add iOS app if needed
+5. Copy API keys (one per platform)
 
-### Task 2: User Accounts + Settings
+#### Step 1.2: Set Up Products in Play Console (30-60 min)
+1. Go to Google Play Console → Your App → Monetize → Products → Subscriptions
+2. Create subscription products:
+   - `voicereminder_pro_monthly` - Monthly subscription
+   - `voicereminder_pro_yearly` - Yearly subscription (with savings)
+3. Link products in RevenueCat dashboard under "Products"
 
-**Goal:** Settings has an Account area and a clear path to Plan/Payments
+#### Step 1.3: Install RevenueCat SDK (5 min)
+```bash
+npm install react-native-purchases --legacy-peer-deps
+```
 
-**Clarifying Questions:**
-- Which auth solution are we using (Clerk + Convex, or something else)?
-- What account actions are needed first (sign in/out only, or profile too)?
+#### Step 1.4: Initialize RevenueCat (15 min)
+**File:** `lib/purchases.ts`
 
-**Steps:**
-1. Add an "Account" section in Settings (sign in/out, user info)
-2. Add a "Plan/Payments" row that routes to the Payments/Pro page
+```typescript
+import Purchases, { LOG_LEVEL } from 'react-native-purchases';
+import { Platform } from 'react-native';
+
+const REVENUECAT_ANDROID_KEY = 'your_android_api_key';
+const REVENUECAT_IOS_KEY = 'your_ios_api_key';
+
+export async function initializePurchases() {
+  Purchases.setLogLevel(LOG_LEVEL.DEBUG); // Remove in production
+  
+  await Purchases.configure({
+    apiKey: Platform.OS === 'ios' ? REVENUECAT_IOS_KEY : REVENUECAT_ANDROID_KEY,
+    // No appUserID = anonymous mode (uses device ID)
+  });
+}
+
+export async function checkProStatus(): Promise<boolean> {
+  try {
+    const customerInfo = await Purchases.getCustomerInfo();
+    return customerInfo.entitlements.active['pro'] !== undefined;
+  } catch (error) {
+    console.error('Error checking pro status:', error);
+    return false;
+  }
+}
+
+export async function restorePurchases(): Promise<boolean> {
+  try {
+    const customerInfo = await Purchases.restorePurchases();
+    return customerInfo.entitlements.active['pro'] !== undefined;
+  } catch (error) {
+    console.error('Error restoring purchases:', error);
+    return false;
+  }
+}
+```
+
+#### Step 1.5: Initialize on App Start (10 min)
+**File:** `app/_layout.tsx`
+
+```typescript
+import { initializePurchases } from '@/lib/purchases';
+
+useEffect(() => {
+  initializePurchases();
+}, []);
+```
+
+**Time estimate:** ~2-3 hours (mostly waiting for Play Console setup)
+
+**Definition of Done:**
+- [ ] RevenueCat SDK initialized on app start
+- [ ] Can check subscription status with `checkProStatus()`
+- [ ] Products visible in RevenueCat dashboard
+
+---
+
+### Task 2: Local Usage Tracking
+
+**Goal:** Track reminder count locally to enforce free tier limits
+
+#### Step 2.1: Create Usage Storage (15 min)
+**File:** `lib/usage.ts`
+
+```typescript
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const REMINDER_COUNT_KEY = 'reminder_count';
+const FREE_LIMIT = 5; // Adjust as needed
+
+export async function getReminderCount(): Promise<number> {
+  const count = await AsyncStorage.getItem(REMINDER_COUNT_KEY);
+  return count ? parseInt(count, 10) : 0;
+}
+
+export async function incrementReminderCount(): Promise<number> {
+  const current = await getReminderCount();
+  const newCount = current + 1;
+  await AsyncStorage.setItem(REMINDER_COUNT_KEY, newCount.toString());
+  return newCount;
+}
+
+export async function canCreateReminder(isPro: boolean): Promise<boolean> {
+  if (isPro) return true;
+  const count = await getReminderCount();
+  return count < FREE_LIMIT;
+}
+```
+
+#### Step 2.2: Check Before Creating Reminder (10 min)
+Update reminder creation flow to check `canCreateReminder()` before proceeding.
+
+**Time estimate:** ~30 min
+
+---
 
 ### Task 3: Paywall
 
 **Goal:** A good-looking paywall that converts
 
-**Clarifying Questions:**
-- What are the Pro features (exact list)?
-- Plans: monthly + yearly, or just one?
-- Trial: yes/no?
-
-**Steps:**
-1. Build a paywall UI (benefits list + strong CTA + restore + terms/privacy)
-2. Gate Pro-only features so paywall appears at the right moment
-
-### Task 4: Payments / Pro Page
-
-**Goal:** A page users can reach anytime to see plans and upgrade
+**Blocked by:** Task 1 (need RevenueCat for products/prices)
 
 **Clarifying Questions:**
-- Is this the same screen as the paywall, or separate?
-- Where do we redirect after purchase (back to Settings, or back to previous screen)?
+- [ ] What are the Pro features (exact list)?
+- [ ] Plans: monthly + yearly, or just one?
+- [ ] Trial: yes/no? How long?
 
-**Steps:**
-1. Create a Payments/Pro page with plan cards and current subscription status
-2. Link to it from Settings and from paywall CTAs
+#### Step 3.1: Create Paywall Screen (1-2 hours)
+**File:** `app/paywall.tsx`
 
-### Task 5: RevenueCat Integration
+Components:
+- Header with app icon/branding
+- Feature list with icons (what Pro unlocks)
+- Plan cards (monthly/yearly with savings badge)
+- Purchase button (calls RevenueCat)
+- "Restore Purchases" link
+- Terms of Service / Privacy Policy links
+- Close/dismiss button
 
-**Goal:** Purchases work reliably and are restorable
+#### Step 3.2: Get Products from RevenueCat (30 min)
+```typescript
+import Purchases from 'react-native-purchases';
+
+const offerings = await Purchases.getOfferings();
+const packages = offerings.current?.availablePackages || [];
+// Display packages with their prices
+```
+
+#### Step 3.3: Handle Purchase (30 min)
+```typescript
+async function handlePurchase(package: PurchasesPackage) {
+  try {
+    const { customerInfo } = await Purchases.purchasePackage(package);
+    if (customerInfo.entitlements.active['pro']) {
+      // Success! Navigate back or update UI
+    }
+  } catch (error) {
+    // Handle error (user cancelled, payment failed, etc.)
+  }
+}
+```
+
+#### Step 3.4: Trigger Paywall at Right Moments (30 min)
+- When user tries to create reminder past free limit
+- From Settings → "Upgrade to Pro"
+- Optional: Soft prompt after N uses
+
+**Time estimate:** ~2-3 hours
+
+---
+
+### Task 4: Onboarding Flow
+
+**Goal:** New users understand the app in under 30 seconds
+
+**No blockers** - can be done in parallel with other tasks
 
 **Clarifying Questions:**
-- Which platforms are in scope first (Android only, or iOS too)?
-- Product IDs and plan names?
+- [ ] Onboarding format: 1 screen or 2-3 swipe screens?
+- [ ] Can users skip onboarding?
 
-**Steps:**
-1. Integrate RevenueCat and wire it to Paywall + Pro page
-2. Implement "restore purchases"
+#### Step 4.1: Create Onboarding Screens (1-1.5 hours)
+**File:** `app/onboarding.tsx`
 
-### Task 6: Release + Submission Prep
+Screens:
+1. **Value prop:** "Speak your reminders, hear them when they're due"
+2. **How it works:** Quick visual of speak → schedule → notify
+3. **Permissions:** Request mic + notification permissions
+4. **Get started:** Button to enter app (no sign-in needed)
+
+#### Step 4.2: Track Onboarding Completion (15 min)
+```typescript
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+await AsyncStorage.setItem('hasSeenOnboarding', 'true');
+```
+
+#### Step 4.3: Route Logic in Layout (15 min)
+```typescript
+// In _layout.tsx
+const [isReady, setIsReady] = useState(false);
+const [showOnboarding, setShowOnboarding] = useState(false);
+
+useEffect(() => {
+  async function checkOnboarding() {
+    const seen = await AsyncStorage.getItem('hasSeenOnboarding');
+    setShowOnboarding(!seen);
+    setIsReady(true);
+  }
+  checkOnboarding();
+}, []);
+
+if (!isReady) return <SplashScreen />;
+if (showOnboarding) return <Redirect href="/onboarding" />;
+```
+
+**Time estimate:** ~1.5-2 hours
+
+---
+
+### Task 5: Release + Submission Prep
 
 **Goal:** Build a real installable app and prepare for store submission
 
-**Clarifying Questions:**
-- Are we shipping Android first, or both Android + iOS?
-- Do we need a custom domain/email now, or later?
+**Blocked by:** Tasks 1-4 (core flows must work)
 
-**Steps:**
-1. Developer accounts
-2. App store submission prep
-3. Domain email setup (optional)
+**Clarifying Questions:**
+- [ ] Android first, or both platforms?
+- [ ] Custom domain/email for developer account?
+
+#### Step 5.1: Developer Accounts
+- Google Play Console ($25 one-time)
+- Apple Developer Program ($99/year) if doing iOS
+
+#### Step 5.2: App Store Assets
+- App icon (1024x1024)
+- Screenshots for each screen size
+- Feature graphic (Play Store)
+- App description, keywords
+- Privacy policy URL
+
+#### Step 5.3: Build Production APK/AAB
+```bash
+eas build --platform android --profile production
+```
+
+#### Step 5.4: Submit to Stores
+- Upload to Play Console / App Store Connect
+- Fill metadata, set pricing
+- Submit for review
+
+**Time estimate:** ~4-6 hours (mostly waiting for builds/reviews)
+
+---
+
+### Future: User Accounts (Optional)
+
+Clerk authentication is **not required** for core functionality but could be added later for:
+
+- Cross-device reminder sync (premium feature)
+- Displaying "Welcome, [Name]" in app
+- User support tickets
+- Advanced analytics
+
+If added, it would become Task 6 after release.
+
+---
+
+### UI Parking Lot
+
+These UI tasks are captured but **parked**:
+
+| Task | Status | Notes |
+|------|--------|-------|
+| Paywall UI | Blocked | Waiting for Task 1 (RevenueCat) |
+| Onboarding UI | Ready | No blockers, can do anytime |
+| Delete animations | Anytime | No dependencies, pure polish |
+| UI consistency pass | Anytime | No dependencies, low priority |
+
+**The rule:** When the engine exists, the UI becomes obvious.
 
 ---
 
@@ -535,8 +801,8 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 
 ## Limitations (POC Scope)
 
-- No user authentication
+- No user authentication (by design for local-first)
 - Editing reminders supported (no TTS regeneration yet)
 - No snooze functionality
-- Single device only (no cross-device sync)
+- Single device only (local-first architecture, no cross-device sync)
 - No timezone handling (uses device timezone)
