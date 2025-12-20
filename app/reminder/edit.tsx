@@ -123,6 +123,12 @@ export default function EditReminderScreen() {
     setSoundRepeatMode(found.soundRepeatMode || "count");
     setSoundRepeatCount(found.soundRepeatCount ?? 1);
 
+    // Load the date if it exists
+    if (found.date) {
+      const [year, month, day] = found.date.split("-").map(Number);
+      setDueDate(new Date(year, month - 1, day));
+    }
+
     if (found.time) {
       const [hours, minutes] = found.time.split(":").map(Number);
       const date = new Date();
@@ -157,15 +163,20 @@ export default function EditReminderScreen() {
     const currentDays = [...days].sort().join(",");
     const originalDays = [...(reminder.days || [])].sort().join(",");
 
+    // Check date change
+    const currentDateStr = dueDate ? `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")}` : undefined;
+    const dateChanged = currentDateStr !== reminder.date;
+
     return (
       title !== reminder.title ||
       timeStr !== reminder.time ||
       frequency !== reminder.frequency ||
       currentDays !== originalDays ||
+      dateChanged ||
       (reminder.soundRepeatMode || "count") !== soundRepeatMode ||
       (reminder.soundRepeatCount ?? 1) !== soundRepeatCount
     );
-  }, [days, frequency, reminder, soundRepeatCount, soundRepeatMode, time, title]);
+  }, [days, dueDate, frequency, reminder, soundRepeatCount, soundRepeatMode, time, title]);
 
   const frequencyLabel = useMemo(() => {
     return FREQUENCIES.find((f) => f.value === frequency)?.label ?? "Once";
@@ -266,7 +277,7 @@ export default function EditReminderScreen() {
     setShowSoundRepeatModal(false);
   };
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     if (!reminder) return;
     if (!title.trim()) {
       Alert.alert("Error", "Please enter a reminder title");
@@ -278,11 +289,17 @@ export default function EditReminderScreen() {
       .toString()
       .padStart(2, "0")}`;
 
+    // Convert dueDate to YYYY-MM-DD string
+    const dateStr = dueDate
+      ? `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")}`
+      : undefined;
+
     const updatedReminder: Reminder = {
       ...reminder,
       title: title.trim(),
       description,
       time: timeStr,
+      date: dateStr,
       frequency,
       days: frequency === "custom" ? days : [],
       soundRepeatMode,
@@ -305,6 +322,7 @@ export default function EditReminderScreen() {
             title: updatedReminder.title,
             description,
             time: timeStr,
+            date: dateStr,
             frequency,
             days: frequency === "custom" ? days : undefined,
             soundRepeatMode,
@@ -329,6 +347,7 @@ export default function EditReminderScreen() {
               title: updatedReminder.title,
               description,
               time: timeStr,
+              date: dateStr,
               frequency,
               days: scheduleDays,
               audioUrl,
@@ -344,7 +363,7 @@ export default function EditReminderScreen() {
       console.error("[VR] Save error:", error);
       Alert.alert("Error", "Failed to save reminder");
     }
-  };
+  }, [reminder, title, time, dueDate, description, frequency, days, soundRepeatMode, soundRepeatCount, router, updateConvexReminder]);
 
   const handleDelete = () => {
     if (!reminder) return;
@@ -385,7 +404,7 @@ export default function EditReminderScreen() {
   };
 
   const openOptionsMenu = () => {
-    const options: Array<{text: string; style?: "cancel" | "destructive"; onPress?: () => void}> = [
+    const options: Array<{ text: string; style?: "cancel" | "destructive"; onPress?: () => void }> = [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
@@ -412,10 +431,15 @@ export default function EditReminderScreen() {
   const handleSheetChange = useCallback(
     (index: number) => {
       if (index === -1) {
-        router.back();
+        // Auto-save if there are changes
+        if (hasChanges()) {
+          handleSave();
+        } else {
+          router.back();
+        }
       }
     },
-    [router]
+    [hasChanges, handleSave, router]
   );
 
   if (!reminder) {

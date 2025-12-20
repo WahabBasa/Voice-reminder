@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   ActivityIndicator,
@@ -33,6 +33,7 @@ import RecordingOverlay from "../components/RecordingOverlay";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
 import { perfLog } from "../lib/perf";
+import NetInfo from "@react-native-community/netinfo";
 
 type HomeView = "all" | "completed";
 
@@ -76,6 +77,19 @@ export default function HomeScreen() {
   const [showRecording, setShowRecording] = useState(false);
   const [selectedView, setSelectedView] = useState<HomeView>("all");
   const [isLoading, setIsLoading] = useState(true);
+  const cancelledRef = useRef(false);
+  const [isConnected, setIsConnected] = useState(true);
+  const [showOfflineMessage, setShowOfflineMessage] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      setIsConnected(state.isConnected ?? true);
+      if (state.isConnected) {
+        setShowOfflineMessage(false);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   const loadData = useCallback(async () => {
     try {
@@ -108,7 +122,13 @@ export default function HomeScreen() {
     setShowRecording(false);
   };
 
+  const handleCancelProcessing = useCallback(() => {
+    cancelledRef.current = true;
+    toast.show({ title: "Cancelled", message: "Reminder creation cancelled", type: "info" });
+  }, [toast]);
+
   const handleRecordingComplete = async (audioUri: string, traceId: string) => {
+    cancelledRef.current = false;
     try {
       perfLog(traceId, "device.processing", "handleRecordingComplete_start", { audioUri });
 
@@ -124,6 +144,12 @@ export default function HomeScreen() {
       perfLog(traceId, "device.processing", "processVoiceReminder_done", {
         ms: Date.now() - tAction,
       });
+
+      // Check if cancelled while processing
+      if (cancelledRef.current) {
+        console.log("[VR] Processing cancelled by user");
+        return;
+      }
 
       if ((result as any)?.perf) {
         perfLog(traceId, "device.processing", "convex_perf", (result as any).perf);
@@ -142,6 +168,7 @@ export default function HomeScreen() {
         title: result.title,
         description: result.description,
         time: result.time,
+        date: result.date,
         frequency,
         days,
         audioUrl: result.audioUrl,
@@ -168,6 +195,7 @@ export default function HomeScreen() {
           title: newReminder.title,
           description: newReminder.description,
           time: newReminder.time,
+          date: newReminder.date,
           frequency: newReminder.frequency,
           days: newReminder.days,
           audioUrl: newReminder.audioUrl,
@@ -269,11 +297,11 @@ export default function HomeScreen() {
 
   const completedBySection = useMemo(() => {
     const sections: Record<"Today" | "Yesterday" | "Earlier", ReminderHistory[]> =
-      {
-        Today: [],
-        Yesterday: [],
-        Earlier: [],
-      };
+    {
+      Today: [],
+      Yesterday: [],
+      Earlier: [],
+    };
 
     const sorted = [...filteredCompletedHistory].sort((a, b) => {
       const aTime = new Date(a.timestamp).getTime();
@@ -323,7 +351,7 @@ export default function HomeScreen() {
   const renderReminderItem = useCallback(
     ({ item }: { item: Reminder }) => {
       const dueTimestamp = getDueTimestamp(
-        { time: item.time, frequency: item.frequency, days: item.days },
+        { time: item.time, date: item.date, frequency: item.frequency, days: item.days },
         new Date()
       );
       const overdue = isOverdue(dueTimestamp);
@@ -411,26 +439,26 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.header}>
         <View style={styles.headerTop}>
-            <Text style={styles.headerTitle}>Voice Reminder</Text>
-            <View style={styles.headerActions}>
-              <TouchableOpacity style={styles.proPill} activeOpacity={0.85}>
-                <AppIcon name="zap" size={14} color="white" style={styles.proIcon} />
-                <Text style={styles.proPillText}>PRO Version</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.settingsButton}
-                onPress={() => router.push("/settings")}
-                activeOpacity={0.8}
-              >
-                <AppIcon name="settings" size={22} color={colors.textPrimary} />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View style={styles.filtersRow}>
+          <Text style={styles.headerTitle}>Voice Reminder</Text>
+          <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.proPill} activeOpacity={0.85}>
+              <AppIcon name="zap" size={14} color="white" style={styles.proIcon} />
+              <Text style={styles.proPillText}>PRO Version</Text>
+            </TouchableOpacity>
             <TouchableOpacity
-              style={[
-                styles.filterPill,
+              style={styles.settingsButton}
+              onPress={() => router.push("/settings")}
+              activeOpacity={0.8}
+            >
+              <AppIcon name="settings" size={22} color={colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.filtersRow}>
+          <TouchableOpacity
+            style={[
+              styles.filterPill,
               selectedView === "all" && styles.filterPillActive,
             ]}
             onPress={() => setSelectedView("all")}
@@ -576,23 +604,41 @@ export default function HomeScreen() {
         />
       )}
 
-      {selectedView === "all" && (
-        <TouchableOpacity
-          style={[
-            styles.fab,
-            { bottom: (Platform.OS === "ios" ? 28 : 18) + insets.bottom },
-          ]}
-          onPress={() => setShowRecording(true)}
-          activeOpacity={0.9}
-        >
-          <AppIcon name="mic" size={26} color="white" />
-        </TouchableOpacity>
+      {selectedView === "all" && !showRecording && (
+        <>
+          {showOfflineMessage && (
+            <View style={[styles.offlineMessage, { bottom: (Platform.OS === "ios" ? 100 : 90) + insets.bottom }]}>
+              <AppIcon name="wifi-off" size={18} color={colors.textSecondary} />
+              <Text style={styles.offlineText}>No internet connection</Text>
+              <TouchableOpacity onPress={() => setShowOfflineMessage(false)} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+                <AppIcon name="x" size={16} color={colors.textTertiary} />
+              </TouchableOpacity>
+            </View>
+          )}
+          <TouchableOpacity
+            style={[
+              styles.fab,
+              { bottom: (Platform.OS === "ios" ? 28 : 18) + insets.bottom },
+            ]}
+            onPress={() => {
+              if (!isConnected) {
+                setShowOfflineMessage(true);
+                return;
+              }
+              setShowRecording(true);
+            }}
+            activeOpacity={0.9}
+          >
+            <AppIcon name="mic" size={26} color="white" />
+          </TouchableOpacity>
+        </>
       )}
 
       <RecordingOverlay
         visible={showRecording}
         onClose={handleCloseRecording}
         onRecordingComplete={handleRecordingComplete}
+        onCancelProcessing={handleCancelProcessing}
       />
     </SafeAreaView>
   );
@@ -821,5 +867,26 @@ const styles = StyleSheet.create({
   },
   emptyCtaGhostText: {
     color: colors.textPrimary,
+  },
+  offlineMessage: {
+    position: "absolute",
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  offlineText: {
+    fontSize: scaleFontSize(14),
+    fontWeight: "500",
+    color: colors.textSecondary,
   },
 });

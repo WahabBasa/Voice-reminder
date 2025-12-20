@@ -17,19 +17,19 @@ export default function RootLayout() {
             <Stack
               screenOptions={{
                 headerShown: false,
-                contentStyle: { backgroundColor: "white" },
                 animation: "slide_from_right",
                 animationDuration: 200,
               }}
             >
-              <Stack.Screen name="index" />
-              <Stack.Screen name="history" />
-              <Stack.Screen name="settings" />
+              <Stack.Screen name="index" options={{ contentStyle: { backgroundColor: "white" } }} />
+              <Stack.Screen name="history" options={{ contentStyle: { backgroundColor: "white" } }} />
+              <Stack.Screen name="settings" options={{ contentStyle: { backgroundColor: "white" } }} />
               <Stack.Screen
                 name="reminder/edit"
                 options={{
                   animation: "fade",
                   presentation: "transparentModal",
+                  contentStyle: { backgroundColor: "transparent" },
                 }}
               />
               <Stack.Screen

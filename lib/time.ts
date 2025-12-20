@@ -10,6 +10,7 @@ const DAY_MAP: Record<string, number> = {
 
 export interface ReminderSchedule {
   time: string; // "HH:MM"
+  date?: string; // "YYYY-MM-DD" for one-time reminders on specific days
   frequency: string; // "once" | "daily" | "weekly" | "custom"
   days?: string[]; // ["mon", "wed", "fri"]
 }
@@ -113,6 +114,21 @@ export function formatReminderTime(timestamp: number, nowDate = new Date()): str
 export function getNextTriggerTime(schedule: ReminderSchedule): number {
   const [hours, minutes] = schedule.time.split(":").map(Number);
   const now = new Date();
+
+  // If a specific date is provided (for one-time reminders), use it
+  if (schedule.frequency === "once" && schedule.date) {
+    const [year, month, day] = schedule.date.split("-").map(Number);
+    const target = new Date(year, month - 1, day, hours, minutes, 0, 0);
+
+    // If the date/time has passed, still return it (will show as overdue)
+    // But if it's today and time hasn't passed yet, return it
+    if (target.getTime() > now.getTime()) {
+      return target.getTime();
+    }
+    // If past, schedule for tomorrow at the same time as fallback
+    target.setDate(target.getDate() + 1);
+    return target.getTime();
+  }
 
   if (schedule.frequency === "once" || schedule.frequency === "daily") {
     const target = new Date();

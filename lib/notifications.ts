@@ -19,6 +19,7 @@ export interface ReminderNotification {
   title: string;
   description: string;
   time: string;
+  date?: string; // YYYY-MM-DD for one-time reminders on specific days
   frequency: string;
   days?: string[];
   audioUrl: string;
@@ -39,11 +40,11 @@ export async function downloadReminderAudio(
   console.log(`[VR] Saving to: ${localPath}`);
   const result = await downloadAsync(audioUrl, localPath);
   console.log(`[VR] Download complete, status: ${result.status}, size: ${result.headers?.["content-length"] || "unknown"}`);
-  
+
   // Verify file exists
   const fileInfo = await getInfoAsync(localPath);
   console.log(`[VR] Saved file exists: ${fileInfo.exists}, size: ${fileInfo.exists ? fileInfo.size : "N/A"}`);
-  
+
   return localPath;
 }
 
@@ -100,6 +101,7 @@ export async function scheduleReminder(
   // Calculate next trigger time
   const schedule: ReminderSchedule = {
     time: reminder.time,
+    date: reminder.date,
     frequency: reminder.frequency,
     days: reminder.days,
   };
@@ -165,16 +167,16 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   if (type === EventType.DELIVERED) {
     console.log("[VR] DELIVERED event - attempting to play TTS");
     const data = detail.notification?.data;
-    
+
     if (data?.reminderId) {
       const localAudioPath = getLocalAudioPath(data.reminderId as string);
       console.log(`[VR] Audio path: ${localAudioPath}`);
-      
+
       // Check if file exists
       try {
         const fileInfo = await getInfoAsync(localAudioPath);
         console.log(`[VR] File exists: ${fileInfo.exists}, size: ${fileInfo.exists ? fileInfo.size : 'N/A'}`);
-        
+
         if (fileInfo.exists) {
           console.log("[VR] Starting audio playback...");
 

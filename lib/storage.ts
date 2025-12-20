@@ -11,6 +11,7 @@ export interface Reminder {
   title: string;
   description: string;
   time: string;
+  date?: string; // YYYY-MM-DD for one-time reminders on specific days
   frequency: string;
   days: string[];
   audioUrl?: string;

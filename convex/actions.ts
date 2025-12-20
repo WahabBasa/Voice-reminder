@@ -223,6 +223,11 @@ export const processVoiceReminder = action({
     const transcript = transcription.text;
 
     // 2. GPT Parse
+    const now = new Date();
+    const currentDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
+    const currentTime = now.toLocaleTimeString('en-US', { hour12: false });
+    const currentDayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       response_format: { type: "json_object" },
@@ -234,9 +239,23 @@ export const processVoiceReminder = action({
   "title": "short title (2-4 words)",
   "description": "what to say when reminder fires",
   "time": "HH:MM in 24-hour format",
+  "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
   "frequency": "once" | "daily" | "custom",
   "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom)
 }
+
+CURRENT CONTEXT:
+- Current date: ${currentDate} (${currentDayOfWeek})
+- Current time: ${currentTime}
+
+IMPORTANT - Date parsing rules:
+- If user says "Sunday", "next Sunday", "this Sunday", calculate the actual date (YYYY-MM-DD)
+- If user says "tomorrow", calculate tomorrow's date
+- If user says "today", use today's date: ${currentDate}
+- If user mentions a specific day (Monday, Tuesday, etc.), find the NEXT occurrence of that day
+- For relative days: "in 3 days" = add 3 days to current date
+- ONLY include "date" for one-time reminders (frequency: "once") on a specific day
+- Do NOT include "date" for recurring/daily reminders
 
 IMPORTANT - Intent + tone rules:
 - Keep the exact intent of the user's request (do not add new meaning, tasks, or extra context).
@@ -249,7 +268,6 @@ IMPORTANT - Time parsing rules:
 - "9 30 a.m." means 9:30 AM = "09:30"
 - "10 15 p.m." means 10:15 PM = "22:15"
 - The first number is hours, the second is minutes
-- Current time is approximately ${new Date().toLocaleTimeString()}
 
 If the user doesn't specify a time, use a reasonable default.
 If the user doesn't specify frequency, assume "once".
@@ -268,6 +286,8 @@ The description should be a friendly reminder message like "Time to take your me
     const rawFrequency = String(parsed.frequency || "once").toLowerCase();
     const frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
     const days = frequency === "custom" ? (parsed.days as string[] | undefined) : undefined;
+    // Only use date for one-time reminders
+    const date = frequency === "once" && parsed.date ? (parsed.date as string) : undefined;
 
     // 3. Generate TTS
     const ttsText = description || String(parsed.description ?? "");
@@ -287,6 +307,7 @@ The description should be a friendly reminder message like "Time to take your me
         title: parsed.title as string,
         description,
         time: parsed.time as string,
+        date,
         frequency,
         days,
         audioStorageId: storageId,
@@ -302,6 +323,7 @@ The description should be a friendly reminder message like "Time to take your me
       title: parsed.title as string,
       description,
       time: parsed.time as string,
+      date,
       frequency,
       days,
       transcript,

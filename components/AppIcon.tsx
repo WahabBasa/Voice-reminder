@@ -23,6 +23,7 @@ import {
   Trash2,
   Volume1,
   Volume2,
+  WifiOff,
   X,
   Zap,
 } from "lucide-react-native";
@@ -58,6 +59,7 @@ export type AppIconName =
   | "trash-2"
   | "volume-1"
   | "volume-2"
+  | "wifi-off"
   | "x"
   | "x-circle"
   | "zap";
@@ -85,6 +87,7 @@ const iconByName: Record<AppIconName, ComponentType<BaseIconProps>> = {
   "trash-2": Trash2,
   "volume-1": Volume1,
   "volume-2": Volume2,
+  "wifi-off": WifiOff,
   x: X,
   "x-circle": CircleX,
   zap: Zap,

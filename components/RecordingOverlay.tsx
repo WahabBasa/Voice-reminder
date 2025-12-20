@@ -28,12 +28,14 @@ interface RecordingOverlayProps {
   visible: boolean;
   onClose: () => void;
   onRecordingComplete: (audioUri: string, traceId: string) => void;
+  onCancelProcessing?: () => void;
 }
 
 export default function RecordingOverlay({
   visible,
   onClose,
   onRecordingComplete,
+  onCancelProcessing,
 }: RecordingOverlayProps) {
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -218,7 +220,7 @@ export default function RecordingOverlay({
       visible={visible}
       transparent
       statusBarTranslucent
-      animationType="fade"
+      animationType="slide"
       onRequestClose={handleClose}
     >
       <View style={styles.backdrop}>
@@ -280,21 +282,21 @@ export default function RecordingOverlay({
               style={[
                 styles.primaryButton,
                 (state === "recording" || state === "paused") && styles.primaryButtonStop,
-                state === "processing" && styles.primaryButtonDisabled,
+                state === "processing" && styles.primaryButtonCancel,
               ]}
-              onPress={handlePrimaryPress}
-              disabled={state === "processing"}
+              onPress={state === "processing" ? () => {
+                setState("idle");
+                setDuration(0);
+                onCancelProcessing?.();
+                onClose();
+              } : handlePrimaryPress}
               activeOpacity={0.85}
             >
-              {state === "processing" ? (
-                <ActivityIndicator size="large" color="#fff" />
-              ) : (
-                <AppIcon
-                  name={state === "recording" || state === "paused" ? "square" : "mic"}
-                  size={30}
-                  color="#fff"
-                />
-              )}
+              <AppIcon
+                name={state === "processing" ? "x" : (state === "recording" || state === "paused" ? "square" : "mic")}
+                size={30}
+                color="#fff"
+              />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -456,5 +458,9 @@ const styles = StyleSheet.create({
   primaryButtonDisabled: {
     backgroundColor: colors.textTertiary,
     shadowColor: colors.textTertiary,
+  },
+  primaryButtonCancel: {
+    backgroundColor: colors.destructive,
+    shadowColor: colors.destructive,
   },
 });
