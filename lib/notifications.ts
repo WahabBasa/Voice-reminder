@@ -1,4 +1,4 @@
-import notifee, {
++import notifee, {
   AndroidImportance,
   TriggerType,
   TimestampTrigger,

@@ -529,10 +529,19 @@ export default function HomeScreen() {
           isExiting={isExiting}
           onDelete={() => handleDelete(item)}
         >
-          <View style={styles.cardInner}>
+          <View style={[
+            styles.cardInner,
+            isSelectMode && selectedIds.has(item.id) && styles.cardSelected,
+          ]}>
             <TouchableOpacity
               style={[styles.cardMain, isExiting && { opacity: 0.5 }]}
-              onPress={() => handleReminderPress(item)}
+              onPress={() => {
+                if (isSelectMode) {
+                  toggleSelection(item.id);
+                } else {
+                  handleReminderPress(item);
+                }
+              }}
               activeOpacity={0.8}
               disabled={isExiting}
             >
@@ -559,37 +568,26 @@ export default function HomeScreen() {
                 </View>
               </View>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.checkButton}
-              onPress={() => {
-                if (isSelectMode) {
-                  toggleSelection(item.id);
-                } else {
-                  handleMarkDone(item.id, item.title);
-                }
-              }}
-              hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel={
-                isSelectMode
-                  ? `${selectedIds.has(item.id) ? "Deselect" : "Select"} "${item.title}"`
-                  : `Mark "${item.title}" as completed`
-              }
-              disabled={isExiting}
-            >
-              <Animated.View
-                style={[
-                  styles.checkCircle,
-                  isExiting && { backgroundColor: colors.success, borderColor: colors.success },
-                  isSelectMode && selectedIds.has(item.id) && { backgroundColor: colors.accent, borderColor: colors.accent },
-                ]}
+            {/* Hide checkmark button in select mode */}
+            {!isSelectMode && (
+              <TouchableOpacity
+                style={styles.checkButton}
+                onPress={() => handleMarkDone(item.id, item.title)}
+                hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Mark "${item.title}" as completed`}
+                disabled={isExiting}
               >
-                {isExiting && <AppIcon name="check" size={14} color="white" />}
-                {isSelectMode && selectedIds.has(item.id) && !isExiting && (
-                  <AppIcon name="check" size={14} color="white" />
-                )}
-              </Animated.View>
-            </TouchableOpacity>
+                <Animated.View
+                  style={[
+                    styles.checkCircle,
+                    isExiting && { backgroundColor: colors.success, borderColor: colors.success },
+                  ]}
+                >
+                  {isExiting && <AppIcon name="check" size={14} color="white" />}
+                </Animated.View>
+              </TouchableOpacity>
+            )}
           </View>
         </SwipeableCard>
       );
@@ -639,13 +637,48 @@ export default function HomeScreen() {
               <AppIcon name="zap" size={14} color="white" style={styles.proIcon} />
               <Text style={styles.proPillText}>PRO Version</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.settingsButton}
-              onPress={() => router.push("/settings")}
-              activeOpacity={0.8}
-            >
-              <AppIcon name="settings" size={22} color={colors.textPrimary} />
-            </TouchableOpacity>
+            <View>
+              <TouchableOpacity
+                style={styles.headerMenuButton}
+                onPress={() => setShowSelectMenu(!showSelectMenu)}
+                activeOpacity={0.8}
+              >
+                <AppIcon name="more-vertical" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+
+              {/* Dropdown menu */}
+              {showSelectMenu && (
+                <View style={styles.headerSelectMenu}>
+                  <TouchableOpacity
+                    style={styles.selectMenuItem}
+                    onPress={enterSelectMode}
+                    activeOpacity={0.8}
+                  >
+                    <AppIcon name="square" size={18} color={colors.textPrimary} />
+                    <Text style={styles.selectMenuText}>Select</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.selectMenuItem}
+                    onPress={selectAll}
+                    activeOpacity={0.8}
+                  >
+                    <AppIcon name="check-circle" size={18} color={colors.textPrimary} />
+                    <Text style={styles.selectMenuText}>Select All</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.selectMenuItem}
+                    onPress={() => {
+                      setShowSelectMenu(false);
+                      router.push("/settings");
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <AppIcon name="settings" size={18} color={colors.textPrimary} />
+                    <Text style={styles.selectMenuText}>Settings</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
           </View>
         </View>
 
@@ -688,49 +721,15 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Three-dot menu or Cancel button */}
-          {selectedView === "all" && (
-            isSelectMode ? (
-              <TouchableOpacity
-                style={styles.cancelSelectButton}
-                onPress={exitSelectMode}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.cancelSelectText}>Cancel</Text>
-              </TouchableOpacity>
-            ) : (
-              <View>
-                <TouchableOpacity
-                  style={styles.moreButton}
-                  onPress={() => setShowSelectMenu(!showSelectMenu)}
-                  activeOpacity={0.8}
-                >
-                  <AppIcon name="more-vertical" size={20} color={colors.textSecondary} />
-                </TouchableOpacity>
-
-                {/* Dropdown menu */}
-                {showSelectMenu && (
-                  <View style={styles.selectMenu}>
-                    <TouchableOpacity
-                      style={styles.selectMenuItem}
-                      onPress={enterSelectMode}
-                      activeOpacity={0.8}
-                    >
-                      <AppIcon name="square" size={18} color={colors.textPrimary} />
-                      <Text style={styles.selectMenuText}>Select</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.selectMenuItem}
-                      onPress={selectAll}
-                      activeOpacity={0.8}
-                    >
-                      <AppIcon name="check-circle" size={18} color={colors.textPrimary} />
-                      <Text style={styles.selectMenuText}>Select All</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </View>
-            )
+          {/* Cancel button when in select mode */}
+          {selectedView === "all" && isSelectMode && (
+            <TouchableOpacity
+              style={styles.cancelSelectButton}
+              onPress={exitSelectMode}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.cancelSelectText}>Cancel</Text>
+            </TouchableOpacity>
           )}
         </View>
 
@@ -1025,6 +1024,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 12,
   },
+  cardSelected: {
+    backgroundColor: colors.accent + "20",
+    borderRadius: 12,
+  },
   cardMain: {
     flex: 1,
     flexDirection: "row",
@@ -1182,6 +1185,28 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
+  },
+  headerMenuButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerSelectMenu: {
+    position: "absolute",
+    top: 44,
+    right: 0,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingVertical: 8,
+    minWidth: 150,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+    zIndex: 100,
   },
   cancelSelectButton: {
     paddingHorizontal: 14,

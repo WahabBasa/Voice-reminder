@@ -65,7 +65,7 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 | 3 | Convex Backend + OpenAI Integration | ✅ Completed |
 | 4 | Notifications with Custom Sound | ✅ Completed |
 | 5 | Complete UI & Polish | ✅ Completed |
-| 6 | UI Polish & Refinement | 🟡 In Progress |
+| 6 | UI Polish & Refinement | ✅ Completed |
 | 7 | Performance & Speed | Pending |
 | 8 | Bottom Sheet & Animations | Pending |
 | 9 | Edit Page & Calendar | Pending |
@@ -161,9 +161,11 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 
 ---
 
-## Phase 6: UI Polish & Refinement 🟡 IN PROGRESS
+## Phase 6: UI Polish & Refinement ✅ COMPLETED
 
 **Goal:** Professional-looking UI with proper typography, icons, and polish
+
+**Status:** Completed on 2025-12-21
 
 ### Task 1: Icon Library Swap ✅ COMPLETED
 **Status:** Completed on 2025-12-18
@@ -185,13 +187,8 @@ Fixed text hierarchy:
 - Created `isOverdue()` function
 - Added visual indicators (red for overdue, yellow for upcoming)
 
-### Task 4: UI Consistency Pass (1.5 hours)
-**What:** Make sure everything feels cohesive
-
-**Steps:**
-1. **Color audit** - Document colors, ensure consistency
-2. **Spacing audit** - Check padding/margins are consistent
-3. **Component states** - Active/pressed/disabled states
+### Task 4: UI Consistency Pass - SKIPPED
+Deferred for now - can revisit after release if needed.
 
 ### Task 5: Little Details ✅ COMPLETED
 **Status:** Completed on 2025-12-20
@@ -203,14 +200,23 @@ Fixed text hierarchy:
 - Small list animations: layout animation on create + mark done
 - Smooth delete animations: fade out + checkmark fill on mark-done
 
-### Task 6: Voice Delay Investigation (Optional)
-**What:** Reduce perceived 1-2 second delay
+### Task 6: Voice Delay Investigation - SKIPPED
+Optional task - only do if users complain.
 
-**Only do if users complain.** Steps:
-1. Add timing logs to measure bottleneck
-2. Show "Processing..." immediately
-3. Consider streaming/partial results
-4. Focus on perceived speed if actual speed can't improve
+### Task 7: Swipe to Delete ✅ COMPLETED
+**Status:** Completed on 2025-12-20
+
+- SwipeableCard component with pan gesture
+- Swipe left reveals red delete button
+- Deletes from local storage, cancels notification, removes from Convex
+
+### Task 8: Multi-Select Mode ✅ COMPLETED
+**Status:** Completed on 2025-12-21
+
+- Three-dot menu moved to header (⋮) with Select, Select All, Settings options
+- Tapping cards toggles selection (darkened background indicator)
+- Bulk action bar: Delete All, Done All
+- Checkmark hidden in select mode
 
 ---
 
