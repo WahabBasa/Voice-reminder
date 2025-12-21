@@ -43,6 +43,23 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>General</Text>
 
         <TouchableOpacity
+          style={[styles.row, styles.proRow]}
+          onPress={() => router.push("/paywall")}
+          activeOpacity={0.85}
+        >
+          <View style={styles.rowLeft}>
+            <View style={[styles.rowIcon, styles.proIcon]}>
+              <AppIcon name="crown" size={18} color="#fff" />
+            </View>
+            <View>
+              <Text style={styles.rowTitle}>Upgrade to Pro</Text>
+              <Text style={styles.rowSubtitle}>Unlimited reminders & no ads</Text>
+            </View>
+          </View>
+          <AppIcon name="chevron-right" size={18} color={colors.accent} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
           style={styles.row}
           onPress={handleOpenAppSettings}
           activeOpacity={0.85}
@@ -172,5 +189,13 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: scaleFontSize(13),
     color: colors.textSecondary,
+  },
+  proRow: {
+    borderWidth: 1,
+    borderColor: colors.accent + "40",
+    backgroundColor: colors.accent + "10",
+  },
+  proIcon: {
+    backgroundColor: colors.accent,
   },
 });

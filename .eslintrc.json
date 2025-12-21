@@ -1,0 +1,15 @@
+{
+    "extends": [
+        "expo",
+        "prettier"
+    ],
+    "plugins": [
+        "react-hooks",
+        "react-compiler"
+    ],
+    "rules": {
+        "react-hooks/rules-of-hooks": "error",
+        "react-hooks/exhaustive-deps": "warn",
+        "react-compiler/react-compiler": "warn"
+    }
+}

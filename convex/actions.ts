@@ -385,3 +385,45 @@ export const processTextReminder = action({
     };
   },
 });
+
+export const regenerateReminderAudio = action({
+  args: {
+    reminderId: v.id("reminders"),
+    soundText: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // 1. Get the existing reminder
+    const reminder = await ctx.runQuery(internal.reminders.getInternal, {
+      id: args.reminderId,
+    });
+
+    if (!reminder) {
+      throw new Error("Reminder not found");
+    }
+
+    // 2. Generate new TTS audio
+    const ttsBuffer = await synthesizeReminderTts({
+      text: args.soundText,
+      title: reminder.title,
+    });
+
+    // 3. Store new audio in Convex storage
+    const blob = new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" });
+    const newStorageId = await ctx.storage.store(blob);
+
+    // 4. Delete old audio and update reminder
+    await ctx.runMutation(internal.reminders.updateAudio, {
+      id: args.reminderId,
+      oldStorageId: reminder.audioStorageId,
+      newStorageId,
+    });
+
+    // 5. Get new audio URL
+    const audioUrl = await ctx.storage.getUrl(newStorageId);
+
+    return {
+      audioUrl,
+      soundText: args.soundText,
+    };
+  },
+});

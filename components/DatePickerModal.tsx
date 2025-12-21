@@ -179,7 +179,7 @@ export default function DatePickerModal({
     const hours = Array.from({ length: 12 }, (_, i) => ({ text: String(i + 1), value: i + 1 }));
     const minutes = ["00", "15", "30", "45"];
     const periods = ["AM", "PM"];
-    
+
     Alert.alert("Select Time", undefined, [
       { text: "9:00 AM", onPress: () => setSelectedTime({ hours: 9, minutes: 0 }) },
       { text: "10:00 AM", onPress: () => setSelectedTime({ hours: 10, minutes: 0 }) },
@@ -344,7 +344,7 @@ export default function DatePickerModal({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(0, 0, 0, 0.25)",
     justifyContent: "center",
     alignItems: "center",
     padding: 24,

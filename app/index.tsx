@@ -5,6 +5,7 @@ import {
   InteractionManager,
   LayoutAnimation,
   Platform,
+  Pressable,
   SectionList,
   StyleSheet,
   Text,
@@ -633,9 +634,13 @@ export default function HomeScreen() {
         <View style={styles.headerTop}>
           <Text style={styles.headerTitle}>Voice Reminder</Text>
           <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.proPill} activeOpacity={0.85}>
-              <AppIcon name="zap" size={14} color="white" style={styles.proIcon} />
-              <Text style={styles.proPillText}>PRO Version</Text>
+            <TouchableOpacity
+              style={styles.proPill}
+              activeOpacity={0.85}
+              onPress={() => router.push("/paywall")}
+            >
+              <AppIcon name="crown" size={14} color="white" style={styles.proIcon} />
+              <Text style={styles.proPillText}>Go to Pro</Text>
             </TouchableOpacity>
             <View>
               <TouchableOpacity
@@ -646,37 +651,43 @@ export default function HomeScreen() {
                 <AppIcon name="more-vertical" size={22} color={colors.textPrimary} />
               </TouchableOpacity>
 
-              {/* Dropdown menu */}
+              {/* Dropdown menu with backdrop */}
               {showSelectMenu && (
-                <View style={styles.headerSelectMenu}>
-                  <TouchableOpacity
-                    style={styles.selectMenuItem}
-                    onPress={enterSelectMode}
-                    activeOpacity={0.8}
-                  >
-                    <AppIcon name="square" size={18} color={colors.textPrimary} />
-                    <Text style={styles.selectMenuText}>Select</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.selectMenuItem}
-                    onPress={selectAll}
-                    activeOpacity={0.8}
-                  >
-                    <AppIcon name="check-circle" size={18} color={colors.textPrimary} />
-                    <Text style={styles.selectMenuText}>Select All</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.selectMenuItem}
-                    onPress={() => {
-                      setShowSelectMenu(false);
-                      router.push("/settings");
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <AppIcon name="settings" size={18} color={colors.textPrimary} />
-                    <Text style={styles.selectMenuText}>Settings</Text>
-                  </TouchableOpacity>
-                </View>
+                <>
+                  <Pressable
+                    style={styles.menuBackdrop}
+                    onPress={() => setShowSelectMenu(false)}
+                  />
+                  <View style={styles.headerSelectMenu}>
+                    <TouchableOpacity
+                      style={styles.selectMenuItem}
+                      onPress={enterSelectMode}
+                      activeOpacity={0.8}
+                    >
+                      <AppIcon name="square" size={18} color={colors.textPrimary} />
+                      <Text style={styles.selectMenuText}>Select</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.selectMenuItem}
+                      onPress={selectAll}
+                      activeOpacity={0.8}
+                    >
+                      <AppIcon name="check-circle" size={18} color={colors.textPrimary} />
+                      <Text style={styles.selectMenuText}>Select All</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.selectMenuItem}
+                      onPress={() => {
+                        setShowSelectMenu(false);
+                        router.push("/settings");
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <AppIcon name="settings" size={18} color={colors.textPrimary} />
+                      <Text style={styles.selectMenuText}>Settings</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
               )}
             </View>
           </View>
@@ -908,6 +919,7 @@ export default function HomeScreen() {
 
       <RecordingOverlay
         visible={showRecording}
+        autoStart={true}
         onClose={handleCloseRecording}
         onRecordingComplete={handleRecordingComplete}
         onCancelProcessing={handleCancelProcessing}
@@ -1207,6 +1219,14 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 8,
     zIndex: 100,
+  },
+  menuBackdrop: {
+    position: "absolute",
+    top: -100,
+    left: -500,
+    right: -500,
+    bottom: -1000,
+    zIndex: 99,
   },
   cancelSelectButton: {
     paddingHorizontal: 14,

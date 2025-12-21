@@ -26,8 +26,9 @@ const DELETE_ACTION_WIDTH = 80;
 /**
  * SwipeableCard - swipe left to reveal delete action
  * Used on home screen for reminder cards
+ * Memoized to prevent re-renders when props haven't changed
  */
-export default function SwipeableCard({
+const SwipeableCard = React.memo(function SwipeableCard({
     id,
     children,
     isExiting = false,
@@ -94,7 +95,9 @@ export default function SwipeableCard({
             </GestureDetector>
         </View>
     );
-}
+});
+
+export default SwipeableCard;
 
 const styles = StyleSheet.create({
     container: {

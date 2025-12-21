@@ -9,6 +9,13 @@ import {
   Pressable,
   useWindowDimensions,
 } from "react-native";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withSpring,
+  runOnJS,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { colors, scaleFontSize } from "../lib/theme";
@@ -26,6 +33,7 @@ type RecordingState = "idle" | "recording" | "paused" | "processing";
 
 interface RecordingOverlayProps {
   visible: boolean;
+  autoStart?: boolean;
   onClose: () => void;
   onRecordingComplete: (audioUri: string, traceId: string) => void;
   onCancelProcessing?: () => void;
@@ -33,6 +41,7 @@ interface RecordingOverlayProps {
 
 export default function RecordingOverlay({
   visible,
+  autoStart = false,
   onClose,
   onRecordingComplete,
   onCancelProcessing,
@@ -47,6 +56,21 @@ export default function RecordingOverlay({
   const [waveformHeights, setWaveformHeights] = useState<number[]>([]);
   const traceIdRef = useRef<string | null>(null);
 
+  // Sheet animation (runs on UI thread)
+  const sheetTranslateY = useSharedValue(400);
+
+  useEffect(() => {
+    if (visible) {
+      // Animate sheet up from bottom when visible
+      sheetTranslateY.value = withTiming(0, { duration: 250 });
+    } else {
+      sheetTranslateY.value = 400;
+    }
+  }, [visible]);
+
+  const animatedSheetStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: sheetTranslateY.value }],
+  }));
   useEffect(() => {
     if (!visible) {
       setState("idle");
@@ -70,6 +94,22 @@ export default function RecordingOverlay({
       if (waveformTimerRef.current) clearInterval(waveformTimerRef.current);
     };
   }, []);
+
+  // Auto-start recording when overlay becomes visible
+  const hasAutoStarted = useRef(false);
+  useEffect(() => {
+    if (visible && autoStart && !hasAutoStarted.current && state === "idle") {
+      hasAutoStarted.current = true;
+      // Small delay to let modal animation start
+      const timeout = setTimeout(() => {
+        handlePrimaryPress();
+      }, 50);
+      return () => clearTimeout(timeout);
+    }
+    if (!visible) {
+      hasAutoStarted.current = false;
+    }
+  }, [visible, autoStart, state]);
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -161,6 +201,19 @@ export default function RecordingOverlay({
     }
   };
 
+  const handleBackdropPress = async () => {
+    // Allow closing by tapping backdrop in any non-processing state
+    if (state === "processing") return;
+    if (state === "recording" || state === "paused") {
+      // Stop recording and close
+      stopTimers();
+      await stopRecording();
+      setDuration(0);
+      setState("idle");
+    }
+    onClose();
+  };
+
   const handleClose = () => {
     if (state === "idle") {
       onClose();
@@ -220,13 +273,13 @@ export default function RecordingOverlay({
       visible={visible}
       transparent
       statusBarTranslucent
-      animationType="slide"
+      animationType="fade"
       onRequestClose={handleClose}
     >
       <View style={styles.backdrop}>
-        <Pressable style={styles.backdropPressable} onPress={handleClose} />
+        <Pressable style={styles.backdropPressable} onPress={handleBackdropPress} />
 
-        <View style={[styles.sheet, { marginBottom: sheetBottomOffset }]}>
+        <Animated.View style={[styles.sheet, { marginBottom: sheetBottomOffset }, animatedSheetStyle]}>
           <View style={styles.handleBar} />
 
           <Text style={styles.title}>New Recording</Text>
@@ -312,7 +365,7 @@ export default function RecordingOverlay({
               />
             </TouchableOpacity>
           </View>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );

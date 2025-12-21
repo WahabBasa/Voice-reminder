@@ -26,6 +26,7 @@ import {
   WifiOff,
   X,
   Zap,
+  Crown,
 } from "lucide-react-native";
 import { colors } from "../lib/theme";
 
@@ -62,7 +63,8 @@ export type AppIconName =
   | "wifi-off"
   | "x"
   | "x-circle"
-  | "zap";
+  | "zap"
+  | "crown";
 
 const iconByName: Record<AppIconName, ComponentType<BaseIconProps>> = {
   "arrow-left": ArrowLeft,
@@ -91,6 +93,7 @@ const iconByName: Record<AppIconName, ComponentType<BaseIconProps>> = {
   x: X,
   "x-circle": CircleX,
   zap: Zap,
+  crown: Crown,
 };
 
 type AppIconProps = {

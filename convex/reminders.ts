@@ -1,4 +1,4 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 
 export const list = query({
@@ -23,6 +23,13 @@ export const get = query({
       ...reminder,
       audioUrl: await ctx.storage.getUrl(reminder.audioStorageId),
     };
+  },
+});
+
+export const getInternal = internalQuery({
+  args: { id: v.id("reminders") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.id);
   },
 });
 
@@ -71,5 +78,19 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const { id, ...updates } = args;
     await ctx.db.patch(id, updates);
+  },
+});
+
+export const updateAudio = internalMutation({
+  args: {
+    id: v.id("reminders"),
+    oldStorageId: v.id("_storage"),
+    newStorageId: v.id("_storage"),
+  },
+  handler: async (ctx, args) => {
+    // Delete old audio file
+    await ctx.storage.delete(args.oldStorageId);
+    // Update reminder with new audio storage ID
+    await ctx.db.patch(args.id, { audioStorageId: args.newStorageId });
   },
 });

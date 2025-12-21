@@ -97,7 +97,7 @@ export default function RepeatTaskModal({
   const openEndDatePicker = () => {
     Alert.alert("Repeat ends at", undefined, [
       { text: "Endlessly", onPress: () => setEndDate("Endlessly") },
-      { text: "Select Date", onPress: () => {} }, // Placeholder
+      { text: "Select Date", onPress: () => { } }, // Placeholder
       { text: "Cancel", style: "cancel" },
     ]);
   };
@@ -220,7 +220,7 @@ export default function RepeatTaskModal({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(0, 0, 0, 0.25)",
     justifyContent: "center",
     alignItems: "center",
     padding: 24,

@@ -10,7 +10,8 @@ import {
   View,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useMutation } from "convex/react";
+import { useAction, useMutation } from "convex/react";
+import { useToast } from "../../components/ToastProvider";
 import { LinearGradient } from "expo-linear-gradient";
 import { Audio } from "expo-av";
 import { TimerPickerModal } from "react-native-timer-picker";
@@ -109,6 +110,12 @@ export default function EditReminderScreen() {
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
+  // Sound regeneration state
+  const [soundText, setSoundText] = useState("");
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const regenerateAudio = useAction(api.actions.regenerateReminderAudio);
+  const toast = useToast();
+
   const loadReminder = useCallback(async () => {
     if (!id) return;
     const reminders = await getReminders();
@@ -118,6 +125,7 @@ export default function EditReminderScreen() {
     setReminder(found);
     setTitle(found.title || "");
     setDescription(found.description || "");
+    setSoundText(found.description || "");
     setFrequency(found.frequency === "weekly" ? "custom" : (found.frequency || "once"));
     setDays(found.days || []);
     setSoundRepeatMode(found.soundRepeatMode || "count");
@@ -138,7 +146,11 @@ export default function EditReminderScreen() {
   }, [id]);
 
   useEffect(() => {
-    loadReminder();
+    // Defer data loading until after navigation animation completes
+    const task = InteractionManager.runAfterInteractions(() => {
+      loadReminder();
+    });
+    return () => task.cancel();
   }, [loadReminder]);
 
   useEffect(() => {
@@ -240,6 +252,61 @@ export default function EditReminderScreen() {
       setIsPlaying(true);
     } catch (error) {
       console.error("[VR] Error playing audio:", error);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    if (!reminder?.convexId || !soundText.trim()) {
+      Alert.alert("Error", "Please enter text for the voice reminder");
+      return;
+    }
+
+    setIsRegenerating(true);
+    try {
+      const result = await regenerateAudio({
+        reminderId: reminder.convexId as any,
+        soundText: soundText.trim(),
+      });
+
+      if (result.audioUrl) {
+        // Update local reminder with new audio URL
+        const updatedReminder = { ...reminder, audioUrl: result.audioUrl, description: soundText.trim() };
+        setReminder(updatedReminder);
+        setDescription(soundText.trim());
+
+        // Update local storage
+        await updateReminderStorage(updatedReminder);
+
+        // Reschedule notification with new audio
+        const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time
+          .getMinutes()
+          .toString()
+          .padStart(2, "0")}`;
+        const dateStr = dueDate
+          ? `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")}`
+          : undefined;
+
+        await cancelReminder(reminder.id);
+        await scheduleReminder({
+          id: reminder.id,
+          title: reminder.title,
+          description: soundText.trim(),
+          time: timeStr,
+          date: dateStr,
+          frequency,
+          days: frequency === "custom" ? days : [],
+          audioUrl: result.audioUrl,
+          soundRepeatMode,
+          soundRepeatCount,
+        });
+
+        toast.show({ title: "Sound regenerated", message: "New voice reminder ready", type: "success" });
+      }
+    } catch (error) {
+      console.error("[VR] Regeneration error:", error);
+      Alert.alert("Error", "Failed to regenerate voice. Please try again.");
+    } finally {
+      setIsRegenerating(false);
     }
   };
 
@@ -423,7 +490,7 @@ export default function EditReminderScreen() {
 
   const renderBackdrop = useCallback(
     (props: any) => (
-      <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} opacity={0.5} />
+      <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} opacity={0.25} />
     ),
     []
   );
@@ -442,6 +509,11 @@ export default function EditReminderScreen() {
     [hasChanges, handleSave, router]
   );
 
+  // Expand sheet to full height when focusing on text input
+  const expandSheet = useCallback(() => {
+    bottomSheetRef.current?.snapToIndex(1); // 95%
+  }, []);
+
   if (!reminder) {
     return (
       <View style={styles.sheetContainer}>
@@ -450,6 +522,7 @@ export default function EditReminderScreen() {
           snapPoints={snapPoints}
           index={0}
           enablePanDownToClose
+          animateOnMount={false}
           backdropComponent={renderBackdrop}
           onChange={handleSheetChange}
           handleIndicatorStyle={styles.handleIndicator}
@@ -470,6 +543,7 @@ export default function EditReminderScreen() {
         snapPoints={snapPoints}
         index={0}
         enablePanDownToClose
+        animateOnMount={false}
         backdropComponent={renderBackdrop}
         onChange={handleSheetChange}
         handleIndicatorStyle={styles.handleIndicator}
@@ -491,6 +565,7 @@ export default function EditReminderScreen() {
             style={styles.titleInput}
             value={title}
             onChangeText={setTitle}
+            onFocus={expandSheet}
             placeholder="Reminder"
             placeholderTextColor={stylesVars.mutedText}
           />
@@ -501,6 +576,40 @@ export default function EditReminderScreen() {
               <Text style={styles.playVoiceText}>{isPlaying ? "Stop voice" : "Play voice"}</Text>
             </TouchableOpacity>
           ) : null}
+
+          {/* Sound Regeneration Section - moved up for visibility */}
+          <View style={styles.soundSection}>
+            <View style={styles.soundSectionHeader}>
+              <AppIcon name="volume-1" size={20} color={stylesVars.iconColor} />
+              <Text style={styles.soundSectionTitle}>Voice Sound</Text>
+            </View>
+            <TextInput
+              style={styles.soundTextInput}
+              value={soundText}
+              onChangeText={setSoundText}
+              onFocus={expandSheet}
+              placeholder="What the reminder will say..."
+              placeholderTextColor={stylesVars.mutedText}
+              multiline
+              numberOfLines={2}
+              textAlignVertical="top"
+            />
+            <TouchableOpacity
+              style={[styles.regenerateButton, isRegenerating && styles.regenerateButtonDisabled]}
+              onPress={handleRegenerate}
+              disabled={isRegenerating}
+              activeOpacity={0.8}
+            >
+              <AppIcon
+                name="refresh-cw"
+                size={18}
+                color="white"
+              />
+              <Text style={styles.regenerateButtonText}>
+                {isRegenerating ? "Regenerating..." : "Regenerate Sound"}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           <View style={styles.rowList}>
             <SettingsRow
@@ -746,5 +855,48 @@ const styles = StyleSheet.create({
     paddingLeft: 38,
     paddingBottom: 12,
     paddingTop: 4,
+  },
+  soundSection: {
+    marginTop: 24,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: stylesVars.chipBg,
+  },
+  soundSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 12,
+  },
+  soundSectionTitle: {
+    fontSize: scaleFontSize(15),
+    fontWeight: "600",
+    color: stylesVars.labelText,
+  },
+  soundTextInput: {
+    backgroundColor: stylesVars.chipBg,
+    borderRadius: 12,
+    padding: 14,
+    fontSize: scaleFontSize(14),
+    color: stylesVars.headerText,
+    minHeight: 80,
+  },
+  regenerateButton: {
+    marginTop: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: colors.accent,
+    borderRadius: 12,
+    paddingVertical: 14,
+  },
+  regenerateButtonDisabled: {
+    opacity: 0.6,
+  },
+  regenerateButtonText: {
+    fontSize: scaleFontSize(15),
+    fontWeight: "600",
+    color: "white",
   },
 });
