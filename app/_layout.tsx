@@ -1,13 +1,19 @@
+import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import ToastProvider from "../components/ToastProvider";
+import { initializePurchases } from "../lib/purchases";
 
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string);
 
 export default function RootLayout() {
+  useEffect(() => {
+    initializePurchases();
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
