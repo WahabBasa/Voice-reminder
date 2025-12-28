@@ -25,23 +25,26 @@
 
 ---
 
-## dY"? Current Machine Setup (DELL Win10)
+## 🖥️ Current Machine Setup
 
-This repo is currently checked out at:
-- `C:\Users\DELL\Desktop\Abdul Wahab\Other Work\Voice-reminder`
+**Project Location:** `C:\Dev\VR`
 
-Project plan recommends a shorter path to avoid Windows path-length issues:
-- `C:\Dev\VR`
+**Tooling Versions:**
+- Node: `22.5.1` (via NVM for Windows, see `.nvmrc`)
+- Java: OpenJDK `17.0.15` (Microsoft build)
+- Android SDK: `C:\Users\AtheA\AppData\Local\Android\Sdk`
+- NDK: `27.1.12297006`
+- CMake: `3.22.1`
+- Gradle: `8.14.3`
 
-**What is set up on this machine:**
-- Git is installed
-- Node is managed via NVM for Windows; repo requires Node `22.5.1` (see `.nvmrc`)
-- Local env file exists: `.env.local` (Convex URL + deployment)
+**What is set up:**
+- Git, Node (NVM), Java 17, Android SDK, NDK, CMake
+- ADB available for device communication
+- Local env file: `.env.local` (Convex URL + deployment)
 
-**Known limitations / gotchas on this machine:**
-- PowerShell blocks `npm` / `npx` `.ps1` shims (scripts disabled). Use `npm.cmd` / `npx.cmd` (or run from `cmd.exe`).
-- Android toolchain is not set up here (no Android Studio/SDK/adb). Java installed is 8; Android builds typically need a newer JDK (17).
-- Plan: run the Android app on the other machine for now.
+**Known gotchas:**
+- PowerShell blocks `npm` / `npx` `.ps1` shims. Use `npm.cmd` / `npx.cmd`
+- Windows file locking can cause `kill EPERM` errors during builds - just retry
 
 ## 📝 Devlog Writing Guidelines
 
@@ -109,27 +112,40 @@ Running on Samsung SM_G955F. Two tabs, both working.
 ## 🔧 Development Commands
 
 ```bash
-# If PowerShell blocks npm/npx, use npm.cmd/npx.cmd:
-# npm.cmd ci
-# npx.cmd convex dev
-
 # Start development (Metro + Android)
 npx expo start --dev-client --android
 
 # Start Convex dev server
 npx convex dev
 
-# Full Android build
+# Full Android build (dev)
 npx expo run:android
 
 # TypeScript check
 npx tsc --noEmit
-
-# Git workflow
-git add .
-git commit -m "message"
-git push
 ```
+
+## 📦 Play Store Build
+
+```powershell
+# 1. Prebuild (regenerates android folder with signing config)
+npx.cmd expo prebuild --platform android --clean
+
+# 2. Build release AAB
+cd android
+.\gradlew.bat bundleRelease
+
+# Output: android\app\build\outputs\bundle\release\app-release.aab
+```
+
+**Signing credentials** (keep safe, not in git):
+- Keystore: `voicereminder.keystore`
+- Alias: `voicereminder`
+- Password: `voicereminder123`
+
+**Patches applied for Expo SDK 54:**
+- `plugins/withNotifeeAndroidMaven.js` - Fixes Notifee + Expo 54 (GitHub #1262)
+- `plugins/withAndroidSigning.js` - Injects release signing config
 
 ---
 
@@ -149,4 +165,4 @@ User Voice → Expo App → Convex Backend → OpenAI (Whisper/GPT/TTS) → Noti
 
 ---
 
-*Last Updated: 2025-12-03*
+*Last Updated: 2025-12-28*
