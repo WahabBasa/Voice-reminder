@@ -66,11 +66,11 @@ A voice-based reminder app where users speak what they want to be reminded of, a
 | 4 | Notifications with Custom Sound | ✅ Completed |
 | 5 | Complete UI & Polish | ✅ Completed |
 | 6 | UI Polish & Refinement | ✅ Completed |
-| 7 | Performance & Speed | Pending |
-| 8 | Bottom Sheet & Animations | Pending |
-| 9 | Edit Page & Calendar | Pending |
+| 7 | Performance & Speed | 🟡 Partial |
+| 8 | Bottom Sheet & Animations | 🟡 Partial |
+| 9 | Edit Page & Calendar | 🟡 Partial |
 | 10 | Edge Cases & Reliability | Pending |
-| 11 | Monetization & Release | Later |
+| 11 | Monetization & Release | 🟡 Partial |
 
 ---
 
@@ -220,81 +220,87 @@ Optional task - only do if users complain.
 
 ---
 
-## Phase 7: Performance & Speed
+## Phase 7: Performance & Speed 🟡 PARTIAL
 
 **Goal:** Fast reminder creation and smooth navigation
+
+**Status:** Partial - infrastructure built, optimization ongoing
 
 ### Task 1: Faster Reminder Creation (2-3 hours)
 
 **Steps:**
-1. **Identify bottleneck** - Add timing logs for recording stop -> transcription -> save
+1. **Identify bottleneck** ✅ - `lib/perf.ts` with `perfLog()` and `createTraceId()`
 2. **Optimize transcription flow** - Start processing immediately, show feedback
-3. **Optimize reminder creation** - Fast DB write, don't block UI
-4. **Better loading states** - Visual feedback immediately
+3. **Optimize reminder creation** ✅ - `InteractionManager.runAfterInteractions` for deferred work
+4. **Better loading states** ✅ - Visual feedback in RecordingOverlay
 
 ### Task 2: Fast Navigation & Transitions (2-3 hours)
 
 **Steps:**
 1. **Audit current navigation** - Test every transition, note slow ones
-2. **Optimize components** - `React.memo`, remove unnecessary re-renders
-3. **Smooth transitions** - Native-feeling animations, 60fps
+2. **Optimize components** ✅ - Heavy use of `useMemo`, `useCallback` throughout
+3. **Smooth transitions** ✅ - `_layout.tsx` with fade/slide animations (80-180ms)
 4. **Optimize list rendering** - `FlatList` optimization, `keyExtractor`, `getItemLayout`
 
 ---
 
-## Phase 8: Bottom Sheet & Animations
+## Phase 8: Bottom Sheet & Animations 🟡 PARTIAL
 
 **Goal:** Better bottom sheet behavior and smooth animations
 
-### Task 1: Bottom Sheet Behavior (1-1.5 hours)
+**Status:** Partial - bottom sheet implemented, some animations done
+
+### Task 1: Bottom Sheet Behavior ✅ COMPLETED
 
 **Goal:** Bottom sheet opens to 60-70% height, not full screen
 
 **Steps:**
-1. Locate bottom sheet component
-2. Set snap point to 60-70%
-3. Add rounded corners, drag indicator
-4. Test swipe to dismiss
+1. Locate bottom sheet component ✅ - `@gorhom/bottom-sheet` in `reminder/edit.tsx`
+2. Set snap point to 60-70% ✅ - `snapPoints: ["60%", "95%"]`
+3. Add rounded corners, drag indicator ✅ - `borderTopLeftRadius: 24`, handle indicator styled
+4. Test swipe to dismiss ✅ - `enablePanDownToClose` with backdrop
 
 ### Task 2: Delete Animations + Fast Cancel (1.5-2 hours)
 
 **Steps:**
-1. **Delete animation** - Fade out + slide out (200-300ms)
-2. **Fast cancel** - Immediately stop recording, discard audio, return to previous screen
+1. **Delete animation** ✅ - Fade out in SwipeableCard, LayoutAnimation on list
+2. **Fast cancel** ✅ - RecordingOverlay handles cancel immediately
 3. **Polish transitions** - No "are you sure?" unless appropriate
 
 ---
 
-## Phase 9: Edit Page & Calendar
+## Phase 9: Edit Page & Calendar 🟡 PARTIAL
 
 **Goal:** Voice regeneration and polished calendar UI
 
-### Task 1: Voice Reminder Regeneration (3-4 hours)
+**Status:** Partial - core features built, polish remaining
+
+### Task 1: Voice Reminder Regeneration ✅ COMPLETED
 
 **Goal:** User can regenerate voice reminder from edit page
 
 **Steps:**
-1. Add "Regenerate voice reminder" button
-2. Options: re-record voice OR generate from edited text
-3. Handle edge cases (no original audio, cancel mid-regen, failure)
-4. Match edit page UI to reference todo app
+1. Add "Regenerate voice reminder" button ✅ - In `reminder/edit.tsx` sound section
+2. Options: re-record voice OR generate from edited text ✅ - Text input + regenerate button
+3. Handle edge cases ✅ - Loading state, error alerts, toast on success
+4. Match edit page UI to reference todo app ✅ - Clean settings-row style
 
-### Task 2: Calendar UI Polish (2-3 hours)
+### Task 2: Calendar UI Polish ✅ COMPLETED
 
 **Goal:** Better date picker for reminders
 
 **Steps:**
-1. Study todo app calendar reference
-2. Implement/adapt calendar UI
-3. Integrate time picker if needed
-4. Test date selection flow
+1. Study todo app calendar reference ✅
+2. Implement/adapt calendar UI ✅ - `DatePickerModal.tsx` (482 lines)
+3. Integrate time picker if needed ✅ - `TimerPickerModal` integration
+4. Test date selection flow ✅ - Month navigation, date selection, confirm
 
-### Task 3: Bottom Sheet UI Polish (1.5-2 hours)
+### Task 3: Bottom Sheet UI Polish ✅ COMPLETED
 
 **Steps:**
-1. Copy header/button styles from todo app
-2. Match spacing and padding
-3. Test on different screen sizes
+1. Copy header/button styles from todo app ✅ - Chip-style frequency selector
+2. Match spacing and padding ✅ - Consistent padding, row styles
+3. Test on different screen sizes ✅ - Responsive snap points
 
 ---
 
@@ -500,15 +506,17 @@ useEffect(() => {
 **Time estimate:** ~2-3 hours (mostly waiting for Play Console setup)
 
 **Definition of Done:**
-- [ ] RevenueCat SDK initialized on app start
-- [ ] Can check subscription status with `checkProStatus()`
-- [ ] Products visible in RevenueCat dashboard
+- [x] RevenueCat SDK initialized on app start - `_layout.tsx` calls `initializePurchases()`
+- [x] Can check subscription status with `checkProStatus()` - Implemented in `lib/purchases.ts`
+- [ ] Products visible in RevenueCat dashboard - **Needs real API keys**
 
 ---
 
-### Task 2: Local Usage Tracking
+### Task 2: Local Usage Tracking ✅ COMPLETED
 
 **Goal:** Track reminder count locally to enforce free tier limits
+
+**Status:** ✅ Fully implemented
 
 #### Step 2.1: Create Usage Storage (15 min)
 **File:** `lib/usage.ts`
@@ -543,32 +551,34 @@ Update reminder creation flow to check `canCreateReminder()` before proceeding.
 
 **Time estimate:** ~30 min
 
+**Status:** ✅ `lib/usage.ts` implemented with `getReminderCount()`, `incrementReminderCount()`, `decrementReminderCount()`, `canCreateReminder()`, `getFreeLimit()`
+
 ---
 
-### Task 3: Paywall
+### Task 3: Paywall ✅ COMPLETED (UI Only)
 
 **Goal:** A good-looking paywall that converts
 
-**Blocked by:** Task 1 (need RevenueCat for products/prices)
+**Status:** ✅ UI built, needs real RevenueCat products
 
 **Clarifying Questions:**
 - [ ] What are the Pro features (exact list)?
 - [ ] Plans: monthly + yearly, or just one?
 - [ ] Trial: yes/no? How long?
 
-#### Step 3.1: Create Paywall Screen (1-2 hours)
-**File:** `app/paywall.tsx`
+#### Step 3.1: Create Paywall Screen ✅ (1-2 hours)
+**File:** `app/paywall.tsx` (375 lines)
 
 Components:
-- Header with app icon/branding
-- Feature list with icons (what Pro unlocks)
-- Plan cards (monthly/yearly with savings badge)
-- Purchase button (calls RevenueCat)
-- "Restore Purchases" link
-- Terms of Service / Privacy Policy links
-- Close/dismiss button
+- Header with app icon/branding ✅
+- Feature list with icons (what Pro unlocks) ✅ - BENEFITS array
+- Plan cards (monthly/yearly with savings badge) ✅ - PLANS array
+- Purchase button (calls RevenueCat) ✅
+- "Restore Purchases" link ✅
+- Terms of Service / Privacy Policy links ✅
+- Close/dismiss button ✅
 
-#### Step 3.2: Get Products from RevenueCat (30 min)
+#### Step 3.2: Get Products from RevenueCat ✅ (30 min)
 ```typescript
 import Purchases from 'react-native-purchases';
 
@@ -577,7 +587,7 @@ const packages = offerings.current?.availablePackages || [];
 // Display packages with their prices
 ```
 
-#### Step 3.3: Handle Purchase (30 min)
+#### Step 3.3: Handle Purchase ✅ (30 min)
 ```typescript
 async function handlePurchase(package: PurchasesPackage) {
   try {
@@ -591,9 +601,9 @@ async function handlePurchase(package: PurchasesPackage) {
 }
 ```
 
-#### Step 3.4: Trigger Paywall at Right Moments (30 min)
+#### Step 3.4: Trigger Paywall at Right Moments ✅ (30 min)
 - When user tries to create reminder past free limit
-- From Settings → "Upgrade to Pro"
+- From Settings → "Upgrade to Pro" ✅ - Wired in `settings.tsx`
 - Optional: Soft prompt after N uses
 
 **Time estimate:** ~2-3 hours
@@ -649,11 +659,11 @@ if (showOnboarding) return <Redirect href="/onboarding" />;
 
 ---
 
-### Task 5: Release + Submission Prep
+### Task 5: Release + Submission Prep 🟡 PARTIAL
 
 **Goal:** Build a real installable app and prepare for store submission
 
-**Blocked by:** Tasks 1-4 (core flows must work)
+**Status:** 🟡 AAB built, not yet submitted
 
 **Clarifying Questions:**
 - [ ] Android first, or both platforms?
@@ -670,9 +680,13 @@ if (showOnboarding) return <Redirect href="/onboarding" />;
 - App description, keywords
 - Privacy policy URL
 
-#### Step 5.3: Build Production APK/AAB
-```bash
-eas build --platform android --profile production
+#### Step 5.3: Build Production APK/AAB ✅ COMPLETED
+```powershell
+# Built on 2025-12-27
+npx.cmd expo prebuild --platform android --clean
+cd android
+.\gradlew.bat bundleRelease
+# Output: android\app\build\outputs\bundle\release\app-release.aab (~82 MB)
 ```
 
 #### Step 5.4: Submit to Stores
