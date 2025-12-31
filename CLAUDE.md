@@ -147,6 +147,20 @@ cd android
 - `plugins/withNotifeeAndroidMaven.js` - Fixes Notifee + Expo 54 (GitHub #1262)
 - `plugins/withAndroidSigning.js` - Injects release signing config
 
+### ⚡ Build Optimization: ARM Only
+
+To speed up release builds (~50% faster), only build for ARM architectures (mobile devices) and skip x86 (emulators):
+
+Add to `android/gradle.properties`:
+```properties
+# Only build for ARM architectures (mobile devices)
+# Skips x86/x86_64 which are only needed for emulators
+reactNativeArchitectures=armeabi-v7a,arm64-v8a
+```
+
+**Without this:** Builds for 4 architectures (~20-30 min)
+**With this:** Builds for 2 architectures (~10-15 min)
+
 ---
 
 ## 🏗️ Project Architecture
