@@ -1,44 +1,18 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
-    Platform,
+    ActivityIndicator,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { colors, scaleFontSize, borderRadius, shadows } from "../lib/theme";
+import { colors, scaleFontSize, shadows } from "../lib/theme";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
-
-const PLANS = [
-    {
-        id: "weekly",
-        title: "Weekly",
-        price: "$2.99",
-        period: "/week",
-        description: "Perfect for a quick start",
-        tag: null,
-    },
-    {
-        id: "monthly",
-        title: "Monthly",
-        price: "$7.99",
-        period: "/month",
-        description: "Our most flexible plan",
-        tag: "Most Popular",
-    },
-    {
-        id: "yearly",
-        title: "Yearly",
-        price: "$49.99",
-        period: "/year",
-        description: "Best value - save 50%",
-        tag: "Best Value",
-    },
-];
+import Purchases, { PurchasesPackage, PurchasesOfferings } from "react-native-purchases";
 
 const BENEFITS = [
     "Unlimited voice reminders",
@@ -52,19 +26,137 @@ export default function PaywallScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const toast = useToast();
-    const [selectedPlan, setSelectedPlan] = useState("monthly");
+
+    // RevenueCat state
+    const [packages, setPackages] = useState<PurchasesPackage[]>([]);
+    const [selectedPackage, setSelectedPackage] = useState<PurchasesPackage | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isPurchasing, setIsPurchasing] = useState(false);
+
+    // Fetch offerings on mount
+    useEffect(() => {
+        const fetchOfferings = async () => {
+            try {
+                const res = await Purchases.getOfferings();
+                console.log("[RevenueCat] Offerings response received");
+
+                // Try current offering first, then fall back to any available offering
+                let availablePackages = res.current?.availablePackages ?? [];
+
+                // If no current offering, try to find any offering with packages
+                if (availablePackages.length === 0 && res.all) {
+                    const offeringKeys = Object.keys(res.all);
+                    console.log("[RevenueCat] Available offering keys:", offeringKeys);
+                    for (const key of offeringKeys) {
+                        const offering = res.all[key];
+                        if (offering?.availablePackages?.length > 0) {
+                            availablePackages = offering.availablePackages;
+                            console.log("[RevenueCat] Using offering:", key, "with", availablePackages.length, "packages");
+                            break;
+                        }
+                    }
+                }
+
+                console.log("[RevenueCat] Total packages found:", availablePackages.length);
+                setPackages(availablePackages);
+
+                // Auto-select first package (or monthly if available)
+                if (availablePackages.length > 0) {
+                    const monthlyPkg = availablePackages.find(
+                        pkg => pkg.packageType === "MONTHLY" || pkg.identifier.includes("monthly")
+                    );
+                    const selected = monthlyPkg ?? availablePackages[0];
+                    setSelectedPackage(selected);
+                    console.log("[RevenueCat] Selected package:", selected.identifier);
+                }
+            } catch (error) {
+                console.error("[RevenueCat] Error fetching offerings:", error);
+                toast.show({
+                    title: "Error",
+                    message: "Failed to load subscription options. Please try again.",
+                    type: "error",
+                });
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        fetchOfferings();
+    }, []);
 
     const handleBack = () => {
         router.back();
     };
 
-    const handleContinue = () => {
-        toast.show({
-            title: "Pro Activated",
-            message: `You've selected the ${selectedPlan} plan.`,
-            type: "success",
-        });
-        router.back();
+    // Real purchase flow using RevenueCat
+    const handlePurchase = async () => {
+        if (!selectedPackage) {
+            toast.show({
+                title: "Error",
+                message: "Please select a plan.",
+                type: "error",
+            });
+            return;
+        }
+
+        setIsPurchasing(true);
+
+        try {
+            const { customerInfo } = await Purchases.purchasePackage(selectedPackage);
+            console.log("[RevenueCat] Purchase complete. Entitlements:", customerInfo.entitlements.active);
+
+            // Check if pro entitlement is now active
+            if (customerInfo.entitlements.active["pro"]) {
+                toast.show({
+                    title: "Pro Activated! 🎉",
+                    message: "Welcome to NoteToSelf Pro!",
+                    type: "success",
+                });
+                router.back();
+            } else {
+                toast.show({
+                    title: "Purchase Complete",
+                    message: "Thank you for subscribing!",
+                    type: "success",
+                });
+                router.back();
+            }
+        } catch (error: any) {
+            // Check if user cancelled
+            if (error.userCancelled) {
+                console.log("[RevenueCat] User cancelled purchase");
+            } else {
+                console.error("[RevenueCat] Purchase error:", error);
+                toast.show({
+                    title: "Purchase Failed",
+                    message: error.message || "Something went wrong. Please try again.",
+                    type: "error",
+                });
+            }
+        } finally {
+            setIsPurchasing(false);
+        }
+    };
+
+    // Helper to get display info from package
+    const getPackageDisplayInfo = (pkg: PurchasesPackage) => {
+        const product = pkg.product;
+        const isAnnual = pkg.packageType === "ANNUAL";
+
+        // Clean up title - remove app name suffix
+        let title = product.title;
+        if (title.includes("(")) {
+            title = title.split("(")[0].trim();
+        }
+
+        return {
+            title,
+            price: product.priceString,
+            period: isAnnual ? "/year" : "/month",
+            description: isAnnual ? "Best value - save 48%" : "Most flexible plan",
+            tag: isAnnual ? "Best Value" : (pkg.packageType === "MONTHLY" ? "Most Popular" : null),
+            isPopular: pkg.packageType === "MONTHLY",
+        };
     };
 
     return (
@@ -109,72 +201,98 @@ export default function PaywallScreen() {
                     </View>
 
                     <View style={styles.plansSection}>
-                        {PLANS.map((plan) => {
-                            const isMonthly = plan.id === "monthly";
-                            const isSelected = selectedPlan === plan.id;
+                        {isLoading ? (
+                            <View style={styles.loadingContainer}>
+                                <ActivityIndicator size="large" color={colors.accent} />
+                                <Text style={styles.loadingText}>Loading plans...</Text>
+                            </View>
+                        ) : packages.length > 0 ? (
+                            packages.map((pkg) => {
+                                const plan = getPackageDisplayInfo(pkg);
+                                const isSelected = selectedPackage?.identifier === pkg.identifier;
 
-                            return (
-                                <TouchableOpacity
-                                    key={plan.id}
-                                    style={[
-                                        styles.planCard,
-                                        isMonthly && styles.planCardHighlighted,
-                                        isSelected && !isMonthly && styles.planCardSelected,
-                                    ]}
-                                    onPress={() => setSelectedPlan(plan.id)}
-                                    activeOpacity={0.9}
-                                >
-                                    {plan.tag && (
-                                        <View
-                                            style={[
-                                                styles.tag,
-                                                isMonthly
-                                                    ? styles.tagActive
-                                                    : styles.tagInactive,
-                                            ]}
-                                        >
-                                            <Text
+                                return (
+                                    <TouchableOpacity
+                                        key={pkg.identifier}
+                                        style={[
+                                            styles.planCard,
+                                            plan.isPopular && styles.planCardHighlighted,
+                                            isSelected && styles.planCardSelected,
+                                        ]}
+                                        onPress={() => {
+                                            console.log("[Paywall] Selected:", pkg.identifier);
+                                            setSelectedPackage(pkg);
+                                        }}
+                                        activeOpacity={0.8}
+                                    >
+                                        {plan.tag && (
+                                            <View
                                                 style={[
-                                                    styles.tagText,
-                                                    isMonthly && styles.tagTextActive,
+                                                    styles.tag,
+                                                    plan.isPopular ? styles.tagActive : styles.tagInactive,
                                                 ]}
                                             >
-                                                {plan.tag}
-                                            </Text>
+                                                <Text
+                                                    style={[
+                                                        styles.tagText,
+                                                        plan.isPopular && styles.tagTextActive,
+                                                    ]}
+                                                >
+                                                    {plan.tag}
+                                                </Text>
+                                            </View>
+                                        )}
+                                        <View style={styles.planCardHeader}>
+                                            <View style={styles.planInfo}>
+                                                <Text style={styles.planTitle}>{plan.title}</Text>
+                                                <Text style={styles.planDescription}>{plan.description}</Text>
+                                            </View>
+                                            <View style={styles.priceContainer}>
+                                                <Text style={styles.planPrice}>{plan.price}</Text>
+                                                <Text style={styles.planPeriod}>{plan.period}</Text>
+                                            </View>
                                         </View>
-                                    )}
-                                    <View style={styles.planCardHeader}>
-                                        <View>
-                                            <Text style={styles.planTitle}>{plan.title}</Text>
-                                            <Text style={styles.planDescription}>{plan.description}</Text>
-                                        </View>
-                                        <View style={styles.priceContainer}>
-                                            <Text style={styles.planPrice}>{plan.price}</Text>
-                                            <Text style={styles.planPeriod}>{plan.period}</Text>
-                                        </View>
-                                    </View>
-                                    {isSelected && (
-                                        <View style={styles.selectedIndicator}>
-                                            <AppIcon name="check" size={16} color="white" />
-                                        </View>
-                                    )}
-                                </TouchableOpacity>
-                            );
-                        })}
+                                        {isSelected && (
+                                            <View style={styles.selectedIndicator}>
+                                                <AppIcon name="check" size={16} color="white" />
+                                            </View>
+                                        )}
+                                    </TouchableOpacity>
+                                );
+                            })
+                        ) : (
+                            <View style={styles.errorContainer}>
+                                <AppIcon name="alert-circle" size={32} color={colors.textSecondary} />
+                                <Text style={styles.errorText}>No plans available</Text>
+                                <Text style={styles.errorSubtext}>Please check your connection and try again.</Text>
+                            </View>
+                        )}
                     </View>
                 </ScrollView>
             </SafeAreaView>
 
             <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
                 <Text style={styles.termsText}>
-                    Secure payment via App Store. Cancel anytime.
+                    Secure payment via Google Play. Cancel anytime.
                 </Text>
                 <TouchableOpacity
-                    style={styles.continueButton}
-                    onPress={handleContinue}
+                    style={[
+                        styles.continueButton,
+                        (isPurchasing || !selectedPackage || packages.length === 0) && styles.continueButtonDisabled,
+                    ]}
+                    onPress={handlePurchase}
                     activeOpacity={0.8}
+                    disabled={isPurchasing || !selectedPackage || packages.length === 0}
                 >
-                    <Text style={styles.continueButtonText}>Continue</Text>
+                    {isPurchasing ? (
+                        <ActivityIndicator color="white" />
+                    ) : (
+                        <Text style={styles.continueButtonText}>
+                            {selectedPackage
+                                ? `Subscribe for ${selectedPackage.product.priceString}`
+                                : "Select a plan"}
+                        </Text>
+                    )}
                 </TouchableOpacity>
             </View>
         </View>
@@ -269,15 +387,20 @@ const styles = StyleSheet.create({
     },
     planCardHighlighted: {
         borderColor: colors.accent,
-        backgroundColor: colors.accent + "05",
+        backgroundColor: colors.accent + "08",
     },
     planCardSelected: {
-        backgroundColor: colors.surface,
+        borderColor: colors.accent,
+        backgroundColor: colors.accent + "10",
     },
     planCardHeader: {
         flexDirection: "row",
         justifyContent: "space-between",
         alignItems: "center",
+    },
+    planInfo: {
+        flex: 1,
+        marginRight: 12,
     },
     planTitle: {
         fontSize: scaleFontSize(18),
@@ -366,9 +489,39 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 4 },
         elevation: 6,
     },
+    continueButtonDisabled: {
+        opacity: 0.6,
+    },
     continueButtonText: {
         fontSize: scaleFontSize(18),
         fontWeight: "700",
         color: "white",
+    },
+    loadingContainer: {
+        padding: 40,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    loadingText: {
+        marginTop: 12,
+        fontSize: scaleFontSize(14),
+        color: colors.textSecondary,
+    },
+    errorContainer: {
+        padding: 40,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    errorText: {
+        marginTop: 12,
+        fontSize: scaleFontSize(16),
+        fontWeight: "600",
+        color: colors.textSecondary,
+    },
+    errorSubtext: {
+        marginTop: 8,
+        fontSize: scaleFontSize(14),
+        color: colors.textTertiary,
+        textAlign: "center",
     },
 });

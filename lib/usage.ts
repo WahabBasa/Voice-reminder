@@ -62,3 +62,28 @@ export async function canCreateReminder(isPro: boolean): Promise<boolean> {
 export function getFreeLimit(): number {
     return FREE_LIMIT;
 }
+
+/**
+ * Check if user can create a reminder by checking RevenueCat entitlements.
+ * Returns { canCreate: boolean, isPro: boolean, currentCount: number, limit: number }
+ */
+export async function checkCanCreateReminder(): Promise<{
+    canCreate: boolean;
+    isPro: boolean;
+    currentCount: number;
+    limit: number;
+}> {
+    // Dynamically import to avoid circular dependencies
+    const { checkProStatus } = await import('./purchases');
+
+    const isPro = await checkProStatus();
+    const currentCount = await getReminderCount();
+    const limit = FREE_LIMIT;
+
+    return {
+        canCreate: isPro || currentCount < limit,
+        isPro,
+        currentCount,
+        limit,
+    };
+}

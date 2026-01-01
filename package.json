@@ -46,6 +46,7 @@
     "@types/react": "~19.1.0",
     "babel-preset-expo": "^54.0.7",
     "patch-package": "^8.0.1",
+    "sharp": "^0.34.5",
     "typescript": "~5.9.2"
   },
   "private": true

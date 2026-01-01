@@ -1,9 +1,9 @@
 import Purchases, { LOG_LEVEL, CustomerInfo, PurchasesPackage, PurchasesOfferings } from 'react-native-purchases';
 import { Platform } from 'react-native';
 
-// Placeholder keys - replace with actual RevenueCat API keys
-const REVENUECAT_ANDROID_KEY = 'PLACEHOLDER_ANDROID_KEY';
-const REVENUECAT_IOS_KEY = 'PLACEHOLDER_IOS_KEY';
+// RevenueCat API keys
+const REVENUECAT_ANDROID_KEY = 'goog_CajJDmwNngamdqNKtBAJerwrxSV';
+const REVENUECAT_IOS_KEY = 'PLACEHOLDER_IOS_KEY'; // Add iOS key when ready
 
 /**
  * Initialize RevenueCat SDK on app start.
@@ -13,11 +13,11 @@ export async function initializePurchases(): Promise<void> {
   if (__DEV__) {
     Purchases.setLogLevel(LOG_LEVEL.DEBUG);
   }
-  
-  const apiKey = Platform.OS === 'ios' 
-    ? REVENUECAT_IOS_KEY 
+
+  const apiKey = Platform.OS === 'ios'
+    ? REVENUECAT_IOS_KEY
     : REVENUECAT_ANDROID_KEY;
-    
+
   await Purchases.configure({ apiKey });
 }
 
