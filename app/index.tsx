@@ -31,7 +31,7 @@ import { api } from "../convex/_generated/api";
 import { colors, scaleFontSize } from "../lib/theme";
 import { formatReminderTime, getDueTimestamp, isOverdue } from "../lib/time";
 import { readFileAsBase64 } from "../lib/convex";
-import { cancelReminder, scheduleReminder } from "../lib/notifications";
+import { deleteReminderWithAudio, scheduleReminder } from "../lib/notifications";
 import {
   addReminder,
   deleteReminder as deleteReminderStorage,
@@ -205,8 +205,8 @@ export default function HomeScreen() {
         frequency,
         days,
         audioUrl: result.audioUrl,
-        soundRepeatMode: "count",
-        soundRepeatCount: 1,
+        // Default to until_stopped - audio plays continuously until dismissed
+        soundRepeatMode: "until_stopped",
       });
       perfLog(traceId, "device.processing", "local_addReminder_done", {
         ms: Date.now() - tLocal,
@@ -288,7 +288,7 @@ export default function HomeScreen() {
           console.log("[VR] Failed to record completion:", e);
         });
 
-        toast.show({ title: "Marked as done", message: reminderTitle, type: "success" });
+        // No toast for individual mark-done (too noisy)
       }, 250); // Match animation duration
     },
     [toast]
@@ -310,8 +310,8 @@ export default function HomeScreen() {
         console.log("[VR] Failed to delete reminder from storage:", e);
       }
 
-      // Cancel notification
-      cancelReminder(reminderId).catch((e) => {
+      // Cancel notification and delete audio
+      deleteReminderWithAudio(reminderId).catch((e) => {
         console.log("[VR] Failed to cancel notification:", e);
       });
 
@@ -322,7 +322,7 @@ export default function HomeScreen() {
         });
       }
 
-      toast.show({ title: "Deleted", message: reminder.title, type: "info" });
+      // No toast for individual delete (too noisy)
     },
     [removeConvexReminder, toast]
   );
@@ -381,7 +381,7 @@ export default function HomeScreen() {
       } catch (e) {
         console.log("[VR] Failed to delete reminder:", e);
       }
-      cancelReminder(reminder.id).catch(() => { });
+      deleteReminderWithAudio(reminder.id).catch(() => { });
       if (reminder.convexId) {
         removeConvexReminder({ id: reminder.convexId as any }).catch(() => { });
       }
@@ -612,7 +612,11 @@ export default function HomeScreen() {
   const renderCompletedItem = useCallback(
     ({ item }: { item: ReminderHistory }) => {
       const reminder = remindersById.get(item.reminderId);
-      const description = reminder?.description || "Completed reminder";
+      const isMissed = item.status === "missed";
+      const description = reminder?.description || (isMissed ? "Missed reminder" : "Completed reminder");
+      const iconName = isMissed ? "clock" : "check";
+      const iconColor = isMissed ? colors.statusOverdue : colors.success;
+
       return (
         <View style={styles.card}>
           <TouchableOpacity
@@ -621,7 +625,7 @@ export default function HomeScreen() {
             activeOpacity={reminder ? 0.8 : 1}
           >
             <View style={styles.cardIcon}>
-              <AppIcon name="check" size={18} color={colors.success} />
+              <AppIcon name={iconName} size={18} color={iconColor} />
             </View>
             <View style={styles.cardText}>
               <Text style={styles.cardTitle} numberOfLines={1}>
@@ -630,8 +634,8 @@ export default function HomeScreen() {
               <Text style={styles.cardSubtitle} numberOfLines={1}>
                 {description}
               </Text>
-              <Text style={styles.cardMeta} numberOfLines={1}>
-                {formatCardTimestamp(item.timestamp)}
+              <Text style={[styles.cardMeta, isMissed && { color: colors.statusOverdue }]} numberOfLines={1}>
+                {isMissed ? "Missed • " : ""}{formatCardTimestamp(item.timestamp)}
               </Text>
             </View>
           </TouchableOpacity>

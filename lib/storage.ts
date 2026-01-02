@@ -38,8 +38,8 @@ export async function addReminder(reminder: Omit<Reminder, "id" | "createdAt">):
       ...reminder,
       id: Math.random().toString(36).substr(2, 9),
       createdAt: new Date().toISOString(),
-      soundRepeatMode: reminder.soundRepeatMode || "count",
-      soundRepeatCount: reminder.soundRepeatCount ?? 1,
+      soundRepeatMode: reminder.soundRepeatMode || "until_stopped",
+      soundRepeatCount: reminder.soundRepeatCount ?? 3,
     };
     reminders.push(newReminder);
     await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(reminders));
@@ -57,8 +57,8 @@ export async function updateReminder(updatedReminder: Reminder): Promise<void> {
     if (index !== -1) {
       reminders[index] = {
         ...updatedReminder,
-        soundRepeatMode: updatedReminder.soundRepeatMode || "count",
-        soundRepeatCount: updatedReminder.soundRepeatCount ?? 1,
+        soundRepeatMode: updatedReminder.soundRepeatMode || "until_stopped",
+        soundRepeatCount: updatedReminder.soundRepeatCount ?? 3,
       };
       await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(reminders));
     }

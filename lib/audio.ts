@@ -122,3 +122,61 @@ export async function playAudio(uri: string, waitForFinish = false): Promise<voi
     }
   });
 }
+
+/**
+ * Optimized function for playing audio multiple times back-to-back.
+ * Preloads the sound once and replays with minimal gap between repeats.
+ */
+export async function playAudioRepeated(uri: string, repeatCount: number): Promise<void> {
+  console.log(`[VR] playAudioRepeated called, repeats: ${repeatCount}`);
+
+  // Stop any currently playing sound
+  if (currentSound) {
+    try {
+      await currentSound.unloadAsync();
+    } catch (e) {
+      console.log("[VR] Error unloading previous sound:", e);
+    }
+    currentSound = null;
+  }
+
+  // Set audio mode once
+  await Audio.setAudioModeAsync({
+    allowsRecordingIOS: false,
+    playsInSilentModeIOS: true,
+    staysActiveInBackground: true,
+  });
+
+  // Create sound once
+  const { sound } = await Audio.Sound.createAsync(
+    { uri },
+    { shouldPlay: false, volume: 1.0 }
+  );
+  currentSound = sound;
+
+  // Play the sound repeatCount times
+  for (let i = 0; i < repeatCount; i++) {
+    // Rewind to start
+    await sound.setPositionAsync(0);
+
+    // Play and wait for finish
+    await new Promise<void>((resolve) => {
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          resolve();
+        }
+      });
+      sound.playAsync();
+    });
+
+    // Tiny gap between repeats (only if not the last one)
+    if (i < repeatCount - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  // Cleanup
+  await sound.unloadAsync();
+  currentSound = null;
+  console.log("[VR] Audio playback completed all repeats");
+}

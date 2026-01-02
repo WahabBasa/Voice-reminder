@@ -39,7 +39,8 @@
         }
       ],
       "./plugins/withNotifeeAndroidMaven",
-      "./plugins/withAndroidSigning"
+      "./plugins/withAndroidSigning",
+      "./plugins/withFullScreenAlarm"
     ]
   }
 }

@@ -22,7 +22,7 @@ import DatePickerModal from "../../components/DatePickerModal";
 import DaySelector from "../../components/DaySelector";
 import SoundRepeatModal from "../../components/SoundRepeatModal";
 import RepeatTaskModal from "../../components/RepeatTaskModal";
-import { cancelReminder, scheduleReminder } from "../../lib/notifications";
+import { cancelReminder, deleteReminderWithAudio, scheduleReminder } from "../../lib/notifications";
 import {
   deleteReminder as deleteReminderStorage,
   getReminders,
@@ -143,6 +143,19 @@ export default function EditReminderScreen() {
       date.setHours(hours, minutes, 0, 0);
       setTime(date);
     }
+
+    // Preload audio in background for instant playback
+    if (found.audioUrl) {
+      try {
+        const { sound: preloadedSound } = await Audio.Sound.createAsync(
+          { uri: found.audioUrl },
+          { volume: 0.9, shouldPlay: false }
+        );
+        setSound(preloadedSound);
+      } catch (e) {
+        console.log("[VR] Failed to preload audio:", e);
+      }
+    }
   }, [id]);
 
   useEffect(() => {
@@ -226,16 +239,28 @@ export default function EditReminderScreen() {
     if (!reminder?.audioUrl) return;
 
     try {
+      // If currently playing, stop
       if (isPlaying && sound) {
         await sound.stopAsync();
         setIsPlaying(false);
         return;
       }
 
+      // If sound is preloaded, just play it
       if (sound) {
-        await sound.unloadAsync();
+        // Rewind to start and play
+        await sound.setPositionAsync(0);
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            setIsPlaying(false);
+          }
+        });
+        await sound.playAsync();
+        setIsPlaying(true);
+        return;
       }
 
+      // Fallback: load and play (shouldn't happen if preload worked)
       const { sound: nextSound } = await Audio.Sound.createAsync(
         { uri: reminder.audioUrl },
         { volume: 0.9 }
@@ -455,7 +480,7 @@ export default function EditReminderScreen() {
           router.back();
 
           InteractionManager.runAfterInteractions(() => {
-            cancelReminder(reminderId).catch((e) => {
+            deleteReminderWithAudio(reminderId).catch((e) => {
               console.log("[VR] Failed to cancel notification:", e);
             });
 

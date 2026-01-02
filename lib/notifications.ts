@@ -1,5 +1,6 @@
 import notifee, {
   AndroidImportance,
+  AndroidCategory,
   TriggerType,
   TimestampTrigger,
   EventType,
@@ -12,7 +13,8 @@ import {
   getInfoAsync,
 } from "expo-file-system/legacy";
 import { getNextTriggerTime, ReminderSchedule } from "./time";
-import { playAudio } from "./audio";
+import { playAudioRepeated } from "./audio";
+import { recordCompletion } from "./storage";
 
 export interface ReminderNotification {
   id: string;
@@ -36,6 +38,14 @@ export async function downloadReminderAudio(
   audioUrl: string
 ): Promise<string> {
   const localPath = getLocalAudioPath(reminderId);
+
+  // Check if file already exists locally (skip download)
+  const existingFile = await getInfoAsync(localPath);
+  if (existingFile.exists && existingFile.size > 0) {
+    console.log(`[VR] Audio already exists locally: ${localPath} (${existingFile.size} bytes)`);
+    return localPath;
+  }
+
   console.log(`[VR] Downloading audio from ${audioUrl}`);
   console.log(`[VR] Saving to: ${localPath}`);
   const result = await downloadAsync(audioUrl, localPath);
@@ -120,6 +130,11 @@ export async function scheduleReminder(
       android: {
         channelId,
         importance: AndroidImportance.HIGH,
+        category: AndroidCategory.ALARM,
+        autoCancel: false,
+        lightUpScreen: true,
+        // Note: fullScreenAction removed - requires additional native setup
+        // that was causing issues. Will implement properly in future update.
         pressAction: {
           id: "default",
         },
@@ -131,8 +146,9 @@ export async function scheduleReminder(
         days: reminder.days?.join(",") || "",
         title: reminder.title,
         description: reminder.description,
-        soundRepeatMode: reminder.soundRepeatMode || "count",
-        soundRepeatCount: reminder.soundRepeatCount ?? 1,
+        audioUrl: reminder.audioUrl,
+        soundRepeatMode: reminder.soundRepeatMode || "until_stopped",
+        soundRepeatCount: reminder.soundRepeatCount ?? 3,
       },
     },
     trigger
@@ -153,10 +169,17 @@ export async function cancelReminder(reminderId: string): Promise<void> {
   // Delete the channel
   await notifee.deleteChannel(channelId);
 
-  // Delete local audio file
-  await deleteLocalAudio(reminderId);
+  // Note: NOT deleting local audio file here - it's needed for rescheduling
+  // Audio is only deleted when reminder is fully deleted via deleteReminderWithAudio()
 
   console.log(`[VR] Cancelled reminder ${reminderId}`);
+}
+
+// Use this when fully deleting a reminder (not just rescheduling)
+export async function deleteReminderWithAudio(reminderId: string): Promise<void> {
+  await cancelReminder(reminderId);
+  await deleteLocalAudio(reminderId);
+  console.log(`[VR] Deleted reminder ${reminderId} with audio`);
 }
 
 export async function handleNotificationEvent(event: Event): Promise<void> {
@@ -180,22 +203,31 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
         if (fileInfo.exists) {
           console.log("[VR] Starting audio playback...");
 
-          const repeatMode = (data.soundRepeatMode as string) || "count";
-          const repeatCountRaw = Number(data.soundRepeatCount ?? 1);
+          const repeatMode = (data.soundRepeatMode as string) || "until_stopped";
+          const repeatCountRaw = Number(data.soundRepeatCount ?? 3);
           const repeatCount =
             repeatMode === "count"
               ? Math.max(1, repeatCountRaw || 1)
-              : 6; // safety cap for "until stopped"
+              : 30; // safety cap for "until stopped" (~3-5 minutes)
 
-          for (let i = 0; i < repeatCount; i++) {
-            await playAudio(localAudioPath, true);
-            // short gap between repeats except last
-            if (i < repeatCount - 1) {
-              await new Promise((resolve) => setTimeout(resolve, 300));
-            }
-          }
+          // Use optimized repeated playback (preloads once, replays with minimal gap)
+          await playAudioRepeated(localAudioPath, repeatCount);
 
           console.log("[VR] Audio playback completed repeats");
+
+          // Record as "missed" since user didn't actively dismiss/complete
+          // This creates a history entry for tracking purposes
+          // For recurring reminders, this marks this occurrence as missed
+          try {
+            await recordCompletion(
+              data.reminderId as string,
+              (data.title as string) || "Reminder",
+              "missed"
+            );
+            console.log("[VR] Recorded reminder as missed");
+          } catch (e) {
+            console.log("[VR] Failed to record missed status:", e);
+          }
         } else {
           console.log("[VR] ERROR: Audio file does not exist!");
         }

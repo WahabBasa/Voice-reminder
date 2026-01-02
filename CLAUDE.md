@@ -112,17 +112,40 @@ Running on Samsung SM_G955F. Two tabs, both working.
 ## 🔧 Development Commands
 
 ```bash
-# Start development (Metro + Android)
-npx expo start --dev-client --android
-
-# Start Convex dev server
+# Start Convex dev server (run in separate terminal)
 npx convex dev
-
-# Full Android build (dev)
-npx expo run:android
 
 # TypeScript check
 npx tsc --noEmit
+```
+
+### 📱 USB Development Workflow (Recommended)
+
+Use this workflow to avoid "invalid host url" errors when connecting via USB:
+
+```powershell
+# Terminal 1: Start Metro with localhost (avoids IP issues)
+npx.cmd expo start --dev-client --host localhost
+
+# Terminal 2: Set up USB tunnel (required for localhost to work on phone)
+C:\Users\AtheA\AppData\Local\Android\Sdk\platform-tools\adb.exe reverse tcp:8081 tcp:8081
+```
+
+**On your phone:** Open the dev app and connect to `http://localhost:8081`
+
+**Why this works:**
+- `--host localhost` → Metro uses 127.0.0.1 instead of your PC's network IP
+- `adb reverse` → Creates a tunnel from phone's localhost:8081 → PC's localhost:8081
+
+**If connection fails:**
+1. Re-run the `adb reverse` command (tunnel may have been cleared)
+2. Check `adb devices` shows your phone connected
+
+### 🔨 Full Android Build (Dev)
+
+```bash
+# Builds APK and installs to connected device
+npx expo run:android
 ```
 
 ## 📦 Play Store Build
