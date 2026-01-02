@@ -160,7 +160,20 @@ export default function HomeScreen() {
       });
 
       const tAction = Date.now();
-      const result = await processVoiceReminder({ audioBase64: base64, traceId });
+      // Send device's LOCAL time (not UTC) so GPT can parse relative times correctly
+      const now = new Date();
+      // Format as local YYYY-MM-DD HH:MM:SS to avoid UTC conversion issues
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const deviceLocalDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const deviceLocalTime = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      const deviceTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const result = await processVoiceReminder({
+        audioBase64: base64,
+        traceId,
+        deviceLocalDate,
+        deviceLocalTime,
+        deviceTimezone,
+      });
       perfLog(traceId, "device.processing", "processVoiceReminder_done", {
         ms: Date.now() - tAction,
       });

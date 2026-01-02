@@ -3,6 +3,7 @@ import { Audio } from "expo-av";
 export type PermissionStatus = "granted" | "denied" | "undetermined";
 
 let recording: Audio.Recording | null = null;
+let isRecordingPreparing = false;
 
 export async function requestMicrophonePermission(): Promise<PermissionStatus> {
   const { status } = await Audio.requestPermissionsAsync();
@@ -15,15 +16,38 @@ export async function getMicrophonePermission(): Promise<PermissionStatus> {
 }
 
 export async function startRecording(): Promise<void> {
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: true,
-    playsInSilentModeIOS: true,
-  });
+  // Prevent double-tap race condition
+  if (isRecordingPreparing) {
+    console.log("[VR] Recording already preparing, ignoring duplicate call");
+    return;
+  }
 
-  const { recording: newRecording } = await Audio.Recording.createAsync(
-    Audio.RecordingOptionsPresets.HIGH_QUALITY
-  );
-  recording = newRecording;
+  // Clean up any existing recording first
+  if (recording) {
+    console.log("[VR] Cleaning up existing recording before starting new one");
+    try {
+      await recording.stopAndUnloadAsync();
+    } catch (e) {
+      console.log("[VR] Error cleaning up previous recording:", e);
+    }
+    recording = null;
+  }
+
+  isRecordingPreparing = true;
+
+  try {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+    });
+
+    const { recording: newRecording } = await Audio.Recording.createAsync(
+      Audio.RecordingOptionsPresets.HIGH_QUALITY
+    );
+    recording = newRecording;
+  } finally {
+    isRecordingPreparing = false;
+  }
 }
 
 export async function pauseRecording(): Promise<void> {
@@ -57,7 +81,7 @@ let currentSound: Audio.Sound | null = null;
 
 export async function playAudio(uri: string, waitForFinish = false): Promise<void> {
   console.log(`[VR] playAudio called with uri: ${uri}`);
-  
+
   // Stop any currently playing sound
   if (currentSound) {
     console.log("[VR] Stopping previous sound");

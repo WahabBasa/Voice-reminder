@@ -204,7 +204,13 @@ async function synthesizeReminderTts(args: { text: string; title?: string }): Pr
 }
 
 export const processVoiceReminder = action({
-  args: { audioBase64: v.string(), traceId: v.optional(v.string()) },
+  args: {
+    audioBase64: v.string(),
+    traceId: v.optional(v.string()),
+    deviceLocalDate: v.optional(v.string()),
+    deviceLocalTime: v.optional(v.string()),
+    deviceTimezone: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
@@ -221,12 +227,20 @@ export const processVoiceReminder = action({
     });
 
     const transcript = transcription.text;
+    console.log("[VR] === STEP 1: STT Transcription ===");
+    console.log("[VR] Transcript:", transcript);
 
-    // 2. GPT Parse
-    const now = new Date();
-    const currentDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
-    const currentTime = now.toLocaleTimeString('en-US', { hour12: false });
+    // 2. GPT Parse - use device LOCAL time directly (no timezone conversion)
+    const currentDate = args.deviceLocalDate || new Date().toISOString().split('T')[0];
+    const currentTime = args.deviceLocalTime || new Date().toLocaleTimeString('en-US', { hour12: false });
+    const now = new Date(`${currentDate}T${currentTime}`);
     const currentDayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
+    const timezone = args.deviceTimezone || 'UTC';
+
+    console.log("[VR] === STEP 2: Context sent to GPT ===");
+    console.log("[VR] Device Local Date:", args.deviceLocalDate);
+    console.log("[VR] Device Local Time:", args.deviceLocalTime);
+    console.log("[VR] Parsed as:", { currentDate, currentTime, currentDayOfWeek, timezone });
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -247,6 +261,7 @@ export const processVoiceReminder = action({
 CURRENT CONTEXT:
 - Current date: ${currentDate} (${currentDayOfWeek})
 - Current time: ${currentTime}
+- User's timezone: ${timezone}
 
 IMPORTANT - Date parsing rules:
 - If user says "Sunday", "next Sunday", "this Sunday", calculate the actual date (YYYY-MM-DD)
@@ -256,6 +271,12 @@ IMPORTANT - Date parsing rules:
 - For relative days: "in 3 days" = add 3 days to current date
 - ONLY include "date" for one-time reminders (frequency: "once") on a specific day
 - Do NOT include "date" for recurring/daily reminders
+
+IMPORTANT - Relative time rules:
+- "in X minutes" = add X minutes to current time (${currentTime})
+- "in X hours" = add X hours to current time
+- "in 2 minutes" at ${currentTime} means calculate the exact time ${currentTime} + 2 minutes
+- Always calculate the actual HH:MM result for relative times
 
 IMPORTANT - Intent + tone rules:
 - Keep the exact intent of the user's request (do not add new meaning, tasks, or extra context).
@@ -280,7 +301,11 @@ The description should be a friendly reminder message like "Time to take your me
       ],
     });
 
-    const parsed = JSON.parse(completion.choices[0].message.content || "{}");
+    const rawGptResponse = completion.choices[0].message.content || "{}";
+    console.log("[VR] === STEP 3: Raw GPT Response ===");
+    console.log("[VR] GPT returned:", rawGptResponse);
+
+    const parsed = JSON.parse(rawGptResponse);
     const description = normalizeReminderDescription(parsed.description);
 
     const rawFrequency = String(parsed.frequency || "once").toLowerCase();
@@ -318,7 +343,7 @@ The description should be a friendly reminder message like "Time to take your me
 
     const audioUrl = await ctx.storage.getUrl(storageId);
 
-    return {
+    const result = {
       id: reminderId as string,
       title: parsed.title as string,
       description,
@@ -329,6 +354,11 @@ The description should be a friendly reminder message like "Time to take your me
       transcript,
       audioUrl,
     };
+
+    console.log("[VR] === STEP 4: Final Result to App ===");
+    console.log("[VR] Returning:", JSON.stringify(result, null, 2));
+
+    return result;
   },
 });
 
