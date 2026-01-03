@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   InteractionManager,
@@ -15,7 +15,12 @@ import { useToast } from "../../components/ToastProvider";
 import { LinearGradient } from "expo-linear-gradient";
 import { Audio } from "expo-av";
 import { TimerPickerModal } from "react-native-timer-picker";
-import BottomSheet, { BottomSheetScrollView, BottomSheetBackdrop } from "@gorhom/bottom-sheet";
+import BottomSheet, {
+  BottomSheetScrollView,
+  BottomSheetBackdrop,
+  useBottomSheetTimingConfigs,
+} from "@gorhom/bottom-sheet";
+import { Easing } from "react-native-reanimated";
 import { api } from "../../convex/_generated/api";
 import AppIcon from "../../components/AppIcon";
 import DatePickerModal from "../../components/DatePickerModal";
@@ -48,7 +53,7 @@ type SettingsRowProps = {
   onPress?: () => void;
 };
 
-function SettingsRow({ icon, label, value, isAction, onPress }: SettingsRowProps) {
+const SettingsRow = React.memo(function SettingsRow({ icon, label, value, isAction, onPress }: SettingsRowProps) {
   const isPressable = Boolean(onPress);
   return (
     <TouchableOpacity
@@ -71,7 +76,7 @@ function SettingsRow({ icon, label, value, isAction, onPress }: SettingsRowProps
       ) : null}
     </TouchableOpacity>
   );
-}
+});
 
 function formatTime(date: Date) {
   return date.toLocaleTimeString("default", {
@@ -89,6 +94,12 @@ export default function EditReminderScreen() {
 
   const bottomSheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ["60%", "95%"], []);
+
+  // Timing animation - smooth and predictable, no jitter
+  const animationConfigs = useBottomSheetTimingConfigs({
+    duration: 280,
+    easing: Easing.out(Easing.cubic), // Smooth deceleration
+  });
 
   const [reminder, setReminder] = useState<Reminder | null>(null);
   const [title, setTitle] = useState("");
@@ -144,17 +155,21 @@ export default function EditReminderScreen() {
       setTime(date);
     }
 
-    // Preload audio in background for instant playback
+    // Preload audio in background AFTER sheet animation completes
+    // Delayed to prevent blocking the bottom sheet open animation
     if (found.audioUrl) {
-      try {
-        const { sound: preloadedSound } = await Audio.Sound.createAsync(
-          { uri: found.audioUrl },
-          { volume: 0.9, shouldPlay: false }
-        );
-        setSound(preloadedSound);
-      } catch (e) {
-        console.log("[VR] Failed to preload audio:", e);
-      }
+      const audioUrl = found.audioUrl;
+      setTimeout(async () => {
+        try {
+          const { sound: preloadedSound } = await Audio.Sound.createAsync(
+            { uri: audioUrl },
+            { volume: 0.9, shouldPlay: false }
+          );
+          setSound(preloadedSound);
+        } catch (e) {
+          console.log("[VR] Failed to preload audio:", e);
+        }
+      }, 300); // Delay to let bottom sheet animation complete
     }
   }, [id]);
 
@@ -513,9 +528,16 @@ export default function EditReminderScreen() {
     Alert.alert("Options", undefined, options);
   };
 
+  // Optimized backdrop - pressBehavior='close' for better touch handling
   const renderBackdrop = useCallback(
     (props: any) => (
-      <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} opacity={0.25} />
+      <BottomSheetBackdrop
+        {...props}
+        disappearsOnIndex={-1}
+        appearsOnIndex={0}
+        opacity={0.25}
+        pressBehavior="close"
+      />
     ),
     []
   );
@@ -547,7 +569,9 @@ export default function EditReminderScreen() {
           snapPoints={snapPoints}
           index={0}
           enablePanDownToClose
-          animateOnMount={false}
+          animateOnMount
+          animationConfigs={animationConfigs}
+          enableDynamicSizing={false}
           backdropComponent={renderBackdrop}
           onChange={handleSheetChange}
           handleIndicatorStyle={styles.handleIndicator}
@@ -568,7 +592,9 @@ export default function EditReminderScreen() {
         snapPoints={snapPoints}
         index={0}
         enablePanDownToClose
-        animateOnMount={false}
+        animateOnMount
+        animationConfigs={animationConfigs}
+        enableDynamicSizing={false}
         backdropComponent={renderBackdrop}
         onChange={handleSheetChange}
         handleIndicatorStyle={styles.handleIndicator}
@@ -700,34 +726,41 @@ export default function EditReminderScreen() {
             />
           ) : null}
 
-          <DatePickerModal
-            visible={showDatePicker}
-            initialDate={dueDate}
-            onCancel={() => setShowDatePicker(false)}
-            onConfirm={(data) => {
-              setDueDate(data.date);
-              setShowDatePicker(false);
-            }}
-          />
+          {/* Lazy render modals - only mount when visible for faster initial sheet open */}
+          {showDatePicker && (
+            <DatePickerModal
+              visible={showDatePicker}
+              initialDate={dueDate}
+              onCancel={() => setShowDatePicker(false)}
+              onConfirm={(data) => {
+                setDueDate(data.date);
+                setShowDatePicker(false);
+              }}
+            />
+          )}
 
-          <SoundRepeatModal
-            visible={showSoundRepeatModal}
-            initialValue={soundRepeatMode === "until_stopped" ? "until_stopped" : soundRepeatCount}
-            onCancel={() => setShowSoundRepeatModal(false)}
-            onConfirm={handleSoundRepeatConfirm}
-          />
+          {showSoundRepeatModal && (
+            <SoundRepeatModal
+              visible={showSoundRepeatModal}
+              initialValue={soundRepeatMode === "until_stopped" ? "until_stopped" : soundRepeatCount}
+              onCancel={() => setShowSoundRepeatModal(false)}
+              onConfirm={handleSoundRepeatConfirm}
+            />
+          )}
 
-          <RepeatTaskModal
-            visible={showRepeatTaskModal}
-            initialRepeatEnabled={frequency !== "once"}
-            initialFrequency={
-              frequency === "custom" ? "weekly" : (frequency === "once" ? "daily" : (frequency as any))
-            }
-            initialInterval={1}
-            initialDays={days}
-            onCancel={() => setShowRepeatTaskModal(false)}
-            onConfirm={handleRepeatConfirm}
-          />
+          {showRepeatTaskModal && (
+            <RepeatTaskModal
+              visible={showRepeatTaskModal}
+              initialRepeatEnabled={frequency !== "once"}
+              initialFrequency={
+                frequency === "custom" ? "weekly" : (frequency === "once" ? "daily" : (frequency as any))
+              }
+              initialInterval={1}
+              initialDays={days}
+              onCancel={() => setShowRepeatTaskModal(false)}
+              onConfirm={handleRepeatConfirm}
+            />
+          )}
 
           <View style={{ height: 40 }} />
         </BottomSheetScrollView>

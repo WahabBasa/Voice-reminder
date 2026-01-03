@@ -13,8 +13,7 @@ import {
   getInfoAsync,
 } from "expo-file-system/legacy";
 import { getNextTriggerTime, ReminderSchedule } from "./time";
-import { playAudioRepeated } from "./audio";
-import { recordCompletion } from "./storage";
+// Note: Audio playback is handled by alarm screen (app/alarm.tsx)
 
 export interface ReminderNotification {
   id: string;
@@ -83,7 +82,8 @@ export async function createReminderChannel(
     id: channelId,
     name: `Reminder: ${title}`,
     importance: AndroidImportance.HIGH,
-    sound: soundPath,
+    // Note: No sound here - alarm screen (app/alarm.tsx) handles audio playback
+    sound: "",
   });
 
   return channelId;
@@ -191,51 +191,21 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   console.log(`[VR] Notification data:`, JSON.stringify(detail.notification?.data));
 
   if (type === EventType.DELIVERED) {
-    console.log("[VR] DELIVERED event - attempting to play TTS");
+    console.log("[VR] DELIVERED event - alarm screen will handle audio");
     const data = detail.notification?.data;
+
+    // Note: Audio playback is now handled by the alarm screen (app/alarm.tsx)
+    // This handler only logs file info and handles recurring reschedule
 
     if (data?.reminderId) {
       const localAudioPath = getLocalAudioPath(data.reminderId as string);
-      console.log(`[VR] Audio path: ${localAudioPath}`);
 
-      // Check if file exists
+      // Log file status for debugging
       try {
         const fileInfo = await getInfoAsync(localAudioPath);
-        console.log(`[VR] File exists: ${fileInfo.exists}, size: ${fileInfo.exists ? fileInfo.size : 'N/A'}`);
-
-        if (fileInfo.exists) {
-          console.log("[VR] Starting audio playback...");
-
-          const repeatMode = (data.soundRepeatMode as string) || "until_stopped";
-          const repeatCountRaw = Number(data.soundRepeatCount ?? 3);
-          const repeatCount =
-            repeatMode === "count"
-              ? Math.max(1, repeatCountRaw || 1)
-              : 30; // safety cap for "until stopped" (~3-5 minutes)
-
-          // Use optimized repeated playback (preloads once, replays with minimal gap)
-          await playAudioRepeated(localAudioPath, repeatCount);
-
-          console.log("[VR] Audio playback completed repeats");
-
-          // Record as "missed" since user didn't actively dismiss/complete
-          // This creates a history entry for tracking purposes
-          // For recurring reminders, this marks this occurrence as missed
-          try {
-            await recordCompletion(
-              data.reminderId as string,
-              (data.title as string) || "Reminder",
-              "missed"
-            );
-            console.log("[VR] Recorded reminder as missed");
-          } catch (e) {
-            console.log("[VR] Failed to record missed status:", e);
-          }
-        } else {
-          console.log("[VR] ERROR: Audio file does not exist!");
-        }
+        console.log(`[VR] Audio file ready: ${fileInfo.exists}, size: ${fileInfo.exists ? fileInfo.size : 'N/A'}`);
       } catch (e) {
-        console.log("[VR] Failed to play TTS audio:", e);
+        console.log("[VR] Failed to check audio file:", e);
       }
     } else {
       console.log("[VR] No reminderId in notification data");

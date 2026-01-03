@@ -10,7 +10,6 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  UIManager,
   View,
 } from "react-native";
 import Animated, {
@@ -127,10 +126,6 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (Platform.OS === "android") {
-        UIManager.setLayoutAnimationEnabledExperimental?.(true);
-      }
-
       const task = InteractionManager.runAfterInteractions(() => {
         loadData();
       });

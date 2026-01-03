@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { InteractionManager } from "react-native";
 import { Stack } from "expo-router";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { StatusBar } from "expo-status-bar";
@@ -11,7 +12,11 @@ const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as strin
 
 export default function RootLayout() {
   useEffect(() => {
-    initializePurchases();
+    // Defer RevenueCat initialization to not block app startup
+    const task = InteractionManager.runAfterInteractions(() => {
+      initializePurchases();
+    });
+    return () => task.cancel();
   }, []);
 
   return (
