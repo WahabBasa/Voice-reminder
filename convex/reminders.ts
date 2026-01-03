@@ -42,8 +42,6 @@ export const create = internalMutation({
     frequency: v.string(),
     days: v.optional(v.array(v.string())),
     audioStorageId: v.id("_storage"),
-    soundRepeatMode: v.optional(v.string()),
-    soundRepeatCount: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("reminders", {
@@ -72,8 +70,6 @@ export const update = mutation({
     date: v.optional(v.string()),
     frequency: v.string(),
     days: v.optional(v.array(v.string())),
-    soundRepeatMode: v.optional(v.string()),
-    soundRepeatCount: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { id, ...updates } = args;

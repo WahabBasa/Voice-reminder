@@ -200,8 +200,6 @@ export default function HomeScreen() {
         frequency,
         days,
         audioUrl: result.audioUrl,
-        // Default to until_stopped - audio plays continuously until dismissed
-        soundRepeatMode: "until_stopped",
       });
       perfLog(traceId, "device.processing", "local_addReminder_done", {
         ms: Date.now() - tLocal,
@@ -227,8 +225,10 @@ export default function HomeScreen() {
           frequency: newReminder.frequency,
           days: newReminder.days,
           audioUrl: newReminder.audioUrl,
-          soundRepeatMode: newReminder.soundRepeatMode,
-          soundRepeatCount: newReminder.soundRepeatCount,
+          snoozeEnabled: newReminder.snoozeEnabled,
+          snoozeDuration: newReminder.snoozeDuration,
+          volume: newReminder.volume,
+          volumeStyle: newReminder.volumeStyle,
         }, { traceId }).catch((e) => {
           console.log("[VR] Failed to schedule reminder:", e);
           perfLog(traceId, "device.notifications", "scheduleReminder_error", {

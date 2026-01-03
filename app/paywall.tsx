@@ -262,7 +262,7 @@ export default function PaywallScreen() {
                             })
                         ) : (
                             <View style={styles.errorContainer}>
-                                <AppIcon name="alert-circle" size={32} color={colors.textSecondary} />
+                                <AppIcon name="info" size={32} color={colors.textSecondary} />
                                 <Text style={styles.errorText}>No plans available</Text>
                                 <Text style={styles.errorSubtext}>Please check your connection and try again.</Text>
                             </View>

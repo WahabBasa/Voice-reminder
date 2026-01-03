@@ -15,6 +15,7 @@ import { useToast } from "../../components/ToastProvider";
 import { LinearGradient } from "expo-linear-gradient";
 import { Audio } from "expo-av";
 import { TimerPickerModal } from "react-native-timer-picker";
+import Slider from "@react-native-community/slider";
 import BottomSheet, {
   BottomSheetScrollView,
   BottomSheetBackdrop,
@@ -25,13 +26,15 @@ import { api } from "../../convex/_generated/api";
 import AppIcon from "../../components/AppIcon";
 import DatePickerModal from "../../components/DatePickerModal";
 import DaySelector from "../../components/DaySelector";
-import SoundRepeatModal from "../../components/SoundRepeatModal";
+
 import RepeatTaskModal from "../../components/RepeatTaskModal";
 import { cancelReminder, deleteReminderWithAudio, scheduleReminder } from "../../lib/notifications";
 import {
+  DEFAULT_ALARM_SETTINGS,
   deleteReminder as deleteReminderStorage,
   getReminders,
   Reminder,
+  VolumeStyle,
   updateReminder as updateReminderStorage,
 } from "../../lib/storage";
 import { colors, scaleFontSize } from "../../lib/theme";
@@ -107,15 +110,18 @@ export default function EditReminderScreen() {
   const [time, setTime] = useState(new Date());
   const [frequency, setFrequency] = useState("once");
   const [days, setDays] = useState<string[]>([]);
-  const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("until_stopped");
-  const [soundRepeatCount, setSoundRepeatCount] = useState<number>(30);
+
+  const [snoozeEnabled, setSnoozeEnabled] = useState(DEFAULT_ALARM_SETTINGS.snoozeEnabled);
+  const [snoozeDuration, setSnoozeDuration] = useState(DEFAULT_ALARM_SETTINGS.snoozeDuration);
+  const [volume, setVolume] = useState(DEFAULT_ALARM_SETTINGS.volume);
+  const [volumeStyle, setVolumeStyle] = useState<VolumeStyle>(DEFAULT_ALARM_SETTINGS.volumeStyle);
 
   const [dueDate, setDueDate] = useState<Date | null>(null);
 
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showDaysPicker, setShowDaysPicker] = useState(false);
-  const [showSoundRepeatModal, setShowSoundRepeatModal] = useState(false);
+
   const [showRepeatTaskModal, setShowRepeatTaskModal] = useState(false);
 
   const [sound, setSound] = useState<Audio.Sound | null>(null);
@@ -139,8 +145,11 @@ export default function EditReminderScreen() {
     setSoundText(found.description || "");
     setFrequency(found.frequency === "weekly" ? "custom" : (found.frequency || "once"));
     setDays(found.days || []);
-    setSoundRepeatMode(found.soundRepeatMode || "until_stopped");
-    setSoundRepeatCount(found.soundRepeatCount ?? 30);
+
+    setSnoozeEnabled(found.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled);
+    setSnoozeDuration(found.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration);
+    setVolume(found.volume ?? DEFAULT_ALARM_SETTINGS.volume);
+    setVolumeStyle(found.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle);
 
     // Load the date if it exists
     if (found.date) {
@@ -209,14 +218,17 @@ export default function EditReminderScreen() {
 
     return (
       title !== reminder.title ||
+      description !== reminder.description ||
       timeStr !== reminder.time ||
       frequency !== reminder.frequency ||
       currentDays !== originalDays ||
       dateChanged ||
-      (reminder.soundRepeatMode || "until_stopped") !== soundRepeatMode ||
-      (reminder.soundRepeatCount ?? 30) !== soundRepeatCount
+      (reminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled) !== snoozeEnabled ||
+      (reminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration) !== snoozeDuration ||
+      (reminder.volume ?? DEFAULT_ALARM_SETTINGS.volume) !== volume ||
+      (reminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle) !== volumeStyle
     );
-  }, [days, dueDate, frequency, reminder, soundRepeatCount, soundRepeatMode, time, title]);
+  }, [days, dueDate, frequency, reminder, time, title, description, snoozeEnabled, snoozeDuration, volume, volumeStyle]);
 
   const frequencyLabel = useMemo(() => {
     return FREQUENCIES.find((f) => f.value === frequency)?.label ?? "Once";
@@ -231,10 +243,7 @@ export default function EditReminderScreen() {
     return picked.map((d) => d.charAt(0).toUpperCase() + d.slice(1, 3)).join(", ");
   }, [days, frequency]);
 
-  const soundRepeatLabel = useMemo(() => {
-    if (soundRepeatMode === "until_stopped") return "Until stopped";
-    return `${soundRepeatCount}x`;
-  }, [soundRepeatCount, soundRepeatMode]);
+
 
   const dueDateLabel = useMemo(() => {
     if (!dueDate) return undefined;
@@ -336,8 +345,10 @@ export default function EditReminderScreen() {
           frequency,
           days: frequency === "custom" ? days : [],
           audioUrl: result.audioUrl,
-          soundRepeatMode,
-          soundRepeatCount,
+          snoozeEnabled,
+          snoozeDuration,
+          volume,
+          volumeStyle,
         });
 
         toast.show({ title: "Sound regenerated", message: "New voice reminder ready", type: "success" });
@@ -354,9 +365,7 @@ export default function EditReminderScreen() {
     setShowRepeatTaskModal(true);
   };
 
-  const openSoundRepeatPicker = () => {
-    setShowSoundRepeatModal(true);
-  };
+
 
   const handleRepeatConfirm = (data: {
     enabled: boolean;
@@ -374,15 +383,7 @@ export default function EditReminderScreen() {
     setShowRepeatTaskModal(false);
   };
 
-  const handleSoundRepeatConfirm = (value: string | number) => {
-    if (value === "until_stopped") {
-      setSoundRepeatMode("until_stopped");
-    } else {
-      setSoundRepeatMode("count");
-      setSoundRepeatCount(value as number);
-    }
-    setShowSoundRepeatModal(false);
-  };
+
 
   const handleSave = useCallback(async () => {
     if (!reminder) return;
@@ -409,8 +410,10 @@ export default function EditReminderScreen() {
       date: dateStr,
       frequency,
       days: frequency === "custom" ? days : [],
-      soundRepeatMode,
-      soundRepeatCount,
+      snoozeEnabled,
+      snoozeDuration,
+      volume,
+      volumeStyle,
     };
 
     try {
@@ -432,8 +435,6 @@ export default function EditReminderScreen() {
             date: dateStr,
             frequency,
             days: frequency === "custom" ? days : undefined,
-            soundRepeatMode,
-            soundRepeatCount,
           }).catch((e) => {
             console.log("[VR] Failed to update Convex reminder:", e);
           });
@@ -458,8 +459,10 @@ export default function EditReminderScreen() {
               frequency,
               days: scheduleDays,
               audioUrl,
-              soundRepeatMode,
-              soundRepeatCount,
+              snoozeEnabled,
+              snoozeDuration,
+              volume,
+              volumeStyle,
             });
           } catch (e) {
             console.log("[VR] Failed to schedule reminder:", e);
@@ -470,7 +473,7 @@ export default function EditReminderScreen() {
       console.error("[VR] Save error:", error);
       Alert.alert("Error", "Failed to save reminder");
     }
-  }, [reminder, title, time, dueDate, description, frequency, days, soundRepeatMode, soundRepeatCount, router, updateConvexReminder]);
+  }, [reminder, title, time, dueDate, description, frequency, days, router, updateConvexReminder]);
 
   const handleDelete = () => {
     if (!reminder) return;
@@ -682,18 +685,77 @@ export default function EditReminderScreen() {
               </>
             ) : null}
 
-            <SettingsRow
-              icon="volume-2"
-              label="Sound repeats"
-              value={soundRepeatLabel}
-              onPress={openSoundRepeatPicker}
-            />
+
             <SettingsRow
               icon="calendar"
               label="Due Date"
               value={dueDateLabel}
               isAction={!dueDateLabel}
               onPress={() => setShowDatePicker(true)}
+            />
+
+            <SettingsRow
+              icon="clock"
+              label="Snooze"
+              value={snoozeEnabled ? "On" : "Off"}
+              onPress={() => setSnoozeEnabled((v) => !v)}
+            />
+
+            <View style={styles.stepperRow}>
+              <View style={styles.rowLeft}>
+                <AppIcon name="clock" size={22} color={stylesVars.iconColor} />
+                <Text style={styles.rowLabel}>Snooze minutes</Text>
+              </View>
+              <View style={styles.stepperRight}>
+                <TouchableOpacity
+                  style={styles.stepperButton}
+                  onPress={() => setSnoozeDuration((v) => Math.max(1, v - 1))}
+                  disabled={!snoozeEnabled}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.stepperButtonText, !snoozeEnabled && styles.stepperDisabled]}>-</Text>
+                </TouchableOpacity>
+                <View style={[styles.valuePill, !snoozeEnabled && styles.stepperPillDisabled]}>
+                  <Text style={styles.valueText}>{snoozeDuration} min</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.stepperButton}
+                  onPress={() => setSnoozeDuration((v) => Math.min(60, v + 1))}
+                  disabled={!snoozeEnabled}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.stepperButtonText, !snoozeEnabled && styles.stepperDisabled]}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.sliderRow}>
+              <View style={styles.rowLeft}>
+                <AppIcon name="volume-1" size={22} color={stylesVars.iconColor} />
+                <Text style={styles.rowLabel}>Volume</Text>
+              </View>
+              <View style={styles.sliderRight}>
+                <AppIcon name="volume-1" size={16} color={stylesVars.iconColor} />
+                <Slider
+                  style={styles.slider}
+                  value={volume}
+                  minimumValue={0}
+                  maximumValue={1}
+                  step={0.05}
+                  onValueChange={setVolume}
+                  minimumTrackTintColor={colors.accent}
+                  maximumTrackTintColor={stylesVars.chipBg}
+                  thumbTintColor={colors.accent}
+                />
+                <AppIcon name="volume-2" size={16} color={stylesVars.iconColor} />
+              </View>
+            </View>
+
+            <SettingsRow
+              icon="zap"
+              label="Volume style"
+              value={volumeStyle === "progressive" ? "Progressive" : "Standard"}
+              onPress={() => setVolumeStyle((v) => (v === "progressive" ? "standard" : "progressive"))}
             />
           </View>
 
@@ -739,14 +801,7 @@ export default function EditReminderScreen() {
             />
           )}
 
-          {showSoundRepeatModal && (
-            <SoundRepeatModal
-              visible={showSoundRepeatModal}
-              initialValue={soundRepeatMode === "until_stopped" ? "until_stopped" : soundRepeatCount}
-              onCancel={() => setShowSoundRepeatModal(false)}
-              onConfirm={handleSoundRepeatConfirm}
-            />
-          )}
+
 
           {showRepeatTaskModal && (
             <RepeatTaskModal
@@ -882,6 +937,49 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+  stepperRow: {
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  stepperRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  stepperButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: stylesVars.chipBg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepperButtonText: {
+    fontSize: scaleFontSize(18),
+    fontWeight: "700",
+    color: stylesVars.headerText,
+  },
+  stepperDisabled: {
+    color: stylesVars.mutedText,
+  },
+  stepperPillDisabled: {
+    opacity: 0.6,
+  },
+  sliderRow: {
+    paddingVertical: 14,
+  },
+  sliderRight: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  slider: {
+    flex: 1,
+    height: 30,
   },
   rowLeft: {
     flexDirection: "row",

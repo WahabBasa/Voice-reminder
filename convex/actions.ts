@@ -336,8 +336,6 @@ The description should be a friendly reminder message like "Time to take your me
         frequency,
         days,
         audioStorageId: storageId,
-        soundRepeatMode: "until_stopped",
-        soundRepeatCount: 30, // ~3-5 minutes of audio
       }
     );
 
@@ -369,8 +367,6 @@ export const processTextReminder = action({
     time: v.string(),
     frequency: v.string(),
     days: v.optional(v.array(v.string())),
-    soundRepeatMode: v.optional(v.string()),
-    soundRepeatCount: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const rawFrequency = String(args.frequency || "once").toLowerCase();
@@ -395,8 +391,6 @@ export const processTextReminder = action({
         frequency,
         days,
         audioStorageId: storageId,
-        soundRepeatMode: args.soundRepeatMode || "until_stopped",
-        soundRepeatCount: args.soundRepeatCount ?? 30,
       }
     );
 
@@ -410,8 +404,6 @@ export const processTextReminder = action({
       frequency,
       days,
       audioUrl,
-      soundRepeatMode: args.soundRepeatMode || "until_stopped",
-      soundRepeatCount: args.soundRepeatCount ?? 30,
     };
   },
 });

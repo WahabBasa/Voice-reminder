@@ -48,6 +48,8 @@
 
 ## 📝 Devlog Writing Guidelines
 
+> ⚠️ **IMPORTANT:** Only update devlogs when explicitly asked by the user. Do not auto-update devlogs after completing work.
+
 **Writing Style: Conversational Technical Notes**
 - Write like you're telling a coworker what you did
 - Keep it casual but include the technical details that matter

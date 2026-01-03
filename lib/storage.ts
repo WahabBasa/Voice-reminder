@@ -4,6 +4,15 @@ const REMINDERS_KEY = "@reminders";
 const HISTORY_KEY = "@reminder_history";
 const MAX_HISTORY_ENTRIES = 1000;
 
+export type VolumeStyle = "standard" | "progressive";
+
+export const DEFAULT_ALARM_SETTINGS = {
+  snoozeEnabled: true,
+  snoozeDuration: 5,
+  volume: 1,
+  volumeStyle: "standard" as VolumeStyle,
+};
+
 // Reminder type (local storage version)
 export interface Reminder {
   id: string;
@@ -16,8 +25,10 @@ export interface Reminder {
   days: string[];
   audioUrl?: string;
   createdAt: string;
-  soundRepeatMode?: "count" | "until_stopped";
-  soundRepeatCount?: number;
+  snoozeEnabled?: boolean;
+  snoozeDuration?: number; // minutes
+  volume?: number; // 0-1
+  volumeStyle?: VolumeStyle;
 }
 
 // Reminder CRUD functions
@@ -38,8 +49,10 @@ export async function addReminder(reminder: Omit<Reminder, "id" | "createdAt">):
       ...reminder,
       id: Math.random().toString(36).substr(2, 9),
       createdAt: new Date().toISOString(),
-      soundRepeatMode: reminder.soundRepeatMode || "until_stopped",
-      soundRepeatCount: reminder.soundRepeatCount ?? 3,
+      snoozeEnabled: reminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled,
+      snoozeDuration: reminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
+      volume: reminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
+      volumeStyle: reminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
     };
     reminders.push(newReminder);
     await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(reminders));
@@ -57,8 +70,10 @@ export async function updateReminder(updatedReminder: Reminder): Promise<void> {
     if (index !== -1) {
       reminders[index] = {
         ...updatedReminder,
-        soundRepeatMode: updatedReminder.soundRepeatMode || "until_stopped",
-        soundRepeatCount: updatedReminder.soundRepeatCount ?? 3,
+        snoozeEnabled: updatedReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled,
+        snoozeDuration: updatedReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
+        volume: updatedReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
+        volumeStyle: updatedReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
       };
       await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(reminders));
     }

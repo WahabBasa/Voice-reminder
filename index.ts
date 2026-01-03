@@ -11,6 +11,10 @@ function navigateToAlarmScreen(notification: any) {
     reminderId: (data?.reminderId as string) || "",
     title: (data?.title as string) || notification?.title || "",
     description: (data?.description as string) || notification?.body || "",
+    snoozeEnabled: String(data?.snoozeEnabled ?? "true"),
+    snoozeDuration: String(data?.snoozeDuration ?? "5"),
+    volume: String(data?.volume ?? "1"),
+    volumeStyle: String(data?.volumeStyle ?? "standard"),
   });
 
   const url = Linking.createURL(`/alarm?${params.toString()}`);
@@ -49,4 +53,3 @@ notifee.onForegroundEvent(async (event) => {
 });
 
 import "expo-router/entry";
-

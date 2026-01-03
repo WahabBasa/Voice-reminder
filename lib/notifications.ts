@@ -24,8 +24,10 @@ export interface ReminderNotification {
   frequency: string;
   days?: string[];
   audioUrl: string;
-  soundRepeatMode?: "count" | "until_stopped";
-  soundRepeatCount?: number;
+  snoozeEnabled?: boolean;
+  snoozeDuration?: number; // minutes
+  volume?: number; // 0-1
+  volumeStyle?: "standard" | "progressive";
 }
 
 function getLocalAudioPath(reminderId: string): string {
@@ -150,8 +152,10 @@ export async function scheduleReminder(
         title: reminder.title,
         description: reminder.description,
         audioUrl: reminder.audioUrl,
-        soundRepeatMode: reminder.soundRepeatMode || "until_stopped",
-        soundRepeatCount: reminder.soundRepeatCount ?? 3,
+        snoozeEnabled: String(reminder.snoozeEnabled ?? true),
+        snoozeDuration: String(reminder.snoozeDuration ?? 5),
+        volume: String(reminder.volume ?? 1),
+        volumeStyle: reminder.volumeStyle ?? "standard",
       },
     },
     trigger

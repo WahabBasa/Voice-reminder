@@ -23,13 +23,6 @@ import DaySelector from "../../components/DaySelector";
 import AppIcon from "../../components/AppIcon";
 import { useToast } from "../../components/ToastProvider";
 
-const REPEAT_OPTIONS: { label: string; mode: "count" | "until_stopped"; count?: number }[] = [
-  { label: "1x", mode: "count", count: 1 },
-  { label: "2x", mode: "count", count: 2 },
-  { label: "3x", mode: "count", count: 3 },
-  { label: "Until stopped", mode: "until_stopped" },
-];
-
 const FREQUENCIES = [
   { value: "once", label: "Once", icon: "sun" as const },
   { value: "daily", label: "Daily", icon: "refresh-cw" as const },
@@ -46,8 +39,6 @@ export default function NewReminderScreen() {
   const [time, setTime] = useState(new Date());
   const [frequency, setFrequency] = useState("once");
   const [days, setDays] = useState<string[]>([]);
-  const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("until_stopped");
-  const [soundRepeatCount, setSoundRepeatCount] = useState<number>(30);
   const [showTimePicker, setShowTimePicker] = useState(false);
 
   const handleDayToggle = (day: string) => {
@@ -80,8 +71,6 @@ export default function NewReminderScreen() {
         time: timeStr,
         frequency,
         days: frequency === "custom" ? days : [],
-        soundRepeatMode,
-        soundRepeatCount,
       });
 
       if (!result.audioUrl) {
@@ -96,8 +85,6 @@ export default function NewReminderScreen() {
         frequency: result.frequency,
         days: result.days || [],
         audioUrl: result.audioUrl,
-        soundRepeatMode,
-        soundRepeatCount,
       });
 
       toast.show({ title: "Reminder created", message: newReminder.title, type: "success" });
@@ -113,8 +100,10 @@ export default function NewReminderScreen() {
           frequency: newReminder.frequency,
           days: newReminder.days,
           audioUrl: newReminder.audioUrl,
-          soundRepeatMode,
-          soundRepeatCount,
+          snoozeEnabled: newReminder.snoozeEnabled,
+          snoozeDuration: newReminder.snoozeDuration,
+          volume: newReminder.volume,
+          volumeStyle: newReminder.volumeStyle,
         }).catch((e) => {
           console.log("[VR] Failed to schedule reminder:", e);
         });
@@ -242,37 +231,6 @@ export default function NewReminderScreen() {
               use12HourPicker
             />
           ) : null}
-        </View>
-
-        {/* Sound repeats */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Sound repeats</Text>
-          <View style={styles.repeatRow}>
-            {REPEAT_OPTIONS.map((opt) => {
-              const active =
-                opt.mode === soundRepeatMode &&
-                (opt.mode !== "count" || opt.count === soundRepeatCount);
-              return (
-                <TouchableOpacity
-                  key={opt.label}
-                  style={[styles.repeatChip, active && styles.repeatChipActive]}
-                  onPress={() => {
-                    setSoundRepeatMode(opt.mode);
-                    if (opt.count) setSoundRepeatCount(opt.count);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.repeatChipText,
-                      active && styles.repeatChipTextActive,
-                    ]}
-                  >
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
         </View>
 
         {/* Description */}
@@ -429,32 +387,6 @@ const styles = StyleSheet.create({
   },
   selectedOptionLabel: {
     color: "white",
-  },
-  repeatRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 8,
-  },
-  repeatChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-  },
-  repeatChipActive: {
-    backgroundColor: colors.accentLight,
-    borderColor: colors.accent,
-  },
-  repeatChipText: {
-    fontSize: scaleFontSize(14),
-    fontWeight: "600",
-    color: colors.textPrimary,
-  },
-  repeatChipTextActive: {
-    color: colors.accent,
   },
   timePickerWrapper: {
     backgroundColor: colors.card,

@@ -9,7 +9,7 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Audio } from "expo-av";
-import notifee from "@notifee/react-native";
+import notifee, { AndroidCategory, AndroidImportance, TriggerType, TimestampTrigger } from "@notifee/react-native";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
 
@@ -22,16 +22,26 @@ export default function AlarmScreen() {
         reminderId?: string;
         title?: string;
         description?: string;
+        snoozeEnabled?: string;
+        snoozeDuration?: string;
+        volume?: string;
+        volumeStyle?: string;
     }>();
 
     const [isPlaying, setIsPlaying] = useState(true);
     const soundRef = useRef<Audio.Sound | null>(null);
     const vibrationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const volumeRampIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
     const title = params.title || "Reminder";
     const description = params.description || "";
     const reminderId = params.reminderId;
     const notificationId = params.notificationId;
+
+    const snoozeEnabled = params.snoozeEnabled !== "false";
+    const snoozeDurationMinutes = Math.max(1, Math.min(60, Number(params.snoozeDuration ?? "5") || 5));
+    const targetVolume = Math.max(0, Math.min(1, Number(params.volume ?? "1") || 1));
+    const volumeStyle = params.volumeStyle === "progressive" ? "progressive" : "standard";
 
     useEffect(() => {
         // Start audio playback loop
@@ -59,11 +69,39 @@ export default function AlarmScreen() {
 
             const { sound } = await Audio.Sound.createAsync(
                 { uri: audioPath },
-                { shouldPlay: true, volume: 1.0, isLooping: true }
+                { shouldPlay: true, volume: volumeStyle === "progressive" ? Math.min(targetVolume, 0.2) : targetVolume, isLooping: true }
             );
 
             soundRef.current = sound;
             setIsPlaying(true);
+
+            if (volumeStyle === "progressive") {
+                const rampMs = 30_000;
+                const tickMs = 1_000;
+                const steps = Math.max(1, Math.floor(rampMs / tickMs));
+                const start = Math.min(targetVolume, 0.2);
+                let step = 0;
+
+                if (volumeRampIntervalRef.current) {
+                    clearInterval(volumeRampIntervalRef.current);
+                }
+
+                volumeRampIntervalRef.current = setInterval(async () => {
+                    step += 1;
+                    const nextVolume = start + ((targetVolume - start) * step) / steps;
+                    try {
+                        await sound.setVolumeAsync(Math.max(0, Math.min(1, nextVolume)));
+                    } catch {
+                        // ignore
+                    }
+                    if (step >= steps) {
+                        if (volumeRampIntervalRef.current) {
+                            clearInterval(volumeRampIntervalRef.current);
+                            volumeRampIntervalRef.current = null;
+                        }
+                    }
+                }, tickMs);
+            }
         } catch (e) {
             console.log("[VR] AlarmScreen: Failed to play audio:", e);
         }
@@ -78,6 +116,10 @@ export default function AlarmScreen() {
                 console.log("[VR] AlarmScreen: Error stopping audio:", e);
             }
             soundRef.current = null;
+        }
+        if (volumeRampIntervalRef.current) {
+            clearInterval(volumeRampIntervalRef.current);
+            volumeRampIntervalRef.current = null;
         }
         setIsPlaying(false);
     };
@@ -122,9 +164,44 @@ export default function AlarmScreen() {
             await notifee.cancelNotification(notificationId);
         }
 
-        // TODO: Reschedule for 5 minutes later
-        // This would require accessing the full reminder data and rescheduling
-        console.log("[VR] AlarmScreen: Snooze pressed - would reschedule for 5 min");
+        if (!snoozeEnabled || !reminderId) {
+            router.back();
+            return;
+        }
+
+        const channelId = `reminder_${reminderId}`;
+        const triggerTimestamp = Date.now() + snoozeDurationMinutes * 60_000;
+        const trigger: TimestampTrigger = {
+            type: TriggerType.TIMESTAMP,
+            timestamp: triggerTimestamp,
+            alarmManager: { allowWhileIdle: true },
+        };
+
+        await notifee.createTriggerNotification(
+            {
+                id: `snooze_${reminderId}_${Date.now()}`,
+                title,
+                body: description,
+                android: {
+                    channelId,
+                    importance: AndroidImportance.HIGH,
+                    category: AndroidCategory.ALARM,
+                    autoCancel: false,
+                    lightUpScreen: true,
+                    pressAction: { id: "default" },
+                },
+                data: {
+                    reminderId,
+                    title,
+                    description,
+                    snoozeEnabled: String(snoozeEnabled),
+                    snoozeDuration: String(snoozeDurationMinutes),
+                    volume: String(targetVolume),
+                    volumeStyle,
+                },
+            },
+            trigger
+        );
 
         // Close the alarm screen
         router.back();
@@ -163,14 +240,16 @@ export default function AlarmScreen() {
 
             {/* Action buttons */}
             <View style={styles.actions}>
-                <TouchableOpacity
-                    style={styles.snoozeButton}
-                    onPress={handleSnooze}
-                    activeOpacity={0.8}
-                >
-                    <AppIcon name="clock" size={24} color="white" />
-                    <Text style={styles.snoozeText}>Snooze 5 min</Text>
-                </TouchableOpacity>
+                {snoozeEnabled ? (
+                    <TouchableOpacity
+                        style={styles.snoozeButton}
+                        onPress={handleSnooze}
+                        activeOpacity={0.8}
+                    >
+                        <AppIcon name="clock" size={24} color="white" />
+                        <Text style={styles.snoozeText}>Snooze {snoozeDurationMinutes} min</Text>
+                    </TouchableOpacity>
+                ) : null}
 
                 <TouchableOpacity
                     style={styles.dismissButton}
