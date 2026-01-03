@@ -6,7 +6,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -19,12 +18,13 @@ import Slider from "@react-native-community/slider";
 import BottomSheet, {
   BottomSheetScrollView,
   BottomSheetBackdrop,
-  useBottomSheetTimingConfigs,
+  useBottomSheetSpringConfigs,
+  TouchableOpacity,
 } from "@gorhom/bottom-sheet";
-import { Easing } from "react-native-reanimated";
+import { NativeViewGestureHandler } from "react-native-gesture-handler";
+import Animated from "react-native-reanimated";
 import { api } from "../../convex/_generated/api";
 import AppIcon from "../../components/AppIcon";
-import DatePickerModal from "../../components/DatePickerModal";
 import DaySelector from "../../components/DaySelector";
 
 import RepeatTaskModal from "../../components/RepeatTaskModal";
@@ -98,10 +98,12 @@ export default function EditReminderScreen() {
   const bottomSheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ["60%", "95%"], []);
 
-  // Timing animation - smooth and predictable, no jitter
-  const animationConfigs = useBottomSheetTimingConfigs({
-    duration: 280,
-    easing: Easing.out(Easing.cubic), // Smooth deceleration
+  // Spring animation - runs on UI thread for smooth 60fps
+  const animationConfigs = useBottomSheetSpringConfigs({
+    damping: 80,
+    stiffness: 400,
+    mass: 1,
+    overshootClamping: true,
   });
 
   const [reminder, setReminder] = useState<Reminder | null>(null);
@@ -116,10 +118,7 @@ export default function EditReminderScreen() {
   const [volume, setVolume] = useState(DEFAULT_ALARM_SETTINGS.volume);
   const [volumeStyle, setVolumeStyle] = useState<VolumeStyle>(DEFAULT_ALARM_SETTINGS.volumeStyle);
 
-  const [dueDate, setDueDate] = useState<Date | null>(null);
-
   const [showTimePicker, setShowTimePicker] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [showDaysPicker, setShowDaysPicker] = useState(false);
 
   const [showRepeatTaskModal, setShowRepeatTaskModal] = useState(false);
@@ -151,11 +150,7 @@ export default function EditReminderScreen() {
     setVolume(found.volume ?? DEFAULT_ALARM_SETTINGS.volume);
     setVolumeStyle(found.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle);
 
-    // Load the date if it exists
-    if (found.date) {
-      const [year, month, day] = found.date.split("-").map(Number);
-      setDueDate(new Date(year, month - 1, day));
-    }
+
 
     if (found.time) {
       const [hours, minutes] = found.time.split(":").map(Number);
@@ -212,9 +207,7 @@ export default function EditReminderScreen() {
     const currentDays = [...days].sort().join(",");
     const originalDays = [...(reminder.days || [])].sort().join(",");
 
-    // Check date change
-    const currentDateStr = dueDate ? `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")}` : undefined;
-    const dateChanged = currentDateStr !== reminder.date;
+
 
     return (
       title !== reminder.title ||
@@ -222,13 +215,12 @@ export default function EditReminderScreen() {
       timeStr !== reminder.time ||
       frequency !== reminder.frequency ||
       currentDays !== originalDays ||
-      dateChanged ||
       (reminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled) !== snoozeEnabled ||
       (reminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration) !== snoozeDuration ||
       (reminder.volume ?? DEFAULT_ALARM_SETTINGS.volume) !== volume ||
       (reminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle) !== volumeStyle
     );
-  }, [days, dueDate, frequency, reminder, time, title, description, snoozeEnabled, snoozeDuration, volume, volumeStyle]);
+  }, [days, frequency, reminder, time, title, description, snoozeEnabled, snoozeDuration, volume, volumeStyle]);
 
   const frequencyLabel = useMemo(() => {
     return FREQUENCIES.find((f) => f.value === frequency)?.label ?? "Once";
@@ -244,20 +236,6 @@ export default function EditReminderScreen() {
   }, [days, frequency]);
 
 
-
-  const dueDateLabel = useMemo(() => {
-    if (!dueDate) return undefined;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const dueDateNorm = new Date(dueDate);
-    dueDateNorm.setHours(0, 0, 0, 0);
-
-    if (dueDateNorm.getTime() === today.getTime()) return "Today";
-    if (dueDateNorm.getTime() === tomorrow.getTime()) return "Tomorrow";
-    return dueDate.toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" });
-  }, [dueDate]);
 
   const handlePlayPreview = async () => {
     if (!reminder?.audioUrl) return;
@@ -331,9 +309,7 @@ export default function EditReminderScreen() {
           .getMinutes()
           .toString()
           .padStart(2, "0")}`;
-        const dateStr = dueDate
-          ? `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")}`
-          : undefined;
+
 
         await cancelReminder(reminder.id);
         await scheduleReminder({
@@ -341,7 +317,6 @@ export default function EditReminderScreen() {
           title: reminder.title,
           description: soundText.trim(),
           time: timeStr,
-          date: dateStr,
           frequency,
           days: frequency === "custom" ? days : [],
           audioUrl: result.audioUrl,
@@ -397,17 +372,13 @@ export default function EditReminderScreen() {
       .toString()
       .padStart(2, "0")}`;
 
-    // Convert dueDate to YYYY-MM-DD string
-    const dateStr = dueDate
-      ? `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")}`
-      : undefined;
+
 
     const updatedReminder: Reminder = {
       ...reminder,
       title: title.trim(),
       description,
       time: timeStr,
-      date: dateStr,
       frequency,
       days: frequency === "custom" ? days : [],
       snoozeEnabled,
@@ -432,7 +403,6 @@ export default function EditReminderScreen() {
             title: updatedReminder.title,
             description,
             time: timeStr,
-            date: dateStr,
             frequency,
             days: frequency === "custom" ? days : undefined,
           }).catch((e) => {
@@ -455,7 +425,6 @@ export default function EditReminderScreen() {
               title: updatedReminder.title,
               description,
               time: timeStr,
-              date: dateStr,
               frequency,
               days: scheduleDays,
               audioUrl,
@@ -473,7 +442,7 @@ export default function EditReminderScreen() {
       console.error("[VR] Save error:", error);
       Alert.alert("Error", "Failed to save reminder");
     }
-  }, [reminder, title, time, dueDate, description, frequency, days, router, updateConvexReminder]);
+  }, [reminder, title, time, description, frequency, days, router, updateConvexReminder, snoozeEnabled, snoozeDuration, volume, volumeStyle]);
 
   const handleDelete = () => {
     if (!reminder) return;
@@ -564,30 +533,6 @@ export default function EditReminderScreen() {
     bottomSheetRef.current?.snapToIndex(1); // 95%
   }, []);
 
-  if (!reminder) {
-    return (
-      <View style={styles.sheetContainer}>
-        <BottomSheet
-          ref={bottomSheetRef}
-          snapPoints={snapPoints}
-          index={0}
-          enablePanDownToClose
-          animateOnMount
-          animationConfigs={animationConfigs}
-          enableDynamicSizing={false}
-          backdropComponent={renderBackdrop}
-          onChange={handleSheetChange}
-          handleIndicatorStyle={styles.handleIndicator}
-          backgroundStyle={styles.sheetBackground}
-        >
-          <View style={styles.loadingBody}>
-            <Text style={styles.loadingText}>Loading...</Text>
-          </View>
-        </BottomSheet>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.sheetContainer}>
       <BottomSheet
@@ -603,222 +548,212 @@ export default function EditReminderScreen() {
         handleIndicatorStyle={styles.handleIndicator}
         backgroundStyle={styles.sheetBackground}
       >
-        <BottomSheetScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <View style={styles.sheetHeader}>
-            <TouchableOpacity style={styles.topChip} onPress={openFrequencyPicker} activeOpacity={0.7}>
-              <Text style={styles.topChipText}>{frequencyLabel}</Text>
-              <AppIcon name="chevron-down" size={16} color={stylesVars.iconColor} />
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={openOptionsMenu} style={styles.moreButton} activeOpacity={0.7}>
-              <AppIcon name="more-vertical" size={24} color={stylesVars.headerText} />
-            </TouchableOpacity>
+        {!reminder ? (
+          <View style={styles.loadingBody}>
+            <Text style={styles.loadingText}>Loading...</Text>
           </View>
+        ) : (
+          <BottomSheetScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+            <View style={styles.sheetHeader}>
+              <TouchableOpacity style={styles.topChip} onPress={openFrequencyPicker} activeOpacity={0.7}>
+                <Text style={styles.topChipText}>{frequencyLabel}</Text>
+                <AppIcon name="chevron-down" size={16} color={stylesVars.iconColor} />
+              </TouchableOpacity>
 
-          <TextInput
-            style={styles.titleInput}
-            value={title}
-            onChangeText={setTitle}
-            onFocus={expandSheet}
-            placeholder="Reminder"
-            placeholderTextColor={stylesVars.mutedText}
-          />
-
-          {reminder.audioUrl ? (
-            <TouchableOpacity style={styles.playVoice} onPress={handlePlayPreview} activeOpacity={0.7}>
-              <AppIcon name={isPlaying ? "square" : "play"} size={20} color={stylesVars.iconColor} />
-              <Text style={styles.playVoiceText}>{isPlaying ? "Stop voice" : "Play voice"}</Text>
-            </TouchableOpacity>
-          ) : null}
-
-          {/* Sound Regeneration Section - moved up for visibility */}
-          <View style={styles.soundSection}>
-            <View style={styles.soundSectionHeader}>
-              <AppIcon name="volume-1" size={20} color={stylesVars.iconColor} />
-              <Text style={styles.soundSectionTitle}>Voice Sound</Text>
+              <TouchableOpacity onPress={openOptionsMenu} style={styles.moreButton} activeOpacity={0.7}>
+                <AppIcon name="more-vertical" size={24} color={stylesVars.headerText} />
+              </TouchableOpacity>
             </View>
+
             <TextInput
-              style={styles.soundTextInput}
-              value={soundText}
-              onChangeText={setSoundText}
+              style={styles.titleInput}
+              value={title}
+              onChangeText={setTitle}
               onFocus={expandSheet}
-              placeholder="What the reminder will say..."
+              placeholder="Reminder"
               placeholderTextColor={stylesVars.mutedText}
-              multiline
-              numberOfLines={2}
-              textAlignVertical="top"
             />
-            <TouchableOpacity
-              style={[styles.regenerateButton, isRegenerating && styles.regenerateButtonDisabled]}
-              onPress={handleRegenerate}
-              disabled={isRegenerating}
-              activeOpacity={0.8}
-            >
-              <AppIcon
-                name="refresh-cw"
-                size={18}
-                color="white"
+
+            {reminder.audioUrl ? (
+              <TouchableOpacity style={styles.playVoice} onPress={handlePlayPreview} activeOpacity={0.7}>
+                <AppIcon name={isPlaying ? "square" : "play"} size={20} color={stylesVars.iconColor} />
+                <Text style={styles.playVoiceText}>{isPlaying ? "Stop voice" : "Play voice"}</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {/* Sound Regeneration Section - moved up for visibility */}
+            <View style={styles.soundSection}>
+              <View style={styles.soundSectionHeader}>
+                <AppIcon name="volume-1" size={20} color={stylesVars.iconColor} />
+                <Text style={styles.soundSectionTitle}>Voice Sound</Text>
+              </View>
+              <TextInput
+                style={styles.soundTextInput}
+                value={soundText}
+                onChangeText={setSoundText}
+                onFocus={expandSheet}
+                placeholder="What the reminder will say..."
+                placeholderTextColor={stylesVars.mutedText}
+                multiline
+                numberOfLines={2}
+                textAlignVertical="top"
               />
-              <Text style={styles.regenerateButtonText}>
-                {isRegenerating ? "Regenerating..." : "Regenerate Sound"}
-              </Text>
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity
+                style={[styles.regenerateButton, isRegenerating && styles.regenerateButtonDisabled]}
+                onPress={handleRegenerate}
+                disabled={isRegenerating}
+                activeOpacity={0.8}
+              >
+                <AppIcon
+                  name="refresh-cw"
+                  size={18}
+                  color="white"
+                />
+                <Text style={styles.regenerateButtonText}>
+                  {isRegenerating ? "Regenerating..." : "Regenerate Sound"}
+                </Text>
+              </TouchableOpacity>
+            </View>
 
-          <View style={styles.rowList}>
-            <SettingsRow
-              icon="clock"
-              label="Time"
-              value={formatTime(time).toLowerCase()}
-              onPress={() => setShowTimePicker(true)}
-            />
-            <SettingsRow icon="refresh-cw" label="Repeat Task" value={frequencyLabel} onPress={openFrequencyPicker} />
+            <View style={styles.rowList}>
+              <SettingsRow
+                icon="clock"
+                label="Time"
+                value={formatTime(time).toLowerCase()}
+                onPress={() => setShowTimePicker(true)}
+              />
+              <SettingsRow icon="refresh-cw" label="Repeat Task" value={frequencyLabel} onPress={openFrequencyPicker} />
 
-            {frequency === "custom" ? (
-              <>
-                <SettingsRow icon="calendar" label="Days" value={daysLabel} onPress={() => setShowDaysPicker((v) => !v)} />
-                {showDaysPicker ? (
-                  <View style={styles.daysPicker}>
-                    <DaySelector selectedDays={days} onToggle={handleDayToggle} />
+              {frequency === "custom" ? (
+                <>
+                  <SettingsRow icon="calendar" label="Days" value={daysLabel} onPress={() => setShowDaysPicker((v) => !v)} />
+                  {showDaysPicker ? (
+                    <View style={styles.daysPicker}>
+                      <DaySelector selectedDays={days} onToggle={handleDayToggle} />
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+
+
+
+              <SettingsRow
+                icon="clock"
+                label="Snooze"
+                value={snoozeEnabled ? "On" : "Off"}
+                onPress={() => setSnoozeEnabled((v) => !v)}
+              />
+
+              <View style={styles.stepperRow}>
+                <View style={styles.rowLeft}>
+                  <AppIcon name="clock" size={22} color={stylesVars.iconColor} />
+                  <Text style={styles.rowLabel}>Snooze minutes</Text>
+                </View>
+                <View style={styles.stepperRight}>
+                  <TouchableOpacity
+                    style={styles.stepperButton}
+                    onPress={() => setSnoozeDuration((v) => Math.max(1, v - 1))}
+                    disabled={!snoozeEnabled}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.stepperButtonText, !snoozeEnabled && styles.stepperDisabled]}>-</Text>
+                  </TouchableOpacity>
+                  <View style={[styles.valuePill, !snoozeEnabled && styles.stepperPillDisabled]}>
+                    <Text style={styles.valueText}>{snoozeDuration} min</Text>
                   </View>
-                ) : null}
-              </>
+                  <TouchableOpacity
+                    style={styles.stepperButton}
+                    onPress={() => setSnoozeDuration((v) => Math.min(60, v + 1))}
+                    disabled={!snoozeEnabled}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.stepperButtonText, !snoozeEnabled && styles.stepperDisabled]}>+</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.sliderRow}>
+                <View style={styles.rowLeft}>
+                  <AppIcon name="volume-1" size={22} color={stylesVars.iconColor} />
+                  <Text style={styles.rowLabel}>Volume</Text>
+                </View>
+                <View style={styles.sliderRight}>
+                  <AppIcon name="volume-1" size={16} color={stylesVars.iconColor} />
+                  <NativeViewGestureHandler disallowInterruption={true}>
+                    <Slider
+                      style={styles.slider}
+                      value={volume}
+                      minimumValue={0}
+                      maximumValue={1}
+                      step={0.05}
+                      onValueChange={setVolume}
+                      minimumTrackTintColor={colors.accent}
+                      maximumTrackTintColor={stylesVars.chipBg}
+                      thumbTintColor={colors.accent}
+                    />
+                  </NativeViewGestureHandler>
+                  <AppIcon name="volume-2" size={16} color={stylesVars.iconColor} />
+                </View>
+              </View>
+
+              <SettingsRow
+                icon="zap"
+                label="Volume style"
+                value={volumeStyle === "progressive" ? "Progressive" : "Standard"}
+                onPress={() => setVolumeStyle((v) => (v === "progressive" ? "standard" : "progressive"))}
+              />
+            </View>
+
+            {showTimePicker ? (
+              <TimerPickerModal
+                closeOnOverlayPress
+                LinearGradient={LinearGradient}
+                hideDays
+                visible={showTimePicker}
+                setIsVisible={setShowTimePicker}
+                modalTitle="Select time"
+                onCancel={() => setShowTimePicker(false)}
+                amLabel="AM"
+                initialValue={{
+                  hours: time.getHours(),
+                  minutes: time.getMinutes(),
+                }}
+                onConfirm={({ hours, minutes, seconds }) => {
+                  const isPm = (seconds ?? 0) >= 12;
+                  const hour24 = (hours % 12) + (isPm ? 12 : 0);
+                  const next = new Date(time);
+                  next.setHours(hour24, minutes, 0, 0);
+                  setTime(next);
+                  setShowTimePicker(false);
+                }}
+                pmLabel="PM"
+                styles={{ theme: "light" }}
+                useAmPmWheel
+                use12HourPicker
+              />
             ) : null}
 
 
-            <SettingsRow
-              icon="calendar"
-              label="Due Date"
-              value={dueDateLabel}
-              isAction={!dueDateLabel}
-              onPress={() => setShowDatePicker(true)}
-            />
-
-            <SettingsRow
-              icon="clock"
-              label="Snooze"
-              value={snoozeEnabled ? "On" : "Off"}
-              onPress={() => setSnoozeEnabled((v) => !v)}
-            />
-
-            <View style={styles.stepperRow}>
-              <View style={styles.rowLeft}>
-                <AppIcon name="clock" size={22} color={stylesVars.iconColor} />
-                <Text style={styles.rowLabel}>Snooze minutes</Text>
-              </View>
-              <View style={styles.stepperRight}>
-                <TouchableOpacity
-                  style={styles.stepperButton}
-                  onPress={() => setSnoozeDuration((v) => Math.max(1, v - 1))}
-                  disabled={!snoozeEnabled}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.stepperButtonText, !snoozeEnabled && styles.stepperDisabled]}>-</Text>
-                </TouchableOpacity>
-                <View style={[styles.valuePill, !snoozeEnabled && styles.stepperPillDisabled]}>
-                  <Text style={styles.valueText}>{snoozeDuration} min</Text>
-                </View>
-                <TouchableOpacity
-                  style={styles.stepperButton}
-                  onPress={() => setSnoozeDuration((v) => Math.min(60, v + 1))}
-                  disabled={!snoozeEnabled}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.stepperButtonText, !snoozeEnabled && styles.stepperDisabled]}>+</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.sliderRow}>
-              <View style={styles.rowLeft}>
-                <AppIcon name="volume-1" size={22} color={stylesVars.iconColor} />
-                <Text style={styles.rowLabel}>Volume</Text>
-              </View>
-              <View style={styles.sliderRight}>
-                <AppIcon name="volume-1" size={16} color={stylesVars.iconColor} />
-                <Slider
-                  style={styles.slider}
-                  value={volume}
-                  minimumValue={0}
-                  maximumValue={1}
-                  step={0.05}
-                  onValueChange={setVolume}
-                  minimumTrackTintColor={colors.accent}
-                  maximumTrackTintColor={stylesVars.chipBg}
-                  thumbTintColor={colors.accent}
-                />
-                <AppIcon name="volume-2" size={16} color={stylesVars.iconColor} />
-              </View>
-            </View>
-
-            <SettingsRow
-              icon="zap"
-              label="Volume style"
-              value={volumeStyle === "progressive" ? "Progressive" : "Standard"}
-              onPress={() => setVolumeStyle((v) => (v === "progressive" ? "standard" : "progressive"))}
-            />
-          </View>
-
-          {showTimePicker ? (
-            <TimerPickerModal
-              closeOnOverlayPress
-              LinearGradient={LinearGradient}
-              hideDays
-              visible={showTimePicker}
-              setIsVisible={setShowTimePicker}
-              modalTitle="Select time"
-              onCancel={() => setShowTimePicker(false)}
-              amLabel="AM"
-              initialValue={{
-                hours: time.getHours(),
-                minutes: time.getMinutes(),
-              }}
-              onConfirm={({ hours, minutes, seconds }) => {
-                const isPm = (seconds ?? 0) >= 12;
-                const hour24 = (hours % 12) + (isPm ? 12 : 0);
-                const next = new Date(time);
-                next.setHours(hour24, minutes, 0, 0);
-                setTime(next);
-                setShowTimePicker(false);
-              }}
-              pmLabel="PM"
-              styles={{ theme: "light" }}
-              useAmPmWheel
-              use12HourPicker
-            />
-          ) : null}
-
-          {/* Lazy render modals - only mount when visible for faster initial sheet open */}
-          {showDatePicker && (
-            <DatePickerModal
-              visible={showDatePicker}
-              initialDate={dueDate}
-              onCancel={() => setShowDatePicker(false)}
-              onConfirm={(data) => {
-                setDueDate(data.date);
-                setShowDatePicker(false);
-              }}
-            />
-          )}
 
 
 
-          {showRepeatTaskModal && (
-            <RepeatTaskModal
-              visible={showRepeatTaskModal}
-              initialRepeatEnabled={frequency !== "once"}
-              initialFrequency={
-                frequency === "custom" ? "weekly" : (frequency === "once" ? "daily" : (frequency as any))
-              }
-              initialInterval={1}
-              initialDays={days}
-              onCancel={() => setShowRepeatTaskModal(false)}
-              onConfirm={handleRepeatConfirm}
-            />
-          )}
+            {showRepeatTaskModal && (
+              <RepeatTaskModal
+                visible={showRepeatTaskModal}
+                initialRepeatEnabled={frequency !== "once"}
+                initialFrequency={
+                  frequency === "custom" ? "weekly" : (frequency === "once" ? "daily" : (frequency as any))
+                }
+                initialInterval={1}
+                initialDays={days}
+                onCancel={() => setShowRepeatTaskModal(false)}
+                onConfirm={handleRepeatConfirm}
+              />
+            )}
 
-          <View style={{ height: 40 }} />
-        </BottomSheetScrollView>
+            <View style={{ height: 40 }} />
+          </BottomSheetScrollView>
+        )}
       </BottomSheet>
     </View>
   );
