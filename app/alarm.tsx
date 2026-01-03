@@ -7,6 +7,7 @@ import {
     Vibration,
     Dimensions,
 } from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Audio } from "expo-av";
 import notifee from "@notifee/react-native";
 import AppIcon from "../components/AppIcon";
@@ -14,28 +15,23 @@ import { colors, scaleFontSize } from "../lib/theme";
 
 const { width, height } = Dimensions.get("window");
 
-interface AlarmScreenProps {
-    notification?: {
-        id?: string;
+export default function AlarmScreen() {
+    const router = useRouter();
+    const params = useLocalSearchParams<{
+        notificationId?: string;
+        reminderId?: string;
         title?: string;
-        body?: string;
-        data?: {
-            reminderId?: string;
-            title?: string;
-            description?: string;
-            audioUrl?: string;
-        };
-    };
-}
+        description?: string;
+    }>();
 
-export default function AlarmScreen({ notification }: AlarmScreenProps) {
     const [isPlaying, setIsPlaying] = useState(true);
     const soundRef = useRef<Audio.Sound | null>(null);
     const vibrationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-    const title = notification?.data?.title || notification?.title || "Reminder";
-    const description = notification?.data?.description || notification?.body || "";
-    const reminderId = notification?.data?.reminderId;
+    const title = params.title || "Reminder";
+    const description = params.description || "";
+    const reminderId = params.reminderId;
+    const notificationId = params.notificationId;
 
     useEffect(() => {
         // Start audio playback loop
@@ -109,13 +105,12 @@ export default function AlarmScreen({ notification }: AlarmScreenProps) {
         stopVibration();
 
         // Cancel the notification
-        if (notification?.id) {
-            await notifee.cancelNotification(notification.id);
+        if (notificationId) {
+            await notifee.cancelNotification(notificationId);
         }
 
-        // Close the alarm screen by going back
-        // Note: In a full-screen intent context, we need to handle this differently
-        // The screen will close when the notification is cancelled
+        // Close the alarm screen
+        router.back();
     };
 
     const handleSnooze = async () => {
@@ -123,13 +118,16 @@ export default function AlarmScreen({ notification }: AlarmScreenProps) {
         stopVibration();
 
         // Cancel current notification
-        if (notification?.id) {
-            await notifee.cancelNotification(notification.id);
+        if (notificationId) {
+            await notifee.cancelNotification(notificationId);
         }
 
         // TODO: Reschedule for 5 minutes later
         // This would require accessing the full reminder data and rescheduling
         console.log("[VR] AlarmScreen: Snooze pressed - would reschedule for 5 min");
+
+        // Close the alarm screen
+        router.back();
     };
 
     return (

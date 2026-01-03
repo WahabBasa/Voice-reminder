@@ -64,8 +64,8 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
     const [sound, setSound] = useState<Audio.Sound | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [showTimePicker, setShowTimePicker] = useState(false);
-    const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("count");
-    const [soundRepeatCount, setSoundRepeatCount] = useState<number>(1);
+    const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("until_stopped");
+    const [soundRepeatCount, setSoundRepeatCount] = useState<number>(30);
 
     useEffect(() => {
       if (reminder) {
@@ -73,9 +73,9 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
         setDescription(reminder.description || "");
         setFrequency(reminder.frequency || "once");
         setDays(reminder.days || []);
-        setSoundRepeatMode(reminder.soundRepeatMode || "count");
-        setSoundRepeatCount(reminder.soundRepeatCount ?? 1);
-        
+        setSoundRepeatMode(reminder.soundRepeatMode || "until_stopped");
+        setSoundRepeatCount(reminder.soundRepeatCount ?? 30);
+
         if (reminder.time) {
           const [hours, minutes] = reminder.time.split(":").map(Number);
           const date = new Date();
@@ -188,19 +188,19 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
     const hasChanges = () => {
       if (!reminder) return false;
       if (reminder.isNew) return true;
-      
+
       const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time.getMinutes().toString().padStart(2, "0")}`;
       const currentDays = [...days].sort().join(",");
       const originalDays = [...(reminder.days || [])].sort().join(",");
-      
+
       return (
         title !== reminder.title ||
         description !== reminder.description ||
         timeStr !== reminder.time ||
         frequency !== reminder.frequency ||
         currentDays !== originalDays ||
-        (reminder.soundRepeatMode || "count") !== soundRepeatMode ||
-        (reminder.soundRepeatCount ?? 1) !== soundRepeatCount
+        (reminder.soundRepeatMode || "until_stopped") !== soundRepeatMode ||
+        (reminder.soundRepeatCount ?? 30) !== soundRepeatCount
       );
     };
 
@@ -221,13 +221,13 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
               {/* Title Input */}
               <View style={styles.section}>
                 <View style={styles.inputContainer}>
-                    <TextInput
-                      style={styles.mainInput}
-                      value={title}
-                      onChangeText={setTitle}
-                      placeholder="Reminder Title"
-                      placeholderTextColor={colors.textTertiary}
-                    />
+                  <TextInput
+                    style={styles.mainInput}
+                    value={title}
+                    onChangeText={setTitle}
+                    placeholder="Reminder Title"
+                    placeholderTextColor={colors.textTertiary}
+                  />
                 </View>
               </View>
 
@@ -404,16 +404,16 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>What to say</Text>
                 <View style={styles.textAreaContainer}>
-                    <TextInput
-                      style={styles.textArea}
-                      value={description}
-                      onChangeText={setDescription}
-                      placeholder="What should the reminder say?"
-                      placeholderTextColor={colors.textTertiary}
-                      multiline
-                      numberOfLines={3}
-                      textAlignVertical="top"
-                    />
+                  <TextInput
+                    style={styles.textArea}
+                    value={description}
+                    onChangeText={setDescription}
+                    placeholder="What should the reminder say?"
+                    placeholderTextColor={colors.textTertiary}
+                    multiline
+                    numberOfLines={3}
+                    textAlignVertical="top"
+                  />
                 </View>
               </View>
 

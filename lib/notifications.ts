@@ -120,6 +120,9 @@ export async function scheduleReminder(
   const trigger: TimestampTrigger = {
     type: TriggerType.TIMESTAMP,
     timestamp: triggerTimestamp,
+    alarmManager: {
+      allowWhileIdle: true, // Bypasses Android Doze mode - uses setExactAndAllowWhileIdle()
+    },
   };
 
   await notifee.createTriggerNotification(
@@ -250,6 +253,9 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       const trigger: TimestampTrigger = {
         type: TriggerType.TIMESTAMP,
         timestamp: nextTrigger,
+        alarmManager: {
+          allowWhileIdle: true, // Bypasses Android Doze mode
+        },
       };
 
       await notifee.createTriggerNotification(

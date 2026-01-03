@@ -96,8 +96,8 @@ export default function EditReminderScreen() {
   const [time, setTime] = useState(new Date());
   const [frequency, setFrequency] = useState("once");
   const [days, setDays] = useState<string[]>([]);
-  const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("count");
-  const [soundRepeatCount, setSoundRepeatCount] = useState<number>(1);
+  const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("until_stopped");
+  const [soundRepeatCount, setSoundRepeatCount] = useState<number>(30);
 
   const [dueDate, setDueDate] = useState<Date | null>(null);
 
@@ -128,8 +128,8 @@ export default function EditReminderScreen() {
     setSoundText(found.description || "");
     setFrequency(found.frequency === "weekly" ? "custom" : (found.frequency || "once"));
     setDays(found.days || []);
-    setSoundRepeatMode(found.soundRepeatMode || "count");
-    setSoundRepeatCount(found.soundRepeatCount ?? 1);
+    setSoundRepeatMode(found.soundRepeatMode || "until_stopped");
+    setSoundRepeatCount(found.soundRepeatCount ?? 30);
 
     // Load the date if it exists
     if (found.date) {
@@ -198,8 +198,8 @@ export default function EditReminderScreen() {
       frequency !== reminder.frequency ||
       currentDays !== originalDays ||
       dateChanged ||
-      (reminder.soundRepeatMode || "count") !== soundRepeatMode ||
-      (reminder.soundRepeatCount ?? 1) !== soundRepeatCount
+      (reminder.soundRepeatMode || "until_stopped") !== soundRepeatMode ||
+      (reminder.soundRepeatCount ?? 30) !== soundRepeatCount
     );
   }, [days, dueDate, frequency, reminder, soundRepeatCount, soundRepeatMode, time, title]);
 

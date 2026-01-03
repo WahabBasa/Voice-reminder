@@ -46,8 +46,8 @@ export default function NewReminderScreen() {
   const [time, setTime] = useState(new Date());
   const [frequency, setFrequency] = useState("once");
   const [days, setDays] = useState<string[]>([]);
-  const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("count");
-  const [soundRepeatCount, setSoundRepeatCount] = useState<number>(1);
+  const [soundRepeatMode, setSoundRepeatMode] = useState<"count" | "until_stopped">("until_stopped");
+  const [soundRepeatCount, setSoundRepeatCount] = useState<number>(30);
   const [showTimePicker, setShowTimePicker] = useState(false);
 
   const handleDayToggle = (day: string) => {
@@ -320,7 +320,7 @@ export default function NewReminderScreen() {
           </TouchableOpacity>
         </View>
 
-      <View style={{ height: 50 }} />
+        <View style={{ height: 50 }} />
       </ScrollView>
     </SafeAreaView>
   );

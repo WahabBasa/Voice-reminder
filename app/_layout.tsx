@@ -64,6 +64,16 @@ export default function RootLayout() {
                   contentStyle: { backgroundColor: "white" },
                 }}
               />
+              <Stack.Screen
+                name="alarm"
+                options={{
+                  animation: "fade",
+                  animationDuration: 150,
+                  presentation: "fullScreenModal",
+                  headerShown: false,
+                  gestureEnabled: false,
+                }}
+              />
             </Stack>
           </ToastProvider>
         </ConvexProvider>
