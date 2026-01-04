@@ -332,7 +332,13 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
                       </TouchableOpacity>
                     </View>
 
-                    <View style={styles.volumeContainer}>
+                    <View
+                      style={styles.volumeContainer}
+                      onStartShouldSetResponder={() => true}
+                      onMoveShouldSetResponder={() => true}
+                      onStartShouldSetResponderCapture={() => true}
+                      onMoveShouldSetResponderCapture={() => true}
+                    >
                       <AppIcon name="volume-1" size={18} color={colors.textSecondary} />
                       <Slider
                         style={styles.slider}

@@ -1,0 +1,67 @@
+﻿# Claude RMD — Tarot Routine
+
+This file defines Claude’s tarot reading routine for quick, consistent readings.
+
+## Defaults
+
+- **Spread**: 3-card (Past / Present / Future)
+- **Deck**: Major Arcana (22 cards)
+- **Orientation**: Upright/Reversed (50/50)
+
+## Routine
+
+1. **Scope the question**
+   - If the user provides no question: use “General guidance for the next 7 days”.
+   - If the user asks for certainty: reframe as reflection and possibilities.
+
+2. **Draw cards**
+   - Shuffle the Major Arcana.
+   - Draw 3 cards, one per position.
+   - For each card, flip orientation (upright/reversed).
+
+3. **Interpret**
+   - Give a 1–2 sentence meaning per card in its position.
+   - End with **1 practical action** and **1 thing to watch for**.
+
+4. **Safety / boundaries**
+   - Treat tarot as reflective/entertainment, not factual prediction.
+   - Avoid giving definitive medical/legal/financial instructions.
+
+## Major Arcana quick meanings
+
+Format: `Card — upright / reversed`
+
+- **0 The Fool** — beginnings, openness / recklessness, naivety
+- **I The Magician** — will, skill, initiative / manipulation, scattered focus
+- **II The High Priestess** — intuition, inner knowing / disconnection, secrets
+- **III The Empress** — nurture, growth / stagnation, overindulgence
+- **IV The Emperor** — structure, authority / rigidity, control issues
+- **V The Hierophant** — tradition, learning / rebellion, hollow rules
+- **VI The Lovers** — alignment, choice / misalignment, imbalance
+- **VII The Chariot** — momentum, discipline / forcing, lack of direction
+- **VIII Strength** — courage, patience / doubt, reactivity
+- **IX The Hermit** — reflection, solitude / isolation, avoidance
+- **X Wheel of Fortune** — change, cycles / resistance, bad timing
+- **XI Justice** — truth, balance / unfairness, denial
+- **XII The Hanged Man** — surrender, new view / stalling, martyrdom
+- **XIII Death** — endings, renewal / clinging, fear of change
+- **XIV Temperance** — harmony, integration / extremes, impatience
+- **XV The Devil** — attachment, temptation / release, reclaiming power
+- **XVI The Tower** — disruption, revelation / delayed upheaval, denial
+- **XVII The Star** — hope, clarity / discouragement, cynicism
+- **XVIII The Moon** — uncertainty, imagination / confusion, anxiety
+- **XIX The Sun** — success, vitality / overconfidence, burnout
+- **XX Judgement** — awakening, calling / self-doubt, stagnation
+- **XXI The World** — completion, mastery / loose ends, unfinished work
+
+## Output template
+
+**Question**: …
+
+**Spread**:
+1. **Past**: CARD (Upright/Reversed) — interpretation
+2. **Present**: CARD (Upright/Reversed) — interpretation
+3. **Future**: CARD (Upright/Reversed) — interpretation
+
+**Action**: …
+**Watch for**: …

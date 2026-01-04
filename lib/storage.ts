@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createTraceId, perfLog } from "./perf";
 
 const REMINDERS_KEY = "@reminders";
 const HISTORY_KEY = "@reminder_history";
@@ -34,8 +35,38 @@ export interface Reminder {
 // Reminder CRUD functions
 export async function getReminders(): Promise<Reminder[]> {
   try {
+    const traceId = createTraceId("storage");
+    const t0 = Date.now();
+    perfLog(traceId, "device.storage", "getReminders_getItem_start", { t: t0 });
     const data = await AsyncStorage.getItem(REMINDERS_KEY);
-    return data ? JSON.parse(data) : [];
+    const t1 = Date.now();
+
+    if (!data) {
+      perfLog(traceId, "device.storage", "getReminders_getItem_done", {
+        t: t1,
+        ms: t1 - t0,
+        bytes: 0,
+        count: 0,
+      });
+      return [];
+    }
+
+    perfLog(traceId, "device.storage", "getReminders_getItem_done", {
+      t: t1,
+      ms: t1 - t0,
+      bytes: data.length,
+    });
+
+    const tParse0 = Date.now();
+    perfLog(traceId, "device.storage", "getReminders_parse_start", { t: tParse0 });
+    const parsed = JSON.parse(data) as Reminder[];
+    const t2 = Date.now();
+    perfLog(traceId, "device.storage", "getReminders_parse_done", {
+      t: t2,
+      ms: t2 - tParse0,
+      count: parsed.length,
+    });
+    return parsed;
   } catch (error) {
     console.error("Error getting reminders:", error);
     return [];
@@ -115,8 +146,38 @@ export interface ReminderHistory {
 
 export async function getHistory(): Promise<ReminderHistory[]> {
   try {
+    const traceId = createTraceId("storage");
+    const t0 = Date.now();
+    perfLog(traceId, "device.storage", "getHistory_getItem_start", { t: t0 });
     const data = await AsyncStorage.getItem(HISTORY_KEY);
-    return data ? JSON.parse(data) : [];
+    const t1 = Date.now();
+
+    if (!data) {
+      perfLog(traceId, "device.storage", "getHistory_getItem_done", {
+        t: t1,
+        ms: t1 - t0,
+        bytes: 0,
+        count: 0,
+      });
+      return [];
+    }
+
+    perfLog(traceId, "device.storage", "getHistory_getItem_done", {
+      t: t1,
+      ms: t1 - t0,
+      bytes: data.length,
+    });
+
+    const tParse0 = Date.now();
+    perfLog(traceId, "device.storage", "getHistory_parse_start", { t: tParse0 });
+    const parsed = JSON.parse(data) as ReminderHistory[];
+    const t2 = Date.now();
+    perfLog(traceId, "device.storage", "getHistory_parse_done", {
+      t: t2,
+      ms: t2 - tParse0,
+      count: parsed.length,
+    });
+    return parsed;
   } catch (error) {
     console.error("Error getting history:", error);
     return [];

@@ -29,6 +29,7 @@ import DaySelector from "../../components/DaySelector";
 
 import RepeatTaskModal from "../../components/RepeatTaskModal";
 import { cancelReminder, deleteReminderWithAudio, scheduleReminder } from "../../lib/notifications";
+import { createTraceId, perfLog } from "../../lib/perf";
 import {
   DEFAULT_ALARM_SETTINGS,
   deleteReminder as deleteReminderStorage,
@@ -91,7 +92,8 @@ function formatTime(date: Date) {
 
 export default function EditReminderScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, traceId: traceIdParam } = useLocalSearchParams<{ id: string; traceId?: string }>();
+  const traceId = typeof traceIdParam === "string" && traceIdParam.length ? traceIdParam : createTraceId("tap");
   const updateConvexReminder = useMutation(api.reminders.update);
   const removeConvexReminder = useMutation(api.reminders.remove);
 
@@ -134,7 +136,9 @@ export default function EditReminderScreen() {
 
   const loadReminder = useCallback(async () => {
     if (!id) return;
+    perfLog(traceId, "nav.edit", "loadReminder_start", { t: Date.now(), reminderId: id });
     const reminders = await getReminders();
+    perfLog(traceId, "nav.edit", "loadReminder_reminders_loaded", { t: Date.now(), count: reminders.length });
     const found = reminders.find((r) => r.id === id);
     if (!found) return;
 
@@ -163,27 +167,42 @@ export default function EditReminderScreen() {
     // Delayed to prevent blocking the bottom sheet open animation
     if (found.audioUrl) {
       const audioUrl = found.audioUrl;
+      perfLog(traceId, "nav.edit", "audio_preload_scheduled", { t: Date.now(), delayMs: 300 });
       setTimeout(async () => {
         try {
+          perfLog(traceId, "nav.edit", "audio_preload_start", { t: Date.now() });
           const { sound: preloadedSound } = await Audio.Sound.createAsync(
             { uri: audioUrl },
             { volume: 0.9, shouldPlay: false }
           );
           setSound(preloadedSound);
+          perfLog(traceId, "nav.edit", "audio_preload_done", { t: Date.now() });
         } catch (e) {
           console.log("[VR] Failed to preload audio:", e);
+          perfLog(traceId, "nav.edit", "audio_preload_error", { t: Date.now(), error: String(e) });
         }
       }, 300); // Delay to let bottom sheet animation complete
     }
-  }, [id]);
+    perfLog(traceId, "nav.edit", "loadReminder_done", { t: Date.now(), reminderId: id });
+  }, [id, traceId]);
 
   useEffect(() => {
+    perfLog(traceId, "nav.edit", "screen_mount", { t: Date.now(), reminderId: id ?? null });
+    const raf = requestAnimationFrame(() => {
+      perfLog(traceId, "nav.edit", "screen_first_frame", { t: Date.now() });
+    });
     // Defer data loading until after navigation animation completes
+    perfLog(traceId, "nav.edit", "runAfterInteractions_scheduled", { t: Date.now() });
     const task = InteractionManager.runAfterInteractions(() => {
+      perfLog(traceId, "nav.edit", "runAfterInteractions_start", { t: Date.now() });
       loadReminder();
     });
-    return () => task.cancel();
-  }, [loadReminder]);
+    return () => {
+      cancelAnimationFrame(raf);
+      task.cancel();
+      perfLog(traceId, "nav.edit", "screen_unmount", { t: Date.now() });
+    };
+  }, [loadReminder, traceId, id]);
 
   useEffect(() => {
     return () => {
@@ -516,6 +535,7 @@ export default function EditReminderScreen() {
 
   const handleSheetChange = useCallback(
     (index: number) => {
+      perfLog(traceId, "nav.edit", "bottomSheet_onChange", { t: Date.now(), index });
       if (index === -1) {
         // Auto-save if there are changes
         if (hasChanges()) {
@@ -545,6 +565,13 @@ export default function EditReminderScreen() {
         enableDynamicSizing={false}
         backdropComponent={renderBackdrop}
         onChange={handleSheetChange}
+        onAnimate={(fromIndex, toIndex) => {
+          perfLog(traceId, "nav.edit", "bottomSheet_onAnimate", {
+            t: Date.now(),
+            fromIndex,
+            toIndex,
+          });
+        }}
         handleIndicatorStyle={styles.handleIndicator}
         backgroundStyle={styles.sheetBackground}
       >
@@ -677,21 +704,25 @@ export default function EditReminderScreen() {
                   <AppIcon name="volume-1" size={22} color={stylesVars.iconColor} />
                   <Text style={styles.rowLabel}>Volume</Text>
                 </View>
-                <View style={styles.sliderRight}>
+                <View
+                  style={styles.sliderRight}
+                  onStartShouldSetResponder={() => true}
+                  onMoveShouldSetResponder={() => true}
+                  onStartShouldSetResponderCapture={() => true}
+                  onMoveShouldSetResponderCapture={() => true}
+                >
                   <AppIcon name="volume-1" size={16} color={stylesVars.iconColor} />
-                  <NativeViewGestureHandler disallowInterruption={true}>
-                    <Slider
-                      style={styles.slider}
-                      value={volume}
-                      minimumValue={0}
-                      maximumValue={1}
-                      step={0.05}
-                      onValueChange={setVolume}
-                      minimumTrackTintColor={colors.accent}
-                      maximumTrackTintColor={stylesVars.chipBg}
-                      thumbTintColor={colors.accent}
-                    />
-                  </NativeViewGestureHandler>
+                  <Slider
+                    style={styles.slider}
+                    value={volume}
+                    minimumValue={0}
+                    maximumValue={1}
+                    step={0.05}
+                    onValueChange={setVolume}
+                    minimumTrackTintColor={colors.accent}
+                    maximumTrackTintColor={stylesVars.chipBg}
+                    thumbTintColor={colors.accent}
+                  />
                   <AppIcon name="volume-2" size={16} color={stylesVars.iconColor} />
                 </View>
               </View>

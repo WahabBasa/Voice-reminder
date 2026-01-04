@@ -44,7 +44,7 @@ import RecordingOverlay from "../components/RecordingOverlay";
 import SwipeableCard from "../components/SwipeableCard";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
-import { perfLog } from "../lib/perf";
+import { createTraceId, perfLog, recordTap, startStallMonitor } from "../lib/perf";
 import NetInfo from "@react-native-community/netinfo";
 import { useMutation } from "convex/react";
 
@@ -100,6 +100,46 @@ export default function HomeScreen() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showSelectMenu, setShowSelectMenu] = useState(false);
 
+  // --- Tap-to-navigation tracing (debug/perf) ---
+  const tapDebugSnapshotRef = useRef({
+    remindersCount: 0,
+    historyCount: 0,
+    isLoading: false,
+    isSelectMode: false,
+    showSelectMenu: false,
+    showOfflineMessage: false,
+  });
+  const tapTraceByReminderIdRef = useRef(new Map<string, { traceId: string; pressInAt: number }>()); // id -> trace
+
+  useEffect(() => {
+    tapDebugSnapshotRef.current = {
+      remindersCount: reminders.length,
+      historyCount: history.length,
+      isLoading,
+      isSelectMode,
+      showSelectMenu,
+      showOfflineMessage,
+    };
+  }, [reminders.length, history.length, isLoading, isSelectMode, showSelectMenu, showOfflineMessage]);
+
+  const recordReminderPressIn = useCallback((reminderId: string) => {
+    const traceId = createTraceId("tap");
+    const now = Date.now();
+    tapTraceByReminderIdRef.current.set(reminderId, { traceId, pressInAt: now });
+    recordTap(traceId);
+    perfLog(traceId, "ui.tap", "reminder_press_in", {
+      reminderId,
+      t: now,
+      ...tapDebugSnapshotRef.current,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (process.env.EXPO_PUBLIC_VR_STALL_MONITOR === "1") {
+      startStallMonitor();
+    }
+  }, []);
+
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
       setIsConnected(state.isConnected ?? true);
@@ -113,12 +153,27 @@ export default function HomeScreen() {
   const loadData = useCallback(async () => {
     try {
       setIsLoading(true);
-      const [loadedReminders, loadedHistory] = await Promise.all([
-        getReminders(),
-        getHistory(),
-      ]);
+      // Load reminders first
+      const loadedReminders = await getReminders();
       setReminders(loadedReminders);
-      setHistory(loadedHistory);
+
+      // Load history after interactions so we don't block taps/gestures with JSON.parse + sorts.
+      InteractionManager.runAfterInteractions(() => {
+        const t0 = Date.now();
+        perfLog("vr_history_load", "device.storage", "history_load_start", { t: t0 });
+        getHistory()
+          .then((loadedHistory) => {
+            setHistory(loadedHistory);
+            perfLog("vr_history_load", "device.storage", "history_load_done", {
+              t: Date.now(),
+              ms: Date.now() - t0,
+              entries: loadedHistory.length,
+            });
+          })
+          .catch((e) => {
+            perfLog("vr_history_load", "device.storage", "history_load_error", { error: String(e) });
+          });
+      });
     } finally {
       setIsLoading(false);
     }
@@ -248,7 +303,20 @@ export default function HomeScreen() {
 
   const handleReminderPress = useCallback(
     (reminder: Reminder) => {
-      router.push(`/reminder/edit?id=${reminder.id}`);
+      const reminderId = reminder.id;
+      const existing = tapTraceByReminderIdRef.current.get(reminderId);
+      const traceId = existing?.traceId ?? createTraceId("tap");
+      const now = Date.now();
+      perfLog(traceId, "ui.tap", "reminder_press", {
+        reminderId,
+        t: now,
+        pressInMs: existing ? now - existing.pressInAt : undefined,
+        ...tapDebugSnapshotRef.current,
+      });
+
+      const url = `/reminder/edit?id=${encodeURIComponent(reminderId)}&traceId=${encodeURIComponent(traceId)}`;
+      perfLog(traceId, "ui.tap", "router_push_edit", { t: Date.now(), url });
+      router.push(url);
     },
     [router]
   );
@@ -420,14 +488,17 @@ export default function HomeScreen() {
   }, [selectedIds, reminders, toast, exitSelectMode]);
 
   const completedTodayReminderIds = useMemo(() => {
-    const today = new Date().toDateString();
+    // Pre-compute today's bounds once to avoid repeated string creation
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const todayEnd = todayStart + 24 * 60 * 60 * 1000;
     return new Set(
       history
-        .filter(
-          (entry) =>
-            entry.status === "completed" &&
-            new Date(entry.timestamp).toDateString() === today
-        )
+        .filter((entry) => {
+          if (entry.status !== "completed") return false;
+          const ts = new Date(entry.timestamp).getTime();
+          return ts >= todayStart && ts < todayEnd;
+        })
         .map((entry) => entry.reminderId)
     );
   }, [history]);
@@ -454,13 +525,14 @@ export default function HomeScreen() {
       Earlier: [],
     };
 
-    const sorted = [...filteredReminders].sort((a, b) => {
-      const aTime = new Date(a.createdAt).getTime();
-      const bTime = new Date(b.createdAt).getTime();
-      return bTime - aTime;
-    });
+    // Pre-compute timestamps once to avoid O(n log n) Date constructions in comparator
+    const withTs = filteredReminders.map((r) => ({
+      reminder: r,
+      ts: new Date(r.createdAt).getTime(),
+    }));
+    withTs.sort((a, b) => b.ts - a.ts);
 
-    for (const reminder of sorted) {
+    for (const { reminder } of withTs) {
       sections[getDayBucket(reminder.createdAt)].push(reminder);
     }
 
@@ -468,20 +540,20 @@ export default function HomeScreen() {
   }, [filteredReminders]);
 
   const completedBySection = useMemo(() => {
-    const sections: Record<"Today" | "Yesterday" | "Earlier", ReminderHistory[]> =
-    {
+    const sections: Record<"Today" | "Yesterday" | "Earlier", ReminderHistory[]> = {
       Today: [],
       Yesterday: [],
       Earlier: [],
     };
 
-    const sorted = [...filteredCompletedHistory].sort((a, b) => {
-      const aTime = new Date(a.timestamp).getTime();
-      const bTime = new Date(b.timestamp).getTime();
-      return bTime - aTime;
-    });
+    // Pre-compute timestamps once to avoid O(n log n) Date constructions in comparator
+    const withTs = filteredCompletedHistory.map((e) => ({
+      entry: e,
+      ts: new Date(e.timestamp).getTime(),
+    }));
+    withTs.sort((a, b) => b.ts - a.ts);
 
-    for (const entry of sorted) {
+    for (const { entry } of withTs) {
       sections[getDayBucket(entry.timestamp)].push(entry);
     }
 

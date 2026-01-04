@@ -17,6 +17,56 @@ export interface ReminderSchedule {
 
 const DAY_KEYS: Array<keyof typeof DAY_MAP> = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
+// Simple LRU cache for formatted time/date strings (avoid expensive toLocale* calls)
+const FORMAT_CACHE_TIME = new Map<number, string>();
+const FORMAT_CACHE_DATE_WEEKDAY = new Map<number, string>();
+const FORMAT_CACHE_DATE_SHORT = new Map<number, string>();
+const MAX_CACHE_SIZE = 100;
+
+function evictOldest(cache: Map<number, string>): void {
+  if (cache.size >= MAX_CACHE_SIZE) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey !== undefined) {
+      cache.delete(firstKey);
+    }
+  }
+}
+
+// Cached locale time formatting (2-digit hour:minute)
+function cachedTimeString(date: Date): string {
+  // Round to minute boundary for cache key
+  const key = Math.floor(date.getTime() / 60000);
+  if (FORMAT_CACHE_TIME.has(key)) return FORMAT_CACHE_TIME.get(key)!;
+
+  const result = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  evictOldest(FORMAT_CACHE_TIME);
+  FORMAT_CACHE_TIME.set(key, result);
+  return result;
+}
+
+// Cached weekday formatting
+function cachedWeekdayString(date: Date): string {
+  // Round to day boundary for cache key
+  const key = Math.floor(date.getTime() / (24 * 60 * 60 * 1000));
+  if (FORMAT_CACHE_DATE_WEEKDAY.has(key)) return FORMAT_CACHE_DATE_WEEKDAY.get(key)!;
+
+  const result = date.toLocaleDateString([], { weekday: "long" });
+  evictOldest(FORMAT_CACHE_DATE_WEEKDAY);
+  FORMAT_CACHE_DATE_WEEKDAY.set(key, result);
+  return result;
+}
+
+// Cached short date formatting (month + day)
+function cachedShortDateString(date: Date): string {
+  const key = Math.floor(date.getTime() / (24 * 60 * 60 * 1000));
+  if (FORMAT_CACHE_DATE_SHORT.has(key)) return FORMAT_CACHE_DATE_SHORT.get(key)!;
+
+  const result = date.toLocaleDateString([], { month: "short", day: "numeric" });
+  evictOldest(FORMAT_CACHE_DATE_SHORT);
+  FORMAT_CACHE_DATE_SHORT.set(key, result);
+  return result;
+}
+
 function isSameDay(a: Date, b: Date): boolean {
   return a.toDateString() === b.toDateString();
 }
@@ -90,7 +140,8 @@ export function formatReminderTime(timestamp: number, nowDate = new Date()): str
     return `in ${formatRelativeMinutes(Math.max(1, diffMinutes))}`;
   }
 
-  const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // Use cached locale formatting to avoid expensive toLocale* calls
+  const timeStr = cachedTimeString(date);
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
@@ -103,11 +154,11 @@ export function formatReminderTime(timestamp: number, nowDate = new Date()): str
 
   const daysAhead = Math.floor((date.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
   if (daysAhead >= 0 && daysAhead < 7) {
-    const dayName = date.toLocaleDateString([], { weekday: "long" });
+    const dayName = cachedWeekdayString(date);
     return `${dayName} at ${timeStr}`;
   }
 
-  const dateStr = date.toLocaleDateString([], { month: "short", day: "numeric" });
+  const dateStr = cachedShortDateString(date);
   return `${dateStr} at ${timeStr}`;
 }
 

@@ -23,3 +23,54 @@ export function perfLog(traceId: string, scope: string, event: string, data?: Pe
   console.log(`[VR PERF] ${JSON.stringify(payload)}`);
 }
 
+// ============ JS Stall Monitor ============
+// Tracks when the JS event loop stalls for > STALL_THRESHOLD_MS
+
+const STALL_THRESHOLD_MS = 100;
+let lastLoopTime = 0;
+let stallMonitorActive = false;
+let lastTapTraceId: string | null = null;
+let lastTapTime = 0;
+
+export function recordTap(traceId: string): void {
+  lastTapTraceId = traceId;
+  lastTapTime = Date.now();
+}
+
+function checkStall(): void {
+  if (!isEnabled() || !stallMonitorActive) return;
+
+  const now = Date.now();
+  if (lastLoopTime > 0) {
+    const delta = now - lastLoopTime;
+    if (delta > STALL_THRESHOLD_MS) {
+      const msSinceLastTap = lastTapTime > 0 ? now - lastTapTime : -1;
+      perfLog(
+        lastTapTraceId || "no_tap",
+        "stall_monitor",
+        "js_stall_detected",
+        {
+          stallMs: delta,
+          msSinceLastTap,
+          threshold: STALL_THRESHOLD_MS,
+        }
+      );
+    }
+  }
+  lastLoopTime = now;
+  requestAnimationFrame(checkStall);
+}
+
+export function startStallMonitor(): void {
+  if (stallMonitorActive) return;
+  stallMonitorActive = true;
+  lastLoopTime = Date.now();
+  requestAnimationFrame(checkStall);
+  if (isEnabled()) {
+    console.log("[VR PERF] Stall monitor started (threshold: " + STALL_THRESHOLD_MS + "ms)");
+  }
+}
+
+export function stopStallMonitor(): void {
+  stallMonitorActive = false;
+}
