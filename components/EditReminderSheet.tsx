@@ -147,7 +147,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     perfLog(traceId, "overlay.edit", "audio_preload_start", { t: Date.now() });
                     const { sound: preloadedSound } = await Audio.Sound.createAsync(
                         { uri: initialReminder.audioUrl! },
-                        { volume: 0.9, shouldPlay: false }
+                        { volume: sliderVolume, shouldPlay: false }
                     );
                     setSound(preloadedSound);
                     perfLog(traceId, "overlay.edit", "audio_preload_done", { t: Date.now() });
@@ -220,6 +220,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
             if (sound) {
                 await sound.setPositionAsync(0);
+                await sound.setVolumeAsync(sliderVolume); // Use current dial volume
                 sound.setOnPlaybackStatusUpdate((status) => {
                     if (status.isLoaded && status.didJustFinish) {
                         setIsPlaying(false);
@@ -232,7 +233,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
             const { sound: nextSound } = await Audio.Sound.createAsync(
                 { uri: reminder.audioUrl },
-                { volume: 0.9 }
+                { volume: sliderVolume } // Use current dial volume
             );
             setSound(nextSound);
 

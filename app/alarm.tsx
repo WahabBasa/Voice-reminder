@@ -6,12 +6,22 @@ import {
     View,
     Vibration,
     Dimensions,
+    Platform,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Audio } from "expo-av";
 import notifee, { AndroidCategory, AndroidImportance, TriggerType, TimestampTrigger } from "@notifee/react-native";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
+
+// Optional import - VolumeManager requires dev client rebuild
+// App will work without it, just won't have per-reminder volume control until rebuilt
+let VolumeManager: any = null;
+try {
+    VolumeManager = require("react-native-volume-manager").VolumeManager;
+} catch (e) {
+    console.log("[VR] VolumeManager not available (needs dev client rebuild)");
+}
 
 const { width, height } = Dimensions.get("window");
 
@@ -32,6 +42,7 @@ export default function AlarmScreen() {
     const soundRef = useRef<Audio.Sound | null>(null);
     const vibrationIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const volumeRampIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const originalAlarmVolumeRef = useRef<number | null>(null);
 
     const title = params.title || "Reminder";
     const description = params.description || "";
@@ -58,6 +69,23 @@ export default function AlarmScreen() {
 
     const startAudioLoop = async () => {
         try {
+            // On Android, save the original alarm volume and set to our target volume
+            // This allows per-reminder volume control and bypasses silent mode
+            if (Platform.OS === "android" && VolumeManager) {
+                try {
+                    const volumeResult = await VolumeManager.getVolume();
+                    // On Android, volumeResult may include alarm property, fallback to volume
+                    const alarmVol = (volumeResult as any).alarm;
+                    originalAlarmVolumeRef.current = typeof alarmVol === "number" ? alarmVol : volumeResult.volume;
+                    console.log(`[VR] AlarmScreen: Saved original alarm volume: ${originalAlarmVolumeRef.current}, setting to: ${targetVolume}`);
+
+                    // Set alarm stream volume to reminder's target volume
+                    await VolumeManager.setVolume(targetVolume, { type: "alarm", showUI: false });
+                } catch (volumeError) {
+                    console.log("[VR] AlarmScreen: VolumeManager error (may be on web/simulator):", volumeError);
+                }
+            }
+
             await Audio.setAudioModeAsync({
                 allowsRecordingIOS: false,
                 playsInSilentModeIOS: true,
@@ -121,6 +149,18 @@ export default function AlarmScreen() {
             clearInterval(volumeRampIntervalRef.current);
             volumeRampIntervalRef.current = null;
         }
+
+        // Restore original alarm volume on Android
+        if (Platform.OS === "android" && VolumeManager && originalAlarmVolumeRef.current !== null) {
+            try {
+                console.log(`[VR] AlarmScreen: Restoring alarm volume to: ${originalAlarmVolumeRef.current}`);
+                await VolumeManager.setVolume(originalAlarmVolumeRef.current, { type: "alarm", showUI: false });
+                originalAlarmVolumeRef.current = null;
+            } catch (e) {
+                console.log("[VR] AlarmScreen: Error restoring alarm volume:", e);
+            }
+        }
+
         setIsPlaying(false);
     };
 
