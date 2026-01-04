@@ -8,6 +8,7 @@ import {
     TextInput,
     View,
 } from "react-native";
+import { NativeViewGestureHandler } from "react-native-gesture-handler";
 import { useAction, useMutation } from "convex/react";
 import { useToast } from "./ToastProvider";
 import { LinearGradient } from "expo-linear-gradient";
@@ -18,6 +19,7 @@ import BottomSheet, {
     BottomSheetScrollView,
     BottomSheetBackdrop,
     TouchableOpacity,
+    BottomSheetView,
 } from "@gorhom/bottom-sheet";
 import { api } from "../convex/_generated/api";
 import AppIcon from "./AppIcon";
@@ -122,6 +124,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const [snoozeEnabled, setSnoozeEnabled] = useState(initialReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled);
     const [snoozeDuration, setSnoozeDuration] = useState(initialReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration);
     const [volume, setVolume] = useState(initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume);
+    const [sliderVolume, setSliderVolume] = useState(initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume); // Local state for smooth dragging
     const [volumeStyle, setVolumeStyle] = useState<VolumeStyle>(initialReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle);
 
     const [showTimePicker, setShowTimePicker] = useState(false);
@@ -469,15 +472,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const handleSheetChange = useCallback(
         (index: number) => {
             perfLog(traceId, "overlay.edit", "bottomSheet_onChange", { t: Date.now(), index });
-            if (index === -1) {
-                if (hasChanges()) {
-                    handleSave();
-                } else {
-                    onClose();
-                }
-            }
+            // Note: onClose is now called in onAnimate for faster FAB reappearance
         },
-        [hasChanges, handleSave, onClose, traceId]
+        [traceId]
     );
 
     const expandSheet = useCallback(() => {
@@ -501,21 +498,22 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         fromIndex,
                         toIndex,
                     });
+                    // Close immediately when animation starts so FAB reappears instantly
+                    if (toIndex === -1) {
+                        if (hasChanges()) {
+                            handleSave();
+                        } else {
+                            onClose();
+                        }
+                    }
                 }}
                 handleIndicatorStyle={styles.handleIndicator}
                 backgroundStyle={styles.sheetBackground}
+                // Allow horizontal gestures (slider) to work by requiring more vertical movement
+                activeOffsetY={[-10, 10]}
+                failOffsetX={[-5, 5]}
             >
                 <BottomSheetScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-                    <View style={styles.sheetHeader}>
-                        <TouchableOpacity style={styles.topChip} onPress={openFrequencyPicker} activeOpacity={0.7}>
-                            <Text style={styles.topChipText}>{frequencyLabel}</Text>
-                            <AppIcon name="chevron-down" size={16} color={stylesVars.iconColor} />
-                        </TouchableOpacity>
-
-                        <TouchableOpacity onPress={openOptionsMenu} style={styles.moreButton} activeOpacity={0.7}>
-                            <AppIcon name="more-vertical" size={24} color={stylesVars.headerText} />
-                        </TouchableOpacity>
-                    </View>
 
                     <TextInput
                         style={styles.titleInput}
@@ -526,18 +524,20 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         placeholderTextColor={stylesVars.mutedText}
                     />
 
-                    {reminder.audioUrl ? (
-                        <TouchableOpacity style={styles.playVoice} onPress={handlePlayPreview} activeOpacity={0.7}>
-                            <AppIcon name={isPlaying ? "square" : "play"} size={20} color={stylesVars.iconColor} />
-                            <Text style={styles.playVoiceText}>{isPlaying ? "Stop voice" : "Play voice"}</Text>
-                        </TouchableOpacity>
-                    ) : null}
+
 
                     <View style={styles.soundSection}>
-                        <View style={styles.soundSectionHeader}>
-                            <AppIcon name="volume-1" size={20} color={stylesVars.iconColor} />
-                            <Text style={styles.soundSectionTitle}>Voice Sound</Text>
-                        </View>
+                        <TouchableOpacity
+                            style={styles.soundSectionHeader}
+                            onPress={reminder.audioUrl ? handlePlayPreview : undefined}
+                            activeOpacity={reminder.audioUrl ? 0.7 : 1}
+                            disabled={!reminder.audioUrl}
+                        >
+                            <AppIcon name={isPlaying ? "square" : "play"} size={20} color={reminder.audioUrl ? colors.accent : stylesVars.iconColor} />
+                            <Text style={[styles.soundSectionTitle, reminder.audioUrl && { color: colors.accent }]}>
+                                {isPlaying ? "Stop reminder" : "Play reminder"}
+                            </Text>
+                        </TouchableOpacity>
                         <TextInput
                             style={styles.soundTextInput}
                             value={soundText}
@@ -557,7 +557,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         >
                             <AppIcon name="refresh-cw" size={18} color="white" />
                             <Text style={styles.regenerateButtonText}>
-                                {isRegenerating ? "Regenerating..." : "Regenerate Sound"}
+                                {isRegenerating ? "Regenerating..." : "Regenerate Reminder"}
                             </Text>
                         </TouchableOpacity>
                     </View>
@@ -617,31 +617,27 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             </View>
                         </View>
 
-                        <View style={styles.sliderRow}>
-                            <View style={styles.rowLeft}>
+                        <View style={styles.sliderSection}>
+                            <View style={styles.sliderLabelRow}>
                                 <AppIcon name="volume-1" size={22} color={stylesVars.iconColor} />
                                 <Text style={styles.rowLabel}>Volume</Text>
                             </View>
-                            <View
-                                style={styles.sliderRight}
-                                onStartShouldSetResponder={() => true}
-                                onMoveShouldSetResponder={() => true}
-                                onStartShouldSetResponderCapture={() => true}
-                                onMoveShouldSetResponderCapture={() => true}
-                            >
-                                <AppIcon name="volume-1" size={16} color={stylesVars.iconColor} />
+                            <View style={styles.sliderTrackRow}>
                                 <Slider
                                     style={styles.slider}
-                                    value={volume}
+                                    value={sliderVolume}
                                     minimumValue={0}
                                     maximumValue={1}
                                     step={0.05}
-                                    onValueChange={setVolume}
+                                    onValueChange={setSliderVolume}
+                                    onSlidingComplete={(val) => {
+                                        setSliderVolume(val);
+                                        setVolume(val);
+                                    }}
                                     minimumTrackTintColor={colors.accent}
                                     maximumTrackTintColor={stylesVars.chipBg}
                                     thumbTintColor={colors.accent}
                                 />
-                                <AppIcon name="volume-2" size={16} color={stylesVars.iconColor} />
                             </View>
                         </View>
 
@@ -767,17 +763,20 @@ const styles = StyleSheet.create({
         marginTop: 14,
         paddingVertical: 4,
     },
-    playVoice: {
+    playButton: {
         flexDirection: "row",
         alignItems: "center",
-        gap: 8,
-        marginTop: 8,
-        paddingVertical: 8,
+        gap: 4,
+        marginLeft: "auto",
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        backgroundColor: colors.accent + "15",
+        borderRadius: 16,
     },
-    playVoiceText: {
-        fontSize: scaleFontSize(14),
-        fontWeight: "500",
-        color: "#1a73e8",
+    playButtonText: {
+        fontSize: scaleFontSize(13),
+        fontWeight: "600",
+        color: colors.accent,
     },
     rowList: {
         marginTop: 20,
@@ -818,18 +817,28 @@ const styles = StyleSheet.create({
     stepperPillDisabled: {
         opacity: 0.6,
     },
-    sliderRow: {
+    sliderSection: {
         paddingVertical: 14,
     },
-    sliderRight: {
+    sliderLabelRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 16,
+    },
+    sliderTrackRow: {
         marginTop: 10,
         flexDirection: "row",
         alignItems: "center",
-        gap: 10,
+    },
+    volumeValue: {
+        marginLeft: "auto",
+        fontSize: scaleFontSize(14),
+        fontWeight: "500",
+        color: stylesVars.chipText,
     },
     slider: {
         flex: 1,
-        height: 30,
+        height: 40,
     },
     rowLeft: {
         flexDirection: "row",

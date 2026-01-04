@@ -18,6 +18,7 @@ import Animated, {
   withTiming,
   runOnJS,
   Easing,
+  FadeIn,
   FadeOut,
   SlideOutLeft,
   Layout,
@@ -967,7 +968,7 @@ export default function HomeScreen() {
         />
       )}
 
-      {selectedView === "all" && !showRecording && (
+      {selectedView === "all" && !showRecording && !editingReminder && (
         <>
           {showOfflineMessage && (
             <View style={[styles.offlineMessage, { bottom: (Platform.OS === "ios" ? 100 : 90) + insets.bottom }]}>
@@ -1000,22 +1001,28 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
           ) : !isSelectMode && (
-            <TouchableOpacity
+            <Animated.View
+              entering={FadeIn.duration(150)}
+              exiting={FadeOut.duration(100)}
               style={[
                 styles.fab,
                 { bottom: (Platform.OS === "ios" ? 28 : 18) + insets.bottom },
               ]}
-              onPress={() => {
-                if (!isConnected) {
-                  setShowOfflineMessage(true);
-                  return;
-                }
-                setShowRecording(true);
-              }}
-              activeOpacity={0.9}
             >
-              <AppIcon name="mic" size={26} color="white" />
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.fabTouchable}
+                onPress={() => {
+                  if (!isConnected) {
+                    setShowOfflineMessage(true);
+                    return;
+                  }
+                  setShowRecording(true);
+                }}
+                activeOpacity={0.9}
+              >
+                <AppIcon name="mic" size={26} color="white" />
+              </TouchableOpacity>
+            </Animated.View>
           )}
         </>
       )}
@@ -1233,6 +1240,14 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
     elevation: 6,
+  },
+  fabTouchable: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
   },
   emptyState: {
     marginTop: 26,

@@ -143,6 +143,18 @@ C:\Users\AtheA\AppData\Local\Android\Sdk\platform-tools\adb.exe reverse tcp:8081
 1. Re-run the `adb reverse` command (tunnel may have been cleared)
 2. Check `adb devices` shows your phone connected
 
+### 🔄 Quick Reconnect (If Metro Crashes)
+
+```powershell
+# 1. Start Metro on an available port
+npx.cmd expo start --dev-client --port 8085
+
+# 2. Set up ADB tunnel for that port
+C:\Users\AtheA\AppData\Local\Android\Sdk\platform-tools\adb.exe reverse tcp:8085 tcp:8085
+
+# 3. Press 'a' in the Metro terminal to open on Android
+```
+
 ### 🔨 Full Android Build (Dev)
 
 ```bash
