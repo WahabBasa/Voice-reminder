@@ -197,8 +197,7 @@ export default function HomeScreen() {
 
   const handleCancelProcessing = useCallback(() => {
     cancelledRef.current = true;
-    toast.show({ title: "Cancelled", message: "Reminder creation cancelled", type: "info" });
-  }, [toast]);
+  }, []);
 
   const handleRecordingComplete = async (audioUri: string, traceId: string) => {
     cancelledRef.current = false;
@@ -268,7 +267,6 @@ export default function HomeScreen() {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setReminders((prev) => [newReminder, ...prev]);
 
-      toast.show({ title: "Reminder created", message: newReminder.title, type: "success" });
       router.push(`/reminder/edit?id=${newReminder.id}`);
 
       InteractionManager.runAfterInteractions(() => {

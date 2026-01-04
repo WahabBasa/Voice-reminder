@@ -209,44 +209,95 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     }, [days, frequency]);
 
     const handlePlayPreview = async () => {
-        if (!reminder?.audioUrl) return;
+        console.log("[VR] ========== PREVIEW PLAYBACK ==========");
+        console.log("[VR] audioUrl:", reminder?.audioUrl);
+        console.log("[VR] sliderVolume (target):", sliderVolume);
+        console.log("[VR] isPlaying:", isPlaying);
+        console.log("[VR] sound loaded:", !!sound);
+
+        if (!reminder?.audioUrl) {
+            console.log("[VR] No audio URL, returning");
+            return;
+        }
 
         try {
             if (isPlaying && sound) {
+                console.log("[VR] Stopping playback");
                 await sound.stopAsync();
                 setIsPlaying(false);
                 return;
             }
 
+            // Try to use VolumeManager to set system volume for preview
+            let originalVolume: number | null = null;
+            try {
+                const { VolumeManager } = require("react-native-volume-manager");
+                if (VolumeManager) {
+                    const volumeResult = await VolumeManager.getVolume();
+                    originalVolume = volumeResult.volume;
+                    console.log("[VR] Current system volume:", originalVolume);
+                    console.log("[VR] Setting system volume to:", sliderVolume);
+                    await VolumeManager.setVolume(sliderVolume, { type: "music", showUI: false });
+                    console.log("[VR] ✅ System volume set");
+                }
+            } catch (e) {
+                console.log("[VR] VolumeManager not available for preview:", e);
+            }
+
             if (sound) {
+                console.log("[VR] Using existing sound, setting position and volume");
                 await sound.setPositionAsync(0);
-                await sound.setVolumeAsync(sliderVolume); // Use current dial volume
-                sound.setOnPlaybackStatusUpdate((status) => {
+                await sound.setVolumeAsync(1); // Full playback volume since system volume is set
+                sound.setOnPlaybackStatusUpdate(async (status) => {
                     if (status.isLoaded && status.didJustFinish) {
                         setIsPlaying(false);
+                        // Restore original volume when done
+                        if (originalVolume !== null) {
+                            try {
+                                const { VolumeManager } = require("react-native-volume-manager");
+                                await VolumeManager.setVolume(originalVolume, { type: "music", showUI: false });
+                                console.log("[VR] Restored system volume to:", originalVolume);
+                            } catch (e) {
+                                console.log("[VR] Failed to restore volume:", e);
+                            }
+                        }
                     }
                 });
                 await sound.playAsync();
                 setIsPlaying(true);
+                console.log("[VR] ✅ Playback started (reused sound)");
                 return;
             }
 
+            console.log("[VR] Creating new sound from:", reminder.audioUrl);
             const { sound: nextSound } = await Audio.Sound.createAsync(
                 { uri: reminder.audioUrl },
-                { volume: sliderVolume } // Use current dial volume
+                { volume: 1 } // Full playback volume since system volume is set
             );
             setSound(nextSound);
+            console.log("[VR] ✅ Sound created");
 
-            nextSound.setOnPlaybackStatusUpdate((status) => {
+            nextSound.setOnPlaybackStatusUpdate(async (status) => {
                 if (status.isLoaded && status.didJustFinish) {
                     setIsPlaying(false);
+                    // Restore original volume when done
+                    if (originalVolume !== null) {
+                        try {
+                            const { VolumeManager } = require("react-native-volume-manager");
+                            await VolumeManager.setVolume(originalVolume, { type: "music", showUI: false });
+                            console.log("[VR] Restored system volume to:", originalVolume);
+                        } catch (e) {
+                            console.log("[VR] Failed to restore volume:", e);
+                        }
+                    }
                 }
             });
 
             await nextSound.playAsync();
             setIsPlaying(true);
+            console.log("[VR] ✅ Playback started (new sound)");
         } catch (error) {
-            console.error("[VR] Error playing audio:", error);
+            console.error("[VR] ❌ Error playing audio:", error);
         }
     };
 
