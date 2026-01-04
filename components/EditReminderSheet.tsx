@@ -509,9 +509,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                 }}
                 handleIndicatorStyle={styles.handleIndicator}
                 backgroundStyle={styles.sheetBackground}
-                // Allow horizontal gestures (slider) to work by requiring more vertical movement
-                activeOffsetY={[-10, 10]}
-                failOffsetX={[-5, 5]}
+                // Less restrictive offset to allow slider while still enabling scroll
+                activeOffsetY={[-15, 15]}
             >
                 <BottomSheetScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
@@ -569,7 +568,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             value={formatTime(time).toLowerCase()}
                             onPress={() => setShowTimePicker(true)}
                         />
-                        <SettingsRow icon="refresh-cw" label="Repeat Task" value={frequencyLabel} onPress={openFrequencyPicker} />
+                        <SettingsRow icon="refresh-cw" label="Repeat" value={frequencyLabel} onPress={openFrequencyPicker} />
 
                         {frequency === "custom" ? (
                             <>
