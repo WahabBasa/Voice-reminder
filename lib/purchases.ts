@@ -24,13 +24,15 @@ export async function initializePurchases(): Promise<void> {
 /**
  * Check if the current user has an active "pro" entitlement.
  * Returns true if user is a pro subscriber, false otherwise.
+ * Errors are logged silently and default to free tier.
  */
 export async function checkProStatus(): Promise<boolean> {
   try {
     const customerInfo = await Purchases.getCustomerInfo();
     return customerInfo.entitlements.active['pro'] !== undefined;
   } catch (error) {
-    console.error('Error checking pro status:', error);
+    // Silent log - expected to fail in dev builds without proper signing
+    console.log('[RevenueCat] checkProStatus failed (silent):', error);
     return false;
   }
 }
@@ -44,7 +46,7 @@ export async function restorePurchases(): Promise<boolean> {
     const customerInfo = await Purchases.restorePurchases();
     return customerInfo.entitlements.active['pro'] !== undefined;
   } catch (error) {
-    console.error('Error restoring purchases:', error);
+    console.log('[RevenueCat] restorePurchases failed (silent):', error);
     return false;
   }
 }
@@ -57,7 +59,7 @@ export async function getOfferings(): Promise<PurchasesOfferings | null> {
     const offerings = await Purchases.getOfferings();
     return offerings;
   } catch (error) {
-    console.error('Error fetching offerings:', error);
+    console.log('[RevenueCat] getOfferings failed (silent):', error);
     return null;
   }
 }
@@ -71,7 +73,7 @@ export async function purchasePackage(pkg: PurchasesPackage): Promise<CustomerIn
     const { customerInfo } = await Purchases.purchasePackage(pkg);
     return customerInfo;
   } catch (error) {
-    console.error('Error purchasing package:', error);
+    console.log('[RevenueCat] purchasePackage failed (silent):', error);
     return null;
   }
 }
@@ -83,7 +85,8 @@ export async function getCustomerInfo(): Promise<CustomerInfo | null> {
   try {
     return await Purchases.getCustomerInfo();
   } catch (error) {
-    console.error('Error getting customer info:', error);
+    console.log('[RevenueCat] getCustomerInfo failed (silent):', error);
     return null;
   }
 }
+

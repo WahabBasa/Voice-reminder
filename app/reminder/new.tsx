@@ -61,6 +61,14 @@ export default function NewReminderScreen() {
       return;
     }
 
+    // Check limit BEFORE calling API to avoid burning credits
+    const { checkCanCreateReminder } = await import('../../lib/usage');
+    const { canCreate } = await checkCanCreateReminder();
+    if (!canCreate) {
+      router.push('/paywall');
+      return;
+    }
+
     const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time.getMinutes().toString().padStart(2, "0")}`;
     const desc = description.trim() || title.trim();
 
@@ -108,8 +116,15 @@ export default function NewReminderScreen() {
           console.log("[VR] Failed to schedule reminder:", e);
         });
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("[VR] Create error:", error);
+
+      // Check if this is a limit exceeded error
+      if (error?.name === 'ReminderLimitExceededError') {
+        router.push('/paywall');
+        return;
+      }
+
       Alert.alert("Error", "Failed to create reminder");
     }
   };
@@ -139,6 +154,7 @@ export default function NewReminderScreen() {
               placeholder="Reminder Title"
               placeholderTextColor={colors.textTertiary}
               autoFocus
+              maxLength={100}
             />
           </View>
         </View>
@@ -246,6 +262,7 @@ export default function NewReminderScreen() {
               multiline
               numberOfLines={3}
               textAlignVertical="top"
+              maxLength={250}
             />
           </View>
         </View>

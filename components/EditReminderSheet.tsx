@@ -573,6 +573,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         onFocus={expandSheet}
                         placeholder="Reminder"
                         placeholderTextColor={stylesVars.mutedText}
+                        maxLength={100}
                     />
 
 
@@ -599,6 +600,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             multiline
                             numberOfLines={2}
                             textAlignVertical="top"
+                            maxLength={250}
                         />
                         <TouchableOpacity
                             style={[styles.regenerateButton, isRegenerating && styles.regenerateButtonDisabled]}

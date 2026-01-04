@@ -292,9 +292,16 @@ export default function HomeScreen() {
           });
         });
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("[VR] Processing error:", error);
       setShowRecording(false);
+
+      // Check if this is a limit exceeded error
+      if (error?.name === 'ReminderLimitExceededError') {
+        router.push('/paywall');
+        return;
+      }
+
       Alert.alert(
         "Error",
         "Failed to process your reminder. Check your internet connection and try again."
@@ -899,7 +906,15 @@ export default function HomeScreen() {
                   {reminders.length === 0 && (
                     <TouchableOpacity
                       style={styles.emptyCta}
-                      onPress={() => setShowRecording(true)}
+                      onPress={async () => {
+                        const { checkCanCreateReminder } = await import('../lib/usage');
+                        const { canCreate } = await checkCanCreateReminder();
+                        if (!canCreate) {
+                          router.push('/paywall');
+                          return;
+                        }
+                        setShowRecording(true);
+                      }}
                       activeOpacity={0.85}
                     >
                       <Text style={styles.emptyCtaText}>Create a reminder</Text>
@@ -1009,9 +1024,16 @@ export default function HomeScreen() {
             >
               <TouchableOpacity
                 style={styles.fabTouchable}
-                onPress={() => {
+                onPress={async () => {
                   if (!isConnected) {
                     setShowOfflineMessage(true);
+                    return;
+                  }
+                  // Check limit BEFORE recording to avoid burning API credits
+                  const { checkCanCreateReminder } = await import('../lib/usage');
+                  const { canCreate } = await checkCanCreateReminder();
+                  if (!canCreate) {
+                    router.push('/paywall');
                     return;
                   }
                   setShowRecording(true);

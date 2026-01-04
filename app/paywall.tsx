@@ -32,6 +32,7 @@ export default function PaywallScreen() {
     const [selectedPackage, setSelectedPackage] = useState<PurchasesPackage | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [isPurchasing, setIsPurchasing] = useState(false);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     // Fetch offerings on mount
     useEffect(() => {
@@ -70,12 +71,8 @@ export default function PaywallScreen() {
                     console.log("[RevenueCat] Selected package:", selected.identifier);
                 }
             } catch (error) {
-                console.error("[RevenueCat] Error fetching offerings:", error);
-                toast.show({
-                    title: "Error",
-                    message: "Failed to load subscription options. Please try again.",
-                    type: "error",
-                });
+                // Log silently - the empty state UI will handle this gracefully
+                console.log("[RevenueCat] Error fetching offerings (silent):", error);
             } finally {
                 setIsLoading(false);
             }
@@ -126,12 +123,11 @@ export default function PaywallScreen() {
             if (error.userCancelled) {
                 console.log("[RevenueCat] User cancelled purchase");
             } else {
-                console.error("[RevenueCat] Purchase error:", error);
-                toast.show({
-                    title: "Purchase Failed",
-                    message: error.message || "Something went wrong. Please try again.",
-                    type: "error",
-                });
+                // Log silently, show inline error banner (not toast)
+                console.log("[RevenueCat] Purchase error (silent):", error);
+                setErrorMessage("Something went wrong. Please try again.");
+                // Auto-dismiss after 4 seconds
+                setTimeout(() => setErrorMessage(null), 4000);
             }
         } finally {
             setIsPurchasing(false);
@@ -270,6 +266,17 @@ export default function PaywallScreen() {
                     </View>
                 </ScrollView>
             </SafeAreaView>
+
+            {/* Error banner - appears above footer */}
+            {errorMessage && (
+                <View style={[styles.errorBanner, { bottom: 180 + insets.bottom }]}>
+                    <AppIcon name="info" size={18} color={colors.destructive} />
+                    <Text style={styles.errorBannerText}>{errorMessage}</Text>
+                    <TouchableOpacity onPress={() => setErrorMessage(null)} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+                        <AppIcon name="x" size={16} color={colors.textTertiary} />
+                    </TouchableOpacity>
+                </View>
+            )}
 
             <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
                 <Text style={styles.termsText}>
@@ -523,5 +530,26 @@ const styles = StyleSheet.create({
         fontSize: scaleFontSize(14),
         color: colors.textTertiary,
         textAlign: "center",
+    },
+    errorBanner: {
+        position: "absolute",
+        alignSelf: "center",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        backgroundColor: colors.surface,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderRadius: 16,
+        shadowColor: "#000",
+        shadowOpacity: 0.08,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 4,
+    },
+    errorBannerText: {
+        fontSize: scaleFontSize(14),
+        fontWeight: "500",
+        color: colors.destructive,
     },
 });

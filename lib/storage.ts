@@ -74,6 +74,14 @@ export async function getReminders(): Promise<Reminder[]> {
 }
 
 export async function addReminder(reminder: Omit<Reminder, "id" | "createdAt">): Promise<Reminder> {
+  // Check if user can create more reminders (enforces free tier limit)
+  const { checkCanCreateReminder, ReminderLimitExceededError } = await import('./usage');
+  const { canCreate, currentCount, limit } = await checkCanCreateReminder();
+
+  if (!canCreate) {
+    throw new ReminderLimitExceededError(currentCount, limit);
+  }
+
   try {
     const reminders = await getReminders();
     const newReminder: Reminder = {
