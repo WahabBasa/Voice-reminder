@@ -92,7 +92,22 @@ function formatTime(date: Date) {
 
 export default function EditReminderScreen() {
   const router = useRouter();
-  const { id, traceId: traceIdParam } = useLocalSearchParams<{ id: string; traceId?: string }>();
+  const params = useLocalSearchParams<{
+    id: string;
+    traceId?: string;
+    initialTitle?: string;
+    initialDescription?: string;
+    initialTime?: string;
+    initialFrequency?: string;
+    initialDays?: string;
+    initialAudioUrl?: string;
+    initialSnoozeEnabled?: string;
+    initialSnoozeDuration?: string;
+    initialVolume?: string;
+    initialVolumeStyle?: string;
+  }>();
+
+  const { id, traceId: traceIdParam } = params;
   const traceId = typeof traceIdParam === "string" && traceIdParam.length ? traceIdParam : createTraceId("tap");
   const updateConvexReminder = useMutation(api.reminders.update);
   const removeConvexReminder = useMutation(api.reminders.remove);
@@ -100,36 +115,55 @@ export default function EditReminderScreen() {
   const bottomSheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ["60%", "95%"], []);
 
-  // Spring animation - runs on UI thread for smooth 60fps
-  const animationConfigs = useBottomSheetSpringConfigs({
-    damping: 80,
-    stiffness: 400,
-    mass: 1,
-    overshootClamping: true,
+  // Hydrate initial state immediately from params if available
+  const [reminder, setReminder] = useState<Reminder | null>(() => {
+    if (params.initialTitle) {
+      return {
+        id: id!,
+        title: params.initialTitle,
+        description: params.initialDescription || "",
+        time: params.initialTime || "",
+        frequency: (params.initialFrequency as any) || "once",
+        days: params.initialDays ? params.initialDays.split(",") : [],
+        audioUrl: params.initialAudioUrl || undefined,
+        snoozeEnabled: params.initialSnoozeEnabled === "true",
+        snoozeDuration: params.initialSnoozeDuration ? Number(params.initialSnoozeDuration) : DEFAULT_ALARM_SETTINGS.snoozeDuration,
+        volume: params.initialVolume ? Number(params.initialVolume) : DEFAULT_ALARM_SETTINGS.volume,
+        volumeStyle: (params.initialVolumeStyle as any) || DEFAULT_ALARM_SETTINGS.volumeStyle,
+        createdAt: new Date().toISOString(), // Mock, overwritten by load
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    return null;
   });
 
-  const [reminder, setReminder] = useState<Reminder | null>(null);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [time, setTime] = useState(new Date());
-  const [frequency, setFrequency] = useState("once");
-  const [days, setDays] = useState<string[]>([]);
+  const [title, setTitle] = useState(reminder?.title || "");
+  const [description, setDescription] = useState(reminder?.description || "");
 
-  const [snoozeEnabled, setSnoozeEnabled] = useState(DEFAULT_ALARM_SETTINGS.snoozeEnabled);
-  const [snoozeDuration, setSnoozeDuration] = useState(DEFAULT_ALARM_SETTINGS.snoozeDuration);
-  const [volume, setVolume] = useState(DEFAULT_ALARM_SETTINGS.volume);
-  const [volumeStyle, setVolumeStyle] = useState<VolumeStyle>(DEFAULT_ALARM_SETTINGS.volumeStyle);
+  const [time, setTime] = useState(() => {
+    if (reminder?.time) {
+      const [hours, minutes] = reminder.time.split(":").map(Number);
+      const date = new Date();
+      date.setHours(hours, minutes, 0, 0);
+      return date;
+    }
+    return new Date();
+  });
+
+  const [frequency, setFrequency] = useState(reminder?.frequency === "weekly" ? "custom" : (reminder?.frequency || "once"));
+  const [days, setDays] = useState<string[]>(reminder?.days || []);
+
+  const [snoozeEnabled, setSnoozeEnabled] = useState(reminder?.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled);
+  const [snoozeDuration, setSnoozeDuration] = useState(reminder?.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration);
+  const [volume, setVolume] = useState(reminder?.volume ?? DEFAULT_ALARM_SETTINGS.volume);
+  const [volumeStyle, setVolumeStyle] = useState<VolumeStyle>(reminder?.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle);
 
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showDaysPicker, setShowDaysPicker] = useState(false);
-
   const [showRepeatTaskModal, setShowRepeatTaskModal] = useState(false);
-
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-
-  // Sound regeneration state
-  const [soundText, setSoundText] = useState("");
+  const [soundText, setSoundText] = useState(reminder?.description || "");
   const [isRegenerating, setIsRegenerating] = useState(false);
   const regenerateAudio = useAction(api.actions.regenerateReminderAudio);
   const toast = useToast();
@@ -142,32 +176,31 @@ export default function EditReminderScreen() {
     const found = reminders.find((r) => r.id === id);
     if (!found) return;
 
+    // Only update if deeper data is needed, otherwise silent sync
     setReminder(found);
-    setTitle(found.title || "");
-    setDescription(found.description || "");
-    setSoundText(found.description || "");
-    setFrequency(found.frequency === "weekly" ? "custom" : (found.frequency || "once"));
-    setDays(found.days || []);
+    if (!params.initialTitle) {
+      setTitle(found.title || "");
+      setDescription(found.description || "");
+      setSoundText(found.description || "");
+      setFrequency(found.frequency === "weekly" ? "custom" : (found.frequency || "once"));
+      setDays(found.days || []);
+      setSnoozeEnabled(found.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled);
+      setSnoozeDuration(found.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration);
+      setVolume(found.volume ?? DEFAULT_ALARM_SETTINGS.volume);
+      setVolumeStyle(found.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle);
 
-    setSnoozeEnabled(found.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled);
-    setSnoozeDuration(found.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration);
-    setVolume(found.volume ?? DEFAULT_ALARM_SETTINGS.volume);
-    setVolumeStyle(found.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle);
-
-
-
-    if (found.time) {
-      const [hours, minutes] = found.time.split(":").map(Number);
-      const date = new Date();
-      date.setHours(hours, minutes, 0, 0);
-      setTime(date);
+      if (found.time) {
+        const [hours, minutes] = found.time.split(":").map(Number);
+        const date = new Date();
+        date.setHours(hours, minutes, 0, 0);
+        setTime(date);
+      }
     }
 
-    // Preload audio in background AFTER sheet animation completes
-    // Delayed to prevent blocking the bottom sheet open animation
+    // Preload audio in background
     if (found.audioUrl) {
       const audioUrl = found.audioUrl;
-      perfLog(traceId, "nav.edit", "audio_preload_scheduled", { t: Date.now(), delayMs: 300 });
+      // Small delay to let initial render finish, but not dependent on animation
       setTimeout(async () => {
         try {
           perfLog(traceId, "nav.edit", "audio_preload_start", { t: Date.now() });
@@ -179,27 +212,21 @@ export default function EditReminderScreen() {
           perfLog(traceId, "nav.edit", "audio_preload_done", { t: Date.now() });
         } catch (e) {
           console.log("[VR] Failed to preload audio:", e);
-          perfLog(traceId, "nav.edit", "audio_preload_error", { t: Date.now(), error: String(e) });
         }
-      }, 300); // Delay to let bottom sheet animation complete
+      }, 100);
     }
     perfLog(traceId, "nav.edit", "loadReminder_done", { t: Date.now(), reminderId: id });
   }, [id, traceId]);
 
   useEffect(() => {
     perfLog(traceId, "nav.edit", "screen_mount", { t: Date.now(), reminderId: id ?? null });
-    const raf = requestAnimationFrame(() => {
-      perfLog(traceId, "nav.edit", "screen_first_frame", { t: Date.now() });
-    });
-    // Defer data loading until after navigation animation completes
-    perfLog(traceId, "nav.edit", "runAfterInteractions_scheduled", { t: Date.now() });
-    const task = InteractionManager.runAfterInteractions(() => {
-      perfLog(traceId, "nav.edit", "runAfterInteractions_start", { t: Date.now() });
-      loadReminder();
-    });
+
+    // Load immediately - no InteractionManager delay
+    // Local storage is fast (~5-10ms), better to block slightly than to delay the whole UI state
+    // which confuses the bottom sheet opening animation
+    loadReminder();
+
     return () => {
-      cancelAnimationFrame(raf);
-      task.cancel();
       perfLog(traceId, "nav.edit", "screen_unmount", { t: Date.now() });
     };
   }, [loadReminder, traceId, id]);
@@ -561,7 +588,7 @@ export default function EditReminderScreen() {
         index={0}
         enablePanDownToClose
         animateOnMount
-        animationConfigs={animationConfigs}
+        // animationConfigs={animationConfigs}  <-- REVERTED TO DEFAULT
         enableDynamicSizing={false}
         backdropComponent={renderBackdrop}
         onChange={handleSheetChange}

@@ -33,6 +33,7 @@ import { readFileAsBase64 } from "../lib/convex";
 import { deleteReminderWithAudio, scheduleReminder } from "../lib/notifications";
 import {
   addReminder,
+  DEFAULT_ALARM_SETTINGS,
   deleteReminder as deleteReminderStorage,
   getHistory,
   getReminders,
@@ -41,6 +42,7 @@ import {
   ReminderHistory,
 } from "../lib/storage";
 import RecordingOverlay from "../components/RecordingOverlay";
+import EditReminderSheet from "../components/EditReminderSheet";
 import SwipeableCard from "../components/SwipeableCard";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
@@ -301,6 +303,9 @@ export default function HomeScreen() {
     }
   };
 
+  // State for edit overlay - renders instantly without navigation
+  const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
+
   const handleReminderPress = useCallback(
     (reminder: Reminder) => {
       const reminderId = reminder.id;
@@ -314,12 +319,26 @@ export default function HomeScreen() {
         ...tapDebugSnapshotRef.current,
       });
 
-      const url = `/reminder/edit?id=${encodeURIComponent(reminderId)}&traceId=${encodeURIComponent(traceId)}`;
-      perfLog(traceId, "ui.tap", "router_push_edit", { t: Date.now(), url });
-      router.push(url);
+      // Open overlay immediately - no navigation delay!
+      perfLog(traceId, "ui.tap", "set_editing_reminder", { t: Date.now(), reminderId });
+      setEditingReminder(reminder);
     },
-    [router]
+    []
   );
+
+  const handleEditSheetClose = useCallback(() => {
+    setEditingReminder(null);
+  }, []);
+
+  const handleEditSheetSave = useCallback((updated: Reminder) => {
+    // Update local state with saved changes
+    setReminders(prev => prev.map(r => r.id === updated.id ? updated : r));
+  }, []);
+
+  const handleEditSheetDelete = useCallback((deleted: Reminder) => {
+    // Remove from local state
+    setReminders(prev => prev.filter(r => r.id !== deleted.id));
+  }, []);
 
   // Track items currently exiting (being marked done)
   const [exitingIds, setExitingIds] = useState<Set<string>>(new Set());
@@ -1008,6 +1027,16 @@ export default function HomeScreen() {
         onRecordingComplete={handleRecordingComplete}
         onCancelProcessing={handleCancelProcessing}
       />
+
+      {/* Edit overlay - renders on top without navigation */}
+      {editingReminder && (
+        <EditReminderSheet
+          reminder={editingReminder}
+          onClose={handleEditSheetClose}
+          onSave={handleEditSheetSave}
+          onDelete={handleEditSheetDelete}
+        />
+      )}
     </SafeAreaView>
   );
 }

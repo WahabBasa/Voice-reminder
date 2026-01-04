@@ -47,7 +47,7 @@ export default function RootLayout() {
                 name="reminder/edit"
                 options={{
                   animation: "fade",
-                  animationDuration: 80,
+                  animationDuration: 50,
                   presentation: "transparentModal",
                   contentStyle: { backgroundColor: "transparent" },
                 }}
