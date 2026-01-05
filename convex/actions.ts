@@ -62,13 +62,18 @@ function normalizeReminderDescription(input: unknown): string {
   if (!text) return "";
 
   // Strip common greetings the model/user might include at the start.
-  // Examples: "Hey!", "Hey there,", "Hello -", "Hi:"
-  const withoutGreeting = text.replace(
+  // English: "Hey!", "Hey there,", "Hello -", "Hi:"
+  // Arabic: "مرحبا", "أهلاً", "السلام عليكم"
+  let normalized = text.replace(
     /^(hey|hi|hello)\b(?:\s+(there|friend))?[\s,:\-!]+/i,
     ""
   );
+  normalized = normalized.replace(
+    /^(مرحبا|أهلاً|أهلا|السلام عليكم)[\s,،:\-!]*/,
+    ""
+  );
 
-  return withoutGreeting.trim();
+  return normalized.trim();
 }
 
 let cachedResembleProjectUuid: string | null = null;
@@ -248,7 +253,9 @@ export const processVoiceReminder = action({
       messages: [
         {
           role: "system",
-          content: `Parse the user's reminder request into structured JSON. Return exactly this format:
+          content: `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
+
+Return exactly this format:
 {
   "title": "short title (2-4 words)",
   "description": "what to say when reminder fires",
@@ -258,41 +265,46 @@ export const processVoiceReminder = action({
   "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom)
 }
 
+LANGUAGE RULES:
+- If the input is in Arabic, return "title" and "description" in Arabic
+- If the input is in English, return "title" and "description" in English
+- The JSON field names and "frequency"/"days" values always remain in English
+- For Arabic days: الأحد=sun, الاثنين=mon, الثلاثاء=tue, الأربعاء=wed, الخميس=thu, الجمعة=fri, السبت=sat
+
 CURRENT CONTEXT:
 - Current date: ${currentDate} (${currentDayOfWeek})
 - Current time: ${currentTime}
 - User's timezone: ${timezone}
 
-IMPORTANT - Date parsing rules:
-- If user says "Sunday", "next Sunday", "this Sunday", calculate the actual date (YYYY-MM-DD)
-- If user says "tomorrow", calculate tomorrow's date
-- If user says "today", use today's date: ${currentDate}
-- If user mentions a specific day (Monday, Tuesday, etc.), find the NEXT occurrence of that day
-- For relative days: "in 3 days" = add 3 days to current date
-- ONLY include "date" for one-time reminders (frequency: "once") on a specific day
+DATE PARSING RULES (English & Arabic):
+- "Sunday"/"يوم الأحد", "tomorrow"/"غداً", "today"/"اليوم" → calculate actual YYYY-MM-DD
+- "next Sunday"/"الأحد القادم" → find the NEXT occurrence
+- "in 3 days"/"بعد ثلاثة أيام" → add days to current date
+- ONLY include "date" for one-time reminders (frequency: "once")
 - Do NOT include "date" for recurring/daily reminders
 
-IMPORTANT - Relative time rules:
-- "in X minutes" = add X minutes to current time (${currentTime})
-- "in X hours" = add X hours to current time
-- "in 2 minutes" at ${currentTime} means calculate the exact time ${currentTime} + 2 minutes
-- Always calculate the actual HH:MM result for relative times
+RELATIVE TIME RULES:
+- "in X minutes"/"بعد X دقائق" = add to current time (${currentTime})
+- "in X hours"/"بعد X ساعات" = add hours to current time
+- Always calculate the actual HH:MM result
 
-IMPORTANT - Intent + tone rules:
-- Keep the exact intent of the user's request (do not add new meaning, tasks, or extra context).
-- Do not add greetings or filler like "Hey", "Hi", "Hello", "Hey there" at the start of the description.
-- Keep the description short, direct, and reminder-like.
+ARABIC TIME EXPRESSIONS:
+- "الساعة ثمانية صباحاً" = 08:00
+- "الساعة تسعة مساءً" = 21:00
+- "صباحاً" = AM, "مساءً" = PM
 
-IMPORTANT - Time parsing rules:
-- Speech-to-text often transcribes times with spaces instead of colons
-- "10 4 p.m." means 10:04 PM = "22:04"
-- "9 30 a.m." means 9:30 AM = "09:30"
-- "10 15 p.m." means 10:15 PM = "22:15"
+INTENT + TONE RULES:
+- Keep the exact intent (do not add meaning or extra context)
+- Do not add greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم")
+- Keep the description short, direct, and reminder-like
+- Arabic example: "حان وقت تناول الدواء" (Time to take your medicine)
+
+TIME PARSING (Speech-to-text quirks):
+- "10 4 p.m." = 22:04, "9 30 a.m." = 09:30
 - The first number is hours, the second is minutes
 
-If the user doesn't specify a time, use a reasonable default.
-If the user doesn't specify frequency, assume "once".
-The description should be a friendly reminder message like "Time to take your medicine" or "Don't forget to call mom".`,
+If no time specified, use a reasonable default.
+If no frequency specified, assume "once".`,
         },
         {
           role: "user",
