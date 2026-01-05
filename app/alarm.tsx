@@ -26,7 +26,7 @@ try {
 }
 
 try {
-    Sound = require("react-native-sound");
+    Sound = require("react-native-sound").default;
     console.log("[VR] ✅ react-native-sound loaded successfully:", !!Sound);
     // Enable playback in silence mode (iOS only - setCategory doesn't exist on Android)
     if (Sound && Platform.OS === "ios" && typeof Sound.setCategory === "function") {

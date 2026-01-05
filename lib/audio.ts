@@ -77,106 +77,299 @@ export function getRecording(): Audio.Recording | null {
   return recording;
 }
 
-let currentSound: Audio.Sound | null = null;
 
-export async function playAudio(uri: string, waitForFinish = false): Promise<void> {
-  console.log(`[VR] playAudio called with uri: ${uri}`);
+// ============================================================
+// AudioService - Unified audio playback with resource management
+// ============================================================
 
-  // Stop any currently playing sound
-  if (currentSound) {
-    console.log("[VR] Stopping previous sound");
-    try {
-      await currentSound.unloadAsync();
-    } catch (e) {
-      console.log("[VR] Error unloading previous sound:", e);
-    }
-    currentSound = null;
-  }
-
-  console.log("[VR] Setting audio mode...");
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: false,
-    playsInSilentModeIOS: true,
-    staysActiveInBackground: true,
-  });
-
-  console.log("[VR] Creating sound object...");
-  const { sound } = await Audio.Sound.createAsync(
-    { uri },
-    { shouldPlay: true, volume: 1.0 }
-  );
-  currentSound = sound;
-  console.log("[VR] Sound created and playing");
-
-  await new Promise<void>((resolve) => {
-    sound.setOnPlaybackStatusUpdate((status) => {
-      if (status.isLoaded && status.didJustFinish) {
-        console.log("[VR] Audio playback finished");
-        sound.unloadAsync();
-        currentSound = null;
-        resolve();
-      }
-    });
-    if (!waitForFinish) {
-      resolve();
-    }
-  });
+export interface PlayOptions {
+  volume?: number;           // 0-1, controls system volume for playback
+  loop?: boolean;            // For alarm continuous playback
+  useNativeSound?: boolean;  // Use react-native-sound (bypasses silent mode)
+  onFinish?: () => void;     // Called when playback finishes
 }
 
-/**
- * Optimized function for playing audio multiple times back-to-back.
- * Preloads the sound once and replays with minimal gap between repeats.
- */
-export async function playAudioRepeated(uri: string, repeatCount: number): Promise<void> {
-  console.log(`[VR] playAudioRepeated called, repeats: ${repeatCount}`);
+// Optional native modules - require dev client rebuild
+let VolumeManager: any = null;
+let NativeSound: any = null;
 
-  // Stop any currently playing sound
-  if (currentSound) {
-    try {
-      await currentSound.unloadAsync();
-    } catch (e) {
-      console.log("[VR] Error unloading previous sound:", e);
+try {
+  VolumeManager = require("react-native-volume-manager").VolumeManager;
+} catch (e) {
+  console.log("[AudioService] VolumeManager not available");
+}
+
+try {
+  NativeSound = require("react-native-sound").default;
+  // iOS only - enable playback in silent mode
+  if (NativeSound && Platform.OS === "ios" && typeof NativeSound.setCategory === "function") {
+    NativeSound.setCategory("Playback");
+  }
+} catch (e) {
+  console.log("[AudioService] react-native-sound not available");
+}
+
+import { Platform } from "react-native";
+
+class AudioServiceClass {
+  private currentSound: Audio.Sound | null = null;
+  private nativeSound: any = null;
+  private isLoading = false;
+  private loadAborted = false;
+  private originalVolume: number | null = null;
+  private preloadDebounceTimer: NodeJS.Timeout | null = null;
+  private preloadedUri: string | null = null;
+
+  /**
+   * Play audio from URI with options
+   */
+  async play(uri: string, options: PlayOptions = {}): Promise<void> {
+    const { volume = 1, loop = false, useNativeSound = false, onFinish } = options;
+    console.log("[AudioService] play()", { uri: uri.slice(0, 50), volume, loop, useNativeSound });
+
+    // Stop any current playback first
+    await this.stop();
+
+    // Set system volume if VolumeManager available
+    if (VolumeManager && Platform.OS === "android") {
+      try {
+        const volumeResult = await VolumeManager.getVolume();
+        this.originalVolume = volumeResult.volume;
+        await VolumeManager.setVolume(volume, { type: "music", showUI: false });
+        console.log("[AudioService] System volume set to:", volume);
+      } catch (e) {
+        console.log("[AudioService] VolumeManager error:", e);
+      }
     }
-    currentSound = null;
+
+    // Use react-native-sound for alarm (bypasses silent mode)
+    if (useNativeSound && NativeSound) {
+      return this.playWithNativeSound(uri, { loop, onFinish });
+    }
+
+    // Use expo-av for preview
+    return this.playWithExpoAv(uri, { volume, loop, onFinish });
   }
 
-  // Set audio mode once
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: false,
-    playsInSilentModeIOS: true,
-    staysActiveInBackground: true,
-  });
+  /**
+   * Play using react-native-sound (for alarms - bypasses silent mode)
+   */
+  private async playWithNativeSound(uri: string, options: { loop: boolean; onFinish?: () => void }): Promise<void> {
+    const { loop, onFinish } = options;
+    console.log("[AudioService] Using react-native-sound");
 
-  // Create sound once
-  const { sound } = await Audio.Sound.createAsync(
-    { uri },
-    { shouldPlay: false, volume: 1.0 }
-  );
-  currentSound = sound;
+    return new Promise((resolve, reject) => {
+      const sound = new NativeSound(uri, "", (error: any) => {
+        if (error) {
+          console.log("[AudioService] Failed to load native sound:", error);
+          this.restoreSystemVolume();
+          reject(error);
+          return;
+        }
 
-  // Play the sound repeatCount times
-  for (let i = 0; i < repeatCount; i++) {
-    // Rewind to start
-    await sound.setPositionAsync(0);
+        console.log("[AudioService] Native sound loaded");
+        sound.setVolume(1); // Full volume since system volume is already set
+        sound.setNumberOfLoops(loop ? -1 : 0);
 
-    // Play and wait for finish
-    await new Promise<void>((resolve) => {
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
+        sound.play((success: boolean) => {
+          if (!loop) {
+            this.restoreSystemVolume();
+            onFinish?.();
+          }
           resolve();
+        });
+
+        this.nativeSound = sound;
+      });
+    });
+  }
+
+  /**
+   * Play using expo-av (for previews)
+   */
+  private async playWithExpoAv(uri: string, options: { volume: number; loop: boolean; onFinish?: () => void }): Promise<void> {
+    const { volume, loop, onFinish } = options;
+    console.log("[AudioService] Using expo-av");
+
+    this.isLoading = true;
+    this.loadAborted = false;
+
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: true,
+      });
+
+      // Check if already preloaded
+      if (this.currentSound && this.preloadedUri === uri) {
+        console.log("[AudioService] Using preloaded sound");
+        await this.currentSound.setPositionAsync(0);
+        await this.currentSound.setVolumeAsync(1); // System volume handles actual level
+      } else {
+        // Load new sound
+        if (this.loadAborted) return;
+
+        const { sound } = await Audio.Sound.createAsync(
+          { uri },
+          { volume: 1, shouldPlay: false, isLooping: loop }
+        );
+
+        if (this.loadAborted) {
+          await sound.unloadAsync();
+          return;
+        }
+
+        this.currentSound = sound;
+        this.preloadedUri = uri;
+      }
+
+      // Set up finish handler
+      this.currentSound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish && !loop) {
+          this.restoreSystemVolume();
+          onFinish?.();
         }
       });
-      sound.playAsync();
-    });
 
-    // Tiny gap between repeats (only if not the last one)
-    if (i < repeatCount - 1) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await this.currentSound.playAsync();
+      console.log("[AudioService] Playback started");
+    } catch (e) {
+      console.log("[AudioService] expo-av playback error:", e);
+      this.restoreSystemVolume();
+      throw e;
+    } finally {
+      this.isLoading = false;
     }
   }
 
-  // Cleanup
-  await sound.unloadAsync();
-  currentSound = null;
-  console.log("[VR] Audio playback completed all repeats");
+  /**
+   * Stop current playback and cleanup resources
+   */
+  async stop(): Promise<void> {
+    console.log("[AudioService] stop()");
+
+    // Abort any in-progress loading
+    this.loadAborted = true;
+
+    // Stop native sound
+    if (this.nativeSound) {
+      try {
+        this.nativeSound.stop();
+        this.nativeSound.release();
+      } catch (e) {
+        console.log("[AudioService] Error stopping native sound:", e);
+      }
+      this.nativeSound = null;
+    }
+
+    // Stop expo-av sound
+    if (this.currentSound) {
+      try {
+        await this.currentSound.stopAsync();
+        await this.currentSound.unloadAsync();
+      } catch (e) {
+        console.log("[AudioService] Error stopping expo-av sound:", e);
+      }
+      this.currentSound = null;
+      this.preloadedUri = null;
+    }
+
+    // Restore system volume
+    await this.restoreSystemVolume();
+  }
+
+  /**
+   * Preload audio (debounced to prevent rapid attempts)
+   */
+  async preload(uri: string): Promise<void> {
+    // Cancel any pending preload
+    if (this.preloadDebounceTimer) {
+      clearTimeout(this.preloadDebounceTimer);
+    }
+
+    // Skip if already preloaded
+    if (this.preloadedUri === uri && this.currentSound) {
+      console.log("[AudioService] Already preloaded:", uri.slice(0, 50));
+      return;
+    }
+
+    // Debounce preload attempts
+    return new Promise((resolve) => {
+      this.preloadDebounceTimer = setTimeout(async () => {
+        try {
+          console.log("[AudioService] Preloading:", uri.slice(0, 50));
+
+          // Cleanup existing
+          if (this.currentSound) {
+            await this.currentSound.unloadAsync().catch(() => { });
+            this.currentSound = null;
+          }
+
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+          });
+
+          const { sound } = await Audio.Sound.createAsync(
+            { uri },
+            { volume: 1, shouldPlay: false }
+          );
+
+          this.currentSound = sound;
+          this.preloadedUri = uri;
+          console.log("[AudioService] Preload complete");
+        } catch (e) {
+          console.log("[AudioService] Preload failed:", e);
+        }
+        resolve();
+      }, 200); // 200ms debounce
+    });
+  }
+
+  /**
+   * Restore system volume to original level
+   */
+  private async restoreSystemVolume(): Promise<void> {
+    if (this.originalVolume !== null && VolumeManager && Platform.OS === "android") {
+      try {
+        await VolumeManager.setVolume(this.originalVolume, { type: "music", showUI: false });
+        console.log("[AudioService] Restored system volume to:", this.originalVolume);
+      } catch (e) {
+        console.log("[AudioService] Error restoring volume:", e);
+      }
+      this.originalVolume = null;
+    }
+  }
+
+  /**
+   * Check if currently playing
+   */
+  get isPlaying(): boolean {
+    return this.currentSound !== null || this.nativeSound !== null;
+  }
 }
+
+// Export singleton instance
+export const audioService = new AudioServiceClass();
+
+// Legacy exports for backward compatibility (deprecated)
+let currentSound: Audio.Sound | null = null;
+
+/** @deprecated Use audioService.play() instead */
+export async function playAudio(uri: string, waitForFinish = false): Promise<void> {
+  console.log("[VR] playAudio (deprecated) - use audioService.play()");
+  await audioService.play(uri, {});
+}
+
+/** @deprecated Use audioService.play() with loop option instead */
+export async function playAudioRepeated(uri: string, repeatCount: number): Promise<void> {
+  console.log("[VR] playAudioRepeated (deprecated) - use audioService.play()");
+  for (let i = 0; i < repeatCount; i++) {
+    await audioService.play(uri, {});
+    if (i < repeatCount - 1) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+}
+
