@@ -78,11 +78,10 @@ export default function AlarmScreen() {
         const audioPath = `${FileSystem.documentDirectory}reminder_${reminderId}.mp3`;
         console.log("[VR] Audio path:", audioPath);
 
-        // IMPORTANT: react-native-sound plays via MUSIC stream by default
-        // So we set MUSIC stream volume (not ALARM) to make it audible
+        // Use native AlarmAudioModule with USAGE_ALARM to bypass silent mode
         const success = await alarmAudioService.play(audioPath, {
             volume: targetVolume,
-            streamType: "music", // Match react-native-sound's actual stream
+            streamType: "alarm", // Uses native AlarmAudioModule with USAGE_ALARM
             loop: true,
         });
 

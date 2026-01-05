@@ -41,7 +41,8 @@
       "./plugins/withNotifeeAndroidMaven",
       "./plugins/withAndroidSigning",
       "./plugins/withFullScreenAlarm",
-      "./plugins/withArmOnlyBuild"
+      "./plugins/withArmOnlyBuild",
+      "./plugins/withAlarmAudioModule"
     ]
   }
 }

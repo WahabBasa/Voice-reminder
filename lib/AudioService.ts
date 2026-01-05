@@ -5,10 +5,13 @@
  * Use separate instances for alarm vs preview to avoid lifecycle conflicts.
  */
 import { Audio } from "expo-av";
-import { Platform } from "react-native";
+import { Platform, NativeModules } from "react-native";
 
 let VolumeManager: any = null;
 let Sound: any = null;
+
+// Native alarm audio module (uses USAGE_ALARM on Android to bypass silent mode)
+const AlarmAudioModule = NativeModules.AlarmAudioModule;
 
 try {
     VolumeManager = require("react-native-volume-manager").VolumeManager;
@@ -56,7 +59,34 @@ export class AudioService {
             // Stop any existing playback first
             await this.stop();
 
-            // Set system volume if VolumeManager available
+            // For alarm stream on Android, use native AlarmAudioModule with USAGE_ALARM
+            // This bypasses silent mode and plays through the alarm volume stream
+            if (Platform.OS === "android" && streamType === "alarm" && AlarmAudioModule) {
+                console.log("[AudioService] Using native AlarmAudioModule for alarm stream");
+                console.log(`[AudioService] File: ${uri}, Volume: ${volume}`);
+
+                try {
+                    // Set alarm volume via VolumeManager
+                    if (VolumeManager) {
+                        const volumeResult = await VolumeManager.getVolume();
+                        this.originalVolume = volumeResult.alarm ?? volumeResult.volume;
+                        await VolumeManager.setVolume(volume, { type: "alarm", showUI: false });
+                        console.log(`[AudioService] Set ALARM volume to ${volume}`);
+                    }
+
+                    const success = await AlarmAudioModule.play(uri, volume);
+                    if (success) {
+                        this.isPlaying = true;
+                        this.sound = { isNative: true }; // marker for native playback
+                        console.log("[AudioService] ✅ Playing via native AlarmAudioModule (USAGE_ALARM)");
+                        return true;
+                    }
+                } catch (nativeError) {
+                    console.log("[AudioService] Native module error, falling back:", nativeError);
+                }
+            }
+
+            // Set system volume if VolumeManager available (for music stream or fallback)
             if (Platform.OS === "android" && VolumeManager) {
                 try {
                     const volumeResult = await VolumeManager.getVolume();
@@ -172,7 +202,11 @@ export class AudioService {
     async stop(): Promise<void> {
         if (this.sound) {
             try {
-                if (Sound && typeof this.sound.stop === "function") {
+                // Check if this is native AlarmAudioModule playback
+                if (this.sound.isNative && AlarmAudioModule) {
+                    await AlarmAudioModule.stop();
+                    console.log("[AudioService] Stopped native AlarmAudioModule");
+                } else if (Sound && typeof this.sound.stop === "function") {
                     this.sound.stop();
                     this.sound.release();
                 } else if (typeof this.sound.stopAsync === "function") {
@@ -195,6 +229,42 @@ export class AudioService {
      */
     getIsPlaying(): boolean {
         return this.isPlaying;
+    }
+
+    /**
+     * Set volume during playback (for live adjustments)
+     */
+    async setVolume(volume: number): Promise<void> {
+        if (!this.isPlaying) return;
+
+        try {
+            // Update system volume
+            if (Platform.OS === "android" && VolumeManager) {
+                await VolumeManager.setVolume(volume, {
+                    type: this.streamType,
+                    showUI: false,
+                });
+                console.log(`[AudioService] Set ${this.streamType} volume to ${volume}`);
+            }
+
+            // Update native module playback volume
+            if (this.sound?.isNative && AlarmAudioModule) {
+                await AlarmAudioModule.setVolume(volume);
+                console.log(`[AudioService] Set native playback volume to ${volume}`);
+            }
+            // Update react-native-sound volume
+            else if (Sound && typeof this.sound?.setVolume === "function") {
+                this.sound.setVolume(volume);
+                console.log(`[AudioService] Set react-native-sound volume to ${volume}`);
+            }
+            // Update expo-av volume
+            else if (typeof this.sound?.setVolumeAsync === "function") {
+                await this.sound.setVolumeAsync(volume);
+                console.log(`[AudioService] Set expo-av volume to ${volume}`);
+            }
+        } catch (e) {
+            console.log("[AudioService] setVolume error:", e);
+        }
     }
 
     private async restoreVolume(): Promise<void> {
