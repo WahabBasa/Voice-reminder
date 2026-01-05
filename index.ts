@@ -3,8 +3,29 @@ import notifee, { EventType } from "@notifee/react-native";
 import { handleNotificationEvent } from "./lib/notifications";
 import * as Linking from "expo-linking";
 
+// Deduplication guard to prevent rapid navigation
+let lastNavigatedNotificationId: string | null = null;
+let lastNavigationTime = 0;
+const NAVIGATION_DEBOUNCE_MS = 2000;
+
 // Navigate to alarm screen with notification data
 function navigateToAlarmScreen(notification: any) {
+  const notificationId = notification?.id;
+  const now = Date.now();
+
+  // Skip if same notification within debounce window
+  if (
+    notificationId &&
+    notificationId === lastNavigatedNotificationId &&
+    now - lastNavigationTime < NAVIGATION_DEBOUNCE_MS
+  ) {
+    console.log("[VR] Skipping duplicate navigation for:", notificationId);
+    return;
+  }
+
+  lastNavigatedNotificationId = notificationId || null;
+  lastNavigationTime = now;
+
   const data = notification?.data;
   const params = new URLSearchParams({
     notificationId: notification?.id || "",

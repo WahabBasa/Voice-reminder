@@ -6,43 +6,13 @@ import {
     View,
     Vibration,
     Dimensions,
-    Platform,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import notifee, { AndroidCategory, AndroidImportance, TriggerType, TimestampTrigger } from "@notifee/react-native";
+import * as FileSystem from "expo-file-system/legacy";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
-
-// Optional imports - require dev client rebuild
-// App will work without them, just won't have per-reminder volume control until rebuilt
-let VolumeManager: any = null;
-let Sound: any = null;
-
-try {
-    VolumeManager = require("react-native-volume-manager").VolumeManager;
-    console.log("[VR] ✅ VolumeManager loaded successfully:", !!VolumeManager);
-} catch (e) {
-    console.log("[VR] ❌ VolumeManager not available (needs dev client rebuild):", e);
-}
-
-try {
-    Sound = require("react-native-sound").default;
-    console.log("[VR] ✅ react-native-sound loaded successfully:", !!Sound);
-    // Enable playback in silence mode (iOS only - setCategory doesn't exist on Android)
-    if (Sound && Platform.OS === "ios" && typeof Sound.setCategory === "function") {
-        Sound.setCategory("Playback");
-        console.log("[VR] Set Sound category to Playback (iOS)");
-    }
-} catch (e) {
-    console.log("[VR] ❌ react-native-sound not available (needs dev client rebuild):", e);
-}
-
-// Log module status at load time
-console.log("[VR] === ALARM MODULE STATUS ===");
-console.log("[VR] Platform:", Platform.OS);
-console.log("[VR] VolumeManager available:", !!VolumeManager);
-console.log("[VR] Sound available:", !!Sound);
-console.log("[VR] ==============================");
+import { alarmAudioService } from "../lib/AudioService";
 
 const { width, height } = Dimensions.get("window");
 
@@ -60,10 +30,9 @@ export default function AlarmScreen() {
     }>();
 
     const [isPlaying, setIsPlaying] = useState(true);
-    const soundRef = useRef<any>(null);
     const vibrationIntervalRef = useRef<NodeJS.Timeout | null>(null);
-    const volumeRampIntervalRef = useRef<NodeJS.Timeout | null>(null);
-    const originalMusicVolumeRef = useRef<number | null>(null);
+    const isMountedRef = useRef(true);
+    const isExplicitDismissRef = useRef(false);
 
     const title = params.title || "Reminder";
     const description = params.description || "";
@@ -73,9 +42,12 @@ export default function AlarmScreen() {
     const snoozeEnabled = params.snoozeEnabled !== "false";
     const snoozeDurationMinutes = Math.max(1, Math.min(60, Number(params.snoozeDuration ?? "5") || 5));
     const targetVolume = Math.max(0, Math.min(1, Number(params.volume ?? "1") || 1));
-    const volumeStyle = params.volumeStyle === "progressive" ? "progressive" : "standard";
 
     useEffect(() => {
+        console.log("[VR] AlarmScreen: useEffect mount, starting audio...");
+        isMountedRef.current = true;
+        isExplicitDismissRef.current = false;
+
         // Start audio playback loop
         startAudioLoop();
 
@@ -83,167 +55,52 @@ export default function AlarmScreen() {
         startVibration();
 
         return () => {
-            stopAudio();
+            console.log("[VR] AlarmScreen: useEffect cleanup, isExplicitDismiss:", isExplicitDismissRef.current);
+            isMountedRef.current = false;
+
+            // Only stop audio if this is an explicit user action (dismiss/snooze)
+            // This prevents audio stopping on navigation churn / React strict mode remounts
+            if (isExplicitDismissRef.current) {
+                stopAudio();
+            } else {
+                console.log("[VR] AlarmScreen: Skipping audio stop - not an explicit dismiss");
+            }
             stopVibration();
         };
     }, []);
 
     const startAudioLoop = async () => {
         console.log("[VR] ========== ALARM AUDIO START ==========");
-        console.log("[VR] Platform:", Platform.OS);
-        console.log("[VR] VolumeManager available:", !!VolumeManager);
-        console.log("[VR] Sound (react-native-sound) available:", !!Sound);
-        console.log("[VR] Target volume from params:", targetVolume);
-        console.log("[VR] Volume style:", volumeStyle);
+        console.log("[VR] Target volume:", targetVolume);
         console.log("[VR] Reminder ID:", reminderId);
 
-        try {
-            // On Android, save the original MUSIC volume and set to our target volume
-            // This allows per-reminder volume control and bypasses silent mode
-            // We use MUSIC stream because react-native-sound plays on MUSIC stream
-            if (Platform.OS === "android" && VolumeManager) {
-                console.log("[VR] Attempting to control volume via VolumeManager...");
-                try {
-                    const volumeResult = await VolumeManager.getVolume();
-                    console.log("[VR] VolumeManager.getVolume() result:", JSON.stringify(volumeResult));
+        // Get audio path from local storage
+        const audioPath = `${FileSystem.documentDirectory}reminder_${reminderId}.mp3`;
+        console.log("[VR] Audio path:", audioPath);
 
-                    // Save original music volume (this is what react-native-sound uses)
-                    originalMusicVolumeRef.current = volumeResult.volume;
-                    console.log(`[VR] Saved original music volume: ${originalMusicVolumeRef.current}`);
-                    console.log(`[VR] Setting music volume to: ${targetVolume}`);
+        // IMPORTANT: react-native-sound plays via MUSIC stream by default
+        // So we set MUSIC stream volume (not ALARM) to make it audible
+        const success = await alarmAudioService.play(audioPath, {
+            volume: targetVolume,
+            streamType: "music", // Match react-native-sound's actual stream
+            loop: true,
+        });
 
-                    // Set MUSIC stream volume to reminder's target volume
-                    // This makes the alarm play at the set volume regardless of device settings
-                    await VolumeManager.setVolume(targetVolume, { type: "music", showUI: false });
-                    console.log("[VR] ✅ VolumeManager.setVolume completed");
-
-                    // Verify the volume was set
-                    const verifyResult = await VolumeManager.getVolume();
-                    console.log("[VR] Volume after setting:", JSON.stringify(verifyResult));
-                } catch (volumeError) {
-                    console.log("[VR] ❌ VolumeManager error:", volumeError);
-                }
-            } else {
-                console.log("[VR] ⚠️ VolumeManager NOT used - Platform:", Platform.OS, "VolumeManager:", !!VolumeManager);
-            }
-
-            // Get audio path from local storage
-            const audioPath = `${require("expo-file-system/legacy").documentDirectory}reminder_${reminderId}.mp3`;
-            console.log("[VR] Audio path:", audioPath);
-
-            // Use react-native-sound if available (plays on MUSIC stream)
-            if (Sound) {
-                console.log("[VR] 🔊 Using react-native-sound for playback");
-                const initialVolume = volumeStyle === "progressive" ? Math.min(targetVolume, 0.2) : 1;
-                console.log("[VR] Initial playback volume:", initialVolume);
-
-                const sound = new Sound(audioPath, "", (error: any) => {
-                    if (error) {
-                        console.log("[VR] ❌ Failed to load sound:", error);
-                        return;
-                    }
-                    console.log("[VR] ✅ Sound loaded successfully");
-
-                    sound.setVolume(initialVolume);
-                    sound.setNumberOfLoops(-1); // Loop indefinitely
-                    console.log("[VR] Starting playback...");
-                    sound.play((success: boolean) => {
-                        if (!success) {
-                            console.log("[VR] ❌ Sound playback failed");
-                        } else {
-                            console.log("[VR] ✅ Sound playing");
-                        }
-                    });
-
-                    soundRef.current = sound;
-                    setIsPlaying(true);
-
-                    // Progressive volume ramp
-                    if (volumeStyle === "progressive") {
-                        const rampMs = 30_000;
-                        const tickMs = 1_000;
-                        const steps = Math.max(1, Math.floor(rampMs / tickMs));
-                        const start = Math.min(targetVolume, 0.2);
-                        let step = 0;
-
-                        if (volumeRampIntervalRef.current) {
-                            clearInterval(volumeRampIntervalRef.current);
-                        }
-
-                        volumeRampIntervalRef.current = setInterval(() => {
-                            step += 1;
-                            const nextVolume = start + ((1 - start) * step) / steps;
-                            try {
-                                sound.setVolume(Math.max(0, Math.min(1, nextVolume)));
-                            } catch {
-                                // ignore
-                            }
-                            if (step >= steps) {
-                                if (volumeRampIntervalRef.current) {
-                                    clearInterval(volumeRampIntervalRef.current);
-                                    volumeRampIntervalRef.current = null;
-                                }
-                            }
-                        }, tickMs);
-                    }
-                });
-            } else {
-                // Fallback to expo-av if react-native-sound not available
-                console.log("[VR] AlarmScreen: Falling back to expo-av");
-                const { Audio } = require("expo-av");
-
-                await Audio.setAudioModeAsync({
-                    allowsRecordingIOS: false,
-                    playsInSilentModeIOS: true,
-                    staysActiveInBackground: true,
-                });
-
-                const { sound } = await Audio.Sound.createAsync(
-                    { uri: audioPath },
-                    { shouldPlay: true, volume: volumeStyle === "progressive" ? Math.min(targetVolume, 0.2) : targetVolume, isLooping: true }
-                );
-
-                soundRef.current = sound;
-                setIsPlaying(true);
-            }
-        } catch (e) {
-            console.log("[VR] AlarmScreen: Failed to play audio:", e);
+        if (isMountedRef.current) {
+            setIsPlaying(success);
+        }
+        if (success) {
+            console.log("[VR] ✅ Alarm audio playing via AudioService");
+        } else {
+            console.log("[VR] ❌ Failed to start alarm audio");
         }
     };
 
     const stopAudio = async () => {
-        if (soundRef.current) {
-            try {
-                // Handle both react-native-sound and expo-av cleanup
-                if (Sound && typeof soundRef.current.stop === "function") {
-                    soundRef.current.stop();
-                    soundRef.current.release();
-                } else if (typeof soundRef.current.stopAsync === "function") {
-                    await soundRef.current.stopAsync();
-                    await soundRef.current.unloadAsync();
-                }
-            } catch (e) {
-                console.log("[VR] AlarmScreen: Error stopping audio:", e);
-            }
-            soundRef.current = null;
-        }
-        if (volumeRampIntervalRef.current) {
-            clearInterval(volumeRampIntervalRef.current);
-            volumeRampIntervalRef.current = null;
-        }
-
-        // Restore original MUSIC volume on Android
-        if (Platform.OS === "android" && VolumeManager && originalMusicVolumeRef.current !== null) {
-            try {
-                console.log(`[VR] AlarmScreen: Restoring music volume to: ${originalMusicVolumeRef.current}`);
-                await VolumeManager.setVolume(originalMusicVolumeRef.current, { type: "music", showUI: false });
-                originalMusicVolumeRef.current = null;
-            } catch (e) {
-                console.log("[VR] AlarmScreen: Error restoring music volume:", e);
-            }
-        }
-
+        console.log("[VR] Stopping alarm audio...");
+        await alarmAudioService.stop();
         setIsPlaying(false);
+        console.log("[VR] Alarm audio stopped");
     };
 
     const startVibration = () => {
@@ -265,6 +122,7 @@ export default function AlarmScreen() {
     };
 
     const handleDismiss = async () => {
+        isExplicitDismissRef.current = true;
         stopAudio();
         stopVibration();
 
@@ -278,6 +136,7 @@ export default function AlarmScreen() {
     };
 
     const handleSnooze = async () => {
+        isExplicitDismissRef.current = true;
         stopAudio();
         stopVibration();
 
@@ -319,7 +178,6 @@ export default function AlarmScreen() {
                     snoozeEnabled: String(snoozeEnabled),
                     snoozeDuration: String(snoozeDurationMinutes),
                     volume: String(targetVolume),
-                    volumeStyle,
                 },
             },
             trigger

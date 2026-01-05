@@ -108,7 +108,13 @@ export default function EditReminderScreen() {
   }>();
 
   const { id, traceId: traceIdParam } = params;
-  const traceId = typeof traceIdParam === "string" && traceIdParam.length ? traceIdParam : createTraceId("tap");
+  const traceId = useMemo(
+    () =>
+      typeof traceIdParam === "string" && traceIdParam.length
+        ? traceIdParam
+        : createTraceId("tap"),
+    [traceIdParam]
+  );
   const updateConvexReminder = useMutation(api.reminders.update);
   const removeConvexReminder = useMutation(api.reminders.remove);
 

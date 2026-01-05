@@ -2,19 +2,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
     Alert,
     InteractionManager,
-    Platform,
     StyleSheet,
     Text,
     TextInput,
     View,
 } from "react-native";
-import { NativeViewGestureHandler } from "react-native-gesture-handler";
 import { useAction, useMutation } from "convex/react";
 import { useToast } from "./ToastProvider";
 import { LinearGradient } from "expo-linear-gradient";
-import { Audio } from "expo-av";
 import { TimerPickerModal } from "react-native-timer-picker";
 import Slider from "@react-native-community/slider";
+import { previewAudioService } from "../lib/AudioService";
 import BottomSheet, {
     BottomSheetScrollView,
     BottomSheetBackdrop,
@@ -130,56 +128,22 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const [showTimePicker, setShowTimePicker] = useState(false);
     const [showDaysPicker, setShowDaysPicker] = useState(false);
     const [showRepeatTaskModal, setShowRepeatTaskModal] = useState(false);
-    const [sound, setSound] = useState<Audio.Sound | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [soundText, setSoundText] = useState(initialReminder.description || "");
     const [isRegenerating, setIsRegenerating] = useState(false);
     const regenerateAudio = useAction(api.actions.regenerateReminderAudio);
     const toast = useToast();
 
-    // Preload audio in background
+    // Log mount/unmount and cleanup audio on unmount
     useEffect(() => {
         perfLog(traceId, "overlay.edit", "sheet_mount", { t: Date.now(), reminderId: initialReminder.id });
 
-        if (initialReminder.audioUrl) {
-            setTimeout(async () => {
-                try {
-                    perfLog(traceId, "overlay.edit", "audio_preload_start", { t: Date.now() });
-                    const { sound: preloadedSound } = await Audio.Sound.createAsync(
-                        { uri: initialReminder.audioUrl! },
-                        { volume: sliderVolume, shouldPlay: false }
-                    );
-                    setSound(preloadedSound);
-                    perfLog(traceId, "overlay.edit", "audio_preload_done", { t: Date.now() });
-                } catch (e) {
-                    console.log("[VR] Failed to preload audio:", e);
-                }
-            }, 100);
-        }
-
         return () => {
             perfLog(traceId, "overlay.edit", "sheet_unmount", { t: Date.now() });
+            // Stop any preview audio when sheet closes
+            previewAudioService.stop();
         };
-    }, [initialReminder.audioUrl, initialReminder.id, traceId]);
-
-    // Reset sound when audio URL changes (e.g., after regeneration)
-    useEffect(() => {
-        // If reminder's audio URL changed and we have a stale sound, clear it
-        if (sound && reminder.audioUrl !== initialReminder.audioUrl) {
-            console.log("[VR] Audio URL changed, clearing stale sound");
-            sound.unloadAsync().catch(() => { });
-            setSound(null);
-            setIsPlaying(false);
-        }
-    }, [reminder.audioUrl, initialReminder.audioUrl, sound]);
-
-    useEffect(() => {
-        return () => {
-            if (sound) {
-                sound.unloadAsync();
-            }
-        };
-    }, [sound]);
+    }, [initialReminder.id, traceId]);
 
     const handleDayToggle = (day: string) => {
         setDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]));
@@ -224,93 +188,39 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         console.log("[VR] audioUrl:", reminder?.audioUrl);
         console.log("[VR] sliderVolume (target):", sliderVolume);
         console.log("[VR] isPlaying:", isPlaying);
-        console.log("[VR] sound loaded:", !!sound);
 
         if (!reminder?.audioUrl) {
             console.log("[VR] No audio URL, returning");
             return;
         }
 
-        try {
-            if (isPlaying && sound) {
-                console.log("[VR] Stopping playback");
-                await sound.stopAsync();
-                setIsPlaying(false);
-                return;
-            }
-
-            // Try to use VolumeManager to set system volume for preview
-            let originalVolume: number | null = null;
-            try {
-                const { VolumeManager } = require("react-native-volume-manager");
-                if (VolumeManager) {
-                    const volumeResult = await VolumeManager.getVolume();
-                    originalVolume = volumeResult.volume;
-                    console.log("[VR] Current system volume:", originalVolume);
-                    console.log("[VR] Setting system volume to:", sliderVolume);
-                    await VolumeManager.setVolume(sliderVolume, { type: "music", showUI: false });
-                    console.log("[VR] ✅ System volume set");
-                }
-            } catch (e) {
-                console.log("[VR] VolumeManager not available for preview:", e);
-            }
-
-            if (sound) {
-                console.log("[VR] Using existing sound, setting position and volume");
-                await sound.setPositionAsync(0);
-                await sound.setVolumeAsync(1); // Full playback volume since system volume is set
-                sound.setOnPlaybackStatusUpdate(async (status) => {
-                    if (status.isLoaded && status.didJustFinish) {
-                        setIsPlaying(false);
-                        // Restore original volume when done
-                        if (originalVolume !== null) {
-                            try {
-                                const { VolumeManager } = require("react-native-volume-manager");
-                                await VolumeManager.setVolume(originalVolume, { type: "music", showUI: false });
-                                console.log("[VR] Restored system volume to:", originalVolume);
-                            } catch (e) {
-                                console.log("[VR] Failed to restore volume:", e);
-                            }
-                        }
-                    }
-                });
-                await sound.playAsync();
-                setIsPlaying(true);
-                console.log("[VR] ✅ Playback started (reused sound)");
-                return;
-            }
-
-            console.log("[VR] Creating new sound from:", reminder.audioUrl);
-            const { sound: nextSound } = await Audio.Sound.createAsync(
-                { uri: reminder.audioUrl },
-                { volume: 1 } // Full playback volume since system volume is set
-            );
-            setSound(nextSound);
-            console.log("[VR] ✅ Sound created");
-
-            nextSound.setOnPlaybackStatusUpdate(async (status) => {
-                if (status.isLoaded && status.didJustFinish) {
-                    setIsPlaying(false);
-                    // Restore original volume when done
-                    if (originalVolume !== null) {
-                        try {
-                            const { VolumeManager } = require("react-native-volume-manager");
-                            await VolumeManager.setVolume(originalVolume, { type: "music", showUI: false });
-                            console.log("[VR] Restored system volume to:", originalVolume);
-                        } catch (e) {
-                            console.log("[VR] Failed to restore volume:", e);
-                        }
-                    }
-                }
-            });
-
-            await nextSound.playAsync();
-            setIsPlaying(true);
-            console.log("[VR] ✅ Playback started (new sound)");
-        } catch (error) {
-            console.error("[VR] ❌ Error playing audio:", error);
-            // Reset playing state on error so button doesn't get stuck
+        // If currently playing, stop
+        if (isPlaying) {
+            console.log("[VR] Stopping playback");
+            await previewAudioService.stop();
             setIsPlaying(false);
+            return;
+        }
+
+        // Play using AudioService with MUSIC stream for preview
+        const success = await previewAudioService.play(
+            reminder.audioUrl,
+            {
+                volume: sliderVolume,
+                streamType: "music", // Preview uses MUSIC stream
+                loop: false,
+            },
+            () => {
+                // Called when playback ends
+                setIsPlaying(false);
+            }
+        );
+
+        setIsPlaying(success);
+        if (success) {
+            console.log("[VR] ✅ Preview playback started via AudioService");
+        } else {
+            console.log("[VR] ❌ Failed to start preview");
         }
     };
 
@@ -328,11 +238,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             });
 
             if (result.audioUrl) {
-                // Clear existing sound so we don't play stale audio
-                if (sound) {
-                    await sound.unloadAsync().catch(() => { });
-                    setSound(null);
-                }
+                // Stop any playing audio and clear stale state
+                await previewAudioService.stop();
                 setIsPlaying(false);
 
                 const updatedReminder = { ...reminder, audioUrl: result.audioUrl, description: soundText.trim() };
