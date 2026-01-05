@@ -162,6 +162,17 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         };
     }, [initialReminder.audioUrl, initialReminder.id, traceId]);
 
+    // Reset sound when audio URL changes (e.g., after regeneration)
+    useEffect(() => {
+        // If reminder's audio URL changed and we have a stale sound, clear it
+        if (sound && reminder.audioUrl !== initialReminder.audioUrl) {
+            console.log("[VR] Audio URL changed, clearing stale sound");
+            sound.unloadAsync().catch(() => { });
+            setSound(null);
+            setIsPlaying(false);
+        }
+    }, [reminder.audioUrl, initialReminder.audioUrl, sound]);
+
     useEffect(() => {
         return () => {
             if (sound) {
@@ -298,6 +309,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             console.log("[VR] ✅ Playback started (new sound)");
         } catch (error) {
             console.error("[VR] ❌ Error playing audio:", error);
+            // Reset playing state on error so button doesn't get stuck
+            setIsPlaying(false);
         }
     };
 
@@ -315,6 +328,13 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             });
 
             if (result.audioUrl) {
+                // Clear existing sound so we don't play stale audio
+                if (sound) {
+                    await sound.unloadAsync().catch(() => { });
+                    setSound(null);
+                }
+                setIsPlaying(false);
+
                 const updatedReminder = { ...reminder, audioUrl: result.audioUrl, description: soundText.trim() };
                 setReminder(updatedReminder);
                 setDescription(soundText.trim());
