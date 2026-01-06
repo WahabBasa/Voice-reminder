@@ -267,7 +267,7 @@ export default function HomeScreen() {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setReminders((prev) => [newReminder, ...prev]);
 
-      router.push(`/reminder/edit?id=${newReminder.id}`);
+      setEditingReminder(newReminder);
 
       InteractionManager.runAfterInteractions(() => {
         if (!newReminder.audioUrl) return;
@@ -589,7 +589,7 @@ export default function HomeScreen() {
     (entry: ReminderHistory) => {
       const reminder = remindersById.get(entry.reminderId);
       if (!reminder) return;
-      router.push(`/reminder/edit?id=${reminder.id}`);
+      setEditingReminder(reminder);
     },
     [remindersById, router]
   );

@@ -7,6 +7,7 @@ import {
     TextInput,
     View,
 } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
 import { useAction, useMutation } from "convex/react";
 import { useToast } from "./ToastProvider";
 import { LinearGradient } from "expo-linear-gradient";
@@ -202,9 +203,22 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             return;
         }
 
+        // Try to use local file if available
+        let audioPath = reminder.audioUrl;
+        try {
+            const localPath = `${FileSystem.documentDirectory}reminder_${reminder.id}.mp3`;
+            const localInfo = await FileSystem.getInfoAsync(localPath);
+            if (localInfo.exists) {
+                audioPath = localPath;
+                console.log("[VR] Using local file for preview:", localPath);
+            }
+        } catch (e) {
+            console.log("[VR] Could not check local file, using remote URL");
+        }
+
         // Play using AudioService with MUSIC stream for preview
         const success = await previewAudioService.play(
-            reminder.audioUrl,
+            audioPath,
             {
                 volume: sliderVolume,
                 streamType: "music", // Preview uses MUSIC stream
@@ -602,7 +616,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                 <AppIcon name="volume-1" size={22} color={stylesVars.iconColor} />
                                 <Text style={styles.rowLabel}>Volume</Text>
                             </View>
-                            <View style={styles.sliderTrackRow}>
+                            <View style={styles.sliderTrackRow} pointerEvents="box-none">
                                 <Slider
                                     style={styles.slider}
                                     value={sliderVolume}
@@ -620,13 +634,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                 />
                             </View>
                         </View>
-
-                        <SettingsRow
-                            icon="zap"
-                            label="Volume style"
-                            value={volumeStyle === "progressive" ? "Progressive" : "Standard"}
-                            onPress={() => setVolumeStyle((v) => (v === "progressive" ? "standard" : "progressive"))}
-                        />
                     </View>
 
                     {showTimePicker ? (

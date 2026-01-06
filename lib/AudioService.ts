@@ -53,11 +53,13 @@ export class AudioService {
     ): Promise<boolean> {
         const { volume, streamType = "music", loop = false } = options;
         this.streamType = streamType;
-        this.onPlaybackEnd = onEnd || null;
 
         try {
             // Stop any existing playback first
             await this.stop();
+
+            // Set callback AFTER stop() so it doesn't get cleared
+            this.onPlaybackEnd = onEnd || null;
 
             // For alarm stream on Android, use native AlarmAudioModule with USAGE_ALARM
             // This bypasses silent mode and plays through the alarm volume stream
