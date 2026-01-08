@@ -117,7 +117,15 @@ export async function scheduleReminder(
     frequency: reminder.frequency,
     days: reminder.days,
   };
-  const triggerTimestamp = getNextTriggerTime(schedule);
+  let triggerTimestamp = getNextTriggerTime(schedule);
+
+  // Safety check: Notifee requires timestamp to be in the future
+  // If calculated time is in the past, schedule for 5 seconds from now
+  const now = Date.now();
+  if (triggerTimestamp <= now) {
+    console.warn(`[VR] Trigger time ${new Date(triggerTimestamp).toLocaleString()} is in the past, adjusting to now + 5s`);
+    triggerTimestamp = now + 5000;
+  }
 
   const trigger: TimestampTrigger = {
     type: TriggerType.TIMESTAMP,
@@ -223,7 +231,15 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
         days: data.days ? (data.days as string).split(",") : undefined,
       };
 
-      const nextTrigger = getNextTriggerTime(schedule);
+      let nextTrigger = getNextTriggerTime(schedule);
+
+      // Safety check: Notifee requires timestamp to be in the future
+      const now = Date.now();
+      if (nextTrigger <= now) {
+        console.warn(`[VR] Recurring trigger time ${new Date(nextTrigger).toLocaleString()} is in the past, adjusting to now + 5s`);
+        nextTrigger = now + 5000;
+      }
+
       const trigger: TimestampTrigger = {
         type: TriggerType.TIMESTAMP,
         timestamp: nextTrigger,

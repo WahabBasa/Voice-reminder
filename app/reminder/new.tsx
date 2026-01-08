@@ -17,7 +17,7 @@ import { api } from "../../convex/_generated/api";
 import { LinearGradient } from "expo-linear-gradient";
 import { TimerPickerModal } from "react-native-timer-picker";
 import { colors, scaleFontSize } from "../../lib/theme";
-import { addReminder } from "../../lib/storage";
+import { useReminderStore } from "../../lib/store";
 import { scheduleReminder } from "../../lib/notifications";
 import DaySelector from "../../components/DaySelector";
 import AppIcon from "../../components/AppIcon";
@@ -33,6 +33,7 @@ export default function NewReminderScreen() {
   const router = useRouter();
   const processTextReminder = useAction(api.actions.processTextReminder);
   const toast = useToast();
+  const storeAddReminder = useReminderStore((state) => state.addReminder);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -85,7 +86,7 @@ export default function NewReminderScreen() {
         throw new Error("Failed to get audio URL");
       }
 
-      const newReminder = await addReminder({
+      const newReminder = await storeAddReminder({
         convexId: result.id,
         title: result.title,
         description: result.description,

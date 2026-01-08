@@ -76,6 +76,11 @@ export function isOverdue(timestamp: number, now = Date.now()): boolean {
 }
 
 export function getDueTimestamp(schedule: ReminderSchedule, nowDate = new Date()): number {
+  // Defensive check for missing time
+  if (!schedule.time) {
+    console.warn("[VR] getDueTimestamp called with undefined time, using current time");
+    return nowDate.getTime();
+  }
   const [hours, minutes] = schedule.time.split(":").map(Number);
   const now = nowDate;
 
@@ -163,6 +168,11 @@ export function formatReminderTime(timestamp: number, nowDate = new Date()): str
 }
 
 export function getNextTriggerTime(schedule: ReminderSchedule): number {
+  // Defensive check for missing time
+  if (!schedule.time) {
+    console.warn("[VR] getNextTriggerTime called with undefined time, using current time");
+    return Date.now();
+  }
   const [hours, minutes] = schedule.time.split(":").map(Number);
   const now = new Date();
 

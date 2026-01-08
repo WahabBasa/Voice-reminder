@@ -32,16 +32,8 @@ import { colors, scaleFontSize } from "../lib/theme";
 import { formatReminderTime, getDueTimestamp, isOverdue } from "../lib/time";
 import { readFileAsBase64 } from "../lib/convex";
 import { deleteReminderWithAudio, scheduleReminder } from "../lib/notifications";
-import {
-  addReminder,
-  DEFAULT_ALARM_SETTINGS,
-  deleteReminder as deleteReminderStorage,
-  getHistory,
-  getReminders,
-  recordCompletion,
-  Reminder,
-  ReminderHistory,
-} from "../lib/storage";
+import { DEFAULT_ALARM_SETTINGS } from "../lib/storage";
+import { useReminderStore, Reminder, ReminderHistory } from "../lib/store";
 import RecordingOverlay from "../components/RecordingOverlay";
 import EditReminderSheet from "../components/EditReminderSheet";
 import SwipeableCard from "../components/SwipeableCard";
@@ -89,11 +81,18 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const toast = useToast();
 
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [history, setHistory] = useState<ReminderHistory[]>([]);
+  // Zustand store for centralized state
+  const reminders = useReminderStore((state) => state.reminders);
+  const history = useReminderStore((state) => state.history);
+  const isLoading = useReminderStore((state) => state.isLoading);
+  const storeAddReminder = useReminderStore((state) => state.addReminder);
+  const storeUpdateReminder = useReminderStore((state) => state.updateReminder);
+  const storeDeleteReminder = useReminderStore((state) => state.deleteReminder);
+  const storeRecordCompletion = useReminderStore((state) => state.recordCompletion);
+  const loadAllData = useReminderStore((state) => state.loadAll);
+
   const [showRecording, setShowRecording] = useState(false);
   const [selectedView, setSelectedView] = useState<HomeView>("all");
-  const [isLoading, setIsLoading] = useState(true);
   const cancelledRef = useRef(false);
   const [isConnected, setIsConnected] = useState(true);
   const [showOfflineMessage, setShowOfflineMessage] = useState(false);
@@ -153,42 +152,14 @@ export default function HomeScreen() {
     return () => unsubscribe();
   }, []);
 
-  const loadData = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      // Load reminders first
-      const loadedReminders = await getReminders();
-      setReminders(loadedReminders);
-
-      // Load history after interactions so we don't block taps/gestures with JSON.parse + sorts.
-      InteractionManager.runAfterInteractions(() => {
-        const t0 = Date.now();
-        perfLog("vr_history_load", "device.storage", "history_load_start", { t: t0 });
-        getHistory()
-          .then((loadedHistory) => {
-            setHistory(loadedHistory);
-            perfLog("vr_history_load", "device.storage", "history_load_done", {
-              t: Date.now(),
-              ms: Date.now() - t0,
-              entries: loadedHistory.length,
-            });
-          })
-          .catch((e) => {
-            perfLog("vr_history_load", "device.storage", "history_load_error", { error: String(e) });
-          });
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
+  // Load data on screen focus using Zustand store
   useFocusEffect(
     useCallback(() => {
       const task = InteractionManager.runAfterInteractions(() => {
-        loadData();
+        loadAllData();
       });
       return () => task.cancel();
-    }, [loadData])
+    }, [loadAllData])
   );
 
   const handleCloseRecording = () => {
@@ -248,7 +219,7 @@ export default function HomeScreen() {
       const days = frequency === "custom" ? (result.days || []) : [];
 
       const tLocal = Date.now();
-      const newReminder = await addReminder({
+      const newReminder = await storeAddReminder({
         convexId: result.id,
         title: result.title,
         description: result.description,
@@ -265,7 +236,7 @@ export default function HomeScreen() {
 
       setShowRecording(false);
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setReminders((prev) => [newReminder, ...prev]);
+      // Store already updated - no need for setReminders
 
       setEditingReminder(newReminder);
 
@@ -336,14 +307,13 @@ export default function HomeScreen() {
     setEditingReminder(null);
   }, []);
 
-  const handleEditSheetSave = useCallback((updated: Reminder) => {
-    // Update local state with saved changes
-    setReminders(prev => prev.map(r => r.id === updated.id ? updated : r));
+  // Store handles updates automatically - these callbacks just close the sheet
+  const handleEditSheetSave = useCallback((_updated: Reminder) => {
+    // Store already updated by EditReminderSheet
   }, []);
 
-  const handleEditSheetDelete = useCallback((deleted: Reminder) => {
-    // Remove from local state
-    setReminders(prev => prev.filter(r => r.id !== deleted.id));
+  const handleEditSheetDelete = useCallback((_deleted: Reminder) => {
+    // Store already updated by EditReminderSheet
   }, []);
 
   // Track items currently exiting (being marked done)
@@ -356,30 +326,22 @@ export default function HomeScreen() {
 
       // Delay actual state update to let animation play
       setTimeout(() => {
-        const optimisticEntry: ReminderHistory = {
-          id: Math.random().toString(36).slice(2, 11),
-          reminderId,
-          reminderTitle,
-          timestamp: new Date().toISOString(),
-          status: "completed",
-        };
-
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setHistory((prev) => [...prev, optimisticEntry]);
         setExitingIds((prev) => {
           const next = new Set(prev);
           next.delete(reminderId);
           return next;
         });
 
-        recordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
+        // Use store to record completion (updates state + persists)
+        storeRecordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
           console.log("[VR] Failed to record completion:", e);
         });
 
         // No toast for individual mark-done (too noisy)
       }, 250); // Match animation duration
     },
-    [toast]
+    [storeRecordCompletion]
   );
 
   const handleDelete = useCallback(
@@ -387,15 +349,12 @@ export default function HomeScreen() {
       const reminderId = reminder.id;
       const convexId = reminder.convexId;
 
-      // Optimistically remove from UI
+      // Delete via store (handles state + persistence)
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setReminders((prev) => prev.filter((r) => r.id !== reminderId));
-
-      // Delete from local storage
       try {
-        await deleteReminderStorage(reminderId);
+        await storeDeleteReminder(reminderId);
       } catch (e) {
-        console.log("[VR] Failed to delete reminder from storage:", e);
+        console.log("[VR] Failed to delete reminder from store:", e);
       }
 
       // Cancel notification and delete audio
@@ -412,7 +371,7 @@ export default function HomeScreen() {
 
       // No toast for individual delete (too noisy)
     },
-    [removeConvexReminder, toast]
+    [storeDeleteReminder, removeConvexReminder]
   );
 
   // Multi-select handlers
@@ -456,16 +415,13 @@ export default function HomeScreen() {
     if (selectedIds.size === 0) return;
 
     const toDelete = reminders.filter((r) => selectedIds.has(r.id));
-
-    // Optimistically remove from UI
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setReminders((prev) => prev.filter((r) => !selectedIds.has(r.id)));
     exitSelectMode();
 
-    // Delete each reminder
+    // Delete each reminder via store
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     for (const reminder of toDelete) {
       try {
-        await deleteReminderStorage(reminder.id);
+        await storeDeleteReminder(reminder.id);
       } catch (e) {
         console.log("[VR] Failed to delete reminder:", e);
       }
@@ -480,29 +436,19 @@ export default function HomeScreen() {
       message: `${toDelete.length} reminder${toDelete.length > 1 ? "s" : ""} deleted`,
       type: "info",
     });
-  }, [selectedIds, reminders, removeConvexReminder, toast, exitSelectMode]);
+  }, [selectedIds, reminders, storeDeleteReminder, removeConvexReminder, toast, exitSelectMode]);
 
-  const handleBulkDone = useCallback(() => {
+  const handleBulkDone = useCallback(async () => {
     if (selectedIds.size === 0) return;
 
     const toMark = reminders.filter((r) => selectedIds.has(r.id));
+    exitSelectMode();
 
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
 
-    const newEntries: ReminderHistory[] = toMark.map((r) => ({
-      id: Math.random().toString(36).slice(2, 11),
-      reminderId: r.id,
-      reminderTitle: r.title,
-      timestamp: new Date().toISOString(),
-      status: "completed" as const,
-    }));
-
-    setHistory((prev) => [...prev, ...newEntries]);
-    exitSelectMode();
-
-    // Record completions
+    // Record completions via store
     for (const reminder of toMark) {
-      recordCompletion(reminder.id, reminder.title, "completed").catch(() => { });
+      await storeRecordCompletion(reminder.id, reminder.title, "completed").catch(() => { });
     }
 
     toast.show({
@@ -510,7 +456,7 @@ export default function HomeScreen() {
       message: `${toMark.length} reminder${toMark.length > 1 ? "s" : ""} completed`,
       type: "success",
     });
-  }, [selectedIds, reminders, toast, exitSelectMode]);
+  }, [selectedIds, reminders, storeRecordCompletion, toast, exitSelectMode]);
 
   const completedTodayReminderIds = useMemo(() => {
     // Pre-compute today's bounds once to avoid repeated string creation
