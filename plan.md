@@ -737,24 +737,28 @@ VR/
     history.tsx
     reminder/
       new.tsx
-      edit.tsx
   components/
     RecordingOverlay.tsx
     ReminderCard.tsx
     DaySelector.tsx
     TimePicker.tsx
     DetailSheet.tsx
+    EditReminderSheet.tsx
     DatePickerModal.tsx
     AppIcon.tsx
     ScrollSelector/
   lib/
     audio.ts
+    AudioService.ts
     convex.ts
     notifications.ts
-    storage.ts
+    storage.ts        # Low-level AsyncStorage helpers (internal)
+    store.ts          # Zustand store - CANONICAL source for Reminder/ReminderHistory types
     theme.ts
     time.ts
     perf.ts
+    usage.ts
+    purchases.ts
   convex/
     actions.ts
     reminders.ts
@@ -764,6 +768,8 @@ VR/
   index.ts
   package.json
 ```
+
+**State Management:** All UI code uses `lib/store.ts` (Zustand) as the single source of truth for reminders and history. Types (`Reminder`, `ReminderHistory`, `VolumeStyle`, `DEFAULT_ALARM_SETTINGS`) are defined in `store.ts` and re-exported by `storage.ts` for backward compatibility.
 
 ---
 
@@ -820,7 +826,5 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 ## Limitations (POC Scope)
 
 - No user authentication (by design for local-first)
-- Editing reminders supported (no TTS regeneration yet)
-- No snooze functionality
 - Single device only (local-first architecture, no cross-device sync)
 - No timezone handling (uses device timezone)
