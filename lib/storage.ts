@@ -1,36 +1,17 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createTraceId, perfLog } from "./perf";
+// Re-export types from store.ts (store.ts is the canonical source)
+export {
+  type VolumeStyle,
+  type Reminder,
+  type ReminderHistory,
+  DEFAULT_ALARM_SETTINGS
+} from "./store";
+import { type Reminder, DEFAULT_ALARM_SETTINGS } from "./store";
 
 const REMINDERS_KEY = "@reminders";
 const HISTORY_KEY = "@reminder_history";
 const MAX_HISTORY_ENTRIES = 1000;
-
-export type VolumeStyle = "standard" | "progressive";
-
-export const DEFAULT_ALARM_SETTINGS = {
-  snoozeEnabled: true,
-  snoozeDuration: 5,
-  volume: 1,
-  volumeStyle: "standard" as VolumeStyle,
-};
-
-// Reminder type (local storage version)
-export interface Reminder {
-  id: string;
-  convexId?: string;
-  title: string;
-  description: string;
-  time: string;
-  date?: string; // YYYY-MM-DD for one-time reminders on specific days
-  frequency: string;
-  days: string[];
-  audioUrl?: string;
-  createdAt: string;
-  snoozeEnabled?: boolean;
-  snoozeDuration?: number; // minutes
-  volume?: number; // 0-1
-  volumeStyle?: VolumeStyle;
-}
 
 // Reminder CRUD functions
 export async function getReminders(): Promise<Reminder[]> {
@@ -143,14 +124,8 @@ export async function getReminderById(id: string): Promise<Reminder | null> {
   }
 }
 
-// History types and functions
-export interface ReminderHistory {
-  id: string;
-  reminderId: string;
-  reminderTitle: string;
-  timestamp: string;
-  status: "completed" | "missed";
-}
+// History functions - using ReminderHistory type from store.ts
+import { type ReminderHistory } from "./store";
 
 export async function getHistory(): Promise<ReminderHistory[]> {
   try {

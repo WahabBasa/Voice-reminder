@@ -12,7 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { colors, scaleFontSize } from "../lib/theme";
-import { getHistory, clearHistory, ReminderHistory } from "../lib/storage";
+import { useReminderStore, ReminderHistory } from "../lib/store";
 import AppIcon from "../components/AppIcon";
 
 type FilterType = "all" | "completed" | "missed";
@@ -48,17 +48,13 @@ function getDayBucket(isoString: string): "Today" | "Yesterday" | "Earlier" {
 
 export default function HistoryScreen() {
   const router = useRouter();
-  const [history, setHistory] = useState<ReminderHistory[]>([]);
-  const [selectedFilter, setSelectedFilter] = useState<FilterType>("all");
 
-  const loadHistory = useCallback(async () => {
-    try {
-      const data = await getHistory();
-      setHistory(data);
-    } catch (error) {
-      console.error("Error loading history:", error);
-    }
-  }, []);
+  // Use Zustand store for centralized history state
+  const history = useReminderStore((state) => state.history);
+  const loadHistory = useReminderStore((state) => state.loadHistory);
+  const storeClearHistory = useReminderStore((state) => state.clearHistory);
+
+  const [selectedFilter, setSelectedFilter] = useState<FilterType>("all");
 
   useFocusEffect(
     useCallback(() => {
@@ -158,8 +154,7 @@ export default function HistoryScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              await clearHistory();
-              setHistory([]);
+              await storeClearHistory();
               Alert.alert("Success", "History cleared successfully");
             } catch (error) {
               Alert.alert("Error", "Failed to clear history");
