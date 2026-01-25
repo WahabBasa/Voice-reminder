@@ -6,6 +6,7 @@ import notifee, {
   EventType,
   Event,
 } from "@notifee/react-native";
+import { Platform } from "react-native";
 import {
   documentDirectory,
   downloadAsync,
@@ -14,6 +15,79 @@ import {
 } from "expo-file-system/legacy";
 import { getNextIntervalOccurrence, getNextTriggerTime, ReminderSchedule } from "./time";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
+
+export class ExactAlarmPermissionError extends Error {
+  public readonly notificationSettings: any;
+
+  constructor(message: string, notificationSettings: any) {
+    super(message);
+    this.name = "ExactAlarmPermissionError";
+    this.notificationSettings = notificationSettings;
+  }
+}
+
+function isAndroidAlarmEnabled(value: any): boolean {
+  // notifee returns a platform-specific value; treat common "enabled" representations as truthy.
+  if (value === true) return true;
+  if (value === 1) return true;
+  if (value === "1") return true;
+  if (value === "enabled") return true;
+  if (value === "ENABLED") return true;
+  if (value === "allowed") return true;
+  if (value === "ALLOWED") return true;
+  return false;
+}
+
+export async function getNotificationSettingsSafe(): Promise<any> {
+  try {
+    return await notifee.getNotificationSettings();
+  } catch (e) {
+    console.log("[VR] getNotificationSettings failed:", e);
+    return null;
+  }
+}
+
+export async function openAlarmPermissionSettingsSafe(): Promise<void> {
+  try {
+    const fn = (notifee as any).openAlarmPermissionSettings;
+    if (typeof fn === "function") {
+      await fn();
+      return;
+    }
+    console.log("[VR] notifee.openAlarmPermissionSettings is not available");
+  } catch (e) {
+    console.log("[VR] Failed to open alarm permission settings:", e);
+  }
+}
+
+export async function openNotificationSettingsSafe(): Promise<void> {
+  try {
+    const fn = (notifee as any).openNotificationSettings;
+    if (typeof fn === "function") {
+      await fn();
+      return;
+    }
+    console.log("[VR] notifee.openNotificationSettings is not available");
+  } catch (e) {
+    console.log("[VR] Failed to open notification settings:", e);
+  }
+}
+
+async function assertAndroidExactAlarmAccess(): Promise<void> {
+  if (Platform.OS !== "android") return;
+  // Android 12+ (API 31+) requires "Alarms & reminders" special access for exact alarms.
+  const apiLevel = typeof Platform.Version === "number" ? Platform.Version : Number(Platform.Version);
+  if (!Number.isFinite(apiLevel) || apiLevel < 31) return;
+
+  const settings = await getNotificationSettingsSafe();
+  const alarmValue = settings?.android?.alarm;
+  if (!isAndroidAlarmEnabled(alarmValue)) {
+    throw new ExactAlarmPermissionError(
+      "Alarms & reminders permission is required on Android 12+.",
+      settings
+    );
+  }
+}
 
 export interface ReminderNotification {
   id: string;
@@ -82,7 +156,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
 export async function createReminderChannel(
   reminderId: string,
   title: string,
-  soundPath: string
+  _soundPath: string
 ): Promise<string> {
   const channelId = `reminder_${reminderId}`;
 
@@ -90,8 +164,9 @@ export async function createReminderChannel(
     id: channelId,
     name: `Reminder: ${title}`,
     importance: AndroidImportance.HIGH,
-    // Note: No sound here - alarm screen (app/alarm.tsx) handles audio playback
-    sound: "",
+    // Audible fallback so users notice delivery even if alarm UI can't open.
+    // Note: Android channels are immutable once created; a reinstall (or deleting the channel) may be required to apply changes.
+    sound: "default",
   });
 
   return channelId;
@@ -105,6 +180,8 @@ export async function scheduleReminder(
   if (!hasPermission) {
     throw new Error("Notification permission not granted");
   }
+
+  await assertAndroidExactAlarmAccess();
 
   // Download audio to device
   const localAudioPath = await downloadReminderAudio(reminder.id, reminder.audioUrl);

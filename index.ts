@@ -53,10 +53,10 @@ function navigateToAlarmScreen(notification: any) {
 notifee.onBackgroundEvent(async (event) => {
   console.log("[VR] Background event:", event.type);
 
-  // Navigate to alarm screen when notification is delivered
-  if (event.type === EventType.DELIVERED) {
-    navigateToAlarmScreen(event.detail.notification);
-  }
+  // Do not try to launch UI from background/headless events.
+  // Navigation is handled by:
+  // - EventType.PRESS in the foreground handler
+  // - notifee.getInitialNotification() on cold start (RootLayout)
 
   await handleNotificationEvent(event);
 });
@@ -64,11 +64,6 @@ notifee.onBackgroundEvent(async (event) => {
 // Register foreground handler
 notifee.onForegroundEvent(async (event) => {
   console.log("[VR] Foreground event:", event.type);
-
-  // Navigate to alarm screen when notification is delivered
-  if (event.type === EventType.DELIVERED) {
-    navigateToAlarmScreen(event.detail.notification);
-  }
 
   if (event.type === EventType.PRESS) {
     console.log("[VR] Notification pressed:", event.detail.notification?.id);

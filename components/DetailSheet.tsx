@@ -46,7 +46,7 @@ const FREQUENCIES = [
 
 const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
   ({ reminder, onClose, onSave, onDelete }, ref) => {
-    const snapPoints = useMemo(() => ["90%"], []);
+    const snapPoints = useMemo(() => ["60%", "95%"], []);
 
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
@@ -195,6 +195,7 @@ const DetailSheet = forwardRef<BottomSheetModal, DetailSheetProps>(
       <BottomSheetModal
         ref={ref}
         snapPoints={snapPoints}
+        index={0}
         enablePanDownToClose
         onChange={handleSheetChanges}
         backdropComponent={renderBackdrop}

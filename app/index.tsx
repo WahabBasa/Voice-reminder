@@ -280,6 +280,16 @@ export default function HomeScreen() {
           anchorAt: newReminder.anchorAt,
         }, { traceId }).catch((e) => {
           console.log("[VR] Failed to schedule reminder:", e);
+          if (e?.name === "ExactAlarmPermissionError") {
+            Alert.alert(
+              "Enable Alarms & reminders",
+              "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+              [
+                { text: "Open diagnostics", onPress: () => router.push("/diagnostics") },
+                { text: "OK" },
+              ]
+            );
+          }
           perfLog(traceId, "device.notifications", "scheduleReminder_error", {
             error: String(e),
           });

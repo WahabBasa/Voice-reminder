@@ -78,6 +78,23 @@ export default function SettingsScreen() {
 
         <TouchableOpacity
           style={styles.row}
+          onPress={() => router.push("/diagnostics")}
+          activeOpacity={0.85}
+        >
+          <View style={styles.rowLeft}>
+            <View style={styles.rowIcon}>
+              <AppIcon name="zap" size={18} color={colors.textSecondary} />
+            </View>
+            <View>
+              <Text style={styles.rowTitle}>Alarm diagnostics</Text>
+              <Text style={styles.rowSubtitle}>Permissions & scheduled alarms</Text>
+            </View>
+          </View>
+          <AppIcon name="chevron-right" size={18} color={colors.textSecondary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.row}
           onPress={() => router.push("/history")}
           activeOpacity={0.85}
         >

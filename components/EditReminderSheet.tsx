@@ -25,7 +25,7 @@ import { api } from "../convex/_generated/api";
 import AppIcon from "./AppIcon";
 import DaySelector from "./DaySelector";
 import RepeatTaskModal from "./RepeatTaskModal";
-import { cancelReminder, deleteReminderWithAudio, scheduleReminder } from "../lib/notifications";
+import { cancelReminder, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
 import { createTraceId, perfLog } from "../lib/perf";
 import { DEFAULT_ALARM_SETTINGS, VolumeStyle } from "../lib/storage";
 import { INTERVAL_MAX_MS, INTERVAL_MIN_MS, useReminderStore, Reminder } from "../lib/store";
@@ -338,7 +338,18 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             }
         } catch (error) {
             console.error("[VR] Regeneration error:", error);
-            Alert.alert("Error", "Failed to regenerate voice. Please try again.");
+            if ((error as any)?.name === "ExactAlarmPermissionError") {
+                Alert.alert(
+                    "Enable Alarms & reminders",
+                    "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+                    [
+                        { text: "Open permission", onPress: () => openAlarmPermissionSettingsSafe() },
+                        { text: "OK" },
+                    ]
+                );
+            } else {
+                Alert.alert("Error", "Failed to regenerate voice. Please try again.");
+            }
         } finally {
             setIsRegenerating(false);
         }
@@ -477,6 +488,16 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         });
                     } catch (e) {
                         console.log("[VR] Failed to schedule reminder:", e);
+                        if ((e as any)?.name === "ExactAlarmPermissionError") {
+                            Alert.alert(
+                                "Enable Alarms & reminders",
+                                "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+                                [
+                                    { text: "Open permission", onPress: () => openAlarmPermissionSettingsSafe() },
+                                    { text: "OK" },
+                                ]
+                            );
+                        }
                     }
                 })();
             });

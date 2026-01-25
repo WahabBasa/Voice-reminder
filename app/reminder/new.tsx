@@ -115,6 +115,16 @@ export default function NewReminderScreen() {
           volumeStyle: newReminder.volumeStyle,
         }).catch((e) => {
           console.log("[VR] Failed to schedule reminder:", e);
+          if (e?.name === "ExactAlarmPermissionError") {
+            Alert.alert(
+              "Enable Alarms & reminders",
+              "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+              [
+                { text: "Open diagnostics", onPress: () => router.push("/diagnostics") },
+                { text: "OK" },
+              ]
+            );
+          }
         });
       });
     } catch (error: any) {
