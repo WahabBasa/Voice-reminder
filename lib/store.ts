@@ -38,9 +38,11 @@ export interface Reminder {
     // Interval recurrence
     intervalMs?: number;
     anchorAt?: number;
+    intervalDays?: number; // Every N days (calendar-based)
+    scheduledFor?: number; // Next computed occurrence timestamp (stable cadence)
 
     // Schema version for migrations
-    schemaVersion?: number; // 1 = legacy, 2 = interval support
+    schemaVersion?: number; // 1 = legacy, 2 = interval support, 3 = custom repetition
 }
 
 // History types
@@ -156,7 +158,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
             snoozeDuration: reminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
             volume: reminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
             volumeStyle: reminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
-            schemaVersion: reminder.schemaVersion ?? 2,
+            schemaVersion: reminder.schemaVersion ?? 3,
         };
 
         const currentReminders = get().reminders;
@@ -194,7 +196,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
             snoozeDuration: updatedReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
             volume: updatedReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
             volumeStyle: updatedReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
-            schemaVersion: updatedReminder.schemaVersion ?? 2,
+            schemaVersion: updatedReminder.schemaVersion ?? 3,
         };
 
         const newReminders = [...currentReminders];

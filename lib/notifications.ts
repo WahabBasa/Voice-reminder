@@ -32,6 +32,7 @@ export interface ReminderNotification {
   // Interval recurrence
   intervalMs?: number;
   anchorAt?: number;
+  intervalDays?: number;
   scheduledFor?: number;
 }
 
@@ -135,6 +136,8 @@ export async function scheduleReminder(
       date: reminder.date,
       frequency: reminder.frequency,
       days: reminder.days,
+      intervalDays: reminder.intervalDays,
+      scheduledFor: reminder.scheduledFor,
     };
     triggerTimestamp = getNextTriggerTime(schedule);
   }
@@ -189,6 +192,7 @@ export async function scheduleReminder(
 
         intervalMs: String(reminder.intervalMs ?? ""),
         anchorAt: String(reminder.anchorAt ?? ""),
+        intervalDays: String(reminder.intervalDays ?? ""),
         scheduledFor: String(triggerTimestamp),
         kind: "reminder_occurrence",
       },
@@ -298,6 +302,8 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
           time: data.time as string,
           frequency,
           days: data.days ? (data.days as string).split(",") : undefined,
+          intervalDays: data.intervalDays ? Number(data.intervalDays) : undefined,
+          scheduledFor: Number(data.scheduledFor),
         };
         nextTrigger = getNextTriggerTime(schedule);
       }

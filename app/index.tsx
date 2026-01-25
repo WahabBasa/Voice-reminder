@@ -598,7 +598,14 @@ export default function HomeScreen() {
         dueLabel = formatIntervalNextIn(dueTimestamp);
       } else {
         dueTimestamp = getDueTimestamp(
-          { time: item.time, date: item.date, frequency: item.frequency, days: item.days },
+          {
+            time: item.time,
+            date: item.date,
+            frequency: item.frequency,
+            days: item.days,
+            intervalDays: item.intervalDays,
+            scheduledFor: item.scheduledFor,
+          },
           new Date()
         );
         dueLabel = formatReminderTime(dueTimestamp);

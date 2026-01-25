@@ -92,7 +92,7 @@ export default function ActionSheet({
         <Portal hostName={hostName}>
             <BottomSheet
                 ref={bottomSheetRef}
-                snapPoints={["auto"]}
+                snapPoints={["90%"]}
                 index={0}
                 enablePanDownToClose
                 enableDynamicSizing

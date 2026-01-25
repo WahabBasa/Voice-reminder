@@ -15,6 +15,7 @@ interface ReminderCardProps {
   time: string;
   frequency: string;
   days?: string[];
+  intervalDays?: number;
   isCompleted?: boolean;
   onPress: () => void;
   onDelete: () => void;
@@ -28,13 +29,14 @@ export default function ReminderCard({
   time,
   frequency,
   days = [],
+  intervalDays,
   isCompleted = false,
   onPress,
   onDelete,
   onMarkDone,
 }: ReminderCardProps) {
   const translateX = useSharedValue(0);
-  const nextTrigger = getNextTriggerTime({ time, frequency, days });
+  const nextTrigger = getNextTriggerTime({ time, frequency, days, intervalDays });
   const nextTriggerStr = formatNextTrigger(nextTrigger);
 
   const panGesture = Gesture.Pan()
@@ -77,7 +79,12 @@ export default function ReminderCard({
 
   const getFrequencyLabel = () => {
     if (frequency === "once") return "Once";
-    if (frequency === "daily") return "Daily";
+    if (frequency === "daily") {
+      if (intervalDays && intervalDays > 1) {
+        return `Every ${intervalDays} Days`;
+      }
+      return "Daily";
+    }
     if (frequency === "custom" && days.length > 0) {
       const dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
       const sortedDays = [...days].sort((a, b) => dayOrder.indexOf(a) - dayOrder.indexOf(b));

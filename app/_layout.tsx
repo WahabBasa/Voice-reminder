@@ -46,15 +46,6 @@ export default function RootLayout() {
                   }}
                 />
                 <Stack.Screen
-                  name="reminder/edit"
-                  options={{
-                    animation: "fade",
-                    animationDuration: 50,
-                    presentation: "transparentModal",
-                    contentStyle: { backgroundColor: "transparent" },
-                  }}
-                />
-                <Stack.Screen
                   name="reminder/new"
                   options={{
                     animation: "fade",

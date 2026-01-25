@@ -4,16 +4,16 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { PortalHost } from "@gorhom/portal";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import AppIcon from "./AppIcon";
-import PickerSheet from "./PickerSheet";
 import { scaleFontSize } from "../lib/theme";
 
-type Frequency = "minute" | "hour" | "daily" | "weekly";
+type Frequency = "minute" | "hour" | "days" | "weekly";
 
 type RepeatTaskModalProps = {
   visible: boolean;
@@ -35,7 +35,7 @@ type RepeatTaskModalProps = {
 const FREQUENCIES: { label: string; value: Frequency }[] = [
   { label: "Minute", value: "minute" },
   { label: "Hour", value: "hour" },
-  { label: "Daily", value: "daily" },
+  { label: "Days", value: "days" },
   { label: "Weekly", value: "weekly" },
 ];
 
@@ -49,11 +49,7 @@ const WEEKDAYS = [
   { label: "Sat", value: "sat" },
 ];
 
-// Interval options by frequency
-const INTERVAL_OPTIONS: Record<"minute" | "hour", number[]> = {
-  minute: [15, 30, 45, 60, 90, 120, 180, 240, 360],
-  hour: [1, 2, 3, 4, 6, 8, 12, 24],
-};
+// No longer using INTERVAL_OPTIONS listed here
 
 export default function RepeatTaskModal({
   visible,
@@ -68,40 +64,34 @@ export default function RepeatTaskModal({
   const portalHostName = "repeatTaskModal";
 
   const [enabled, setEnabled] = useState(initialRepeatEnabled);
-  const [frequency, setFrequency] = useState<Frequency>(initialFrequency);
-  const [interval, setInterval] = useState(initialInterval);
+  const [frequency, setFrequency] = useState<Frequency>(
+    initialFrequency === ("daily" as any) ? "days" : initialFrequency
+  );
+  const [interval, setIntervalValue] = useState(String(initialInterval));
   const [days, setDays] = useState<string[]>(initialDays);
   const [endDate, setEndDate] = useState(initialEndDate);
 
-  // Picker sheet state
-  const [showIntervalPicker, setShowIntervalPicker] = useState(false);
+  const parsedInterval = parseInt(interval, 10) || 0;
+
+  const isValid = useMemo(() => {
+    if (!enabled) return true;
+    if (frequency === "minute") return parsedInterval >= 15 && parsedInterval <= 360;
+    if (frequency === "hour") return parsedInterval >= 1 && parsedInterval <= 168;
+    if (frequency === "days") return parsedInterval >= 1 && parsedInterval <= 30;
+    if (frequency === "weekly") return days.length > 0;
+    return true;
+  }, [enabled, frequency, parsedInterval, days]);
 
   const handleConfirm = () => {
+    if (!isValid) return;
     onConfirm({
       enabled,
       frequency,
-      interval,
+      interval: parsedInterval,
       days: frequency === "weekly" ? days : undefined,
       endDate,
     });
   };
-
-  // Build interval picker options
-  const intervalOptions = useMemo(() => {
-    if (frequency === "daily" || frequency === "weekly") {
-      return [{ value: 1, label: `1 ${frequency === "daily" ? "Day" : "Week"}` }];
-    }
-
-    const baseValues = INTERVAL_OPTIONS[frequency] || [1];
-    // Include current interval if not in base values
-    const values = Array.from(new Set([...baseValues, interval])).sort((a, b) => a - b);
-
-    const unit = frequency === "minute" ? "Minute" : "Hour";
-    return values.map((num) => ({
-      value: num,
-      label: `${num} ${unit}${num !== 1 ? "s" : ""}`,
-    }));
-  }, [frequency, interval]);
 
   const toggleDay = (day: string) => {
     setDays((prev) =>
@@ -109,16 +99,16 @@ export default function RepeatTaskModal({
     );
   };
 
-  // Format current interval for display
-  const intervalLabel = useMemo(() => {
-    if (frequency === "daily") return "1 Day";
-    if (frequency === "weekly") return "1 Week";
+  // Format unit label
+  const unitLabel = useMemo(() => {
+    if (frequency === "days") return parsedInterval === 1 ? "Day" : "Days";
+    if (frequency === "weekly") return "";
     const unit = frequency === "minute" ? "Minute" : "Hour";
-    return `${interval} ${unit}${interval > 1 ? "s" : ""}`;
-  }, [frequency, interval]);
+    return `${unit}${parsedInterval !== 1 ? "s" : ""}`;
+  }, [frequency, parsedInterval]);
 
-  // Whether interval picker should be enabled
-  const intervalPickerEnabled = frequency === "minute" || frequency === "hour";
+  // Whether interval input should be shown
+  const showIntervalInput = frequency !== "weekly";
 
   return (
     <>
@@ -131,134 +121,137 @@ export default function RepeatTaskModal({
         <GestureHandlerRootView style={{ flex: 1 }}>
           <View style={styles.overlay}>
             <View style={styles.modal}>
-            <View style={styles.header}>
-              <Text style={styles.title}>Set as Repeat Task</Text>
-              <Switch
-                value={enabled}
-                onValueChange={setEnabled}
-                trackColor={{ false: "#e0e0e0", true: "#4285f4" }}
-                thumbColor={enabled ? "#ffffff" : "#f5f5f5"}
-              />
-            </View>
+              <View style={styles.header}>
+                <Text style={styles.title}>Set as Repeat Task</Text>
+                <Switch
+                  value={enabled}
+                  onValueChange={setEnabled}
+                  trackColor={{ false: "#e0e0e0", true: "#4285f4" }}
+                  thumbColor={enabled ? "#ffffff" : "#f5f5f5"}
+                />
+              </View>
 
-            <View style={styles.frequencyContainer}>
-              {FREQUENCIES.map((freq) => (
-                <TouchableOpacity
-                  key={freq.value}
-                  style={[
-                    styles.freqChip,
-                    frequency === freq.value && styles.freqChipSelected,
-                  ]}
-                  onPress={() => {
-                    setFrequency(freq.value);
-                    if (freq.value === "daily" || freq.value === "weekly") {
-                      setInterval(1);
-                    }
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text
+              <View style={styles.frequencyContainer}>
+                {FREQUENCIES.map((freq) => (
+                  <TouchableOpacity
+                    key={freq.value}
                     style={[
-                      styles.freqChipText,
-                      frequency === freq.value && styles.freqChipTextSelected,
+                      styles.freqChip,
+                      frequency === freq.value && styles.freqChipSelected,
                     ]}
+                    onPress={() => {
+                      setFrequency(freq.value);
+                      if (freq.value === "days" || freq.value === "weekly") {
+                        setIntervalValue("1");
+                      }
+                    }}
+                    activeOpacity={0.7}
                   >
-                    {freq.label}
+                    <Text
+                      style={[
+                        styles.freqChipText,
+                        frequency === freq.value && styles.freqChipTextSelected,
+                      ]}
+                    >
+                      {freq.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <View style={styles.settingsSection}>
+                {showIntervalInput && (
+                  <View style={styles.settingsRow}>
+                    <Text style={styles.settingsLabel}>Repeat every</Text>
+                    <View style={styles.settingsValueContainer}>
+                      <TextInput
+                        style={styles.intervalInput}
+                        value={interval}
+                        onChangeText={setIntervalValue}
+                        keyboardType="number-pad"
+                        placeholder="1"
+                        placeholderTextColor="#bdbdbd"
+                      />
+                      <Text style={styles.unitText}>{unitLabel}</Text>
+                    </View>
+                  </View>
+                )}
+
+                {frequency === "minute" && (
+                  <Text style={styles.hintText}>
+                    {parsedInterval < 15 ? "Minimum 15 minutes" : parsedInterval > 360 ? "Maximum 360 minutes (6 hours)" : "15-360 minutes"}
                   </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                )}
 
-            <View style={styles.settingsSection}>
-              <TouchableOpacity
-                style={[
-                  styles.settingsRow,
-                  !intervalPickerEnabled && styles.settingsRowDisabled,
-                ]}
-                activeOpacity={intervalPickerEnabled ? 0.7 : 1}
-                onPress={() => {
-                  if (intervalPickerEnabled) {
-                    setShowIntervalPicker(true);
-                  }
-                }}
-              >
-                <Text style={styles.settingsLabel}>Repeat every</Text>
-                <View style={styles.settingsValueContainer}>
-                  <Text style={styles.settingsValue}>{intervalLabel}</Text>
-                  {intervalPickerEnabled && (
-                    <AppIcon name="chevron-down" size={16} color="#9e9e9e" />
-                  )}
-                </View>
-              </TouchableOpacity>
+                {frequency === "hour" && (
+                  <Text style={styles.hintText}>
+                    {parsedInterval < 1 ? "Minimum 1 hour" : parsedInterval > 168 ? "Maximum 168 hours (7 days)" : "1-168 hours"}
+                  </Text>
+                )}
 
-              {frequency === "weekly" && (
-                <View style={styles.daysContainer}>
-                  <Text style={[styles.settingsLabel, { marginBottom: 12 }]}>Repeat on</Text>
-                  <View style={styles.weekdaysRow}>
-                    {WEEKDAYS.map((day) => {
-                      const isSelected = days.includes(day.value);
-                      return (
-                        <TouchableOpacity
-                          key={day.value}
-                          style={[
-                            styles.dayCircle,
-                            isSelected && styles.dayCircleSelected,
-                          ]}
-                          onPress={() => toggleDay(day.value)}
-                        >
-                          <Text
+                {frequency === "days" && (
+                  <Text style={styles.hintText}>
+                    {parsedInterval < 1 || parsedInterval > 30 ? "Enter 1-30 days" : "Calendar-based, same time each occurrence"}
+                  </Text>
+                )}
+
+                {(frequency === "minute" || frequency === "hour") && (
+                  <Text style={styles.infoNote}>Note: Time setting is ignored for interval reminders</Text>
+                )}
+
+                {frequency === "weekly" && (
+                  <View style={styles.daysContainer}>
+                    <Text style={[styles.settingsLabel, { marginBottom: 12 }]}>Repeat on</Text>
+                    <View style={styles.weekdaysRow}>
+                      {WEEKDAYS.map((day) => {
+                        const isSelected = days.includes(day.value);
+                        return (
+                          <TouchableOpacity
+                            key={day.value}
                             style={[
-                              styles.dayCircleText,
-                              isSelected && styles.dayCircleTextSelected,
+                              styles.dayCircle,
+                              isSelected && styles.dayCircleSelected,
                             ]}
+                            onPress={() => toggleDay(day.value)}
                           >
-                            {day.label[0]}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                            <Text
+                              style={[
+                                styles.dayCircleText,
+                                isSelected && styles.dayCircleTextSelected,
+                              ]}
+                            >
+                              {day.label[0]}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                )}
+
+                {/* Repeat ends at - disabled for v1 */}
+                <View style={[styles.settingsRow, styles.settingsRowDisabled]}>
+                  <Text style={styles.settingsLabel}>Repeat ends at</Text>
+                  <View style={styles.settingsValueContainer}>
+                    <Text style={styles.settingsValueDisabled}>{endDate}</Text>
                   </View>
                 </View>
-              )}
+              </View>
 
-              {/* Repeat ends at - disabled for v1 */}
-              <View style={[styles.settingsRow, styles.settingsRowDisabled]}>
-                <Text style={styles.settingsLabel}>Repeat ends at</Text>
-                <View style={styles.settingsValueContainer}>
-                  <Text style={styles.settingsValueDisabled}>{endDate}</Text>
-                </View>
+              <View style={styles.actions}>
+                <TouchableOpacity onPress={onCancel} style={styles.actionButton}>
+                  <Text style={styles.cancelText}>CANCEL</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleConfirm} style={[styles.actionButton, !isValid && { opacity: 0.5 }]} disabled={!isValid}>
+                  <Text style={styles.doneText}>DONE</Text>
+                </TouchableOpacity>
               </View>
             </View>
-
-            <View style={styles.actions}>
-              <TouchableOpacity onPress={onCancel} style={styles.actionButton}>
-                <Text style={styles.cancelText}>CANCEL</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleConfirm} style={styles.actionButton}>
-                <Text style={styles.doneText}>DONE</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
 
             <PortalHost name={portalHostName} />
           </View>
         </GestureHandlerRootView>
       </Modal>
-
-      {/* Interval Picker Sheet */}
-      <PickerSheet
-        visible={showIntervalPicker}
-        title="Repeat every"
-        mode="list"
-        options={intervalOptions}
-        selected={interval}
-        onSelect={(value) => {
-          setInterval(value as number);
-          setShowIntervalPicker(false);
-        }}
-        onDismiss={() => setShowIntervalPicker(false)}
-        hostName={portalHostName}
-      />
     </>
   );
 }
@@ -345,6 +338,7 @@ const styles = StyleSheet.create({
   settingsValueDisabled: {
     fontSize: scaleFontSize(14),
     color: "#bdbdbd",
+    fontWeight: "500",
   },
   daysContainer: {
     paddingVertical: 16,
@@ -393,5 +387,32 @@ const styles = StyleSheet.create({
     fontSize: scaleFontSize(14),
     fontWeight: "600",
     color: "#4285f4",
+  },
+  intervalInput: {
+    fontSize: scaleFontSize(16),
+    color: "#424242",
+    fontWeight: "600",
+    borderBottomWidth: 1,
+    borderBottomColor: "#4285f4",
+    paddingHorizontal: 4,
+    minWidth: 40,
+    textAlign: "center",
+  },
+  unitText: {
+    fontSize: scaleFontSize(15),
+    color: "#424242",
+  },
+  hintText: {
+    fontSize: scaleFontSize(12),
+    color: "#9e9e9e",
+    marginTop: -8,
+    marginBottom: 16,
+    marginLeft: 4,
+  },
+  infoNote: {
+    fontSize: scaleFontSize(11),
+    color: "#f44336",
+    fontStyle: "italic",
+    marginTop: 8,
   },
 });

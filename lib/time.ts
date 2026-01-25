@@ -17,6 +17,7 @@ export interface ReminderSchedule {
   // Interval recurrence
   intervalMs?: number;
   anchorAt?: number;
+  intervalDays?: number;
   scheduledFor?: number;
 }
 
@@ -103,13 +104,16 @@ export function getDueTimestamp(schedule: ReminderSchedule, nowDate = new Date()
   const now = nowDate;
 
   if (schedule.frequency === "once") {
-    return getNextTriggerTime(schedule);
+    return getNextTriggerTime(schedule, nowDate.getTime());
   }
 
   const todayTarget = new Date(now);
   todayTarget.setHours(hours, minutes, 0, 0);
 
   if (schedule.frequency === "daily") {
+    if (schedule.intervalDays && schedule.intervalDays > 1) {
+      return getNextTriggerTime(schedule, nowDate.getTime());
+    }
     return todayTarget.getTime();
   }
 
@@ -119,10 +123,10 @@ export function getDueTimestamp(schedule: ReminderSchedule, nowDate = new Date()
     if (days.includes(todayKey)) {
       return todayTarget.getTime();
     }
-    return getNextTriggerTime(schedule);
+    return getNextTriggerTime(schedule, nowDate.getTime());
   }
 
-  return getNextTriggerTime(schedule);
+  return getNextTriggerTime(schedule, nowDate.getTime());
 }
 
 function formatRelativeMinutes(minutes: number): string {
@@ -277,9 +281,20 @@ export function getNextTriggerTime(schedule: ReminderSchedule, referenceTime?: n
     const target = new Date(now);
     target.setHours(hours, minutes, 0, 0);
 
-    // If time has passed today, schedule for tomorrow (or just today for "once" that's in future)
+    // If time has passed today, move to tomorrow (standard daily) or +N days (custom interval)
     if (target.getTime() <= now.getTime()) {
-      target.setDate(target.getDate() + 1);
+      const daysToAdd = schedule.intervalDays && schedule.intervalDays > 1 ? schedule.intervalDays : 1;
+      target.setDate(target.getDate() + daysToAdd);
+    } else if (schedule.intervalDays && schedule.intervalDays > 1 && schedule.scheduledFor) {
+      // If we have a stable cadence, compute exactly N days from the last occurrence
+      const prev = new Date(schedule.scheduledFor);
+      prev.setHours(hours, minutes, 0, 0);
+
+      // Add N days until we are after now
+      while (prev.getTime() <= now.getTime()) {
+        prev.setDate(prev.getDate() + schedule.intervalDays);
+      }
+      return prev.getTime();
     }
 
     return target.getTime();

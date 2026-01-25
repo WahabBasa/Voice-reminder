@@ -123,6 +123,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
     const [intervalMs, setIntervalMs] = useState<number | undefined>(initialReminder.intervalMs);
     const [anchorAt, setAnchorAt] = useState<number | undefined>(initialReminder.anchorAt);
+    const [intervalDays, setIntervalDays] = useState<number | undefined>(initialReminder.intervalDays);
     const [selectedDate, setSelectedDate] = useState<Date | null>(() => {
         if (initialReminder.date) {
             const [year, month, day] = initialReminder.date.split("-").map(Number);
@@ -207,7 +208,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             (initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume) !== volume ||
             (initialReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle) !== volumeStyle ||
             (initialReminder.intervalMs ?? undefined) !== (intervalMs ?? undefined) ||
-            (initialReminder.anchorAt ?? undefined) !== (anchorAt ?? undefined)
+            (initialReminder.anchorAt ?? undefined) !== (anchorAt ?? undefined) ||
+            (initialReminder.intervalDays ?? undefined) !== (intervalDays ?? undefined)
         );
     }, [days, frequency, initialReminder, time, title, description, selectedDate, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt]);
 
@@ -215,8 +217,11 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         if (frequency === "interval" && intervalMs) {
             return formatIntervalDuration(intervalMs);
         }
+        if (frequency === "daily" && intervalDays && intervalDays > 1) {
+            return `Every ${intervalDays} Days`;
+        }
         return FREQUENCIES.find((f) => f.value === frequency)?.label ?? "Once";
-    }, [frequency, intervalMs]);
+    }, [frequency, intervalMs, intervalDays]);
 
     const daysLabel = useMemo(() => {
         if (frequency !== "custom") return "";
@@ -326,6 +331,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
                     intervalMs: frequency === "interval" ? intervalMs : undefined,
                     anchorAt: frequency === "interval" ? anchorAt : undefined,
+                    intervalDays: frequency === "daily" ? intervalDays : undefined,
                 });
 
                 toast.show({ title: "Sound regenerated", message: "New voice reminder ready", type: "success" });
@@ -364,11 +370,18 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                 setIntervalMs(clamped);
                 setAnchorAt(Date.now());
                 setDays([]);
+            } else if (data.frequency === "days") {
+                setFrequency("daily");
+                setIntervalDays(data.interval);
+                setIntervalMs(undefined);
+                setAnchorAt(undefined);
+                setDays([]);
             } else {
                 setFrequency(data.frequency === "weekly" ? "custom" : data.frequency);
                 if (data.days) setDays(data.days);
                 setIntervalMs(undefined);
                 setAnchorAt(undefined);
+                setIntervalDays(undefined);
             }
         }
         setShowRepeatTaskModal(false);
@@ -405,7 +418,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
             intervalMs: frequency === "interval" ? intervalMs : undefined,
             anchorAt: frequency === "interval" ? anchorAt : undefined,
-            schemaVersion: 2,
+            intervalDays: frequency === "daily" ? intervalDays : undefined,
+            schemaVersion: 3,
         };
 
         try {
@@ -459,6 +473,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
                             intervalMs: frequency === "interval" ? intervalMs : undefined,
                             anchorAt: frequency === "interval" ? anchorAt : undefined,
+                            intervalDays: frequency === "daily" ? intervalDays : undefined,
                         });
                     } catch (e) {
                         console.log("[VR] Failed to schedule reminder:", e);
@@ -914,7 +929,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                     ? ((intervalMs && intervalMs % (60 * 60 * 1000) !== 0) ? "minute" : "hour")
                                     : (frequency === "custom"
                                         ? "weekly"
-                                        : (frequency === "once" || frequency === "daily" ? "daily" : "daily"))
+                                        : "days")
                             }
                             initialInterval={
                                 frequency === "interval" && intervalMs
@@ -923,7 +938,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                             ? Math.max(15, Math.round(intervalMs / (60 * 1000)))
                                             : Math.max(1, Math.round(intervalMs / (60 * 60 * 1000)))
                                     )
-                                    : 1
+                                    : (frequency === "daily" ? (intervalDays || 1) : 1)
                             }
                             initialDays={days}
                             onCancel={() => setShowRepeatTaskModal(false)}
