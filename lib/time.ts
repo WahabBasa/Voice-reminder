@@ -9,10 +9,15 @@ const DAY_MAP: Record<string, number> = {
 };
 
 export interface ReminderSchedule {
-  time: string; // "HH:MM"
+  time?: string; // "HH:MM" (optional for interval)
   date?: string; // "YYYY-MM-DD" for one-time reminders on specific days
-  frequency: string; // "once" | "daily" | "weekly" | "custom"
+  frequency: string; // "once" | "daily" | "weekly" | "custom" | "interval"
   days?: string[]; // ["mon", "wed", "fri"]
+
+  // Interval recurrence
+  intervalMs?: number;
+  anchorAt?: number;
+  scheduledFor?: number;
 }
 
 const DAY_KEYS: Array<keyof typeof DAY_MAP> = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -76,6 +81,19 @@ export function isOverdue(timestamp: number, now = Date.now()): boolean {
 }
 
 export function getDueTimestamp(schedule: ReminderSchedule, nowDate = new Date()): number {
+  // Interval reminders: compute next occurrence from cadence
+  if (schedule.frequency === "interval") {
+    if (!schedule.anchorAt || !schedule.intervalMs) {
+      return nowDate.getTime();
+    }
+    const { scheduledFor } = getNextIntervalOccurrence(
+      schedule.anchorAt,
+      schedule.intervalMs,
+      nowDate.getTime()
+    );
+    return scheduledFor;
+  }
+
   // Defensive check for missing time
   if (!schedule.time) {
     console.warn("[VR] getDueTimestamp called with undefined time, using current time");
@@ -167,14 +185,78 @@ export function formatReminderTime(timestamp: number, nowDate = new Date()): str
   return `${dateStr} at ${timeStr}`;
 }
 
-export function getNextTriggerTime(schedule: ReminderSchedule): number {
+/**
+ * Format interval duration for display.
+ * E.g., 28800000 -> "Every 8 hours"
+ */
+export function formatIntervalDuration(intervalMs: number): string {
+  const minutes = Math.round(intervalMs / (60 * 1000));
+
+  if (minutes < 60) {
+    return `Every ${minutes} minute${minutes !== 1 ? "s" : ""}`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return `Every ${hours} hour${hours !== 1 ? "s" : ""}`;
+  }
+
+  const days = Math.round(hours / 24);
+  return `Every ${days} day${days !== 1 ? "s" : ""}`;
+}
+
+/**
+ * Compute the next interval occurrence.
+ * Algorithm: Find smallest t = anchorAt + k*intervalMs where t > referenceTime.
+ */
+export function getNextIntervalOccurrence(
+  anchorAt: number,
+  intervalMs: number,
+  referenceTime: number = Date.now()
+): { scheduledFor: number; k: number } {
+  let safeInterval = intervalMs;
+  if (!Number.isFinite(safeInterval) || safeInterval <= 0) {
+    console.warn("[VR] Invalid intervalMs, defaulting to 1 hour");
+    safeInterval = 60 * 60 * 1000;
+  }
+
+  const elapsed = referenceTime - anchorAt;
+  const k0 = Math.max(0, Math.ceil(elapsed / safeInterval));
+  let scheduledFor = anchorAt + k0 * safeInterval;
+
+  // If exactly on boundary (or in the past), push to the next interval.
+  if (scheduledFor <= referenceTime) {
+    scheduledFor += safeInterval;
+  }
+
+  const k = Math.max(0, Math.round((scheduledFor - anchorAt) / safeInterval));
+  return { scheduledFor, k };
+}
+
+export function getNextTriggerTime(schedule: ReminderSchedule, referenceTime?: number): number {
+  // Handle interval frequency
+  if (schedule.frequency === "interval") {
+    if (!schedule.anchorAt || !schedule.intervalMs) {
+      console.warn("[VR] Interval reminder missing anchorAt or intervalMs");
+      return Date.now() + 60 * 60 * 1000;
+    }
+    const ref = referenceTime ?? schedule.scheduledFor ?? Date.now();
+    const { scheduledFor } = getNextIntervalOccurrence(
+      schedule.anchorAt,
+      schedule.intervalMs,
+      ref
+    );
+    return scheduledFor;
+  }
+
   // Defensive check for missing time
   if (!schedule.time) {
     console.warn("[VR] getNextTriggerTime called with undefined time, using current time");
-    return Date.now();
+    return referenceTime ?? Date.now();
   }
+
   const [hours, minutes] = schedule.time.split(":").map(Number);
-  const now = new Date();
+  const now = referenceTime ? new Date(referenceTime) : new Date();
 
   // If a specific date is provided (for one-time reminders), use it
   if (schedule.frequency === "once" && schedule.date) {
@@ -192,7 +274,7 @@ export function getNextTriggerTime(schedule: ReminderSchedule): number {
   }
 
   if (schedule.frequency === "once" || schedule.frequency === "daily") {
-    const target = new Date();
+    const target = new Date(now);
     target.setHours(hours, minutes, 0, 0);
 
     // If time has passed today, schedule for tomorrow (or just today for "once" that's in future)
@@ -225,7 +307,7 @@ export function getNextTriggerTime(schedule: ReminderSchedule): number {
     for (const day of targetDays) {
       if (day > currentDay || (day === currentDay && targetTime > currentTime)) {
         const daysUntil = day - currentDay;
-        const target = new Date();
+        const target = new Date(now);
         target.setDate(target.getDate() + daysUntil);
         target.setHours(hours, minutes, 0, 0);
         return target.getTime();
@@ -235,14 +317,14 @@ export function getNextTriggerTime(schedule: ReminderSchedule): number {
     // Wrap to next week's first target day
     const firstDay = targetDays[0];
     const daysUntil = 7 - currentDay + firstDay;
-    const target = new Date();
+    const target = new Date(now);
     target.setDate(target.getDate() + daysUntil);
     target.setHours(hours, minutes, 0, 0);
     return target.getTime();
   }
 
   // Fallback: schedule for tomorrow at specified time
-  const fallback = new Date();
+  const fallback = new Date(now);
   fallback.setDate(fallback.getDate() + 1);
   fallback.setHours(hours, minutes, 0, 0);
   return fallback.getTime();

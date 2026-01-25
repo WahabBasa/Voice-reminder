@@ -12,7 +12,7 @@ import {
   deleteAsync,
   getInfoAsync,
 } from "expo-file-system/legacy";
-import { getNextTriggerTime, ReminderSchedule } from "./time";
+import { getNextIntervalOccurrence, getNextTriggerTime, ReminderSchedule } from "./time";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
 
 export interface ReminderNotification {
@@ -28,6 +28,11 @@ export interface ReminderNotification {
   snoozeDuration?: number; // minutes
   volume?: number; // 0-1
   volumeStyle?: "standard" | "progressive";
+
+  // Interval recurrence
+  intervalMs?: number;
+  anchorAt?: number;
+  scheduledFor?: number;
 }
 
 function getLocalAudioPath(reminderId: string): string {
@@ -111,13 +116,28 @@ export async function scheduleReminder(
   );
 
   // Calculate next trigger time
-  const schedule: ReminderSchedule = {
-    time: reminder.time,
-    date: reminder.date,
-    frequency: reminder.frequency,
-    days: reminder.days,
-  };
-  let triggerTimestamp = getNextTriggerTime(schedule);
+  let triggerTimestamp: number;
+
+  if (reminder.frequency === "interval" && reminder.anchorAt && reminder.intervalMs) {
+    if (reminder.scheduledFor && reminder.scheduledFor > Date.now()) {
+      triggerTimestamp = reminder.scheduledFor;
+    } else {
+      const { scheduledFor } = getNextIntervalOccurrence(
+        reminder.anchorAt,
+        reminder.intervalMs,
+        Date.now()
+      );
+      triggerTimestamp = scheduledFor;
+    }
+  } else {
+    const schedule: ReminderSchedule = {
+      time: reminder.time,
+      date: reminder.date,
+      frequency: reminder.frequency,
+      days: reminder.days,
+    };
+    triggerTimestamp = getNextTriggerTime(schedule);
+  }
 
   // Safety check: Notifee requires timestamp to be in the future
   // If calculated time is in the past, schedule for 5 seconds from now
@@ -135,9 +155,11 @@ export async function scheduleReminder(
     },
   };
 
+  const notificationId = `reminder_${reminder.id}_${triggerTimestamp}`;
+
   await notifee.createTriggerNotification(
     {
-      id: `reminder_${reminder.id}`,
+      id: notificationId,
       title: reminder.title,
       body: reminder.description,
       android: {
@@ -164,6 +186,11 @@ export async function scheduleReminder(
         snoozeDuration: String(reminder.snoozeDuration ?? 5),
         volume: String(reminder.volume ?? 1),
         volumeStyle: reminder.volumeStyle ?? "standard",
+
+        intervalMs: String(reminder.intervalMs ?? ""),
+        anchorAt: String(reminder.anchorAt ?? ""),
+        scheduledFor: String(triggerTimestamp),
+        kind: "reminder_occurrence",
       },
     },
     trigger
@@ -175,11 +202,17 @@ export async function scheduleReminder(
 }
 
 export async function cancelReminder(reminderId: string): Promise<void> {
-  const notificationId = `reminder_${reminderId}`;
   const channelId = `reminder_${reminderId}`;
 
-  // Cancel scheduled notification
-  await notifee.cancelNotification(notificationId);
+  // Cancel all scheduled notifications for this reminder (occurrence + snooze)
+  const scheduledIds = await notifee.getTriggerNotificationIds();
+  const toCancel = scheduledIds.filter(
+    (id) => id.startsWith(`reminder_${reminderId}_`) || id.startsWith(`snooze_${reminderId}_`)
+  );
+
+  for (const id of toCancel) {
+    await notifee.cancelNotification(id);
+  }
 
   // Delete the channel
   await notifee.deleteChannel(channelId);
@@ -187,7 +220,7 @@ export async function cancelReminder(reminderId: string): Promise<void> {
   // Note: NOT deleting local audio file here - it's needed for rescheduling
   // Audio is only deleted when reminder is fully deleted via deleteReminderWithAudio()
 
-  console.log(`[VR] Cancelled reminder ${reminderId}`);
+  console.log(`[VR] Cancelled ${toCancel.length} notifications for reminder ${reminderId}`);
 }
 
 // Use this when fully deleting a reminder (not just rescheduling)
@@ -224,40 +257,81 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     }
 
     // Check if we need to reschedule recurring reminders
-    if (data && data.frequency !== "once") {
-      const schedule: ReminderSchedule = {
-        time: data.time as string,
-        frequency: data.frequency as string,
-        days: data.days ? (data.days as string).split(",") : undefined,
-      };
+    const frequency = typeof data?.frequency === "string" ? (data.frequency as string) : "";
+    if (!frequency) {
+      console.log("[VR] Notification missing frequency, skipping reschedule");
+      return;
+    }
+    if (!["once", "daily", "weekly", "custom", "interval"].includes(frequency)) {
+      console.log(`[VR] Unknown frequency "${frequency}", skipping reschedule`);
+      return;
+    }
+    if (!data?.reminderId) {
+      console.log("[VR] Notification missing reminderId, skipping reschedule");
+      return;
+    }
 
-      let nextTrigger = getNextTriggerTime(schedule);
+    if (frequency !== "once") {
+      const kind = (data.kind as string) || "reminder_occurrence";
+      if (kind === "snooze_occurrence") {
+        console.log("[VR] Snooze notification delivered, not rescheduling");
+        return;
+      }
 
-      // Safety check: Notifee requires timestamp to be in the future
+      let nextTrigger: number;
+      if (frequency === "interval") {
+        const intervalMs = Number(data.intervalMs);
+        const anchorAt = Number(data.anchorAt);
+        const scheduledFor = Number(data.scheduledFor);
+
+        if (!intervalMs || !anchorAt) {
+          console.warn("[VR] Interval reminder missing data, skipping reschedule");
+          return;
+        }
+
+        // Stable cadence + skip missed: compute from the later of (scheduledFor, now)
+        const ref = Math.max(scheduledFor || Date.now(), Date.now());
+        const { scheduledFor: next } = getNextIntervalOccurrence(anchorAt, intervalMs, ref);
+        nextTrigger = next;
+      } else {
+        const schedule: ReminderSchedule = {
+          time: data.time as string,
+          frequency,
+          days: data.days ? (data.days as string).split(",") : undefined,
+        };
+        nextTrigger = getNextTriggerTime(schedule);
+      }
+
       const now = Date.now();
       if (nextTrigger <= now) {
-        console.warn(`[VR] Recurring trigger time ${new Date(nextTrigger).toLocaleString()} is in the past, adjusting to now + 5s`);
+        console.warn("[VR] Next trigger in past, adjusting to now + 5s");
         nextTrigger = now + 5000;
       }
+
+      const newNotificationId = `reminder_${data.reminderId}_${nextTrigger}`;
 
       const trigger: TimestampTrigger = {
         type: TriggerType.TIMESTAMP,
         timestamp: nextTrigger,
         alarmManager: {
-          allowWhileIdle: true, // Bypasses Android Doze mode
+          allowWhileIdle: true,
         },
       };
 
       await notifee.createTriggerNotification(
         {
           ...detail.notification!,
+          id: newNotificationId,
+          data: {
+            ...detail.notification!.data,
+            scheduledFor: String(nextTrigger),
+            kind: "reminder_occurrence",
+          },
         },
         trigger
       );
 
-      console.log(
-        `[VR] Rescheduled recurring reminder for ${new Date(nextTrigger).toLocaleString()}`
-      );
+      console.log(`[VR] Rescheduled for ${new Date(nextTrigger).toLocaleString()}`);
     }
   }
 }

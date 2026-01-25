@@ -11,5 +11,8 @@ export default defineSchema({
     days: v.optional(v.array(v.string())),
     audioStorageId: v.id("_storage"),
     createdAt: v.number(),
+    // Alarm settings (optional for backward compatibility)
+    soundRepeatCount: v.optional(v.number()),
+    soundRepeatMode: v.optional(v.string()),
   }),
 });

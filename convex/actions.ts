@@ -261,8 +261,10 @@ Return exactly this format:
   "description": "what to say when reminder fires",
   "time": "HH:MM in 24-hour format",
   "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
-  "frequency": "once" | "daily" | "custom",
-  "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom)
+  "frequency": "once" | "daily" | "custom" | "interval",
+  "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom),
+  "intervalHours": number (only if frequency is interval),
+  "intervalMinutes": number (only if frequency is interval)
 }
 
 LANGUAGE RULES:
@@ -287,6 +289,13 @@ RELATIVE TIME RULES:
 - "in X minutes"/"بعد X دقائق" = add to current time (${currentTime})
 - "in X hours"/"بعد X ساعات" = add hours to current time
 - Always calculate the actual HH:MM result
+
+INTERVAL RULES:
+- "every 8 hours"/"كل 8 ساعات" = frequency="interval" and intervalHours=8
+- "every 30 minutes"/"كل 30 دقيقة" = frequency="interval" and intervalMinutes=30
+- "in 8 hours"/"بعد 8 ساعات" = ONE-TIME reminder (frequency="once")
+- For interval reminders: do NOT include a specific date. time can be omitted.
+- Minimum interval: 15 minutes. Maximum interval: 168 hours.
 
 ARABIC TIME EXPRESSIONS:
 - "الساعة ثمانية صباحاً" = 08:00
@@ -326,6 +335,31 @@ If no frequency specified, assume "once".`,
     // Only use date for one-time reminders
     const date = frequency === "once" && parsed.date ? (parsed.date as string) : undefined;
 
+    // Ensure time is always a valid HH:MM string (Convex schema requires it)
+    const currentTimeHm = (() => {
+      const match = String(currentTime).match(/^(\d{1,2}):(\d{2})/);
+      if (!match) return "09:00";
+      return `${match[1].padStart(2, "0")}:${match[2]}`;
+    })();
+    const time = typeof parsed.time === "string" && parsed.time ? (parsed.time as string) : currentTimeHm;
+
+    // Interval normalization
+    let intervalMs: number | undefined;
+    let anchorAt: number | undefined;
+    if (frequency === "interval") {
+      const hours = Number(parsed.intervalHours ?? 0);
+      const minutes = Number(parsed.intervalMinutes ?? 0);
+      const totalMinutes = hours * 60 + minutes;
+
+      intervalMs = totalMinutes * 60 * 1000;
+      // Clamp to valid range
+      const MIN_MS = 15 * 60 * 1000;
+      const MAX_MS = 7 * 24 * 60 * 60 * 1000;
+      intervalMs = Math.max(MIN_MS, Math.min(MAX_MS, intervalMs || 0));
+
+      anchorAt = Date.now();
+    }
+
     // 3. Generate TTS
     const ttsText = description || String(parsed.description ?? "");
     const ttsBuffer = await synthesizeReminderTts({
@@ -343,7 +377,7 @@ If no frequency specified, assume "once".`,
       {
         title: parsed.title as string,
         description,
-        time: parsed.time as string,
+        time,
         date,
         frequency,
         days,
@@ -357,12 +391,15 @@ If no frequency specified, assume "once".`,
       id: reminderId as string,
       title: parsed.title as string,
       description,
-      time: parsed.time as string,
+      time,
       date,
       frequency,
       days,
       transcript,
       audioUrl,
+
+      intervalMs,
+      anchorAt,
     };
 
     console.log("[VR] === STEP 4: Final Result to App ===");

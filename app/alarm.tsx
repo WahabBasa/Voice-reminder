@@ -13,6 +13,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
 import { alarmAudioService } from "../lib/AudioService";
+import { getNextIntervalOccurrence } from "../lib/time";
 
 const { width, height } = Dimensions.get("window");
 
@@ -27,6 +28,10 @@ export default function AlarmScreen() {
         snoozeDuration?: string;
         volume?: string;
         volumeStyle?: string;
+        scheduledFor?: string;
+        intervalMs?: string;
+        anchorAt?: string;
+        kind?: string;
     }>();
 
     const [isPlaying, setIsPlaying] = useState(true);
@@ -130,6 +135,25 @@ export default function AlarmScreen() {
             await notifee.cancelNotification(notificationId);
         }
 
+        // Record completion in history (per occurrence if available)
+        if (reminderId) {
+            try {
+                const { useReminderStore } = await import("../lib/store");
+                const store = useReminderStore.getState();
+                const reminder = store.getReminderById(reminderId);
+                if (reminder) {
+                    const scheduledForRaw = params.scheduledFor ? Number(params.scheduledFor) : undefined;
+                    const scheduledFor = Number.isFinite(scheduledForRaw as number) ? (scheduledForRaw as number) : undefined;
+                    await store.recordCompletion(reminderId, reminder.title, "completed", {
+                        scheduledFor,
+                        action: "dismissed",
+                    });
+                }
+            } catch (e) {
+                console.log("[VR] Failed to record completion:", e);
+            }
+        }
+
         // Close the alarm screen
         router.back();
     };
@@ -177,10 +201,87 @@ export default function AlarmScreen() {
                     snoozeEnabled: String(snoozeEnabled),
                     snoozeDuration: String(snoozeDurationMinutes),
                     volume: String(targetVolume),
+                    volumeStyle: String(params.volumeStyle ?? "standard"),
+                    kind: "snooze_occurrence",
+                    originalScheduledFor: params.scheduledFor ?? "",
+
+                    // Preserve interval metadata so repeated snoozes can still do collision suppression
+                    intervalMs: String(params.intervalMs ?? ""),
+                    anchorAt: String(params.anchorAt ?? ""),
+                    scheduledFor: String(triggerTimestamp),
                 },
             },
             trigger
         );
+
+        // Snooze collision suppression for interval reminders:
+        // if the cadence would fire during snooze, cancel those and schedule the next cadence after snooze.
+        const intervalMs = params.intervalMs ? Number(params.intervalMs) : undefined;
+        const anchorAt = params.anchorAt ? Number(params.anchorAt) : undefined;
+        const volumeStyle = params.volumeStyle ?? "standard";
+        if (intervalMs && anchorAt) {
+            try {
+                const scheduledIds = await notifee.getTriggerNotificationIds();
+                const reminderPrefix = `reminder_${reminderId}_`;
+                const toCancel = scheduledIds.filter((id) => id.startsWith(reminderPrefix));
+
+                for (const id of toCancel) {
+                    const parts = id.split("_");
+                    const maybeTs = parts[parts.length - 1];
+                    const ts = Number(maybeTs);
+                    if (Number.isFinite(ts) && ts <= triggerTimestamp) {
+                        await notifee.cancelNotification(id);
+                    }
+                }
+
+                const { scheduledFor: nextTrigger } = getNextIntervalOccurrence(
+                    anchorAt,
+                    intervalMs,
+                    triggerTimestamp
+                );
+
+                const nextTriggerSafe = nextTrigger <= Date.now() ? Date.now() + 5000 : nextTrigger;
+                const nextId = `reminder_${reminderId}_${nextTriggerSafe}`;
+                const nextTriggerObj: TimestampTrigger = {
+                    type: TriggerType.TIMESTAMP,
+                    timestamp: nextTriggerSafe,
+                    alarmManager: { allowWhileIdle: true },
+                };
+
+                await notifee.createTriggerNotification(
+                    {
+                        id: nextId,
+                        title,
+                        body: description,
+                        android: {
+                            channelId,
+                            importance: AndroidImportance.HIGH,
+                            category: AndroidCategory.ALARM,
+                            autoCancel: false,
+                            lightUpScreen: true,
+                            pressAction: { id: "default" },
+                        },
+                        data: {
+                            reminderId,
+                            frequency: "interval",
+                            title,
+                            description,
+                            snoozeEnabled: String(snoozeEnabled),
+                            snoozeDuration: String(snoozeDurationMinutes),
+                            volume: String(targetVolume),
+                            volumeStyle: String(volumeStyle),
+                            intervalMs: String(intervalMs),
+                            anchorAt: String(anchorAt),
+                            scheduledFor: String(nextTriggerSafe),
+                            kind: "reminder_occurrence",
+                        },
+                    },
+                    nextTriggerObj
+                );
+            } catch (e) {
+                console.log("[VR] Failed interval snooze collision suppression:", e);
+            }
+        }
 
         // Close the alarm screen
         router.back();

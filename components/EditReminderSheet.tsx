@@ -7,6 +7,7 @@ import {
     TextInput,
     View,
 } from "react-native";
+import ActionSheet, { ActionSheetAction } from "./ActionSheet";
 import * as FileSystem from "expo-file-system/legacy";
 import { useAction, useMutation } from "convex/react";
 import { useToast } from "./ToastProvider";
@@ -27,8 +28,9 @@ import RepeatTaskModal from "./RepeatTaskModal";
 import { cancelReminder, deleteReminderWithAudio, scheduleReminder } from "../lib/notifications";
 import { createTraceId, perfLog } from "../lib/perf";
 import { DEFAULT_ALARM_SETTINGS, VolumeStyle } from "../lib/storage";
-import { useReminderStore, Reminder } from "../lib/store";
+import { INTERVAL_MAX_MS, INTERVAL_MIN_MS, useReminderStore, Reminder } from "../lib/store";
 import { colors, scaleFontSize } from "../lib/theme";
+import { formatIntervalDuration } from "../lib/time";
 
 const FREQUENCIES = [
     { value: "once", label: "Once" },
@@ -118,6 +120,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         initialReminder.frequency === "weekly" ? "custom" : (initialReminder.frequency || "once")
     );
     const [days, setDays] = useState<string[]>(initialReminder.days || []);
+
+    const [intervalMs, setIntervalMs] = useState<number | undefined>(initialReminder.intervalMs);
+    const [anchorAt, setAnchorAt] = useState<number | undefined>(initialReminder.anchorAt);
     const [selectedDate, setSelectedDate] = useState<Date | null>(() => {
         if (initialReminder.date) {
             const [year, month, day] = initialReminder.date.split("-").map(Number);
@@ -136,6 +141,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const [showTimePicker, setShowTimePicker] = useState(false);
     const [showDaysPicker, setShowDaysPicker] = useState(false);
     const [showRepeatTaskModal, setShowRepeatTaskModal] = useState(false);
+    const [showOptionsSheet, setShowOptionsSheet] = useState(false);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
 
     // Date formatting helpers
     const formatDateLabel = useCallback((date: Date | null) => {
@@ -197,13 +205,18 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             (initialReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled) !== snoozeEnabled ||
             (initialReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration) !== snoozeDuration ||
             (initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume) !== volume ||
-            (initialReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle) !== volumeStyle
+            (initialReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle) !== volumeStyle ||
+            (initialReminder.intervalMs ?? undefined) !== (intervalMs ?? undefined) ||
+            (initialReminder.anchorAt ?? undefined) !== (anchorAt ?? undefined)
         );
-    }, [days, frequency, initialReminder, time, title, description, selectedDate, snoozeEnabled, snoozeDuration, volume, volumeStyle]);
+    }, [days, frequency, initialReminder, time, title, description, selectedDate, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt]);
 
     const frequencyLabel = useMemo(() => {
+        if (frequency === "interval" && intervalMs) {
+            return formatIntervalDuration(intervalMs);
+        }
         return FREQUENCIES.find((f) => f.value === frequency)?.label ?? "Once";
-    }, [frequency]);
+    }, [frequency, intervalMs]);
 
     const daysLabel = useMemo(() => {
         if (frequency !== "custom") return "";
@@ -310,6 +323,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     snoozeDuration,
                     volume,
                     volumeStyle,
+
+                    intervalMs: frequency === "interval" ? intervalMs : undefined,
+                    anchorAt: frequency === "interval" ? anchorAt : undefined,
                 });
 
                 toast.show({ title: "Sound regenerated", message: "New voice reminder ready", type: "success" });
@@ -335,9 +351,25 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     }) => {
         if (!data.enabled) {
             setFrequency("once");
+            setIntervalMs(undefined);
+            setAnchorAt(undefined);
         } else {
-            setFrequency(data.frequency === "weekly" ? "custom" : data.frequency);
-            if (data.days) setDays(data.days);
+            if (data.frequency === "hour" || data.frequency === "minute") {
+                setFrequency("interval");
+                const raw =
+                    data.frequency === "minute"
+                        ? data.interval * 60 * 1000
+                        : data.interval * 60 * 60 * 1000;
+                const clamped = Math.max(INTERVAL_MIN_MS, Math.min(INTERVAL_MAX_MS, raw));
+                setIntervalMs(clamped);
+                setAnchorAt(Date.now());
+                setDays([]);
+            } else {
+                setFrequency(data.frequency === "weekly" ? "custom" : data.frequency);
+                if (data.days) setDays(data.days);
+                setIntervalMs(undefined);
+                setAnchorAt(undefined);
+            }
         }
         setShowRepeatTaskModal(false);
     };
@@ -370,6 +402,10 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             snoozeDuration,
             volume,
             volumeStyle,
+
+            intervalMs: frequency === "interval" ? intervalMs : undefined,
+            anchorAt: frequency === "interval" ? anchorAt : undefined,
+            schemaVersion: 2,
         };
 
         try {
@@ -420,6 +456,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             snoozeDuration,
                             volume,
                             volumeStyle,
+
+                            intervalMs: frequency === "interval" ? intervalMs : undefined,
+                            anchorAt: frequency === "interval" ? anchorAt : undefined,
                         });
                     } catch (e) {
                         console.log("[VR] Failed to schedule reminder:", e);
@@ -430,63 +469,81 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             console.error("[VR] Save error:", error);
             Alert.alert("Error", "Failed to save reminder");
         }
-    }, [reminder, title, time, description, frequency, days, selectedDate, storeUpdateReminder, updateConvexReminder, snoozeEnabled, snoozeDuration, volume, volumeStyle, onSave, onClose]);
+    }, [reminder, title, time, description, frequency, days, selectedDate, storeUpdateReminder, updateConvexReminder, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt, onSave, onClose]);
 
     const handleDelete = () => {
-        Alert.alert("Delete Reminder", `Delete "${title}"?`, [
-            { text: "Cancel", style: "cancel" },
-            {
-                text: "Delete",
-                style: "destructive",
-                onPress: async () => {
-                    const reminderId = reminder.id;
-                    const convexId = reminder.convexId;
+        setShowDeleteConfirm(true);
+    };
 
-                    try {
-                        // Delete via Zustand store (handles state + persistence)
-                        await storeDeleteReminder(reminderId);
-                    } catch (e) {
-                        console.log("[VR] Failed to delete reminder:", e);
-                        Alert.alert("Error", "Failed to delete reminder");
-                        return;
-                    }
+    const executeDelete = async () => {
+        const reminderId = reminder.id;
+        const convexId = reminder.convexId;
 
-                    onDelete(reminder);
-                    onClose();
+        try {
+            // Delete via Zustand store (handles state + persistence)
+            await storeDeleteReminder(reminderId);
+        } catch (e) {
+            console.log("[VR] Failed to delete reminder:", e);
+            toast.show({ title: "Error", message: "Failed to delete reminder", type: "error" });
+            return;
+        }
 
-                    InteractionManager.runAfterInteractions(() => {
-                        deleteReminderWithAudio(reminderId).catch((e) => {
-                            console.log("[VR] Failed to cancel notification:", e);
-                        });
+        onDelete(reminder);
+        onClose();
 
-                        if (convexId) {
-                            removeConvexReminder({ id: convexId as any }).catch((e) => {
-                                console.log("[VR] Failed to delete Convex reminder:", e);
-                            });
-                        }
-                    });
-                },
-            },
-        ]);
+        InteractionManager.runAfterInteractions(() => {
+            deleteReminderWithAudio(reminderId).catch((e) => {
+                console.log("[VR] Failed to cancel notification:", e);
+            });
+
+            if (convexId) {
+                removeConvexReminder({ id: convexId as any }).catch((e) => {
+                    console.log("[VR] Failed to delete Convex reminder:", e);
+                });
+            }
+        });
     };
 
     const openOptionsMenu = () => {
-        const options: Array<{ text: string; style?: "cancel" | "destructive"; onPress?: () => void }> = [
-            { text: "Cancel", style: "cancel" },
-            {
-                text: "Delete",
-                style: "destructive",
-                onPress: handleDelete,
-            },
-        ];
+        setShowOptionsSheet(true);
+    };
+
+    const optionsActions = useMemo((): ActionSheetAction[] => {
+        const actions: ActionSheetAction[] = [];
+
         if (hasChanges()) {
-            options.unshift({
-                text: "Save",
-                onPress: handleSave,
+            actions.push({
+                key: "save",
+                label: "Save Changes",
+                icon: "check",
+                onPress: () => {
+                    setShowOptionsSheet(false);
+                    handleSave();
+                },
             });
         }
-        Alert.alert("Options", undefined, options);
-    };
+
+        actions.push({
+            key: "delete",
+            label: "Delete Reminder",
+            icon: "trash-2",
+            variant: "destructive",
+            onPress: () => {
+                setShowOptionsSheet(false);
+                setShowDeleteConfirm(true);
+            },
+        });
+
+        actions.push({
+            key: "cancel",
+            label: "Cancel",
+            variant: "cancel",
+            onPress: () => setShowOptionsSheet(false),
+        });
+
+        return actions;
+    }, [hasChanges, handleSave]);
+
 
     const renderBackdrop = useCallback(
         (props: any) => (
@@ -853,9 +910,21 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             visible={showRepeatTaskModal}
                             initialRepeatEnabled={frequency !== "once"}
                             initialFrequency={
-                                frequency === "custom" ? "weekly" : (frequency === "once" ? "daily" : (frequency as any))
+                                frequency === "interval"
+                                    ? ((intervalMs && intervalMs % (60 * 60 * 1000) !== 0) ? "minute" : "hour")
+                                    : (frequency === "custom"
+                                        ? "weekly"
+                                        : (frequency === "once" || frequency === "daily" ? "daily" : "daily"))
                             }
-                            initialInterval={1}
+                            initialInterval={
+                                frequency === "interval" && intervalMs
+                                    ? (
+                                        intervalMs % (60 * 60 * 1000) !== 0
+                                            ? Math.max(15, Math.round(intervalMs / (60 * 1000)))
+                                            : Math.max(1, Math.round(intervalMs / (60 * 60 * 1000)))
+                                    )
+                                    : 1
+                            }
                             initialDays={days}
                             onCancel={() => setShowRepeatTaskModal(false)}
                             onConfirm={handleRepeatConfirm}
@@ -865,6 +934,40 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     <View style={{ height: 40 }} />
                 </BottomSheetScrollView>
             </BottomSheet>
+
+            {/* Options Menu ActionSheet */}
+            <ActionSheet
+                visible={showOptionsSheet}
+                title="Options"
+                actions={optionsActions}
+                onDismiss={() => setShowOptionsSheet(false)}
+            />
+
+            {/* Delete Confirmation ActionSheet */}
+            <ActionSheet
+                visible={showDeleteConfirm}
+                title="Delete Reminder"
+                message={`Are you sure you want to delete "${title}"?`}
+                actions={[
+                    {
+                        key: "delete",
+                        label: "Delete",
+                        icon: "trash-2",
+                        variant: "destructive",
+                        onPress: () => {
+                            setShowDeleteConfirm(false);
+                            executeDelete();
+                        },
+                    },
+                    {
+                        key: "cancel",
+                        label: "Cancel",
+                        variant: "cancel",
+                        onPress: () => setShowDeleteConfirm(false),
+                    },
+                ]}
+                onDismiss={() => setShowDeleteConfirm(false)}
+            />
         </View>
     );
 }

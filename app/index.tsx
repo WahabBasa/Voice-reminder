@@ -29,7 +29,7 @@ import { useRouter } from "expo-router";
 import { useAction } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { colors, scaleFontSize } from "../lib/theme";
-import { formatReminderTime, getDueTimestamp, isOverdue } from "../lib/time";
+import { formatReminderTime, getDueTimestamp, getNextIntervalOccurrence, isOverdue } from "../lib/time";
 import { readFileAsBase64 } from "../lib/convex";
 import { deleteReminderWithAudio, scheduleReminder } from "../lib/notifications";
 import { DEFAULT_ALARM_SETTINGS } from "../lib/storage";
@@ -72,6 +72,18 @@ function getDayBucket(isoString: string): "Today" | "Yesterday" | "Earlier" {
   if (date >= startOfToday) return "Today";
   if (date >= startOfYesterday) return "Yesterday";
   return "Earlier";
+}
+
+function formatIntervalNextIn(targetMs: number, nowMs: number = Date.now()): string {
+  const diffMs = Math.max(0, targetMs - nowMs);
+  const minutes = Math.max(1, Math.ceil(diffMs / 60000));
+  if (minutes < 60) return `Next in ${minutes} minute${minutes !== 1 ? "s" : ""}`;
+
+  const hours = Math.ceil(minutes / 60);
+  if (hours < 24) return `Next in ${hours} hour${hours !== 1 ? "s" : ""}`;
+
+  const days = Math.ceil(hours / 24);
+  return `Next in ${days} day${days !== 1 ? "s" : ""}`;
 }
 
 export default function HomeScreen() {
@@ -218,16 +230,23 @@ export default function HomeScreen() {
       const frequency = result.frequency === "weekly" ? "custom" : result.frequency;
       const days = frequency === "custom" ? (result.days || []) : [];
 
+      const intervalMs = Number((result as any).intervalMs);
+      const anchorAt = Number((result as any).anchorAt);
+
       const tLocal = Date.now();
       const newReminder = await storeAddReminder({
         convexId: result.id,
         title: result.title,
         description: result.description,
-        time: result.time,
-        date: result.date,
+        time: (result as any).time ?? "00:00",
+        date: (result as any).date,
         frequency,
         days,
         audioUrl: result.audioUrl,
+
+        intervalMs: Number.isFinite(intervalMs) ? intervalMs : undefined,
+        anchorAt: Number.isFinite(anchorAt) ? anchorAt : undefined,
+        schemaVersion: 2,
       });
       perfLog(traceId, "device.processing", "local_addReminder_done", {
         ms: Date.now() - tLocal,
@@ -256,6 +275,9 @@ export default function HomeScreen() {
           snoozeDuration: newReminder.snoozeDuration,
           volume: newReminder.volume,
           volumeStyle: newReminder.volumeStyle,
+
+          intervalMs: newReminder.intervalMs,
+          anchorAt: newReminder.anchorAt,
         }, { traceId }).catch((e) => {
           console.log("[VR] Failed to schedule reminder:", e);
           perfLog(traceId, "device.notifications", "scheduleReminder_error", {
@@ -395,7 +417,9 @@ export default function HomeScreen() {
         .filter((e) => e.status === "completed" && new Date(e.timestamp).toDateString() === today)
         .map((e) => e.reminderId)
     );
-    const allIds = reminders.filter((r) => !completedToday.has(r.id)).map((r) => r.id);
+    const allIds = reminders
+      .filter((r) => r.frequency === "interval" || !completedToday.has(r.id))
+      .map((r) => r.id);
     setSelectedIds(new Set(allIds));
     setIsSelectMode(true);
     setShowSelectMenu(false);
@@ -475,10 +499,11 @@ export default function HomeScreen() {
   }, [history]);
 
   const filteredReminders = useMemo(() => {
-    const incompleteReminders = reminders.filter(
-      (reminder) => !completedTodayReminderIds.has(reminder.id)
-    );
-    return incompleteReminders;
+    return reminders.filter((reminder) => {
+      // Interval reminders are never hidden (they recur)
+      if (reminder.frequency === "interval") return true;
+      return !completedTodayReminderIds.has(reminder.id);
+    });
   }, [completedTodayReminderIds, reminders]);
 
   const remindersById = useMemo(() => {
@@ -565,10 +590,19 @@ export default function HomeScreen() {
 
   const renderReminderItem = useCallback(
     ({ item }: { item: Reminder }) => {
-      const dueTimestamp = getDueTimestamp(
-        { time: item.time, date: item.date, frequency: item.frequency, days: item.days },
-        new Date()
-      );
+      let dueTimestamp: number;
+      let dueLabel: string;
+      if (item.frequency === "interval" && item.intervalMs && item.anchorAt) {
+        const { scheduledFor } = getNextIntervalOccurrence(item.anchorAt, item.intervalMs, Date.now());
+        dueTimestamp = scheduledFor;
+        dueLabel = formatIntervalNextIn(dueTimestamp);
+      } else {
+        dueTimestamp = getDueTimestamp(
+          { time: item.time, date: item.date, frequency: item.frequency, days: item.days },
+          new Date()
+        );
+        dueLabel = formatReminderTime(dueTimestamp);
+      }
       const overdue = isOverdue(dueTimestamp);
       const dueColor = overdue ? colors.statusOverdue : colors.statusUpcoming;
       const isRepeating = item.frequency !== "once";
@@ -607,7 +641,7 @@ export default function HomeScreen() {
                 <View style={styles.dueRow}>
                   <View style={[styles.dueDot, { backgroundColor: dueColor }]} />
                   <Text style={[styles.cardMeta, styles.dueText, { color: dueColor }]} numberOfLines={1}>
-                    {formatReminderTime(dueTimestamp)}
+                    {dueLabel}
                   </Text>
                   {isRepeating && (
                     <AppIcon

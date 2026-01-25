@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   InteractionManager,
   SectionList,
-  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -14,6 +13,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import { colors, scaleFontSize } from "../lib/theme";
 import { useReminderStore, ReminderHistory } from "../lib/store";
 import AppIcon from "../components/AppIcon";
+import ActionSheet from "../components/ActionSheet";
+import { useToast } from "../components/ToastProvider";
 
 type FilterType = "all" | "completed" | "missed";
 
@@ -48,6 +49,7 @@ function getDayBucket(isoString: string): "Today" | "Yesterday" | "Earlier" {
 
 export default function HistoryScreen() {
   const router = useRouter();
+  const toast = useToast();
 
   // Use Zustand store for centralized history state
   const history = useReminderStore((state) => state.history);
@@ -55,6 +57,7 @@ export default function HistoryScreen() {
   const storeClearHistory = useReminderStore((state) => state.clearHistory);
 
   const [selectedFilter, setSelectedFilter] = useState<FilterType>("all");
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -144,25 +147,16 @@ export default function HistoryScreen() {
   }, []);
 
   const handleClearHistory = () => {
-    Alert.alert(
-      "Clear History",
-      "Are you sure you want to clear all history? This cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Clear All",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await storeClearHistory();
-              Alert.alert("Success", "History cleared successfully");
-            } catch (error) {
-              Alert.alert("Error", "Failed to clear history");
-            }
-          },
-        },
-      ]
-    );
+    setShowClearConfirm(true);
+  };
+
+  const executeClearHistory = async () => {
+    try {
+      await storeClearHistory();
+      toast.show({ title: "Success", message: "History cleared successfully", type: "success" });
+    } catch (error) {
+      toast.show({ title: "Error", message: "Failed to clear history", type: "error" });
+    }
   };
 
   return (
@@ -245,6 +239,32 @@ export default function HistoryScreen() {
             </View>
           ) : null
         }
+      />
+
+      {/* Clear History Confirmation */}
+      <ActionSheet
+        visible={showClearConfirm}
+        title="Clear History"
+        message="Are you sure you want to clear all history? This cannot be undone."
+        actions={[
+          {
+            key: "clear",
+            label: "Clear All",
+            icon: "trash-2",
+            variant: "destructive",
+            onPress: () => {
+              setShowClearConfirm(false);
+              executeClearHistory();
+            },
+          },
+          {
+            key: "cancel",
+            label: "Cancel",
+            variant: "cancel",
+            onPress: () => setShowClearConfirm(false),
+          },
+        ]}
+        onDismiss={() => setShowClearConfirm(false)}
       />
     </SafeAreaView>
   );

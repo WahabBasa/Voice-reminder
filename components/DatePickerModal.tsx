@@ -1,13 +1,17 @@
 import { useCallback, useMemo, useState } from "react";
 import {
-  Alert,
   Modal,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { PortalHost } from "@gorhom/portal";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { TimerPickerModal } from "react-native-timer-picker";
+import { LinearGradient } from "expo-linear-gradient";
 import AppIcon, { AppIconName } from "./AppIcon";
+import PickerSheet from "./PickerSheet";
 import { scaleFontSize } from "../lib/theme";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -76,6 +80,8 @@ export default function DatePickerModal({
   onConfirm,
   onCancel,
 }: DatePickerModalProps) {
+  const portalHostName = "datePickerModal";
+
   const today = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -87,6 +93,10 @@ export default function DatePickerModal({
   const [selectedTime, setSelectedTime] = useState(() => initialTime || { hours: 10, minutes: 0 });
   const [selectedReminder, setSelectedReminder] = useState(initialReminder);
   const [selectedRepeat, setSelectedRepeat] = useState(initialRepeat);
+
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showReminderPicker, setShowReminderPicker] = useState(false);
+  const [showRepeatPicker, setShowRepeatPicker] = useState(false);
 
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth();
@@ -175,41 +185,9 @@ export default function DatePickerModal({
     return REPEAT_OPTIONS.find((o) => o.value === selectedRepeat)?.label || "No Repeat";
   }, [selectedRepeat]);
 
-  const openTimePicker = () => {
-    const hours = Array.from({ length: 12 }, (_, i) => ({ text: String(i + 1), value: i + 1 }));
-    const minutes = ["00", "15", "30", "45"];
-    const periods = ["AM", "PM"];
-
-    Alert.alert("Select Time", undefined, [
-      { text: "9:00 AM", onPress: () => setSelectedTime({ hours: 9, minutes: 0 }) },
-      { text: "10:00 AM", onPress: () => setSelectedTime({ hours: 10, minutes: 0 }) },
-      { text: "12:00 PM", onPress: () => setSelectedTime({ hours: 12, minutes: 0 }) },
-      { text: "3:00 PM", onPress: () => setSelectedTime({ hours: 15, minutes: 0 }) },
-      { text: "6:00 PM", onPress: () => setSelectedTime({ hours: 18, minutes: 0 }) },
-      { text: "9:00 PM", onPress: () => setSelectedTime({ hours: 21, minutes: 0 }) },
-      { text: "Cancel", style: "cancel" },
-    ]);
-  };
-
-  const openReminderPicker = () => {
-    Alert.alert("Reminder", "When should we remind you?", [
-      ...REMINDER_OPTIONS.map((opt) => ({
-        text: opt.label,
-        onPress: () => setSelectedReminder(opt.value),
-      })),
-      { text: "Cancel", style: "cancel" },
-    ]);
-  };
-
-  const openRepeatPicker = () => {
-    Alert.alert("Repeat", "How often should this repeat?", [
-      ...REPEAT_OPTIONS.map((opt) => ({
-        text: opt.label,
-        onPress: () => setSelectedRepeat(opt.value),
-      })),
-      { text: "Cancel", style: "cancel" },
-    ]);
-  };
+  const openTimePicker = () => setShowTimePicker(true);
+  const openReminderPicker = () => setShowReminderPicker(true);
+  const openRepeatPicker = () => setShowRepeatPicker(true);
 
   const handleDone = () => {
     onConfirm({
@@ -227,8 +205,9 @@ export default function DatePickerModal({
       animationType="fade"
       onRequestClose={onCancel}
     >
-      <View style={styles.overlay}>
-        <View style={styles.modal}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <View style={styles.overlay}>
+          <View style={styles.modal}>
           {/* Month Navigation */}
           <View style={styles.monthNav}>
             <TouchableOpacity onPress={goToPrevMonth} style={styles.navButton}>
@@ -336,7 +315,65 @@ export default function DatePickerModal({
             </TouchableOpacity>
           </View>
         </View>
-      </View>
+
+          <PortalHost name={portalHostName} />
+        </View>
+      </GestureHandlerRootView>
+
+      {showTimePicker ? (
+        <TimerPickerModal
+          closeOnOverlayPress
+          LinearGradient={LinearGradient}
+          hideDays
+          visible={showTimePicker}
+          setIsVisible={setShowTimePicker}
+          modalTitle="Select time"
+          onCancel={() => setShowTimePicker(false)}
+          amLabel="AM"
+          pmLabel="PM"
+          initialValue={{
+            hours: selectedTime.hours,
+            minutes: selectedTime.minutes,
+          }}
+          onConfirm={({ hours, minutes, seconds }) => {
+            const isPm = (seconds ?? 0) >= 12;
+            const hour24 = (hours % 12) + (isPm ? 12 : 0);
+            setSelectedTime({ hours: hour24, minutes });
+            setShowTimePicker(false);
+          }}
+          styles={{ theme: "light" }}
+          useAmPmWheel
+          use12HourPicker
+        />
+      ) : null}
+
+      <PickerSheet
+        visible={showReminderPicker}
+        title="Reminder"
+        mode="list"
+        options={REMINDER_OPTIONS}
+        selected={selectedReminder}
+        onSelect={(value) => {
+          setSelectedReminder(String(value));
+          setShowReminderPicker(false);
+        }}
+        onDismiss={() => setShowReminderPicker(false)}
+        hostName={portalHostName}
+      />
+
+      <PickerSheet
+        visible={showRepeatPicker}
+        title="Repeat"
+        mode="list"
+        options={REPEAT_OPTIONS}
+        selected={selectedRepeat}
+        onSelect={(value) => {
+          setSelectedRepeat(String(value));
+          setShowRepeatPicker(false);
+        }}
+        onDismiss={() => setShowRepeatPicker(false)}
+        hostName={portalHostName}
+      />
     </Modal>
   );
 }

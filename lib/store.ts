@@ -6,6 +6,9 @@ const REMINDERS_KEY = '@reminders';
 const HISTORY_KEY = '@reminder_history';
 const MAX_HISTORY_ENTRIES = 1000;
 
+export const INTERVAL_MIN_MS = 15 * 60 * 1000; // 15 minutes
+export const INTERVAL_MAX_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 export type VolumeStyle = 'standard' | 'progressive';
 
 export const DEFAULT_ALARM_SETTINGS = {
@@ -31,6 +34,13 @@ export interface Reminder {
     snoozeDuration?: number; // minutes
     volume?: number; // 0-1
     volumeStyle?: VolumeStyle;
+
+    // Interval recurrence
+    intervalMs?: number;
+    anchorAt?: number;
+
+    // Schema version for migrations
+    schemaVersion?: number; // 1 = legacy, 2 = interval support
 }
 
 // History types
@@ -40,6 +50,10 @@ export interface ReminderHistory {
     reminderTitle: string;
     timestamp: string;
     status: 'completed' | 'missed';
+
+    // Occurrence tracking
+    scheduledFor?: number;
+    action?: 'dismissed' | 'snoozed' | 'fired' | 'auto_completed';
 }
 
 // Store state interface
@@ -58,7 +72,12 @@ interface ReminderState {
 
     // Actions - History
     loadHistory: () => Promise<void>;
-    recordCompletion: (reminderId: string, reminderTitle: string, status: 'completed' | 'missed') => Promise<void>;
+    recordCompletion: (
+        reminderId: string,
+        reminderTitle: string,
+        status: 'completed' | 'missed',
+        options?: { scheduledFor?: number; action?: ReminderHistory['action'] }
+    ) => Promise<void>;
     clearHistory: () => Promise<void>;
 
     // Combined load
@@ -95,7 +114,18 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
 
             const tParse0 = Date.now();
             perfLog(traceId, 'device.storage', 'getReminders_parse_start', { t: tParse0 });
-            const parsed = JSON.parse(data) as Reminder[];
+            let parsed = JSON.parse(data) as Reminder[];
+
+            // Migrate legacy reminders
+            parsed = parsed.map((r) => {
+                if (!r.schemaVersion) {
+                    return {
+                        ...r,
+                        schemaVersion: 1,
+                    };
+                }
+                return r;
+            });
             const t2 = Date.now();
             perfLog(traceId, 'device.storage', 'getReminders_parse_done', {
                 t: t2, ms: t2 - tParse0, count: parsed.length,
@@ -126,6 +156,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
             snoozeDuration: reminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
             volume: reminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
             volumeStyle: reminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
+            schemaVersion: reminder.schemaVersion ?? 2,
         };
 
         const currentReminders = get().reminders;
@@ -163,6 +194,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
             snoozeDuration: updatedReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
             volume: updatedReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
             volumeStyle: updatedReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
+            schemaVersion: updatedReminder.schemaVersion ?? 2,
         };
 
         const newReminders = [...currentReminders];
@@ -244,7 +276,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
     },
 
     // Record a completion in history
-    recordCompletion: async (reminderId, reminderTitle, status) => {
+    recordCompletion: async (reminderId, reminderTitle, status, options) => {
         const currentHistory = get().history;
 
         const newEntry: ReminderHistory = {
@@ -253,6 +285,8 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
             reminderTitle,
             timestamp: new Date().toISOString(),
             status,
+            scheduledFor: options?.scheduledFor,
+            action: options?.action,
         };
 
         let updatedHistory = [...currentHistory, newEntry];

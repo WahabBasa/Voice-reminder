@@ -36,6 +36,12 @@ function navigateToAlarmScreen(notification: any) {
     snoozeDuration: String(data?.snoozeDuration ?? "5"),
     volume: String(data?.volume ?? "1"),
     volumeStyle: String(data?.volumeStyle ?? "standard"),
+
+    // Occurrence + interval metadata
+    scheduledFor: String(data?.scheduledFor ?? ""),
+    intervalMs: String(data?.intervalMs ?? ""),
+    anchorAt: String(data?.anchorAt ?? ""),
+    kind: String(data?.kind ?? ""),
   });
 
   const url = Linking.createURL(`/alarm?${params.toString()}`);
