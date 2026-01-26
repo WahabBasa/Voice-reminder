@@ -5,6 +5,23 @@ import { Platform } from 'react-native';
 const REVENUECAT_ANDROID_KEY = 'goog_CajJDmwNngamdqNKtBAJerwrxSV';
 const REVENUECAT_IOS_KEY = 'PLACEHOLDER_IOS_KEY'; // Add iOS key when ready
 
+const PRO_ENTITLEMENT_ID = 'pro';
+
+let cachedCustomerInfo: CustomerInfo | null = null;
+let cachedIsPro: boolean | null = null;
+let cachedAtMs = 0;
+let listenerRegistered = false;
+
+function updateCache(customerInfo: CustomerInfo): void {
+  cachedCustomerInfo = customerInfo;
+  cachedIsPro = customerInfo.entitlements.active[PRO_ENTITLEMENT_ID] !== undefined;
+  cachedAtMs = Date.now();
+}
+
+export function getCachedProStatus(): { isPro: boolean | null; updatedAtMs: number } {
+  return { isPro: cachedIsPro, updatedAtMs: cachedAtMs };
+}
+
 /**
  * Initialize RevenueCat SDK on app start.
  * Call this once in the app layout.
@@ -20,6 +37,22 @@ export async function initializePurchases(): Promise<void> {
       : REVENUECAT_ANDROID_KEY;
 
     await Purchases.configure({ apiKey });
+
+    if (!listenerRegistered) {
+      listenerRegistered = true;
+      Purchases.addCustomerInfoUpdateListener((info) => {
+        updateCache(info);
+      });
+    }
+
+    // Prime cache so UI-gating paths can avoid blocking on network later.
+    try {
+      const info = await Purchases.getCustomerInfo();
+      updateCache(info);
+    } catch (e) {
+      // Keep cache as-is; we'll treat as free tier until updated.
+      console.log('[RevenueCat] getCustomerInfo prime failed (silent):', e);
+    }
   } catch (error) {
     // Silent log - RevenueCat init failure is non-critical
     console.log('[RevenueCat] initializePurchases failed (silent):', error);
@@ -33,8 +66,12 @@ export async function initializePurchases(): Promise<void> {
  */
 export async function checkProStatus(): Promise<boolean> {
   try {
+    if (cachedIsPro !== null) {
+      return cachedIsPro;
+    }
     const customerInfo = await Purchases.getCustomerInfo();
-    return customerInfo.entitlements.active['pro'] !== undefined;
+    updateCache(customerInfo);
+    return cachedIsPro ?? false;
   } catch (error) {
     // Silent log - expected to fail in dev builds without proper signing
     console.log('[RevenueCat] checkProStatus failed (silent):', error);
@@ -49,7 +86,8 @@ export async function checkProStatus(): Promise<boolean> {
 export async function restorePurchases(): Promise<boolean> {
   try {
     const customerInfo = await Purchases.restorePurchases();
-    return customerInfo.entitlements.active['pro'] !== undefined;
+    updateCache(customerInfo);
+    return customerInfo.entitlements.active[PRO_ENTITLEMENT_ID] !== undefined;
   } catch (error) {
     console.log('[RevenueCat] restorePurchases failed (silent):', error);
     return false;

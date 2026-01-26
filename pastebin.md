@@ -1,72 +1,43 @@
-# Task: Convert edit page to a draggable bottom sheet
+Confirm intended semantics
 
-## Goal
-Make the reminder edit screen appear as a bottom sheet that:
-- Opens at ~60% screen height by default
-- Can be dragged up to ~95% (full height)
-- Has a drag handle at top center
-- No back button - swipe down to dismiss
+Treat “active reminder” as: “a reminder that can still fire in the future.”
+For frequency="once": after the user dismisses/marks done, it should become inactive and free a slot.
+For recurring reminders: dismissing an occurrence should NOT remove the reminder (it’s still active).
+Stop hiding “active” state behind history
 
-## Reference
-See `Screenshot_20251218-194116_Todoist.jpg` for the desired look.
+Extract a shared helper isReminderActive(reminder, history, now) (or similar) that returns whether a reminder should count as active.
+Use that helper for both:
+Home list rendering (what “All” shows)
+Gating count (what blocks creation)
+This removes the current mismatch: “All empty” vs “active count is 5”.
+Make one-time reminders actually become inactive
 
----
+When an alarm is dismissed for a one-time reminder:
+Delete or archive the reminder record (recommended: delete from useReminderStore.reminders + storage, and remove Convex reminder/audio + local audio file + cancel triggers).
+When a reminder is marked done from the list (not via alarm screen):
+Apply the same rule: if it’s frequency="once", delete/archive it instead of only writing history.
+Files to touch (agent handoff):
 
-## Option A: Update DetailSheet.tsx (if using this component)
+alarm.tsx: after recording completion, if reminder is once, call the unified “remove reminder fully” path.
+index.tsx: handleMarkDone / bulk done path should also remove once reminders.
+Centralize deletion into one function used by both (avoid duplicating “delete store + delete audio + remove Convex”).
+Add a startup cleanup for existing “ghost actives”
 
-### File: `components/DetailSheet.tsx`
+On app start (after reminders + history loaded), scan for frequency="once" reminders that already have a “completed/dismissed” history entry for their occurrence and are past-due, then delete/archive them.
+This fixes users who already accumulated hidden reminders.
+Likely place:
 
-### Change 1: Update snapPoints
-```tsx
-// Current (line ~53):
-const snapPoints = useMemo(() => ["90%"], []);
+_layout.tsx startup task or a store action like cleanupExpiredOnceReminders().
+Update Completed tab behavior
 
-// Change to:
-const snapPoints = useMemo(() => ["60%", "95%"], []);
-```
+After deleting once reminders, Completed entries won’t have a backing reminder to open/edit.
+Decide behavior:
+Press does nothing + toast (“This one-time reminder was completed and removed”), or
+Open a read-only “history detail” view.
+Validation checklist
 
-### Change 2: Add index prop to start at 60%
-In the `<BottomSheetModal>` component, add `index={0}`:
-```tsx
-<BottomSheetModal
-  ref={ref}
-  snapPoints={snapPoints}
-  index={0}  // <-- ADD THIS to start at first snap point (60%)
-  enablePanDownToClose
-  ...
->
-```
-
----
-
-## Option B: Convert edit.tsx to bottom sheet (preferred)
-
-### File: `app/reminder/edit.tsx`
-
-The edit page is currently a full-screen page with a back button header. Convert it to use a bottom sheet pattern:
-
-1. **Remove the header with back button** - Delete the header View containing `arrow-left` icon
-
-2. **Wrap content in a BottomSheet** - Use `@gorhom/bottom-sheet`:
-   ```tsx
-   import BottomSheet from '@gorhom/bottom-sheet';
-   
-   const snapPoints = useMemo(() => ['60%', '95%'], []);
-   ```
-
-3. **Add drag handle** - The library provides this automatically via `handleIndicatorStyle`
-
-4. **Dismiss on swipe down** - Use `enablePanDownToClose={true}` and call `router.back()` on dismiss
-
-### Key changes in edit.tsx:
-- Remove `<View style={styles.header}>` block (the one with arrow-left and more-vertical icons)
-- Keep the 3-dot menu accessible (move to top-right of content or floating)
-- Wrap the `<ScrollView>` content in a `<BottomSheet>` component
-- Handle the "discard changes" logic in `onChange` callback when sheet is dismissed
-
----
-
-## Styling notes
-- Drag handle: small gray bar, centered at top (default from library)
-- Background: white with rounded top corners (borderTopLeftRadius: 24, borderTopRightRadius: 24)
-- Content scrollable within the sheet
+Create 5 one-time reminders → 6th blocked.
+Let them fire and dismiss → active list drops (slots free) → can create again.
+Mark a one-time reminder done from list → it is removed and frees a slot.
+Recurring reminder dismissed → stays active and still counts.
+After restart, “All” and gating agree (no more “All empty but upgrade required”).

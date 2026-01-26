@@ -34,6 +34,11 @@ type RecordingState = "idle" | "recording" | "paused" | "processing";
 interface RecordingOverlayProps {
   visible: boolean;
   autoStart?: boolean;
+  initialTraceId?: string;
+  canStartRecording?: boolean;
+  gateStatusText?: string;
+  showUpgradeCta?: boolean;
+  onUpgradePress?: () => void;
   onClose: () => void;
   onRecordingComplete: (audioUri: string, traceId: string) => void;
   onCancelProcessing?: () => void;
@@ -42,6 +47,11 @@ interface RecordingOverlayProps {
 export default function RecordingOverlay({
   visible,
   autoStart = false,
+  initialTraceId,
+  canStartRecording = true,
+  gateStatusText,
+  showUpgradeCta = false,
+  onUpgradePress,
   onClose,
   onRecordingComplete,
   onCancelProcessing,
@@ -61,12 +71,18 @@ export default function RecordingOverlay({
 
   useEffect(() => {
     if (visible) {
+      if (initialTraceId && !traceIdRef.current) {
+        traceIdRef.current = initialTraceId;
+      }
+      if (traceIdRef.current) {
+        perfLog(traceIdRef.current, "overlay.recording", "visible_true");
+      }
       // Animate sheet up from bottom when visible
       sheetTranslateY.value = withTiming(0, { duration: 250 });
     } else {
       sheetTranslateY.value = 400;
     }
-  }, [visible]);
+  }, [visible, initialTraceId]);
 
   const animatedSheetStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: sheetTranslateY.value }],
@@ -98,7 +114,7 @@ export default function RecordingOverlay({
   // Auto-start recording when overlay becomes visible
   const hasAutoStarted = useRef(false);
   useEffect(() => {
-    if (visible && autoStart && !hasAutoStarted.current && state === "idle") {
+    if (visible && autoStart && canStartRecording && !hasAutoStarted.current && state === "idle") {
       hasAutoStarted.current = true;
       // Small delay to let modal animation start
       const timeout = setTimeout(() => {
@@ -109,7 +125,7 @@ export default function RecordingOverlay({
     if (!visible) {
       hasAutoStarted.current = false;
     }
-  }, [visible, autoStart, state]);
+  }, [visible, autoStart, canStartRecording, state]);
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -152,6 +168,13 @@ export default function RecordingOverlay({
   const handlePrimaryPress = async () => {
     if (state === "processing") return;
 
+    if (state === "idle" && !canStartRecording) {
+      const traceId = traceIdRef.current ?? initialTraceId ?? createTraceId("vr");
+      traceIdRef.current = traceId;
+      perfLog(traceId, "device.recording", "start_blocked_gate");
+      return;
+    }
+
     if (state === "recording" || state === "paused") {
       const traceId = traceIdRef.current ?? createTraceId("vr");
       traceIdRef.current = traceId;
@@ -173,8 +196,8 @@ export default function RecordingOverlay({
         perfLog(traceId, "device.recording", "stop_no_uri");
         setState("idle");
       }
-    } else {
-      const traceId = createTraceId("vr");
+      } else {
+      const traceId = traceIdRef.current ?? createTraceId("vr");
       traceIdRef.current = traceId;
       perfLog(traceId, "device.recording", "start_tap");
 
@@ -253,6 +276,9 @@ export default function RecordingOverlay({
     if (state === "processing") return "Creating your reminder...";
     if (state === "paused") return "Paused";
     if (state === "recording") return "Listening...";
+    if (!canStartRecording) {
+      return gateStatusText ?? (showUpgradeCta ? "Upgrade to continue" : "Checking your plan...");
+    }
     return "Tap the mic to start";
   };
 
@@ -267,6 +293,8 @@ export default function RecordingOverlay({
     const base = Platform.OS === "ios" ? 28 : 18;
     return base + Math.round(windowHeight * 0.05) + insets.bottom;
   }, [windowHeight, insets.bottom]);
+
+  const showGateLock = state === "idle" && !canStartRecording && showUpgradeCta;
 
   return (
     <Modal
@@ -284,10 +312,25 @@ export default function RecordingOverlay({
 
           <Text style={styles.title}>New Recording</Text>
 
-          <View style={styles.proRow}>
-            <AppIcon name="zap" size={14} color={colors.accent} />
-            <Text style={styles.proText}>Get Pro for recordings over 1 minute</Text>
-          </View>
+          {showGateLock && (
+            <View style={styles.gateRow}>
+              <View style={styles.gateLeft}>
+                <AppIcon name="crown" size={14} color={colors.accent} />
+                <Text style={styles.gateText} numberOfLines={2}>
+                  {gateStatusText ?? "Free limit reached"}
+                </Text>
+              </View>
+              {showUpgradeCta && onUpgradePress && (
+                <TouchableOpacity
+                  style={styles.upgradeButton}
+                  onPress={onUpgradePress}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.upgradeButtonText}>Upgrade</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
 
           <View style={styles.waveform}>
             {waveformBars.map((height, idx) => (
@@ -332,10 +375,12 @@ export default function RecordingOverlay({
             </TouchableOpacity>
 
             <TouchableOpacity
+              disabled={state === "idle" && !canStartRecording}
               style={[
                 styles.primaryButton,
                 (state === "recording" || state === "paused") && styles.primaryButtonStop,
                 state === "processing" && styles.primaryButtonCancel,
+                state !== "processing" && state === "idle" && !canStartRecording && styles.primaryButtonDisabled,
               ]}
               onPress={state === "processing" ? () => {
                 setState("idle");
@@ -408,17 +453,39 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     textAlign: "center",
   },
-  proRow: {
+  gateRow: {
     marginTop: 10,
     flexDirection: "row",
-    justifyContent: "center",
     alignItems: "center",
-    gap: 6,
+    justifyContent: "space-between",
+    gap: 10,
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  proText: {
+  gateLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+  },
+  gateText: {
     fontSize: scaleFontSize(13),
     color: colors.textSecondary,
-    fontWeight: "500",
+    fontWeight: "600",
+    flex: 1,
+  },
+  upgradeButton: {
+    backgroundColor: colors.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  upgradeButtonText: {
+    color: "white",
+    fontSize: scaleFontSize(13),
+    fontWeight: "800",
   },
   waveform: {
     marginTop: 18,

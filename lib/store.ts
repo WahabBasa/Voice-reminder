@@ -64,6 +64,7 @@ interface ReminderState {
     reminders: Reminder[];
     history: ReminderHistory[];
     isLoading: boolean;
+    hasLoadedReminders: boolean;
 
     // Actions - Reminders
     loadReminders: () => Promise<void>;
@@ -86,65 +87,94 @@ interface ReminderState {
     loadAll: () => Promise<void>;
 }
 
+let loadRemindersInFlight: Promise<void> | null = null;
+
 export const useReminderStore = create<ReminderState>((set, get) => ({
     // Initial state
     reminders: [],
     history: [],
     isLoading: false,
+    hasLoadedReminders: false,
 
     // Load reminders from AsyncStorage
     loadReminders: async () => {
-        try {
+        if (loadRemindersInFlight) {
+            return loadRemindersInFlight;
+        }
+
+        loadRemindersInFlight = (async () => {
             const traceId = createTraceId('storage');
-            const t0 = Date.now();
-            perfLog(traceId, 'device.storage', 'getReminders_getItem_start', { t: t0 });
+            try {
+                const t0 = Date.now();
+                perfLog(traceId, 'device.storage', 'getReminders_getItem_start', { t: t0 });
 
-            const data = await AsyncStorage.getItem(REMINDERS_KEY);
-            const t1 = Date.now();
+                const data = await AsyncStorage.getItem(REMINDERS_KEY);
+                const t1 = Date.now();
 
-            if (!data) {
-                perfLog(traceId, 'device.storage', 'getReminders_getItem_done', {
-                    t: t1, ms: t1 - t0, bytes: 0, count: 0,
-                });
-                set({ reminders: [] });
-                return;
-            }
-
-            perfLog(traceId, 'device.storage', 'getReminders_getItem_done', {
-                t: t1, ms: t1 - t0, bytes: data.length,
-            });
-
-            const tParse0 = Date.now();
-            perfLog(traceId, 'device.storage', 'getReminders_parse_start', { t: tParse0 });
-            let parsed = JSON.parse(data) as Reminder[];
-
-            // Migrate legacy reminders
-            parsed = parsed.map((r) => {
-                if (!r.schemaVersion) {
-                    return {
-                        ...r,
-                        schemaVersion: 1,
-                    };
+                if (!data) {
+                    perfLog(traceId, 'device.storage', 'getReminders_getItem_done', {
+                        t: t1, ms: t1 - t0, bytes: 0, count: 0,
+                    });
+                    set({ reminders: [], hasLoadedReminders: true });
+                    perfLog(traceId, 'store', 'loadReminders_done', { count: 0 });
+                    return;
                 }
-                return r;
-            });
-            const t2 = Date.now();
-            perfLog(traceId, 'device.storage', 'getReminders_parse_done', {
-                t: t2, ms: t2 - tParse0, count: parsed.length,
-            });
 
-            set({ reminders: parsed });
-        } catch (error) {
-            console.error('[VR Store] Error loading reminders:', error);
-            set({ reminders: [] });
+                perfLog(traceId, 'device.storage', 'getReminders_getItem_done', {
+                    t: t1, ms: t1 - t0, bytes: data.length,
+                });
+
+                const tParse0 = Date.now();
+                perfLog(traceId, 'device.storage', 'getReminders_parse_start', { t: tParse0 });
+                let parsed = JSON.parse(data) as Reminder[];
+
+                // Migrate legacy reminders
+                parsed = parsed.map((r) => {
+                    if (!r.schemaVersion) {
+                        return {
+                            ...r,
+                            schemaVersion: 1,
+                        };
+                    }
+                    return r;
+                });
+                const t2 = Date.now();
+                perfLog(traceId, 'device.storage', 'getReminders_parse_done', {
+                    t: t2, ms: t2 - tParse0, count: parsed.length,
+                });
+
+                set({ reminders: parsed, hasLoadedReminders: true });
+                perfLog(traceId, 'store', 'loadReminders_done', { count: parsed.length });
+            } catch (error) {
+                console.error('[VR Store] Error loading reminders:', error);
+                set({ reminders: [], hasLoadedReminders: true });
+                perfLog(traceId, 'store', 'loadReminders_done', { count: 0, error: String(error) });
+            }
+        })();
+
+        try {
+            await loadRemindersInFlight;
+        } finally {
+            loadRemindersInFlight = null;
         }
     },
 
     // Add a new reminder
     addReminder: async (reminder) => {
         // Check if user can create more reminders (enforces free tier limit)
-        const { checkCanCreateReminder, ReminderLimitExceededError } = await import('./usage');
-        const { canCreate, currentCount, limit } = await checkCanCreateReminder();
+        const { checkCanCreateWithCount, getActiveReminderCount, ReminderLimitExceededError } = await import('./usage');
+        const gateTraceId = createTraceId('gate');
+
+        // Close cold-start race: ensure reminders are loaded before counting.
+        if (!get().hasLoadedReminders) {
+            perfLog(gateTraceId, 'store.gate', 'gate_requested_while_not_loaded', {
+                currentCount: get().reminders.length,
+            });
+            await get().loadReminders();
+        }
+
+        const currentCount = getActiveReminderCount();
+        const { canCreate, limit } = await checkCanCreateWithCount(currentCount);
 
         if (!canCreate) {
             throw new ReminderLimitExceededError(currentCount, limit);
@@ -345,3 +375,4 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
 export const useReminders = () => useReminderStore((state) => state.reminders);
 export const useHistory = () => useReminderStore((state) => state.history);
 export const useIsLoading = () => useReminderStore((state) => state.isLoading);
+export const useHasLoadedReminders = () => useReminderStore((state) => state.hasLoadedReminders);

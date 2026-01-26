@@ -29,10 +29,9 @@ import { useRouter } from "expo-router";
 import { useAction } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { colors, scaleFontSize } from "../lib/theme";
-import { formatReminderTime, getDueTimestamp, getNextIntervalOccurrence, isOverdue } from "../lib/time";
+import { formatReminderTime, isOverdue } from "../lib/time";
 import { readFileAsBase64 } from "../lib/convex";
-import { deleteReminderWithAudio, scheduleReminder } from "../lib/notifications";
-import { DEFAULT_ALARM_SETTINGS } from "../lib/storage";
+import { scheduleReminder } from "../lib/notifications";
 import { useReminderStore, Reminder, ReminderHistory } from "../lib/store";
 import RecordingOverlay from "../components/RecordingOverlay";
 import EditReminderSheet from "../components/EditReminderSheet";
@@ -40,6 +39,9 @@ import SwipeableCard from "../components/SwipeableCard";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
 import { createTraceId, perfLog, recordTap, startStallMonitor } from "../lib/perf";
+import { checkCanCreateWithCount, getFreeActiveLimit } from "../lib/usage";
+import { getReminderNextDueTimestamp, isReminderActive } from "../lib/reminderActive";
+import { removeReminderFully } from "../lib/reminderRemoval";
 import NetInfo from "@react-native-community/netinfo";
 import { useMutation } from "convex/react";
 
@@ -99,12 +101,20 @@ export default function HomeScreen() {
   const history = useReminderStore((state) => state.history);
   const isLoading = useReminderStore((state) => state.isLoading);
   const storeAddReminder = useReminderStore((state) => state.addReminder);
-  const storeUpdateReminder = useReminderStore((state) => state.updateReminder);
-  const storeDeleteReminder = useReminderStore((state) => state.deleteReminder);
   const storeRecordCompletion = useReminderStore((state) => state.recordCompletion);
   const loadAllData = useReminderStore((state) => state.loadAll);
+  const loadReminders = useReminderStore((state) => state.loadReminders);
+  const hasLoadedReminders = useReminderStore((state) => state.hasLoadedReminders);
+
+  const activeReminders = useMemo(() => {
+    return reminders.filter((r) => isReminderActive(r, history, nowMs));
+  }, [reminders, history, nowMs]);
 
   const [showRecording, setShowRecording] = useState(false);
+  const [recordingTraceId, setRecordingTraceId] = useState<string | null>(null);
+  const [canStartRecording, setCanStartRecording] = useState(false);
+  const [gateStatusText, setGateStatusText] = useState<string | undefined>(undefined);
+  const [showUpgradeCta, setShowUpgradeCta] = useState(false);
   const [selectedView, setSelectedView] = useState<HomeView>("all");
   const cancelledRef = useRef(false);
   const [isConnected, setIsConnected] = useState(true);
@@ -186,7 +196,124 @@ export default function HomeScreen() {
 
   const handleCloseRecording = () => {
     setShowRecording(false);
+    setRecordingTraceId(null);
+    setCanStartRecording(false);
+    setGateStatusText(undefined);
+    setShowUpgradeCta(false);
   };
+
+  const openPaywall = useCallback(() => {
+    router.push("/paywall");
+  }, [router]);
+
+  const lockRecordingForLimit = useCallback(
+    (traceId: string, currentCount: number, limit: number) => {
+      setCanStartRecording(false);
+      setGateStatusText(`You've reached ${limit} active reminders. Upgrade for unlimited.`);
+      setShowUpgradeCta(true);
+      perfLog(traceId, "ui.recording", "gate_blocked_limit", { currentCount, limit });
+    },
+    []
+  );
+
+  const handleOpenRecording = useCallback(async () => {
+    if (showRecording) return;
+    const traceId = createTraceId("vr");
+    setRecordingTraceId(traceId);
+    recordTap(traceId);
+    perfLog(traceId, "ui.recording", "open_tap");
+
+    if (!isConnected) {
+      perfLog(traceId, "ui.recording", "open_blocked_offline");
+      setShowOfflineMessage(true);
+      return;
+    }
+
+    perfLog(traceId, "ui.recording", "show_overlay");
+    setShowRecording(true);
+
+    // Gate recording start without blocking the overlay from rendering.
+    setCanStartRecording(false);
+    setGateStatusText("Checking your plan...");
+    setShowUpgradeCta(false);
+
+    const limit = getFreeActiveLimit();
+    const currentCount = activeReminders.length;
+    perfLog(traceId, "ui.recording", "gate_snapshot", { currentCount, limit, hasLoadedReminders });
+
+    if (!hasLoadedReminders) {
+      perfLog(traceId, "ui.recording", "gate_requested_while_not_loaded");
+      setGateStatusText("Loading reminders...");
+      setShowUpgradeCta(false);
+      setCanStartRecording(false);
+
+      await loadReminders().catch(() => {});
+      const state = useReminderStore.getState();
+      const afterLoadCount = state.reminders.filter((r) => isReminderActive(r, state.history, Date.now())).length;
+      perfLog(traceId, "ui.recording", "gate_after_load", { currentCount: afterLoadCount, limit });
+
+      if (afterLoadCount < limit) {
+        setCanStartRecording(true);
+        setGateStatusText(undefined);
+        setShowUpgradeCta(false);
+        perfLog(traceId, "ui.recording", "gate_allowed_fast");
+        return;
+      }
+
+      const tCheck = Date.now();
+      perfLog(traceId, "ui.recording", "checkCanCreate_start", { currentCount: afterLoadCount, limit });
+      const { canCreate, isPro } = await checkCanCreateWithCount(afterLoadCount);
+      perfLog(traceId, "ui.recording", "checkCanCreate_done", {
+        ms: Date.now() - tCheck,
+        canCreate,
+        isPro,
+        currentCount: afterLoadCount,
+        limit,
+      });
+
+      if (!canCreate) {
+        lockRecordingForLimit(traceId, afterLoadCount, limit);
+        return;
+      }
+
+      setCanStartRecording(true);
+      setGateStatusText(undefined);
+      setShowUpgradeCta(false);
+      perfLog(traceId, "ui.recording", "gate_allowed");
+      return;
+    }
+
+    // Fast path: under the free limit, allow immediately.
+    if (currentCount < limit) {
+      setCanStartRecording(true);
+      setGateStatusText(undefined);
+      setShowUpgradeCta(false);
+      perfLog(traceId, "ui.recording", "gate_allowed_fast");
+      return;
+    }
+
+    // Slow path: only now do we consult RevenueCat.
+    const tCheck = Date.now();
+    perfLog(traceId, "ui.recording", "checkCanCreate_start", { currentCount, limit });
+    const { canCreate, isPro } = await checkCanCreateWithCount(currentCount);
+    perfLog(traceId, "ui.recording", "checkCanCreate_done", {
+      ms: Date.now() - tCheck,
+      canCreate,
+      isPro,
+      currentCount,
+      limit,
+    });
+
+    if (!canCreate) {
+      lockRecordingForLimit(traceId, currentCount, limit);
+      return;
+    }
+
+    setCanStartRecording(true);
+    setGateStatusText(undefined);
+    setShowUpgradeCta(false);
+    perfLog(traceId, "ui.recording", "gate_allowed");
+  }, [showRecording, isConnected, activeReminders.length, hasLoadedReminders, loadReminders, lockRecordingForLimit]);
 
   const handleCancelProcessing = useCallback(() => {
     cancelledRef.current = true;
@@ -307,13 +434,21 @@ export default function HomeScreen() {
       });
     } catch (error: any) {
       console.error("[VR] Processing error:", error);
-      setShowRecording(false);
 
-      // Check if this is a limit exceeded error
-      if (error?.name === 'ReminderLimitExceededError') {
-        router.push('/paywall');
+      // If we somehow got gated at the store level (race, legacy path), reset overlay to locked state.
+      if (error?.name === "ReminderLimitExceededError") {
+        const currentCount = Number.isFinite(error?.currentCount) ? error.currentCount : reminders.length;
+        const limit = Number.isFinite(error?.limit) ? error.limit : getFreeActiveLimit();
+        setShowRecording(false);
+        setTimeout(() => {
+          setRecordingTraceId(traceId);
+          setShowRecording(true);
+          lockRecordingForLimit(traceId, currentCount, limit);
+        }, 0);
         return;
       }
+
+      setShowRecording(false);
 
       Alert.alert(
         "Error",
@@ -375,10 +510,23 @@ export default function HomeScreen() {
           return next;
         });
 
-        // Use store to record completion (updates state + persists)
-        storeRecordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
-          console.log("[VR] Failed to record completion:", e);
-        });
+        void (async () => {
+          const reminder = useReminderStore.getState().getReminderById(reminderId);
+
+          // Record completion (always)
+          await storeRecordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
+            console.log("[VR] Failed to record completion:", e);
+          });
+
+          // One-time reminders become inactive after completion.
+          if (reminder?.frequency === "once") {
+            await removeReminderFully(reminderId, {
+              removeConvexById: async (id) => {
+                await removeConvexReminder({ id: id as any });
+              },
+            });
+          }
+        })();
 
         // No toast for individual mark-done (too noisy)
       }, 250); // Match animation duration
@@ -389,31 +537,17 @@ export default function HomeScreen() {
   const handleDelete = useCallback(
     async (reminder: Reminder) => {
       const reminderId = reminder.id;
-      const convexId = reminder.convexId;
 
-      // Delete via store (handles state + persistence)
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      try {
-        await storeDeleteReminder(reminderId);
-      } catch (e) {
-        console.log("[VR] Failed to delete reminder from store:", e);
-      }
-
-      // Cancel notification and delete audio
-      deleteReminderWithAudio(reminderId).catch((e) => {
-        console.log("[VR] Failed to cancel notification:", e);
+      await removeReminderFully(reminderId, {
+        removeConvexById: async (id) => {
+          await removeConvexReminder({ id: id as any });
+        },
       });
-
-      // Delete from Convex
-      if (convexId) {
-        removeConvexReminder({ id: convexId as any }).catch((e) => {
-          console.log("[VR] Failed to delete Convex reminder:", e);
-        });
-      }
 
       // No toast for individual delete (too noisy)
     },
-    [storeDeleteReminder, removeConvexReminder]
+    [removeConvexReminder]
   );
 
   // Multi-select handlers
@@ -430,20 +564,11 @@ export default function HomeScreen() {
   }, []);
 
   const selectAll = useCallback(() => {
-    // Get incomplete reminder IDs (same logic as filteredReminders)
-    const today = new Date().toDateString();
-    const completedToday = new Set(
-      history
-        .filter((e) => e.status === "completed" && new Date(e.timestamp).toDateString() === today)
-        .map((e) => e.reminderId)
-    );
-    const allIds = reminders
-      .filter((r) => r.frequency === "interval" || !completedToday.has(r.id))
-      .map((r) => r.id);
+    const allIds = activeReminders.map((r) => r.id);
     setSelectedIds(new Set(allIds));
     setIsSelectMode(true);
     setShowSelectMenu(false);
-  }, [reminders, history]);
+  }, [activeReminders]);
 
   const enterSelectMode = useCallback(() => {
     setIsSelectMode(true);
@@ -461,18 +586,14 @@ export default function HomeScreen() {
     const toDelete = reminders.filter((r) => selectedIds.has(r.id));
     exitSelectMode();
 
-    // Delete each reminder via store
+    // Delete each reminder fully
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     for (const reminder of toDelete) {
-      try {
-        await storeDeleteReminder(reminder.id);
-      } catch (e) {
-        console.log("[VR] Failed to delete reminder:", e);
-      }
-      deleteReminderWithAudio(reminder.id).catch(() => { });
-      if (reminder.convexId) {
-        removeConvexReminder({ id: reminder.convexId as any }).catch(() => { });
-      }
+      await removeReminderFully(reminder.id, {
+        removeConvexById: async (id) => {
+          await removeConvexReminder({ id: id as any });
+        },
+      });
     }
 
     toast.show({
@@ -480,7 +601,7 @@ export default function HomeScreen() {
       message: `${toDelete.length} reminder${toDelete.length > 1 ? "s" : ""} deleted`,
       type: "info",
     });
-  }, [selectedIds, reminders, storeDeleteReminder, removeConvexReminder, toast, exitSelectMode]);
+  }, [selectedIds, reminders, removeConvexReminder, toast, exitSelectMode]);
 
   const handleBulkDone = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -490,9 +611,16 @@ export default function HomeScreen() {
 
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
 
-    // Record completions via store
+    // Record completions; one-time reminders are removed fully
     for (const reminder of toMark) {
       await storeRecordCompletion(reminder.id, reminder.title, "completed").catch(() => { });
+      if (reminder.frequency === "once") {
+        await removeReminderFully(reminder.id, {
+          removeConvexById: async (id) => {
+            await removeConvexReminder({ id: id as any });
+          },
+        });
+      }
     }
 
     toast.show({
@@ -500,31 +628,9 @@ export default function HomeScreen() {
       message: `${toMark.length} reminder${toMark.length > 1 ? "s" : ""} completed`,
       type: "success",
     });
-  }, [selectedIds, reminders, storeRecordCompletion, toast, exitSelectMode]);
+  }, [selectedIds, reminders, storeRecordCompletion, removeConvexReminder, toast, exitSelectMode]);
 
-  const completedTodayReminderIds = useMemo(() => {
-    // Pre-compute today's bounds once to avoid repeated string creation
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const todayEnd = todayStart + 24 * 60 * 60 * 1000;
-    return new Set(
-      history
-        .filter((entry) => {
-          if (entry.status !== "completed") return false;
-          const ts = new Date(entry.timestamp).getTime();
-          return ts >= todayStart && ts < todayEnd;
-        })
-        .map((entry) => entry.reminderId)
-    );
-  }, [history]);
-
-  const filteredReminders = useMemo(() => {
-    return reminders.filter((reminder) => {
-      // Interval reminders are never hidden (they recur)
-      if (reminder.frequency === "interval") return true;
-      return !completedTodayReminderIds.has(reminder.id);
-    });
-  }, [completedTodayReminderIds, reminders]);
+  const filteredReminders = activeReminders;
 
   const remindersById = useMemo(() => {
     return new Map(reminders.map((reminder) => [reminder.id, reminder]));
@@ -579,10 +685,17 @@ export default function HomeScreen() {
   const handleCompletedPress = useCallback(
     (entry: ReminderHistory) => {
       const reminder = remindersById.get(entry.reminderId);
-      if (!reminder) return;
+      if (!reminder) {
+        toast.show({
+          title: "Completed",
+          message: "This one-time reminder was completed and removed.",
+          type: "info",
+        });
+        return;
+      }
       setEditingReminder(reminder);
     },
-    [remindersById, router]
+    [remindersById, toast]
   );
 
   const reminderSections = useMemo(() => {
@@ -610,26 +723,10 @@ export default function HomeScreen() {
 
   const renderReminderItem = useCallback(
     ({ item }: { item: Reminder }) => {
-      let dueTimestamp: number;
-      let dueLabel: string;
-      if (item.frequency === "interval" && item.intervalMs && item.anchorAt) {
-        const { scheduledFor } = getNextIntervalOccurrence(item.anchorAt, item.intervalMs, nowMs);
-        dueTimestamp = scheduledFor;
-        dueLabel = formatIntervalNextIn(dueTimestamp, nowMs);
-      } else {
-        dueTimestamp = getDueTimestamp(
-          {
-            time: item.time,
-            date: item.date,
-            frequency: item.frequency,
-            days: item.days,
-            intervalDays: item.intervalDays,
-            scheduledFor: item.scheduledFor,
-          },
-          new Date(nowMs)
-        );
-        dueLabel = formatReminderTime(dueTimestamp);
-      }
+      const dueTimestamp = getReminderNextDueTimestamp(item, history, nowMs);
+      const dueLabel = item.frequency === "interval"
+        ? formatIntervalNextIn(dueTimestamp, nowMs)
+        : formatReminderTime(dueTimestamp);
       const overdue = isOverdue(dueTimestamp, nowMs);
       const dueColor = overdue ? colors.statusOverdue : colors.statusUpcoming;
       const isRepeating = item.frequency !== "once";
@@ -705,7 +802,7 @@ export default function HomeScreen() {
         </SwipeableCard>
       );
     },
-    [exitingIds, handleDelete, handleMarkDone, handleReminderPress, isSelectMode, nowMs, selectedIds, toggleSelection]
+    [exitingIds, handleDelete, handleMarkDone, handleReminderPress, history, isSelectMode, nowMs, selectedIds, toggleSelection]
   );
 
   const renderCompletedItem = useCallback(
@@ -910,20 +1007,8 @@ export default function HomeScreen() {
                       ? "Tap below to create your first reminder."
                       : "Check the Completed tab to review what you finished."}
                   </Text>
-                  {reminders.length === 0 && (
-                    <TouchableOpacity
-                      style={styles.emptyCta}
-                      onPress={async () => {
-                        const { checkCanCreateReminder } = await import('../lib/usage');
-                        const { canCreate } = await checkCanCreateReminder();
-                        if (!canCreate) {
-                          router.push('/paywall');
-                          return;
-                        }
-                        setShowRecording(true);
-                      }}
-                      activeOpacity={0.85}
-                    >
+                  {activeReminders.length === 0 && (
+                    <TouchableOpacity style={styles.emptyCta} onPress={handleOpenRecording} activeOpacity={0.85}>
                       <Text style={styles.emptyCtaText}>Create a reminder</Text>
                     </TouchableOpacity>
                   )}
@@ -1031,20 +1116,7 @@ export default function HomeScreen() {
             >
               <TouchableOpacity
                 style={styles.fabTouchable}
-                onPress={async () => {
-                  if (!isConnected) {
-                    setShowOfflineMessage(true);
-                    return;
-                  }
-                  // Check limit BEFORE recording to avoid burning API credits
-                  const { checkCanCreateReminder } = await import('../lib/usage');
-                  const { canCreate } = await checkCanCreateReminder();
-                  if (!canCreate) {
-                    router.push('/paywall');
-                    return;
-                  }
-                  setShowRecording(true);
-                }}
+                onPress={handleOpenRecording}
                 activeOpacity={0.9}
               >
                 <AppIcon name="mic" size={26} color="white" />
@@ -1057,6 +1129,11 @@ export default function HomeScreen() {
       <RecordingOverlay
         visible={showRecording}
         autoStart={true}
+        initialTraceId={recordingTraceId ?? undefined}
+        canStartRecording={canStartRecording}
+        gateStatusText={gateStatusText}
+        showUpgradeCta={showUpgradeCta}
+        onUpgradePress={openPaywall}
         onClose={handleCloseRecording}
         onRecordingComplete={handleRecordingComplete}
         onCancelProcessing={handleCancelProcessing}

@@ -522,27 +522,23 @@ useEffect(() => {
 **File:** `lib/usage.ts`
 
 ```typescript
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useReminderStore } from '@/lib/store';
 
-const REMINDER_COUNT_KEY = 'reminder_count';
-const FREE_LIMIT = 5; // Adjust as needed
+export const MAX_FREE_ACTIVE_REMINDERS = 5;
 
-export async function getReminderCount(): Promise<number> {
-  const count = await AsyncStorage.getItem(REMINDER_COUNT_KEY);
-  return count ? parseInt(count, 10) : 0;
+export function getActiveReminderCount(): number {
+  // Active reminders only (history never counts)
+  return useReminderStore.getState().reminders.length;
 }
 
-export async function incrementReminderCount(): Promise<number> {
-  const current = await getReminderCount();
-  const newCount = current + 1;
-  await AsyncStorage.setItem(REMINDER_COUNT_KEY, newCount.toString());
-  return newCount;
-}
-
-export async function canCreateReminder(isPro: boolean): Promise<boolean> {
-  if (isPro) return true;
-  const count = await getReminderCount();
-  return count < FREE_LIMIT;
+export async function checkCanCreateActiveReminder() {
+  const currentCount = getActiveReminderCount();
+  // Fast-path: if under limit, don't hit RevenueCat.
+  if (currentCount < MAX_FREE_ACTIVE_REMINDERS) {
+    return { canCreate: true, isPro: false, currentCount, limit: MAX_FREE_ACTIVE_REMINDERS };
+  }
+  const isPro = await checkProStatus();
+  return { canCreate: isPro, isPro, currentCount, limit: MAX_FREE_ACTIVE_REMINDERS };
 }
 ```
 
@@ -551,7 +547,7 @@ Update reminder creation flow to check `canCreateReminder()` before proceeding.
 
 **Time estimate:** ~30 min
 
-**Status:** ✅ `lib/usage.ts` implemented with `getReminderCount()`, `incrementReminderCount()`, `decrementReminderCount()`, `canCreateReminder()`, `getFreeLimit()`
+**Status:** ✅ `lib/usage.ts` gates creation using active reminder count + RevenueCat entitlement (no separate counter to drift)
 
 ---
 

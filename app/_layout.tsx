@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { InteractionManager } from "react-native";
 import { Stack, useRouter } from "expo-router";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider, ConvexReactClient, useMutation } from "convex/react";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -11,6 +11,9 @@ import { initializePurchases } from "../lib/purchases";
 import notifee from "@notifee/react-native";
 import { useReminderStore } from "../lib/store";
 import { syncRemindersOnStartup } from "../lib/notifications";
+import { api } from "../convex/_generated/api";
+import { removeReminderFully } from "../lib/reminderRemoval";
+import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
 
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string);
 
@@ -18,16 +21,47 @@ function StartupTasks() {
   const router = useRouter();
   const toast = useToast();
   const hasSyncedRef = useRef(false);
+  const hasCleanedRef = useRef(false);
+  const removeConvexReminder = useMutation(api.reminders.remove);
 
   const reminders = useReminderStore((s) => s.reminders);
   const history = useReminderStore((s) => s.history);
-  const loadAll = useReminderStore((s) => s.loadAll);
+  const loadReminders = useReminderStore((s) => s.loadReminders);
+  const loadHistory = useReminderStore((s) => s.loadHistory);
 
   useEffect(() => {
-    InteractionManager.runAfterInteractions(() => {
-      loadAll();
+    // Load reminders early to close cold-start gating window.
+    void loadReminders();
+    let cancelled = false;
+    const task = InteractionManager.runAfterInteractions(async () => {
+      try {
+        await loadHistory();
+      } catch {
+        // ignore
+      }
+      if (cancelled || hasCleanedRef.current) return;
+      hasCleanedRef.current = true;
+
+      // Cleanup old one-time reminders that are already completed/missed but still present.
+      const store = useReminderStore.getState();
+      const nowMs = Date.now();
+      const toCleanup = store.reminders.filter((r) => shouldCleanupGhostOnceReminder(r, store.history, nowMs));
+      if (toCleanup.length > 0) {
+        console.log(`[VR] Startup cleanup: removing ${toCleanup.length} ghost once reminders`);
+      }
+      for (const r of toCleanup) {
+        await removeReminderFully(r.id, {
+          removeConvexById: async (id) => {
+            await removeConvexReminder({ id: id as any });
+          },
+        });
+      }
     });
-  }, [loadAll]);
+    return () => {
+      cancelled = true;
+      task.cancel();
+    };
+  }, [loadReminders, loadHistory]);
 
   useEffect(() => {
     // Only run sync once data is loaded and we haven't synced this session

@@ -10,15 +10,20 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import notifee, { AndroidCategory, AndroidImportance, TriggerType, TimestampTrigger } from "@notifee/react-native";
 import * as FileSystem from "expo-file-system/legacy";
+import { useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
 import { alarmAudioService } from "../lib/AudioService";
 import { getNextIntervalOccurrence } from "../lib/time";
+import { useReminderStore } from "../lib/store";
+import { removeReminderFully } from "../lib/reminderRemoval";
 
 const { width, height } = Dimensions.get("window");
 
 export default function AlarmScreen() {
     const router = useRouter();
+    const removeConvexReminder = useMutation(api.reminders.remove);
     const params = useLocalSearchParams<{
         notificationId?: string;
         reminderId?: string;
@@ -35,6 +40,7 @@ export default function AlarmScreen() {
     }>();
 
     const [isPlaying, setIsPlaying] = useState(true);
+    const [isHandlingAction, setIsHandlingAction] = useState(false);
     const vibrationIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const isMountedRef = useRef(true);
     const isExplicitDismissRef = useRef(false);
@@ -103,8 +109,18 @@ export default function AlarmScreen() {
     const stopAudio = async () => {
         console.log("[VR] Stopping alarm audio...");
         await alarmAudioService.stop();
-        setIsPlaying(false);
+        if (isMountedRef.current) {
+            setIsPlaying(false);
+        }
         console.log("[VR] Alarm audio stopped");
+    };
+
+    const closeAlarmScreen = () => {
+        if (router.canGoBack()) {
+            router.back();
+        } else {
+            router.replace("/");
+        }
     };
 
     const startVibration = () => {
@@ -126,52 +142,73 @@ export default function AlarmScreen() {
     };
 
     const handleDismiss = async () => {
-        isExplicitDismissRef.current = true;
-        stopAudio();
-        stopVibration();
+        if (isHandlingAction) return;
+        setIsHandlingAction(true);
+        try {
+            isExplicitDismissRef.current = true;
+            await stopAudio();
+            stopVibration();
 
-        // Cancel the notification
-        if (notificationId) {
-            await notifee.cancelNotification(notificationId);
-        }
+            // Cancel the notification
+            if (notificationId) {
+                await notifee.cancelNotification(notificationId);
+            }
 
-        // Record completion in history (per occurrence if available)
-        if (reminderId) {
-            try {
-                const { useReminderStore } = await import("../lib/store");
-                const store = useReminderStore.getState();
-                const reminder = store.getReminderById(reminderId);
-                if (reminder) {
-                    const scheduledForRaw = params.scheduledFor ? Number(params.scheduledFor) : undefined;
-                    const scheduledFor = Number.isFinite(scheduledForRaw as number) ? (scheduledForRaw as number) : undefined;
-                    await store.recordCompletion(reminderId, reminder.title, "completed", {
-                        scheduledFor,
-                        action: "dismissed",
-                    });
+            // Record completion in history (per occurrence if available)
+            if (reminderId) {
+                try {
+                    const store = useReminderStore.getState();
+                    const reminder = store.getReminderById(reminderId);
+                    if (reminder) {
+                        const scheduledForRaw = params.scheduledFor ? Number(params.scheduledFor) : undefined;
+                        const scheduledFor = Number.isFinite(scheduledForRaw as number)
+                            ? (scheduledForRaw as number)
+                            : undefined;
+                        await store.recordCompletion(reminderId, reminder.title, "completed", {
+                            scheduledFor,
+                            action: "dismissed",
+                        });
+
+                        // One-time reminders become inactive after dismiss.
+                        if (reminder.frequency === "once") {
+                            await removeReminderFully(reminderId, {
+                                removeConvexById: async (id) => {
+                                    await removeConvexReminder({ id: id as any });
+                                },
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.log("[VR] Failed to record completion:", e);
                 }
-            } catch (e) {
-                console.log("[VR] Failed to record completion:", e);
+            }
+
+            // Close the alarm screen
+            closeAlarmScreen();
+        } finally {
+            if (isMountedRef.current) {
+                setIsHandlingAction(false);
             }
         }
-
-        // Close the alarm screen
-        router.back();
     };
 
     const handleSnooze = async () => {
-        isExplicitDismissRef.current = true;
-        stopAudio();
-        stopVibration();
+        if (isHandlingAction) return;
+        setIsHandlingAction(true);
+        try {
+            isExplicitDismissRef.current = true;
+            await stopAudio();
+            stopVibration();
 
-        // Cancel current notification
-        if (notificationId) {
-            await notifee.cancelNotification(notificationId);
-        }
+            // Cancel current notification
+            if (notificationId) {
+                await notifee.cancelNotification(notificationId);
+            }
 
-        if (!snoozeEnabled || !reminderId) {
-            router.back();
-            return;
-        }
+            if (!snoozeEnabled || !reminderId) {
+                closeAlarmScreen();
+                return;
+            }
 
         const channelId = `reminder_${reminderId}`;
         const triggerTimestamp = Date.now() + snoozeDurationMinutes * 60_000;
@@ -285,8 +322,13 @@ export default function AlarmScreen() {
             }
         }
 
-        // Close the alarm screen
-        router.back();
+            // Close the alarm screen
+            closeAlarmScreen();
+        } finally {
+            if (isMountedRef.current) {
+                setIsHandlingAction(false);
+            }
+        }
     };
 
     return (

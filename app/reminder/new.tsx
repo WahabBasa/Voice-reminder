@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   InteractionManager,
   Platform,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -19,6 +20,8 @@ import { TimerPickerModal } from "react-native-timer-picker";
 import { colors, scaleFontSize } from "../../lib/theme";
 import { useReminderStore } from "../../lib/store";
 import { scheduleReminder } from "../../lib/notifications";
+import NetInfo from "@react-native-community/netinfo";
+import { checkCanCreateActiveReminder } from "../../lib/usage";
 import DaySelector from "../../components/DaySelector";
 import AppIcon from "../../components/AppIcon";
 import { useToast } from "../../components/ToastProvider";
@@ -34,6 +37,9 @@ export default function NewReminderScreen() {
   const processTextReminder = useAction(api.actions.processTextReminder);
   const toast = useToast();
   const storeAddReminder = useReminderStore((state) => state.addReminder);
+  const loadReminders = useReminderStore((state) => state.loadReminders);
+  const hasLoadedReminders = useReminderStore((state) => state.hasLoadedReminders);
+  const [gateReady, setGateReady] = useState(false);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -41,6 +47,34 @@ export default function NewReminderScreen() {
   const [frequency, setFrequency] = useState("once");
   const [days, setDays] = useState<string[]>([]);
   const [showTimePicker, setShowTimePicker] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // Ensure we have the current active reminder count before gating.
+      await loadReminders().catch(() => {});
+      const { canCreate } = await checkCanCreateActiveReminder();
+      if (!cancelled && !canCreate) {
+        router.replace("/paywall");
+        return;
+      }
+      if (!cancelled) setGateReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadReminders, router]);
+
+  if (!hasLoadedReminders || !gateReady) {
+    return (
+      <SafeAreaView style={styles.container} edges={["bottom"]}>
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="small" color={colors.textSecondary} />
+          <Text style={styles.loadingText}>Loading reminders…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   const handleDayToggle = (day: string) => {
     setDays((prev) =>
@@ -62,11 +96,16 @@ export default function NewReminderScreen() {
       return;
     }
 
+    const net = await NetInfo.fetch();
+    if (!(net.isConnected ?? true)) {
+      Alert.alert("Offline", "Connect to the internet to create a reminder.");
+      return;
+    }
+
     // Check limit BEFORE calling API to avoid burning credits
-    const { checkCanCreateReminder } = await import('../../lib/usage');
-    const { canCreate } = await checkCanCreateReminder();
+    const { canCreate } = await checkCanCreateActiveReminder();
     if (!canCreate) {
-      router.push('/paywall');
+      router.push("/paywall");
       return;
     }
 
@@ -131,8 +170,8 @@ export default function NewReminderScreen() {
       console.error("[VR] Create error:", error);
 
       // Check if this is a limit exceeded error
-      if (error?.name === 'ReminderLimitExceededError') {
-        router.push('/paywall');
+      if (error?.name === "ReminderLimitExceededError") {
+        router.push("/paywall");
         return;
       }
 
@@ -316,6 +355,18 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  loadingWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: scaleFontSize(14),
+    color: colors.textSecondary,
+    fontWeight: "600",
   },
   header: {
     flexDirection: "row",
