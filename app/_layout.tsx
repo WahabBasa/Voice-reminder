@@ -6,11 +6,50 @@ import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { PortalProvider } from "@gorhom/portal";
-import ToastProvider from "../components/ToastProvider";
+import ToastProvider, { useToast } from "../components/ToastProvider";
 import { initializePurchases } from "../lib/purchases";
 import notifee from "@notifee/react-native";
+import { useReminderStore } from "../lib/store";
+import { syncRemindersOnStartup } from "../lib/notifications";
 
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string);
+
+function StartupTasks() {
+  const router = useRouter();
+  const toast = useToast();
+  const hasSyncedRef = useRef(false);
+
+  const reminders = useReminderStore((s) => s.reminders);
+  const history = useReminderStore((s) => s.history);
+  const loadAll = useReminderStore((s) => s.loadAll);
+
+  useEffect(() => {
+    InteractionManager.runAfterInteractions(() => {
+      loadAll();
+    });
+  }, [loadAll]);
+
+  useEffect(() => {
+    // Only run sync once data is loaded and we haven't synced this session
+    if (hasSyncedRef.current || reminders.length === 0) return;
+    hasSyncedRef.current = true;
+
+    InteractionManager.runAfterInteractions(async () => {
+      console.log("[VR] Starting startup sync...");
+      const result = await syncRemindersOnStartup(reminders, history);
+      if (result.permissionError) {
+        toast.show({
+          title: "Alarms may not fire",
+          message: "Tap to open diagnostics",
+          type: "warning",
+          onPress: () => router.push("/diagnostics"),
+        });
+      }
+    });
+  }, [reminders, history, router, toast]);
+
+  return null;
+}
 
 export default function RootLayout() {
   const router = useRouter();
@@ -19,7 +58,7 @@ export default function RootLayout() {
   useEffect(() => {
     // Defer RevenueCat initialization to not block app startup
     const task = InteractionManager.runAfterInteractions(() => {
-      initializePurchases();
+      void initializePurchases();
     });
     return () => task.cancel();
   }, []);
@@ -72,6 +111,7 @@ export default function RootLayout() {
         <SafeAreaProvider>
           <ConvexProvider client={convex}>
             <ToastProvider>
+              <StartupTasks />
               <StatusBar style="light" />
               <Stack
                 screenOptions={{

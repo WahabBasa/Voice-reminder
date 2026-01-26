@@ -4,19 +4,21 @@ import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, spacing } from "../lib/theme";
 
-type ToastType = "success" | "error" | "info";
+type ToastType = "success" | "error" | "info" | "warning";
 
 type ToastOptions = {
   title: string;
   message?: string;
   type?: ToastType;
   durationMs?: number;
+  onPress?: () => void;
 };
 
 type ToastState = {
   title: string;
   message?: string;
   type: ToastType;
+  onPress?: () => void;
 };
 
 type ToastContextValue = {
@@ -34,6 +36,7 @@ export function useToast(): ToastContextValue {
 function getToastAccent(type: ToastType): string {
   if (type === "success") return colors.statusUpcoming;
   if (type === "error") return colors.statusOverdue;
+  if (type === "warning") return "#f59e0b"; // Amber-500
   return colors.accent;
 }
 
@@ -67,13 +70,13 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   }, [opacity, translateY]);
 
   const show = useCallback(
-    ({ title, message, type = "info", durationMs = 2200 }: ToastOptions) => {
+    ({ title, message, type = "info", durationMs = 2200, onPress }: ToastOptions) => {
       if (hideTimerRef.current) {
         clearTimeout(hideTimerRef.current);
         hideTimerRef.current = null;
       }
 
-      setToast({ title, message, type });
+      setToast({ title, message, type, onPress });
       opacity.setValue(0);
       translateY.setValue(-30);
 
@@ -112,7 +115,10 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
           ]}
         >
           <Pressable
-            onPress={hide}
+            onPress={() => {
+              toast.onPress?.();
+              hide();
+            }}
             style={[styles.toast, { borderLeftColor: getToastAccent(toast.type) }]}
           >
             <Text style={styles.title}>{toast.title}</Text>

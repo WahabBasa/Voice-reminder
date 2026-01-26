@@ -65,6 +65,15 @@ notifee.onBackgroundEvent(async (event) => {
 notifee.onForegroundEvent(async (event) => {
   console.log("[VR] Foreground event:", event.type);
 
+  if (event.type === EventType.DELIVERED) {
+    const data = event.detail.notification?.data as any;
+    const kind = typeof data?.kind === "string" ? (data.kind as string) : "";
+    if (kind === "reminder_occurrence" || kind === "snooze_occurrence") {
+      console.log("[VR] Alarm delivered, opening alarm screen:", event.detail.notification?.id);
+      navigateToAlarmScreen(event.detail.notification);
+    }
+  }
+
   if (event.type === EventType.PRESS) {
     console.log("[VR] Notification pressed:", event.detail.notification?.id);
     // Also navigate to alarm on press (in case they dismissed the screen)

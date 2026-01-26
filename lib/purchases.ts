@@ -10,15 +10,20 @@ const REVENUECAT_IOS_KEY = 'PLACEHOLDER_IOS_KEY'; // Add iOS key when ready
  * Call this once in the app layout.
  */
 export async function initializePurchases(): Promise<void> {
-  if (__DEV__) {
-    Purchases.setLogLevel(LOG_LEVEL.DEBUG);
+  try {
+    if (__DEV__) {
+      Purchases.setLogLevel(LOG_LEVEL.DEBUG);
+    }
+
+    const apiKey = Platform.OS === 'ios'
+      ? REVENUECAT_IOS_KEY
+      : REVENUECAT_ANDROID_KEY;
+
+    await Purchases.configure({ apiKey });
+  } catch (error) {
+    // Silent log - RevenueCat init failure is non-critical
+    console.log('[RevenueCat] initializePurchases failed (silent):', error);
   }
-
-  const apiKey = Platform.OS === 'ios'
-    ? REVENUECAT_IOS_KEY
-    : REVENUECAT_ANDROID_KEY;
-
-  await Purchases.configure({ apiKey });
 }
 
 /**
@@ -89,4 +94,3 @@ export async function getCustomerInfo(): Promise<CustomerInfo | null> {
     return null;
   }
 }
-

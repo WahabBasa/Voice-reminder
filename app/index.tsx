@@ -92,6 +92,7 @@ export default function HomeScreen() {
   const removeConvexReminder = useMutation(api.reminders.remove);
   const insets = useSafeAreaInsets();
   const toast = useToast();
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Zustand store for centralized state
   const reminders = useReminderStore((state) => state.reminders);
@@ -172,6 +173,15 @@ export default function HomeScreen() {
       });
       return () => task.cancel();
     }, [loadAllData])
+  );
+
+  // Keep "due in X minutes" labels fresh without requiring user interaction.
+  useFocusEffect(
+    useCallback(() => {
+      setNowMs(Date.now());
+      const interval = setInterval(() => setNowMs(Date.now()), 30_000);
+      return () => clearInterval(interval);
+    }, [])
   );
 
   const handleCloseRecording = () => {
@@ -603,9 +613,9 @@ export default function HomeScreen() {
       let dueTimestamp: number;
       let dueLabel: string;
       if (item.frequency === "interval" && item.intervalMs && item.anchorAt) {
-        const { scheduledFor } = getNextIntervalOccurrence(item.anchorAt, item.intervalMs, Date.now());
+        const { scheduledFor } = getNextIntervalOccurrence(item.anchorAt, item.intervalMs, nowMs);
         dueTimestamp = scheduledFor;
-        dueLabel = formatIntervalNextIn(dueTimestamp);
+        dueLabel = formatIntervalNextIn(dueTimestamp, nowMs);
       } else {
         dueTimestamp = getDueTimestamp(
           {
@@ -616,11 +626,11 @@ export default function HomeScreen() {
             intervalDays: item.intervalDays,
             scheduledFor: item.scheduledFor,
           },
-          new Date()
+          new Date(nowMs)
         );
         dueLabel = formatReminderTime(dueTimestamp);
       }
-      const overdue = isOverdue(dueTimestamp);
+      const overdue = isOverdue(dueTimestamp, nowMs);
       const dueColor = overdue ? colors.statusOverdue : colors.statusUpcoming;
       const isRepeating = item.frequency !== "once";
 
@@ -695,7 +705,7 @@ export default function HomeScreen() {
         </SwipeableCard>
       );
     },
-    [exitingIds, handleDelete, handleMarkDone, handleReminderPress, isSelectMode, selectedIds, toggleSelection]
+    [exitingIds, handleDelete, handleMarkDone, handleReminderPress, isSelectMode, nowMs, selectedIds, toggleSelection]
   );
 
   const renderCompletedItem = useCallback(

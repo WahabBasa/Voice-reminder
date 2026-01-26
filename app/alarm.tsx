@@ -192,6 +192,7 @@ export default function AlarmScreen() {
                     category: AndroidCategory.ALARM,
                     autoCancel: false,
                     lightUpScreen: true,
+                    fullScreenAction: { id: "default" },
                     pressAction: { id: "default" },
                 },
                 data: {
@@ -259,6 +260,7 @@ export default function AlarmScreen() {
                             category: AndroidCategory.ALARM,
                             autoCancel: false,
                             lightUpScreen: true,
+                            fullScreenAction: { id: "default" },
                             pressAction: { id: "default" },
                         },
                         data: {

@@ -7,6 +7,7 @@ import notifee, {
   Event,
 } from "@notifee/react-native";
 import { Platform } from "react-native";
+import { alarmAudioService } from "./AudioService";
 import {
   documentDirectory,
   downloadAsync,
@@ -14,6 +15,7 @@ import {
   getInfoAsync,
 } from "expo-file-system/legacy";
 import { getNextIntervalOccurrence, getNextTriggerTime, ReminderSchedule } from "./time";
+import { Reminder, ReminderHistory } from "./store";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
 
 export class ExactAlarmPermissionError extends Error {
@@ -248,9 +250,12 @@ export async function scheduleReminder(
         category: AndroidCategory.ALARM,
         autoCancel: false,
         lightUpScreen: true,
-        // Note: fullScreenAction removed - requires additional native setup
-        // that was causing issues. Will implement properly in future update.
         pressAction: {
+          id: "default",
+        },
+        // Show the alarm UI immediately when the trigger fires (Android).
+        // Requires `android.permission.USE_FULL_SCREEN_INTENT` in AndroidManifest.xml.
+        fullScreenAction: {
           id: "default",
         },
       },
@@ -316,12 +321,64 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   console.log(`[VR] handleNotificationEvent called, type=${type}`);
   console.log(`[VR] Notification data:`, JSON.stringify(detail.notification?.data));
 
-  if (type === EventType.DELIVERED) {
-    console.log("[VR] DELIVERED event - alarm screen will handle audio");
-    const data = detail.notification?.data;
+  const notificationData = detail.notification?.data;
+  const kind = typeof notificationData?.kind === "string" ? (notificationData.kind as string) : "";
+  const reminderId =
+    typeof notificationData?.reminderId === "string" ? (notificationData.reminderId as string) : "";
 
-    // Note: Audio playback is now handled by the alarm screen (app/alarm.tsx)
-    // This handler only logs file info and handles recurring reschedule
+  const shouldHandleAsAlarm =
+    Boolean(reminderId) && (kind === "reminder_occurrence" || kind === "snooze_occurrence");
+
+  async function startAlarmAudioIfPossible(): Promise<void> {
+    if (!shouldHandleAsAlarm) return;
+    if (Platform.OS !== "android") return;
+
+    const localAudioPath = getLocalAudioPath(reminderId);
+    try {
+      const fileInfo = await getInfoAsync(localAudioPath);
+      if (!fileInfo.exists || !fileInfo.size) {
+        console.log("[VR] Alarm audio file missing, skipping playback:", localAudioPath);
+        return;
+      }
+    } catch (e) {
+      console.log("[VR] Failed to stat alarm audio file:", e);
+      return;
+    }
+
+    const rawVolume = Number(notificationData?.volume ?? "1");
+    const targetVolume = Math.max(0, Math.min(1, Number.isFinite(rawVolume) ? rawVolume : 1));
+
+    const ok = await alarmAudioService.play(localAudioPath, {
+      volume: targetVolume,
+      streamType: "alarm",
+      loop: true,
+    });
+    if (!ok) {
+      console.log("[VR] Alarm audio playback failed to start");
+    }
+  }
+
+  async function stopAlarmAudioIfPlaying(): Promise<void> {
+    if (!shouldHandleAsAlarm) return;
+    try {
+      await alarmAudioService.stop();
+    } catch (e) {
+      console.log("[VR] Failed to stop alarm audio:", e);
+    }
+  }
+
+  if (type === EventType.DISMISSED) {
+    await stopAlarmAudioIfPlaying();
+    return;
+  }
+
+  if (type === EventType.DELIVERED) {
+    console.log("[VR] DELIVERED event - starting alarm audio");
+    const data = notificationData;
+    await startAlarmAudioIfPossible();
+
+    // Alarm audio is started here on delivery so it plays without requiring a tap.
+    // Alarm screen (app/alarm.tsx) still provides the UI to dismiss/snooze.
 
     if (data?.reminderId) {
       const localAudioPath = getLocalAudioPath(data.reminderId as string);
@@ -422,4 +479,99 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
 export async function getScheduledNotifications(): Promise<string[]> {
   const ids = await notifee.getTriggerNotificationIds();
   return ids;
+}
+
+/**
+ * Reconciles local reminders with scheduled triggers on startup.
+ * Ensures at least one trigger exists per active reminder.
+ */
+export async function syncRemindersOnStartup(
+  reminders: Reminder[],
+  history: ReminderHistory[]
+): Promise<{ synced: number; skipped: number; failed: number; permissionError: boolean }> {
+  try {
+    const scheduledIds = await notifee.getTriggerNotificationIds();
+    const now = Date.now();
+
+    // Get today's completions for "once" reminder skip logic
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const completedTodayIds = new Set(
+      history
+        .filter((h) => h.status === "completed" && new Date(h.timestamp) >= todayStart)
+        .map((h) => h.reminderId)
+    );
+
+    let synced = 0,
+      skipped = 0,
+      failed = 0;
+    let permissionError = false;
+
+    for (const reminder of reminders) {
+      if (!reminder.audioUrl) {
+        skipped++;
+        continue;
+      }
+
+      // Skip "once" reminders that are completed today or in the past
+      if (reminder.frequency === "once") {
+        if (completedTodayIds.has(reminder.id)) {
+          skipped++;
+          continue;
+        }
+        // If scheduledFor exists and is in the past, skip it
+        if (reminder.scheduledFor && reminder.scheduledFor < now) {
+          skipped++;
+          continue;
+        }
+      }
+
+      // Check if any notification exists for this reminder ID prefix
+      // Use prefix match: reminder_{id}_
+      const hasScheduled = scheduledIds.some((id) => id.startsWith(`reminder_${reminder.id}_`));
+      if (hasScheduled) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        // Map store Reminder to ReminderNotification interface
+        const notificationInput: ReminderNotification = {
+          id: reminder.id,
+          title: reminder.title,
+          description: reminder.description,
+          time: reminder.time,
+          date: reminder.date,
+          frequency: reminder.frequency,
+          days: reminder.days,
+          audioUrl: reminder.audioUrl,
+          snoozeEnabled: reminder.snoozeEnabled,
+          snoozeDuration: reminder.snoozeDuration,
+          volume: reminder.volume,
+          volumeStyle: reminder.volumeStyle,
+          intervalMs: reminder.intervalMs,
+          anchorAt: reminder.anchorAt,
+          intervalDays: reminder.intervalDays,
+          scheduledFor: reminder.scheduledFor,
+        };
+
+        await scheduleReminder(notificationInput);
+        synced++;
+      } catch (e: any) {
+        if (e?.name === "ExactAlarmPermissionError") {
+          permissionError = true;
+        }
+        console.log(`[VR] Sync failed for ${reminder.id}:`, e?.message || e);
+        failed++;
+      }
+    }
+
+    console.log(
+      `[VR] Startup sync: ${synced} scheduled, ${skipped} skipped, ${failed} failed`
+    );
+    return { synced, skipped, failed, permissionError };
+  } catch (e) {
+    console.error("[VR] syncRemindersOnStartup critical failure:", e);
+    return { synced: 0, skipped: 0, failed: 0, permissionError: false };
+  }
 }
