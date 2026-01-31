@@ -8,10 +8,18 @@ import {
     Dimensions,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import notifee, { AndroidCategory, AndroidImportance, TriggerType, TimestampTrigger } from "@notifee/react-native";
+import notifee, {
+    AndroidCategory,
+    AndroidImportance,
+    AndroidVisibility,
+    AlarmType,
+    TriggerType,
+    TimestampTrigger,
+} from "@notifee/react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import { useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
+import { cancelDisplayedAlarmNotifications, clearPendingAlarm } from "../lib/notifications";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
 import { alarmAudioService } from "../lib/AudioService";
@@ -20,6 +28,7 @@ import { useReminderStore } from "../lib/store";
 import { removeReminderFully } from "../lib/reminderRemoval";
 
 const { width, height } = Dimensions.get("window");
+const ANDROID_ALARM_ACTIVITY = "com.wahabbasa.VoiceReminder.AlarmActivity";
 
 export default function AlarmScreen() {
     const router = useRouter();
@@ -29,6 +38,11 @@ export default function AlarmScreen() {
         reminderId?: string;
         title?: string;
         description?: string;
+        audioUrl?: string;
+        frequency?: string;
+        days?: string;
+        time?: string;
+        intervalDays?: string;
         snoozeEnabled?: string;
         snoozeDuration?: string;
         volume?: string;
@@ -153,6 +167,8 @@ export default function AlarmScreen() {
             if (notificationId) {
                 await notifee.cancelNotification(notificationId);
             }
+            await cancelDisplayedAlarmNotifications(notificationId);
+            await clearPendingAlarm();
 
             // Record completion in history (per occurrence if available)
             if (reminderId) {
@@ -204,53 +220,70 @@ export default function AlarmScreen() {
             if (notificationId) {
                 await notifee.cancelNotification(notificationId);
             }
+            await cancelDisplayedAlarmNotifications(notificationId);
+            await clearPendingAlarm();
 
             if (!snoozeEnabled || !reminderId) {
                 closeAlarmScreen();
                 return;
             }
 
-        const channelId = `reminder_${reminderId}`;
-        const triggerTimestamp = Date.now() + snoozeDurationMinutes * 60_000;
-        const trigger: TimestampTrigger = {
-            type: TriggerType.TIMESTAMP,
-            timestamp: triggerTimestamp,
-            alarmManager: { allowWhileIdle: true },
-        };
+            const store = useReminderStore.getState();
+            const reminder = store.getReminderById(reminderId);
+            const audioUrl = params.audioUrl || reminder?.audioUrl || "";
+            const frequency = params.frequency || reminder?.frequency || "once";
+            const time = params.time || reminder?.time || "";
+            const days = params.days || reminder?.days?.join(",") || "";
+            const intervalDays =
+                (params.intervalDays ? Number(params.intervalDays) : undefined) ?? reminder?.intervalDays;
 
-        await notifee.createTriggerNotification(
-            {
-                id: `snooze_${reminderId}_${Date.now()}`,
-                title,
-                body: description,
-                android: {
-                    channelId,
-                    importance: AndroidImportance.HIGH,
-                    category: AndroidCategory.ALARM,
-                    autoCancel: false,
-                    lightUpScreen: true,
-                    fullScreenAction: { id: "default" },
-                    pressAction: { id: "default" },
-                },
-                data: {
-                    reminderId,
+            const channelId = `reminder_${reminderId}`;
+            const triggerTimestamp = Date.now() + snoozeDurationMinutes * 60_000;
+            const trigger: TimestampTrigger = {
+                type: TriggerType.TIMESTAMP,
+                timestamp: triggerTimestamp,
+                alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
+            };
+
+            await notifee.createTriggerNotification(
+                {
+                    id: `snooze_${reminderId}_${Date.now()}`,
                     title,
-                    description,
-                    snoozeEnabled: String(snoozeEnabled),
-                    snoozeDuration: String(snoozeDurationMinutes),
-                    volume: String(targetVolume),
-                    volumeStyle: String(params.volumeStyle ?? "standard"),
-                    kind: "snooze_occurrence",
-                    originalScheduledFor: params.scheduledFor ?? "",
+                    body: description,
+                    android: {
+                        channelId,
+                        importance: AndroidImportance.HIGH,
+                        category: AndroidCategory.ALARM,
+                        visibility: AndroidVisibility.PUBLIC,
+                        autoCancel: false,
+                        lightUpScreen: true,
+                        fullScreenAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
+                        pressAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
+                    },
+                    data: {
+                        reminderId,
+                        frequency,
+                        time,
+                        days,
+                        intervalDays: String(intervalDays ?? ""),
+                        title,
+                        description,
+                        audioUrl,
+                        snoozeEnabled: String(snoozeEnabled),
+                        snoozeDuration: String(snoozeDurationMinutes),
+                        volume: String(targetVolume),
+                        volumeStyle: String(params.volumeStyle ?? "standard"),
+                        kind: "snooze_occurrence",
+                        originalScheduledFor: params.scheduledFor ?? "",
 
-                    // Preserve interval metadata so repeated snoozes can still do collision suppression
-                    intervalMs: String(params.intervalMs ?? ""),
-                    anchorAt: String(params.anchorAt ?? ""),
-                    scheduledFor: String(triggerTimestamp),
+                        // Preserve interval metadata so repeated snoozes can still do collision suppression
+                        intervalMs: String(params.intervalMs ?? ""),
+                        anchorAt: String(params.anchorAt ?? ""),
+                        scheduledFor: String(triggerTimestamp),
+                    },
                 },
-            },
-            trigger
-        );
+                trigger
+            );
 
         // Snooze collision suppression for interval reminders:
         // if the cadence would fire during snooze, cancel those and schedule the next cadence after snooze.
@@ -283,7 +316,7 @@ export default function AlarmScreen() {
                 const nextTriggerObj: TimestampTrigger = {
                     type: TriggerType.TIMESTAMP,
                     timestamp: nextTriggerSafe,
-                    alarmManager: { allowWhileIdle: true },
+                    alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
                 };
 
                 await notifee.createTriggerNotification(
@@ -295,16 +328,18 @@ export default function AlarmScreen() {
                             channelId,
                             importance: AndroidImportance.HIGH,
                             category: AndroidCategory.ALARM,
+                            visibility: AndroidVisibility.PUBLIC,
                             autoCancel: false,
                             lightUpScreen: true,
-                            fullScreenAction: { id: "default" },
-                            pressAction: { id: "default" },
+                            fullScreenAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
+                            pressAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
                         },
                         data: {
                             reminderId,
                             frequency: "interval",
                             title,
                             description,
+                            audioUrl,
                             snoozeEnabled: String(snoozeEnabled),
                             snoozeDuration: String(snoozeDurationMinutes),
                             volume: String(targetVolume),

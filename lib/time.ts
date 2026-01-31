@@ -267,17 +267,25 @@ export function getNextTriggerTime(schedule: ReminderSchedule, referenceTime?: n
     const [year, month, day] = schedule.date.split("-").map(Number);
     const target = new Date(year, month - 1, day, hours, minutes, 0, 0);
 
-    // If the date/time has passed, still return it (will show as overdue)
-    // But if it's today and time hasn't passed yet, return it
-    if (target.getTime() > now.getTime()) {
-      return target.getTime();
-    }
-    // If past, schedule for tomorrow at the same time as fallback
-    target.setDate(target.getDate() + 1);
+    // One-time reminders with a specific date do NOT roll forward.
+    // They stay fixed at their scheduled time and become overdue if passed.
     return target.getTime();
   }
 
-  if (schedule.frequency === "once" || schedule.frequency === "daily") {
+  if (schedule.frequency === "once") {
+    // One-time reminders without a specific date: if scheduledFor exists, keep it fixed
+    // Don't roll to tomorrow - one-time means one specific occurrence
+    if (schedule.scheduledFor) {
+      return schedule.scheduledFor;
+    }
+    
+    // Fallback: schedule for today at the specified time
+    const target = new Date(now);
+    target.setHours(hours, minutes, 0, 0);
+    return target.getTime();
+  }
+
+  if (schedule.frequency === "daily") {
     const target = new Date(now);
     target.setHours(hours, minutes, 0, 0);
 
