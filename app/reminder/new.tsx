@@ -37,6 +37,7 @@ export default function NewReminderScreen() {
   const processTextReminder = useAction(api.actions.processTextReminder);
   const toast = useToast();
   const storeAddReminder = useReminderStore((state) => state.addReminder);
+  const storeUpdateReminder = useReminderStore((state) => state.updateReminder);
   const loadReminders = useReminderStore((state) => state.loadReminders);
   const hasLoadedReminders = useReminderStore((state) => state.hasLoadedReminders);
   const [gateReady, setGateReady] = useState(false);
@@ -139,32 +140,42 @@ export default function NewReminderScreen() {
       router.back();
 
       InteractionManager.runAfterInteractions(() => {
-        if (!newReminder.audioUrl) return;
-        scheduleReminder({
-          id: newReminder.id,
-          title: newReminder.title,
-          description: newReminder.description,
-          time: newReminder.time,
-          frequency: newReminder.frequency,
-          days: newReminder.days,
-          audioUrl: newReminder.audioUrl,
-          snoozeEnabled: newReminder.snoozeEnabled,
-          snoozeDuration: newReminder.snoozeDuration,
-          volume: newReminder.volume,
-          volumeStyle: newReminder.volumeStyle,
-        }).catch((e) => {
-          console.log("[VR] Failed to schedule reminder:", e);
-          if (e?.name === "ExactAlarmPermissionError") {
-            Alert.alert(
-              "Enable Alarms & reminders",
-              "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
-              [
-                { text: "Open diagnostics", onPress: () => router.push("/diagnostics") },
-                { text: "OK" },
-              ]
-            );
+        (async () => {
+          const audioUrl = newReminder.audioUrl;
+          if (!audioUrl) return;
+          try {
+            const { triggerTimestamp } = await scheduleReminder({
+              id: newReminder.id,
+              title: newReminder.title,
+              description: newReminder.description,
+              time: newReminder.time,
+              frequency: newReminder.frequency,
+              days: newReminder.days,
+              audioUrl,
+              snoozeEnabled: newReminder.snoozeEnabled,
+              snoozeDuration: newReminder.snoozeDuration,
+              volume: newReminder.volume,
+              volumeStyle: newReminder.volumeStyle,
+            });
+
+            const current = useReminderStore.getState().getReminderById(newReminder.id);
+            if (current) {
+              await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
+            }
+          } catch (e: any) {
+            console.log("[VR] Failed to schedule reminder:", e);
+            if (e?.name === "ExactAlarmPermissionError") {
+              Alert.alert(
+                "Enable Alarms & reminders",
+                "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+                [
+                  { text: "Open diagnostics", onPress: () => router.push("/diagnostics") },
+                  { text: "OK" },
+                ]
+              );
+            }
           }
-        });
+        })();
       });
     } catch (error: any) {
       console.error("[VR] Create error:", error);

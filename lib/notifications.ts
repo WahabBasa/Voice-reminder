@@ -19,7 +19,7 @@ import {
   getInfoAsync,
 } from "expo-file-system/legacy";
 import { getNextIntervalOccurrence, getNextTriggerTime, ReminderSchedule } from "./time";
-import { Reminder, ReminderHistory } from "./store";
+import { Reminder, ReminderHistory, useReminderStore } from "./store";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
 
 export class ExactAlarmPermissionError extends Error {
@@ -35,6 +35,34 @@ export class ExactAlarmPermissionError extends Error {
 const PENDING_ALARM_KEY = "@pending_alarm";
 const ANDROID_ALARM_ACTIVITY = "com.wahabbasa.VoiceReminder.AlarmActivity";
 const DISPLAYED_ALARM_KEY = "@displayed_alarm_id";
+
+// Event type name mapping for readable logs
+const EVENT_TYPE_NAMES: Record<number, string> = {
+  [EventType.UNKNOWN]: "UNKNOWN",
+  [EventType.DISMISSED]: "DISMISSED",
+  [EventType.PRESS]: "PRESS",
+  [EventType.ACTION_PRESS]: "ACTION_PRESS",
+  [EventType.DELIVERED]: "DELIVERED",
+  [EventType.APP_BLOCKED]: "APP_BLOCKED",
+  [EventType.CHANNEL_BLOCKED]: "CHANNEL_BLOCKED",
+  [EventType.CHANNEL_GROUP_BLOCKED]: "CHANNEL_GROUP_BLOCKED",
+  [EventType.TRIGGER_NOTIFICATION_CREATED]: "TRIGGER_NOTIFICATION_CREATED",
+};
+
+export function eventTypeName(type: EventType): string {
+  return EVENT_TYPE_NAMES[type] || `UNKNOWN(${type})`;
+}
+
+export function buildAlarmTrace(notification?: { id?: string; data?: Record<string, any> } | null): string {
+  if (!notification) return "no_notification";
+  const data = notification.data || {};
+  const id = notification.id || "";
+  const reminderId = data.reminderId || "";
+  const scheduledFor = data.scheduledFor || "";
+  const kind = data.kind || "";
+  const reposted = data.__reposted || "0";
+  return `${id}|${reminderId}|${scheduledFor}|${kind}|repost=${reposted}`;
+}
 
 type PendingAlarmNotification = {
   id?: string;
@@ -71,6 +99,8 @@ export async function setPendingAlarm(
   };
   try {
     await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(payload));
+    const data = notification.data || {};
+    console.log(`[VR] pending_set id=${notification.id} kind=${data.kind || ""} repost=${data.__reposted || "0"}`);
   } catch (e) {
     console.log("[VR] Failed to persist pending alarm:", e);
   }
@@ -79,9 +109,16 @@ export async function setPendingAlarm(
 export async function getPendingAlarm(): Promise<PendingAlarm | null> {
   try {
     const raw = await AsyncStorage.getItem(PENDING_ALARM_KEY);
-    if (!raw) return null;
+    if (!raw) {
+      console.log(`[VR] pending_get id=null`);
+      return null;
+    }
     const parsed = JSON.parse(raw) as PendingAlarm;
-    if (!parsed?.notification?.id) return null;
+    if (!parsed?.notification?.id) {
+      console.log(`[VR] pending_get id=null (invalid)`);
+      return null;
+    }
+    console.log(`[VR] pending_get id=${parsed.notification.id} handledAt=${parsed.handledAt || "none"}`);
     return parsed;
   } catch (e) {
     console.log("[VR] Failed to read pending alarm:", e);
@@ -99,6 +136,7 @@ export async function markPendingAlarmHandled(notificationId?: string): Promise<
     if (pending.handledAt) return;
     pending.handledAt = Date.now();
     await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(pending));
+    console.log(`[VR] pending_handled id=${notificationId}`);
   } catch (e) {
     console.log("[VR] Failed to mark pending alarm handled:", e);
   }
@@ -107,6 +145,7 @@ export async function markPendingAlarmHandled(notificationId?: string): Promise<
 export async function clearPendingAlarm(): Promise<void> {
   try {
     await AsyncStorage.removeItem(PENDING_ALARM_KEY);
+    console.log(`[VR] pending_clear`);
   } catch (e) {
     console.log("[VR] Failed to clear pending alarm:", e);
   }
@@ -483,8 +522,8 @@ export async function deleteReminderWithAudio(reminderId: string): Promise<void>
 
 export async function handleNotificationEvent(event: Event): Promise<void> {
   const { type, detail } = event;
-  console.log(`[VR] handleNotificationEvent called, type=${type}`);
-  console.log(`[VR] Notification data:`, JSON.stringify(detail.notification?.data));
+  const trace = buildAlarmTrace(detail.notification);
+  console.log(`[VR] handleEvent type=${eventTypeName(type)} trace=${trace}`);
 
   const notificationData = detail.notification?.data;
   const kind = typeof notificationData?.kind === "string" ? (notificationData.kind as string) : "";
@@ -500,6 +539,8 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   const isAlarmDisplayNotification =
     typeof notificationId === "string" && notificationId.startsWith("alarm_display_");
   const isRepostNotification = isAlarmDisplayNotification || isRepostedFlag;
+
+  console.log(`[VR] handleEvent_flags alarm=${shouldHandleAsAlarm} repostFlag=${isRepostedFlag} alarmDisplayId=${isAlarmDisplayNotification} isRepost=${isRepostNotification}`);
 
   if (type === EventType.DELIVERED && shouldHandleAsAlarm && !isRepostNotification) {
     await setPendingAlarm(detail.notification as PendingAlarmNotification);
@@ -638,7 +679,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   }
 
   if (type === EventType.DELIVERED) {
-    console.log("[VR] DELIVERED event - starting alarm audio");
+    console.log(`[VR] DELIVERED processing trace=${trace}`);
     const data = notificationData;
 
     const isTriggerNotification =
@@ -648,6 +689,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     // Ignore reposted "alarm_display_*" notifications for alarm lifecycle processing.
     // They exist only to deliver full-screen UI reliably and can otherwise cause loops/duplicate reschedules.
     if (shouldHandleAsAlarm && isRepostNotification) {
+      console.log(`[VR] delivered_ignore reason=reposted id=${notificationId} repostFlag=${isRepostedFlag} alarmDisplayId=${isAlarmDisplayNotification}`);
       return;
     }
 
@@ -683,6 +725,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
             ? String((data as any).scheduledFor)
             : String(Date.now());
         const repostId = `alarm_display_${reminderId}_${scheduledForKey}`;
+        console.log(`[VR] repost_create from=${notificationId} to=${repostId} scheduledFor=${scheduledForKey}`);
 
         await notifee.displayNotification({
           id: repostId,
@@ -714,7 +757,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
           },
         });
         await setDisplayedAlarm(repostId);
-        console.log("[VR] Reposted alarm notification for full-screen delivery");
+        console.log(`[VR] repost_done from=${notificationId} to=${repostId}`);
       } catch (e) {
         console.log("[VR] Failed to repost alarm notification:", e);
       }
@@ -868,6 +911,13 @@ export async function syncRemindersOnStartup(
     const scheduledIds = await notifee.getTriggerNotificationIds();
     const now = Date.now();
 
+    const pending = await getPendingAlarm();
+    const pendingReminderId =
+      typeof pending?.notification?.data?.reminderId === "string"
+        ? (pending!.notification!.data!.reminderId as string)
+        : "";
+    const pendingScheduledFor = Number(pending?.notification?.data?.scheduledFor);
+
     // Get today's completions for "once" reminder skip logic
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -894,8 +944,29 @@ export async function syncRemindersOnStartup(
           skipped++;
           continue;
         }
-        // If scheduledFor exists and is in the past, skip it
-        if (reminder.scheduledFor && reminder.scheduledFor < now) {
+
+        // If there's a pending alarm for this reminder, don't create a duplicate trigger.
+        if (pendingReminderId && pendingReminderId === reminder.id && pending && !pending.handledAt) {
+          if (!Number.isFinite(pendingScheduledFor) || pendingScheduledFor <= now) {
+            skipped++;
+            continue;
+          }
+        }
+
+        // If this one-time reminder is already past due, don't resurrect it as "now + 5s".
+        // It can be shown as overdue in UI, but it should not keep scheduling.
+        const due = getNextTriggerTime(
+          {
+            time: reminder.time,
+            date: reminder.date,
+            frequency: reminder.frequency,
+            days: reminder.days,
+            intervalDays: reminder.intervalDays,
+            scheduledFor: reminder.scheduledFor,
+          },
+          now
+        );
+        if (due <= now) {
           skipped++;
           continue;
         }
@@ -930,7 +1001,17 @@ export async function syncRemindersOnStartup(
           scheduledFor: reminder.scheduledFor,
         };
 
-        await scheduleReminder(notificationInput);
+        const { triggerTimestamp } = await scheduleReminder(notificationInput);
+        // Persist the scheduled occurrence timestamp so one-time reminders can't loop on restart.
+        try {
+          const store = useReminderStore.getState();
+          const current = store.getReminderById(reminder.id);
+          if (current && current.scheduledFor !== triggerTimestamp) {
+            await store.updateReminder({ ...current, scheduledFor: triggerTimestamp });
+          }
+        } catch {
+          // ignore
+        }
         synced++;
       } catch (e: any) {
         if (e?.name === "ExactAlarmPermissionError") {

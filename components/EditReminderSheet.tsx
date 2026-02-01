@@ -315,12 +315,17 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     .toString()
                     .padStart(2, "0")}`;
 
+                const dateStr = selectedDate
+                    ? `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`
+                    : undefined;
+
                 await cancelReminder(reminder.id);
-                await scheduleReminder({
+                const { triggerTimestamp } = await scheduleReminder({
                     id: reminder.id,
                     title: reminder.title,
                     description: soundText.trim(),
                     time: timeStr,
+                    date: frequency === "once" ? dateStr : undefined,
                     frequency,
                     days: frequency === "custom" ? days : [],
                     audioUrl: result.audioUrl,
@@ -332,6 +337,11 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     intervalMs: frequency === "interval" ? intervalMs : undefined,
                     anchorAt: frequency === "interval" ? anchorAt : undefined,
                     intervalDays: frequency === "daily" ? intervalDays : undefined,
+                });
+
+                await storeUpdateReminder({
+                    ...updatedReminder,
+                    scheduledFor: triggerTimestamp,
                 });
 
                 toast.show({ title: "Sound regenerated", message: "New voice reminder ready", type: "success" });
@@ -468,7 +478,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     if (!audioUrl) return;
 
                     try {
-                        await scheduleReminder({
+                        const { triggerTimestamp } = await scheduleReminder({
                             id: reminderId,
                             title: updatedReminder.title,
                             description,
@@ -486,6 +496,11 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             anchorAt: frequency === "interval" ? anchorAt : undefined,
                             intervalDays: frequency === "daily" ? intervalDays : undefined,
                         });
+
+                        const current = useReminderStore.getState().getReminderById(reminderId);
+                        if (current) {
+                            await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
+                        }
                     } catch (e) {
                         console.log("[VR] Failed to schedule reminder:", e);
                         if ((e as any)?.name === "ExactAlarmPermissionError") {

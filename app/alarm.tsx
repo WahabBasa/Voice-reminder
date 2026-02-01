@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
+    BackHandler,
     StyleSheet,
     Text,
     TouchableOpacity,
     View,
     Vibration,
     Dimensions,
+    Platform,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import notifee, {
@@ -69,7 +71,7 @@ export default function AlarmScreen() {
     const targetVolume = Math.max(0, Math.min(1, Number(params.volume ?? "1") || 1));
 
     useEffect(() => {
-        console.log("[VR] AlarmScreen: useEffect mount, starting audio...");
+        console.log(`[VR] alarm_screen_mount router.canGoBack=${router.canGoBack()} notificationId=${notificationId} reminderId=${reminderId}`);
         isMountedRef.current = true;
         isExplicitDismissRef.current = false;
 
@@ -130,9 +132,20 @@ export default function AlarmScreen() {
     };
 
     const closeAlarmScreen = () => {
-        if (router.canGoBack()) {
+        const canGoBack = router.canGoBack();
+        console.log(`[VR] close_alarm canGoBack=${canGoBack} platform=${Platform.OS}`);
+        if (canGoBack) {
+            console.log(`[VR] close_alarm action=router.back`);
             router.back();
         } else {
+            // If this alarm was launched into a dedicated AlarmActivity, don't
+            // navigate to the normal app UI inside that activity.
+            if (Platform.OS === "android") {
+                console.log(`[VR] close_alarm action=exitApp`);
+                BackHandler.exitApp();
+                return;
+            }
+            console.log(`[VR] close_alarm action=replace_home`);
             router.replace("/");
         }
     };
@@ -285,77 +298,77 @@ export default function AlarmScreen() {
                 trigger
             );
 
-        // Snooze collision suppression for interval reminders:
-        // if the cadence would fire during snooze, cancel those and schedule the next cadence after snooze.
-        const intervalMs = params.intervalMs ? Number(params.intervalMs) : undefined;
-        const anchorAt = params.anchorAt ? Number(params.anchorAt) : undefined;
-        const volumeStyle = params.volumeStyle ?? "standard";
-        if (intervalMs && anchorAt) {
-            try {
-                const scheduledIds = await notifee.getTriggerNotificationIds();
-                const reminderPrefix = `reminder_${reminderId}_`;
-                const toCancel = scheduledIds.filter((id) => id.startsWith(reminderPrefix));
+            // Snooze collision suppression for interval reminders:
+            // if the cadence would fire during snooze, cancel those and schedule the next cadence after snooze.
+            const intervalMs = params.intervalMs ? Number(params.intervalMs) : undefined;
+            const anchorAt = params.anchorAt ? Number(params.anchorAt) : undefined;
+            const volumeStyle = params.volumeStyle ?? "standard";
+            if (intervalMs && anchorAt) {
+                try {
+                    const scheduledIds = await notifee.getTriggerNotificationIds();
+                    const reminderPrefix = `reminder_${reminderId}_`;
+                    const toCancel = scheduledIds.filter((id) => id.startsWith(reminderPrefix));
 
-                for (const id of toCancel) {
-                    const parts = id.split("_");
-                    const maybeTs = parts[parts.length - 1];
-                    const ts = Number(maybeTs);
-                    if (Number.isFinite(ts) && ts <= triggerTimestamp) {
-                        await notifee.cancelNotification(id);
+                    for (const id of toCancel) {
+                        const parts = id.split("_");
+                        const maybeTs = parts[parts.length - 1];
+                        const ts = Number(maybeTs);
+                        if (Number.isFinite(ts) && ts <= triggerTimestamp) {
+                            await notifee.cancelNotification(id);
+                        }
                     }
-                }
 
-                const { scheduledFor: nextTrigger } = getNextIntervalOccurrence(
-                    anchorAt,
-                    intervalMs,
-                    triggerTimestamp
-                );
+                    const { scheduledFor: nextTrigger } = getNextIntervalOccurrence(
+                        anchorAt,
+                        intervalMs,
+                        triggerTimestamp
+                    );
 
-                const nextTriggerSafe = nextTrigger <= Date.now() ? Date.now() + 5000 : nextTrigger;
-                const nextId = `reminder_${reminderId}_${nextTriggerSafe}`;
-                const nextTriggerObj: TimestampTrigger = {
-                    type: TriggerType.TIMESTAMP,
-                    timestamp: nextTriggerSafe,
-                    alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
-                };
+                    const nextTriggerSafe = nextTrigger <= Date.now() ? Date.now() + 5000 : nextTrigger;
+                    const nextId = `reminder_${reminderId}_${nextTriggerSafe}`;
+                    const nextTriggerObj: TimestampTrigger = {
+                        type: TriggerType.TIMESTAMP,
+                        timestamp: nextTriggerSafe,
+                        alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
+                    };
 
-                await notifee.createTriggerNotification(
-                    {
-                        id: nextId,
-                        title,
-                        body: description,
-                        android: {
-                            channelId,
-                            importance: AndroidImportance.HIGH,
-                            category: AndroidCategory.ALARM,
-                            visibility: AndroidVisibility.PUBLIC,
-                            autoCancel: false,
-                            lightUpScreen: true,
-                            fullScreenAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
-                            pressAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
-                        },
-                        data: {
-                            reminderId,
-                            frequency: "interval",
+                    await notifee.createTriggerNotification(
+                        {
+                            id: nextId,
                             title,
-                            description,
-                            audioUrl,
-                            snoozeEnabled: String(snoozeEnabled),
-                            snoozeDuration: String(snoozeDurationMinutes),
-                            volume: String(targetVolume),
-                            volumeStyle: String(volumeStyle),
-                            intervalMs: String(intervalMs),
-                            anchorAt: String(anchorAt),
-                            scheduledFor: String(nextTriggerSafe),
-                            kind: "reminder_occurrence",
+                            body: description,
+                            android: {
+                                channelId,
+                                importance: AndroidImportance.HIGH,
+                                category: AndroidCategory.ALARM,
+                                visibility: AndroidVisibility.PUBLIC,
+                                autoCancel: false,
+                                lightUpScreen: true,
+                                fullScreenAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
+                                pressAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
+                            },
+                            data: {
+                                reminderId,
+                                frequency: "interval",
+                                title,
+                                description,
+                                audioUrl,
+                                snoozeEnabled: String(snoozeEnabled),
+                                snoozeDuration: String(snoozeDurationMinutes),
+                                volume: String(targetVolume),
+                                volumeStyle: String(volumeStyle),
+                                intervalMs: String(intervalMs),
+                                anchorAt: String(anchorAt),
+                                scheduledFor: String(nextTriggerSafe),
+                                kind: "reminder_occurrence",
+                            },
                         },
-                    },
-                    nextTriggerObj
-                );
-            } catch (e) {
-                console.log("[VR] Failed interval snooze collision suppression:", e);
+                        nextTriggerObj
+                    );
+                } catch (e) {
+                    console.log("[VR] Failed interval snooze collision suppression:", e);
+                }
             }
-        }
 
             // Close the alarm screen
             closeAlarmScreen();

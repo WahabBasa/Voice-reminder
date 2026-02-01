@@ -101,6 +101,7 @@ export default function HomeScreen() {
   const history = useReminderStore((state) => state.history);
   const isLoading = useReminderStore((state) => state.isLoading);
   const storeAddReminder = useReminderStore((state) => state.addReminder);
+  const storeUpdateReminder = useReminderStore((state) => state.updateReminder);
   const storeRecordCompletion = useReminderStore((state) => state.recordCompletion);
   const loadAllData = useReminderStore((state) => state.loadAll);
   const loadReminders = useReminderStore((state) => state.loadReminders);
@@ -399,38 +400,53 @@ export default function HomeScreen() {
       InteractionManager.runAfterInteractions(() => {
         if (!newReminder.audioUrl) return;
         perfLog(traceId, "device.notifications", "scheduleReminder_start");
-        scheduleReminder({
-          id: newReminder.id,
-          title: newReminder.title,
-          description: newReminder.description,
-          time: newReminder.time,
-          date: newReminder.date,
-          frequency: newReminder.frequency,
-          days: newReminder.days,
-          audioUrl: newReminder.audioUrl,
-          snoozeEnabled: newReminder.snoozeEnabled,
-          snoozeDuration: newReminder.snoozeDuration,
-          volume: newReminder.volume,
-          volumeStyle: newReminder.volumeStyle,
+        (async () => {
+          try {
+            const audioUrl = newReminder.audioUrl;
+            if (!audioUrl) return;
+            const { triggerTimestamp } = await scheduleReminder(
+              {
+                id: newReminder.id,
+                title: newReminder.title,
+                description: newReminder.description,
+                time: newReminder.time,
+                date: newReminder.date,
+                frequency: newReminder.frequency,
+                days: newReminder.days,
+                audioUrl,
+                snoozeEnabled: newReminder.snoozeEnabled,
+                snoozeDuration: newReminder.snoozeDuration,
+                volume: newReminder.volume,
+                volumeStyle: newReminder.volumeStyle,
 
-          intervalMs: newReminder.intervalMs,
-          anchorAt: newReminder.anchorAt,
-        }, { traceId }).catch((e) => {
-          console.log("[VR] Failed to schedule reminder:", e);
-          if (e?.name === "ExactAlarmPermissionError") {
-            Alert.alert(
-              "Enable Alarms & reminders",
-              "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
-              [
-                { text: "Open diagnostics", onPress: () => router.push("/diagnostics") },
-                { text: "OK" },
-              ]
+                intervalMs: newReminder.intervalMs,
+                anchorAt: newReminder.anchorAt,
+                intervalDays: newReminder.intervalDays,
+              },
+              { traceId }
             );
+
+            const current = useReminderStore.getState().getReminderById(newReminder.id);
+            if (current) {
+              await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
+            }
+          } catch (e: any) {
+            console.log("[VR] Failed to schedule reminder:", e);
+            if (e?.name === "ExactAlarmPermissionError") {
+              Alert.alert(
+                "Enable Alarms & reminders",
+                "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+                [
+                  { text: "Open diagnostics", onPress: () => router.push("/diagnostics") },
+                  { text: "OK" },
+                ]
+              );
+            }
+            perfLog(traceId, "device.notifications", "scheduleReminder_error", {
+              error: String(e),
+            });
           }
-          perfLog(traceId, "device.notifications", "scheduleReminder_error", {
-            error: String(e),
-          });
-        });
+        })();
       });
     } catch (error: any) {
       console.error("[VR] Processing error:", error);
