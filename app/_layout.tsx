@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { AppState, InteractionManager } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { AppState, InteractionManager, Platform } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { ConvexProvider, ConvexReactClient, useMutation } from "convex/react";
 import { StatusBar } from "expo-status-bar";
@@ -12,15 +12,17 @@ import notifee, { EventType } from "@notifee/react-native";
 import { useReminderStore } from "../lib/store";
 import {
   getPendingAlarm,
-  markPendingAlarmHandled,
   setPendingAlarm,
   syncRemindersOnStartup,
   buildAlarmTrace,
   eventTypeName,
+  markPendingAlarmResolved,
+  clearPendingAlarm,
 } from "../lib/notifications";
 import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
+import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
 
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string);
 
@@ -97,6 +99,22 @@ export default function RootLayout() {
   const initialNotificationHandledRef = useRef<string | null>(null);
   const lastAlarmRoutedIdRef = useRef<string | null>(null);
   const pendingRouteInFlightRef = useRef(false);
+  const [activeAlarm, setActiveAlarm] = useState<AlarmOverlayProps | null>(null);
+  const lastBecameActiveRef = useRef<{ at: number; from: string }>({
+    at: 0,
+    from: AppState.currentState,
+  });
+
+  useEffect(() => {
+    let prev = AppState.currentState;
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "active") {
+        lastBecameActiveRef.current = { at: Date.now(), from: prev };
+      }
+      prev = next;
+    });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     // Defer RevenueCat initialization to not block app startup
@@ -164,8 +182,6 @@ export default function RootLayout() {
           kind: String(data?.kind ?? ""),
         },
       });
-
-      await markPendingAlarmHandled(notificationId);
     }
 
     async function maybeRouteToPendingAlarm(reason: string): Promise<void> {
@@ -177,9 +193,9 @@ export default function RootLayout() {
       pendingRouteInFlightRef.current = true;
       try {
         const pending = await getPendingAlarm();
-        console.log(`[VR] maybeRoute_pending exists=${!!pending} handledAt=${pending?.handledAt || "none"} id=${pending?.notification?.id || "none"}`);
-        if (!pending || pending.handledAt) {
-          console.log(`[VR] maybeRoute_skip reason=${!pending ? "no_pending" : "already_handled"}`);
+        console.log(`[VR] maybeRoute_pending exists=${!!pending} resolvedAt=${pending?.resolvedAt || "none"} id=${pending?.notification?.id || "none"}`);
+        if (!pending || pending.resolvedAt) {
+          console.log(`[VR] maybeRoute_skip reason=${!pending ? "no_pending" : "already_resolved"}`);
           return;
         }
         if (!pending.notification?.id) {
@@ -231,9 +247,9 @@ export default function RootLayout() {
       pendingRouteInFlightRef.current = true;
       try {
         const pending = await getPendingAlarm();
-        console.log(`[VR] maybeRoute2_pending exists=${!!pending} handledAt=${pending?.handledAt || "none"} id=${pending?.notification?.id || "none"}`);
-        if (!pending || pending.handledAt) {
-          console.log(`[VR] maybeRoute2_skip reason=${!pending ? "no_pending" : "already_handled"}`);
+        console.log(`[VR] maybeRoute2_pending exists=${!!pending} resolvedAt=${pending?.resolvedAt || "none"} id=${pending?.notification?.id || "none"}`);
+        if (!pending || pending.resolvedAt) {
+          console.log(`[VR] maybeRoute2_skip reason=${!pending ? "no_pending" : "already_resolved"}`);
           return;
         }
         if (!pending.notification?.id) {
@@ -289,8 +305,6 @@ export default function RootLayout() {
             kind: String(data?.kind ?? ""),
           },
         });
-
-        await markPendingAlarmHandled(notificationId);
       } catch (e) {
         console.log("[VR] Failed to route pending alarm:", e);
       } finally {
@@ -375,7 +389,6 @@ export default function RootLayout() {
             kind: String(data?.kind ?? ""),
           },
         });
-        await markPendingAlarmHandled(notificationId);
         return;
       }
 
@@ -395,6 +408,108 @@ export default function RootLayout() {
     };
   }, [router]);
 
+  useEffect(() => {
+    let cancelled = false;
+    let checkInterval: NodeJS.Timeout | null = null;
+
+    async function checkAndShowAlarm() {
+      if (cancelled) return;
+      const pending = await getPendingAlarm();
+      if (cancelled) return;
+
+      if (!pending || pending.resolvedAt) {
+        if (activeAlarm && !activeAlarm.shouldExitOnResolve) {
+          console.log(`[VR] overlay_hide reason=${!pending ? "cleared" : "resolved"}`);
+          setActiveAlarm(null);
+        }
+        return;
+      }
+
+      const notificationId = pending.notification?.id;
+      if (!notificationId) return;
+
+      if (activeAlarm?.notificationId === notificationId) {
+        return;
+      }
+
+      const data: any = pending.notification?.data || {};
+      console.log(`[VR] overlay_show id=${notificationId}`);
+
+      // Heuristic: if the app just transitioned into the foreground from a non-active state
+      // while an alarm is ringing, treat this as a lockscreen/background alarm UI and exit
+      // the activity on resolve (so the main app UI doesn't show).
+      const lastActive = lastBecameActiveRef.current;
+      const justBecameActive = Date.now() - lastActive.at < 8000;
+      const cameFromBackground = lastActive.from !== "active";
+      const isRinging = typeof pending.ringingAt === "number" && Date.now() - pending.ringingAt < 60_000;
+      const shouldExitOnResolve =
+        Platform.OS === "android" && Boolean(justBecameActive && cameFromBackground && isRinging);
+
+      const alarmProps: AlarmOverlayProps = {
+        notificationId,
+        reminderId: String(data?.reminderId ?? ""),
+        title: String(data?.title ?? pending.notification?.title ?? ""),
+        description: String(data?.description ?? pending.notification?.body ?? ""),
+        audioUrl: String(data?.audioUrl ?? ""),
+        frequency: String(data?.frequency ?? ""),
+        time: String(data?.time ?? ""),
+        days: String(data?.days ?? ""),
+        intervalDays: String(data?.intervalDays ?? ""),
+        snoozeEnabled: String(data?.snoozeEnabled ?? "true"),
+        snoozeDuration: String(data?.snoozeDuration ?? "5"),
+        volume: String(data?.volume ?? "1"),
+        volumeStyle: String(data?.volumeStyle ?? "standard"),
+        scheduledFor: String(data?.scheduledFor ?? ""),
+        intervalMs: String(data?.intervalMs ?? ""),
+        anchorAt: String(data?.anchorAt ?? ""),
+        kind: String(data?.kind ?? ""),
+        onDismiss: async () => {
+          await markPendingAlarmResolved(notificationId, "dismiss");
+          await clearPendingAlarm();
+        },
+        onSnooze: async () => {
+          await markPendingAlarmResolved(notificationId, "snooze");
+          await clearPendingAlarm();
+        },
+        shouldExitOnResolve,
+      };
+
+      setActiveAlarm(alarmProps);
+    }
+
+    // Run immediately for cold start / lockscreen responsiveness
+    checkAndShowAlarm();
+
+    checkInterval = setInterval(() => {
+      if (!cancelled) {
+        checkAndShowAlarm();
+      }
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      if (checkInterval) clearInterval(checkInterval);
+    };
+  }, [activeAlarm]);
+
+  const handleOverlayDismiss = async () => {
+    if (!activeAlarm) return;
+    await markPendingAlarmResolved(activeAlarm.notificationId, "dismiss");
+    await clearPendingAlarm();
+    if (!activeAlarm.shouldExitOnResolve) {
+      setActiveAlarm(null);
+    }
+  };
+
+  const handleOverlaySnooze = async () => {
+    if (!activeAlarm) return;
+    await markPendingAlarmResolved(activeAlarm.notificationId, "snooze");
+    await clearPendingAlarm();
+    if (!activeAlarm.shouldExitOnResolve) {
+      setActiveAlarm(null);
+    }
+  };
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <PortalProvider>
@@ -402,6 +517,13 @@ export default function RootLayout() {
           <ConvexProvider client={convex}>
             <ToastProvider>
               <StartupTasks />
+              {activeAlarm && (
+                <AlarmOverlay
+                  {...activeAlarm}
+                  onDismiss={handleOverlayDismiss}
+                  onSnooze={handleOverlaySnooze}
+                />
+              )}
               <StatusBar style="light" />
               <Stack
                 screenOptions={{

@@ -74,7 +74,10 @@ type PendingAlarmNotification = {
 export type PendingAlarm = {
   notification: PendingAlarmNotification;
   storedAt: number;
-  handledAt?: number;
+  ringingAt?: number;
+  uiShownAt?: number;
+  resolvedAt?: number;
+  resolvedAction?: "dismiss" | "snooze";
 };
 
 function toPendingNotification(notification?: PendingAlarmNotification | null): PendingAlarmNotification {
@@ -118,7 +121,23 @@ export async function getPendingAlarm(): Promise<PendingAlarm | null> {
       console.log(`[VR] pending_get id=null (invalid)`);
       return null;
     }
-    console.log(`[VR] pending_get id=${parsed.notification.id} handledAt=${parsed.handledAt || "none"}`);
+
+    let needsResave = false;
+    if ((parsed as any).handledAt && !parsed.resolvedAt) {
+      console.log(`[VR] pending_get legacy_handledAt found, migrating id=${parsed.notification.id}`);
+      delete (parsed as any).handledAt;
+      needsResave = true;
+    }
+
+    if (needsResave) {
+      try {
+        await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(parsed));
+      } catch {
+        // ignore resave errors
+      }
+    }
+
+    console.log(`[VR] pending_get id=${parsed.notification.id} ringingAt=${parsed.ringingAt || "none"} uiShownAt=${parsed.uiShownAt || "none"} resolvedAt=${parsed.resolvedAt || "none"}`);
     return parsed;
   } catch (e) {
     console.log("[VR] Failed to read pending alarm:", e);
@@ -126,19 +145,66 @@ export async function getPendingAlarm(): Promise<PendingAlarm | null> {
   }
 }
 
-export async function markPendingAlarmHandled(notificationId?: string): Promise<void> {
+async function patchPendingAlarm(notificationId: string, updates: Partial<PendingAlarm>): Promise<void> {
   if (!notificationId) return;
   try {
     const raw = await AsyncStorage.getItem(PENDING_ALARM_KEY);
     if (!raw) return;
     const pending = JSON.parse(raw) as PendingAlarm;
     if (pending?.notification?.id !== notificationId) return;
-    if (pending.handledAt) return;
-    pending.handledAt = Date.now();
+    Object.assign(pending, updates);
     await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(pending));
-    console.log(`[VR] pending_handled id=${notificationId}`);
   } catch (e) {
-    console.log("[VR] Failed to mark pending alarm handled:", e);
+    console.log("[VR] Failed to patch pending alarm:", e);
+  }
+}
+
+export async function markPendingAlarmRinging(notificationId: string): Promise<void> {
+  if (!notificationId) return;
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_ALARM_KEY);
+    if (!raw) return;
+    const pending = JSON.parse(raw) as PendingAlarm;
+    if (pending?.notification?.id !== notificationId) return;
+    if (pending.ringingAt) return;
+    pending.ringingAt = Date.now();
+    await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(pending));
+    console.log(`[VR] alarm_state ringing_set id=${notificationId}`);
+  } catch (e) {
+    console.log("[VR] Failed to mark alarm ringing:", e);
+  }
+}
+
+export async function markPendingAlarmUiShown(notificationId: string): Promise<void> {
+  if (!notificationId) return;
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_ALARM_KEY);
+    if (!raw) return;
+    const pending = JSON.parse(raw) as PendingAlarm;
+    if (pending?.notification?.id !== notificationId) return;
+    if (pending.uiShownAt) return;
+    pending.uiShownAt = Date.now();
+    await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(pending));
+    console.log(`[VR] alarm_state ui_shown_set id=${notificationId}`);
+  } catch (e) {
+    console.log("[VR] Failed to mark alarm UI shown:", e);
+  }
+}
+
+export async function markPendingAlarmResolved(notificationId: string, action: "dismiss" | "snooze"): Promise<void> {
+  if (!notificationId) return;
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_ALARM_KEY);
+    if (!raw) return;
+    const pending = JSON.parse(raw) as PendingAlarm;
+    if (pending?.notification?.id !== notificationId) return;
+    if (pending.resolvedAt) return;
+    pending.resolvedAt = Date.now();
+    pending.resolvedAction = action;
+    await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(pending));
+    console.log(`[VR] alarm_state resolved_set id=${notificationId} action=${action}`);
+  } catch (e) {
+    console.log("[VR] Failed to mark alarm resolved:", e);
   }
 }
 
@@ -572,6 +638,8 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     });
     if (!ok) {
       console.log("[VR] Alarm audio playback failed to start");
+    } else {
+      await markPendingAlarmRinging(notificationId);
     }
   }
 
@@ -599,6 +667,11 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     console.log(`[VR] Action pressed: ${actionId}`);
 
     if (shouldHandleAsAlarm) {
+      if (actionId === "dismiss_action") {
+        await markPendingAlarmResolved(notificationId, "dismiss");
+      } else if (actionId === "snooze_action") {
+        await markPendingAlarmResolved(notificationId, "snooze");
+      }
       await clearPendingAlarm();
     }
     await stopAlarmAudioIfPlaying();
@@ -946,7 +1019,7 @@ export async function syncRemindersOnStartup(
         }
 
         // If there's a pending alarm for this reminder, don't create a duplicate trigger.
-        if (pendingReminderId && pendingReminderId === reminder.id && pending && !pending.handledAt) {
+        if (pendingReminderId && pendingReminderId === reminder.id && pending && !pending.resolvedAt) {
           if (!Number.isFinite(pendingScheduledFor) || pendingScheduledFor <= now) {
             skipped++;
             continue;
