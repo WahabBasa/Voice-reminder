@@ -13,6 +13,7 @@ import {
 import notifee, {
   AndroidCategory,
   AndroidImportance,
+  AndroidLaunchActivityFlag,
   AndroidVisibility,
   AlarmType,
   TriggerType,
@@ -152,30 +153,9 @@ export function AlarmOverlay({
   };
 
   const maybeExitApp = () => {
-    if (shouldExitOnResolve && Platform.OS === "android") {
-      const ActivityControl: any = (NativeModules as any).ActivityControl;
-      if (ActivityControl?.finishIfAlarmActivity) {
-        console.log(`[VR] close_alarm_overlay action=finishIfAlarmActivity`);
-        ActivityControl.finishIfAlarmActivity()
-          .then((didFinish: boolean) => {
-            console.log(`[VR] close_alarm_overlay finished=${didFinish}`);
-            if (!didFinish) {
-              console.log(`[VR] close_alarm_overlay fallback=exitApp`);
-              BackHandler.exitApp();
-            }
-          })
-          .catch(() => {
-            console.log(`[VR] close_alarm_overlay fallback=exitApp (finish failed)`);
-            BackHandler.exitApp();
-          });
-        return;
-      }
-
-      console.log(`[VR] close_alarm_overlay action=exitApp (no native module)`);
-      BackHandler.exitApp();
-    } else {
-      console.log(`[VR] close_alarm_overlay action=none (normal app use)`);
-    }
+    // Exit logic is now handled by RootLayout via finishIfAlarmActivity()
+    // This component only calls its callbacks - the parent decides whether to exit
+    console.log(`[VR] close_alarm_overlay callback_invoked`);
   };
 
   const startVibration = () => {
@@ -290,8 +270,16 @@ export function AlarmOverlay({
             visibility: AndroidVisibility.PUBLIC,
             autoCancel: false,
             lightUpScreen: true,
-            fullScreenAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
-            pressAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
+            fullScreenAction: {
+              id: "default",
+              launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+            },
+            pressAction: {
+              id: "default",
+              launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+            },
           },
           data: {
             reminderId,
@@ -359,8 +347,16 @@ export function AlarmOverlay({
                 visibility: AndroidVisibility.PUBLIC,
                 autoCancel: false,
                 lightUpScreen: true,
-                fullScreenAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
-                pressAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
+                fullScreenAction: {
+                  id: "default",
+                  launchActivity: ANDROID_ALARM_ACTIVITY,
+                  launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+                },
+                pressAction: {
+                  id: "default",
+                  launchActivity: ANDROID_ALARM_ACTIVITY,
+                  launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+                },
               },
               data: {
                 reminderId,

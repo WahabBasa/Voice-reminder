@@ -2,6 +2,7 @@ import notifee, {
   AndroidImportance,
   AndroidCategory,
   AndroidVisibility,
+  AndroidLaunchActivityFlag,
   TriggerType,
   TimestampTrigger,
   EventType,
@@ -519,12 +520,14 @@ export async function scheduleReminder(
         pressAction: {
           id: "default",
           launchActivity: ANDROID_ALARM_ACTIVITY,
+          launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
         },
         // Show the alarm UI immediately when the trigger fires (Android).
         // Requires `android.permission.USE_FULL_SCREEN_INTENT` in AndroidManifest.xml.
         fullScreenAction: {
           id: "default",
           launchActivity: ANDROID_ALARM_ACTIVITY,
+          launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
         },
       },
       data: {
@@ -729,8 +732,16 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
               { title: "Dismiss", pressAction: { id: "dismiss_action" } },
               { title: "Snooze 5m", pressAction: { id: "snooze_action" } },
             ],
-            fullScreenAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
-            pressAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
+            fullScreenAction: {
+              id: "default",
+              launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+            },
+            pressAction: {
+              id: "default",
+              launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+            },
           },
           data: {
             ...notificationData,
@@ -818,10 +829,12 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
             pressAction: {
               id: "default",
               launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
             },
             fullScreenAction: {
               id: "default",
               launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
             },
           },
           data: {
@@ -949,8 +962,16 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
           android: {
             ...(detail.notification?.android ?? {}),
             visibility: AndroidVisibility.PUBLIC,
-            fullScreenAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
-            pressAction: { id: "default", launchActivity: ANDROID_ALARM_ACTIVITY },
+            fullScreenAction: {
+              id: "default",
+              launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+            },
+            pressAction: {
+              id: "default",
+              launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+            },
           },
           id: newNotificationId,
           data: {

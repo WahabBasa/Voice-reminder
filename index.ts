@@ -1,6 +1,11 @@
 import "react-native-gesture-handler";
+import { AppRegistry } from "react-native";
 import notifee, { EventType } from "@notifee/react-native";
 import { handleNotificationEvent, buildAlarmTrace, eventTypeName } from "./lib/notifications";
+import AlarmRoot from "./alarm/AlarmRoot";
+
+// Separate root for AlarmActivity (lockscreen UI) to avoid mounting expo-router in the alarm task.
+AppRegistry.registerComponent("alarm", () => AlarmRoot);
 
 // Register background handler before app loads
 notifee.onBackgroundEvent(async (event) => {

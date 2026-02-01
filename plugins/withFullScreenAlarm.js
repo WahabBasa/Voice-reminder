@@ -72,6 +72,7 @@ function withFullScreenAlarm(config) {
                 $: {
                     "android:name": ".AlarmActivity",
                     "android:launchMode": "singleTask",
+                    "android:taskAffinity": `${packageName}.alarm`,
                     "android:excludeFromRecents": "true",
                     "android:showWhenLocked": "true",
                     "android:turnScreenOn": "true",
@@ -134,7 +135,7 @@ class AlarmActivity : ReactActivity() {
     super.onCreate(null)
   }
 
-  override fun getMainComponentName(): String = "main"
+  override fun getMainComponentName(): String = "alarm"
 
   override fun createReactActivityDelegate(): ReactActivityDelegate {
     return ReactActivityDelegateWrapper(

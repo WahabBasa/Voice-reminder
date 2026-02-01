@@ -23,6 +23,13 @@ import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
 import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
+import {
+  finishCurrentTask,
+  finishIfAlarmActivity,
+  getCurrentActivityName,
+  isAlarmActivity,
+  isKeyguardLocked,
+} from "../lib/activityControl";
 
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string);
 
@@ -100,20 +107,18 @@ export default function RootLayout() {
   const lastAlarmRoutedIdRef = useRef<string | null>(null);
   const pendingRouteInFlightRef = useRef(false);
   const [activeAlarm, setActiveAlarm] = useState<AlarmOverlayProps | null>(null);
-  const lastBecameActiveRef = useRef<{ at: number; from: string }>({
-    at: 0,
-    from: AppState.currentState,
-  });
+  const isAlarmActivityRef = useRef<boolean>(false);
+  const exitInFlightRef = useRef<{ id: string; at: number } | null>(null);
 
+  // Detect AlarmActivity early and refresh before showing overlay
   useEffect(() => {
-    let prev = AppState.currentState;
-    const sub = AppState.addEventListener("change", (next) => {
-      if (next === "active") {
-        lastBecameActiveRef.current = { at: Date.now(), from: prev };
-      }
-      prev = next;
-    });
-    return () => sub.remove();
+    async function detectActivity() {
+      const name = await getCurrentActivityName();
+      const isAlarm = await isAlarmActivity();
+      isAlarmActivityRef.current = isAlarm;
+      console.log(`[VR] activity_detect name=${name ?? "null"} isAlarmActivity=${isAlarm}`);
+    }
+    detectActivity();
   }, []);
 
   useEffect(() => {
@@ -129,6 +134,13 @@ export default function RootLayout() {
     let cancelled = false;
 
     async function routeToAlarmFromNotification(notification: any, reason: string, allowReposted = false): Promise<void> {
+      // Skip navigation entirely if we're in AlarmActivity - overlay handles the UI
+      const inAlarmActivity = await isAlarmActivity();
+      if (inAlarmActivity) {
+        console.log(`[VR] skip_route reason=in_alarm_activity`);
+        return;
+      }
+
       const notificationId = notification?.id || "";
       const trace = buildAlarmTrace(notification);
       console.log(`[VR] route_check reason=${reason} allowReposted=${allowReposted} trace=${trace}`);
@@ -418,7 +430,10 @@ export default function RootLayout() {
       if (cancelled) return;
 
       if (!pending || pending.resolvedAt) {
-        if (activeAlarm && !activeAlarm.shouldExitOnResolve) {
+        const exit = exitInFlightRef.current;
+        const isExitInFlightForActive =
+          Boolean(exit && activeAlarm?.notificationId && exit.id === activeAlarm.notificationId && Date.now() - exit.at < 5000);
+        if (activeAlarm && !isExitInFlightForActive) {
           console.log(`[VR] overlay_hide reason=${!pending ? "cleared" : "resolved"}`);
           setActiveAlarm(null);
         }
@@ -432,18 +447,19 @@ export default function RootLayout() {
         return;
       }
 
-      const data: any = pending.notification?.data || {};
-      console.log(`[VR] overlay_show id=${notificationId}`);
+      // Native detection: determine if we're in AlarmActivity
+      const inAlarmActivity = await isAlarmActivity();
+      isAlarmActivityRef.current = inAlarmActivity;
+      const activityName = await getCurrentActivityName();
+      const keyguardLocked = await isKeyguardLocked();
 
-      // Heuristic: if the app just transitioned into the foreground from a non-active state
-      // while an alarm is ringing, treat this as a lockscreen/background alarm UI and exit
-      // the activity on resolve (so the main app UI doesn't show).
-      const lastActive = lastBecameActiveRef.current;
-      const justBecameActive = Date.now() - lastActive.at < 8000;
-      const cameFromBackground = lastActive.from !== "active";
-      const isRinging = typeof pending.ringingAt === "number" && Date.now() - pending.ringingAt < 60_000;
-      const shouldExitOnResolve =
-        Platform.OS === "android" && Boolean(justBecameActive && cameFromBackground && isRinging);
+      const data: any = pending.notification?.data || {};
+      console.log(
+        `[VR] overlay_show id=${notificationId} activity=${activityName ?? "null"} inAlarmActivity=${inAlarmActivity} keyguardLocked=${keyguardLocked}`
+      );
+
+      // New alarm - clear any previous exit latch.
+      exitInFlightRef.current = null;
 
       const alarmProps: AlarmOverlayProps = {
         notificationId,
@@ -471,7 +487,7 @@ export default function RootLayout() {
           await markPendingAlarmResolved(notificationId, "snooze");
           await clearPendingAlarm();
         },
-        shouldExitOnResolve,
+        shouldExitOnResolve: inAlarmActivity || keyguardLocked,
       };
 
       setActiveAlarm(alarmProps);
@@ -494,18 +510,56 @@ export default function RootLayout() {
 
   const handleOverlayDismiss = async () => {
     if (!activeAlarm) return;
-    await markPendingAlarmResolved(activeAlarm.notificationId, "dismiss");
+    const notificationId = activeAlarm.notificationId;
+
+    const inAlarmActivity = await isAlarmActivity();
+    const keyguardLocked = await isKeyguardLocked();
+    const shouldExitTask = inAlarmActivity || keyguardLocked;
+    if (shouldExitTask) {
+      exitInFlightRef.current = { id: notificationId, at: Date.now() };
+    }
+
+    await markPendingAlarmResolved(notificationId, "dismiss");
     await clearPendingAlarm();
-    if (!activeAlarm.shouldExitOnResolve) {
+
+    let didFinish = false;
+    if (shouldExitTask) {
+      didFinish = inAlarmActivity ? await finishIfAlarmActivity() : await finishCurrentTask();
+    }
+    console.log(
+      `[VR] handleOverlayDismiss exit=${shouldExitTask} inAlarmActivity=${inAlarmActivity} keyguardLocked=${keyguardLocked} didFinish=${didFinish}`
+    );
+
+    if (!shouldExitTask || !didFinish) {
+      exitInFlightRef.current = null;
       setActiveAlarm(null);
     }
   };
 
   const handleOverlaySnooze = async () => {
     if (!activeAlarm) return;
-    await markPendingAlarmResolved(activeAlarm.notificationId, "snooze");
+    const notificationId = activeAlarm.notificationId;
+
+    const inAlarmActivity = await isAlarmActivity();
+    const keyguardLocked = await isKeyguardLocked();
+    const shouldExitTask = inAlarmActivity || keyguardLocked;
+    if (shouldExitTask) {
+      exitInFlightRef.current = { id: notificationId, at: Date.now() };
+    }
+
+    await markPendingAlarmResolved(notificationId, "snooze");
     await clearPendingAlarm();
-    if (!activeAlarm.shouldExitOnResolve) {
+
+    let didFinish = false;
+    if (shouldExitTask) {
+      didFinish = inAlarmActivity ? await finishIfAlarmActivity() : await finishCurrentTask();
+    }
+    console.log(
+      `[VR] handleOverlaySnooze exit=${shouldExitTask} inAlarmActivity=${inAlarmActivity} keyguardLocked=${keyguardLocked} didFinish=${didFinish}`
+    );
+
+    if (!shouldExitTask || !didFinish) {
+      exitInFlightRef.current = null;
       setActiveAlarm(null);
     }
   };

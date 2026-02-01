@@ -2,8 +2,9 @@
  * Expo config plugin to add AlarmAudioModule native Android module.
  * This adds:
  * 1. AlarmAudioModule.kt - Native module with USAGE_ALARM for alarm stream audio
- * 2. AlarmAudioPackage.kt - React Native package registration
- * 3. Modifies MainApplication.kt to register the package
+ * 2. ActivityControlModule.kt - Native helpers for AlarmActivity/task handling
+ * 3. AlarmAudioPackage.kt - React Native package registration
+ * 4. Modifies MainApplication.kt to register the package
  */
 
 const { withProjectBuildGradle, withMainApplication, withDangerousMod } = require("@expo/config-plugins");
@@ -121,6 +122,136 @@ class AlarmAudioModule(private val reactContext: ReactApplicationContext) : Reac
     }
 }`;
 
+// ActivityControlModule.kt content
+const ACTIVITY_CONTROL_MODULE_KT = `package com.wahabbasa.VoiceReminder
+
+import android.app.KeyguardManager
+import android.content.Context
+import android.os.Build
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+
+/**
+ * Native helpers for distinguishing AlarmActivity vs MainActivity and closing
+ * the AlarmActivity task after dismiss/snooze so the main app UI does not show.
+ */
+class ActivityControlModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+
+  override fun getName(): String = "ActivityControl"
+
+  @ReactMethod
+  fun getCurrentActivityName(promise: Promise) {
+    try {
+      val activity = currentActivity
+      promise.resolve(activity?.javaClass?.name)
+    } catch (e: Exception) {
+      promise.resolve(null)
+    }
+  }
+
+  /**
+   * Returns true if the current activity is AlarmActivity.
+   */
+  @ReactMethod
+  fun isAlarmActivity(promise: Promise) {
+    val activity = currentActivity
+    if (activity == null) {
+      promise.resolve(false)
+      return
+    }
+    val name = activity.javaClass.name
+    promise.resolve(name.endsWith(".AlarmActivity"))
+  }
+
+  @ReactMethod
+  fun isKeyguardLocked(promise: Promise) {
+    try {
+      val km = reactContext.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+      if (km == null) {
+        promise.resolve(false)
+        return
+      }
+
+      val locked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        km.isDeviceLocked || km.isKeyguardLocked
+      } else {
+        km.isKeyguardLocked
+      }
+
+      promise.resolve(locked)
+    } catch (_: Exception) {
+      promise.resolve(false)
+    }
+  }
+
+  /**
+   * Finishes the current activity if it is AlarmActivity.
+   * Returns true if a finish was requested.
+   */
+  @ReactMethod
+  fun finishIfAlarmActivity(promise: Promise) {
+    val activity = currentActivity
+    if (activity == null) {
+      promise.resolve(false)
+      return
+    }
+    val name = activity.javaClass.name
+    if (!name.endsWith(".AlarmActivity")) {
+      promise.resolve(false)
+      return
+    }
+
+    activity.runOnUiThread {
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+          activity.finishAndRemoveTask()
+        } else {
+          activity.finish()
+        }
+      } catch (_: Exception) {
+        try {
+          activity.finish()
+        } catch (_: Exception) {
+          // ignore
+        }
+      }
+    }
+    promise.resolve(true)
+  }
+
+  /**
+   * Finishes the current activity task (AlarmActivity or MainActivity).
+   * Returns true if a finish was requested.
+   */
+  @ReactMethod
+  fun finishCurrentTask(promise: Promise) {
+    val activity = currentActivity
+    if (activity == null) {
+      promise.resolve(false)
+      return
+    }
+
+    activity.runOnUiThread {
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+          activity.finishAndRemoveTask()
+        } else {
+          activity.finish()
+        }
+      } catch (_: Exception) {
+        try {
+          activity.finish()
+        } catch (_: Exception) {
+          // ignore
+        }
+      }
+    }
+    promise.resolve(true)
+  }
+}`;
+
 // AlarmAudioPackage.kt content
 const ALARM_AUDIO_PACKAGE_KT = `package com.wahabbasa.VoiceReminder
 
@@ -131,7 +262,10 @@ import com.facebook.react.uimanager.ViewManager
 
 class AlarmAudioPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-        return listOf(AlarmAudioModule(reactContext))
+        return listOf(
+            AlarmAudioModule(reactContext),
+            ActivityControlModule(reactContext)
+        )
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {
@@ -159,6 +293,11 @@ function withAlarmAudioModule(config) {
             const moduleFile = path.join(packageDir, "AlarmAudioModule.kt");
             fs.writeFileSync(moduleFile, ALARM_AUDIO_MODULE_KT, "utf-8");
             console.log("[withAlarmAudioModule] Created AlarmAudioModule.kt");
+
+            // Write ActivityControlModule.kt
+            const activityControlFile = path.join(packageDir, "ActivityControlModule.kt");
+            fs.writeFileSync(activityControlFile, ACTIVITY_CONTROL_MODULE_KT, "utf-8");
+            console.log("[withAlarmAudioModule] Created ActivityControlModule.kt");
 
             // Write AlarmAudioPackage.kt
             const packageFile = path.join(packageDir, "AlarmAudioPackage.kt");
