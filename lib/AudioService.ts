@@ -42,6 +42,7 @@ export class AudioService {
     private originalVolume: number | null = null;
     private streamType: StreamType = "music";
     private onPlaybackEnd: (() => void) | null = null;
+    private currentUri: string | null = null;
 
     /**
      * Play audio from a file path or URL
@@ -79,6 +80,7 @@ export class AudioService {
                     const success = await AlarmAudioModule.play(uri, volume);
                     if (success) {
                         this.isPlaying = true;
+                        this.currentUri = uri;
                         this.sound = { isNative: true }; // marker for native playback
                         console.log("[AudioService] ✅ Playing via native AlarmAudioModule (USAGE_ALARM)");
                         return true;
@@ -149,6 +151,7 @@ export class AudioService {
 
                         this.sound = sound;
                         this.isPlaying = true;
+                        this.currentUri = uri;
                         console.log("[AudioService] ✅ Playing via react-native-sound");
                         console.log("[AudioService] isPlaying set to true");
                         resolve(true);
@@ -190,12 +193,34 @@ export class AudioService {
             }
 
             console.log("[AudioService] ✅ Playing via expo-av");
+            this.currentUri = uri;
             return true;
         } catch (error) {
             console.error("[AudioService] Play error:", error);
             this.isPlaying = false;
             return false;
         }
+    }
+
+    /**
+     * Ensure audio is playing without restarting if already playing the same URI.
+     * This prevents the "play → stop → play" double-start issue when UI mounts.
+     */
+    async ensurePlaying(
+        uri: string,
+        options: AudioPlaybackOptions,
+        onEnd?: () => void
+    ): Promise<boolean> {
+        const targetStreamType = options.streamType ?? "music";
+        
+        // If already playing the same URI with the same stream type, just update volume
+        if (this.isPlaying && this.currentUri === uri && this.streamType === targetStreamType) {
+            await this.setVolume(options.volume);
+            return true;
+        }
+        
+        // Otherwise, start playback normally
+        return this.play(uri, options, onEnd);
     }
 
     /**
@@ -222,6 +247,7 @@ export class AudioService {
         }
 
         this.isPlaying = false;
+        this.currentUri = null;
         this.onPlaybackEnd = null;
         await this.restoreVolume();
     }

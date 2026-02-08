@@ -372,6 +372,18 @@ export default function HomeScreen() {
       const anchorAt = Number((result as any).anchorAt);
 
       const tLocal = Date.now();
+
+      // Extract unified schedule fields from Convex result
+      const resultScheduleType = (result as any).scheduleType as 'once' | 'interval' | 'rrule' | undefined;
+      const resultOnceAt = (result as any).onceAt as number | undefined;
+      const resultRrule = (result as any).rrule as string | undefined;
+      const resultDtstart = (result as any).dtstart as number | undefined;
+      const resultUntil = (result as any).until as number | undefined;
+      const resultParseWarnings = (result as any).parseWarnings as string[] | undefined;
+
+      // Determine timezone
+      const deviceTzid = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
       const newReminder = await storeAddReminder({
         convexId: result.id,
         title: result.title,
@@ -384,7 +396,17 @@ export default function HomeScreen() {
 
         intervalMs: Number.isFinite(intervalMs) ? intervalMs : undefined,
         anchorAt: Number.isFinite(anchorAt) ? anchorAt : undefined,
-        schemaVersion: 2,
+
+        // New unified schedule fields
+        scheduleType: resultScheduleType,
+        onceAt: resultOnceAt,
+        rrule: resultRrule,
+        dtstart: resultDtstart,
+        tzid: deviceTzid,
+        until: resultUntil,
+        parseWarnings: resultParseWarnings,
+
+        schemaVersion: 4,
       });
       perfLog(traceId, "device.processing", "local_addReminder_done", {
         ms: Date.now() - tLocal,
@@ -422,6 +444,15 @@ export default function HomeScreen() {
                 intervalMs: newReminder.intervalMs,
                 anchorAt: newReminder.anchorAt,
                 intervalDays: newReminder.intervalDays,
+
+                // New unified schedule fields
+                scheduleType: newReminder.scheduleType,
+                onceAt: newReminder.onceAt,
+                rrule: newReminder.rrule,
+                dtstart: newReminder.dtstart,
+                tzid: newReminder.tzid,
+                until: newReminder.until,
+                parseWarnings: newReminder.parseWarnings,
               },
               { traceId }
             );

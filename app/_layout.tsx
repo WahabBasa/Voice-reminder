@@ -13,7 +13,7 @@ import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPending
 import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
-import { vrLog } from "../lib/vrLog";
+import { vrLog, logBuildInfo } from "../lib/vrLog";
 import { logAppTaskState, isAlarmActivity } from "../lib/activityControl";
 import { alarmAudioService } from "../lib/AudioService";
 import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
@@ -213,6 +213,9 @@ function AlarmOverlayFallback() {
 
 export default function RootLayout() {
   useEffect(() => {
+    // Log build info first to detect stale bundles
+    logBuildInfo();
+    
     // Log router root mount (pastebin Step 4.4)
     vrLog('router', 'root_mounted', { rootType: 'expo-router', component: 'main' });
     void logAppTaskState('router_root_mounted');

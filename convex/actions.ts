@@ -264,7 +264,12 @@ Return exactly this format:
   "frequency": "once" | "daily" | "custom" | "interval",
   "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom),
   "intervalHours": number (only if frequency is interval),
-  "intervalMinutes": number (only if frequency is interval)
+  "intervalMinutes": number (only if frequency is interval),
+  
+  // NEW: Unified schedule system (optional, for complex patterns)
+  "scheduleType": "once" | "interval" | "rrule" (infer from other fields if not provided),
+  "rrule": "RFC5545 RRULE string (for complex weekly/monthly/yearly patterns)",
+  "until": "ISO date for bounded recurrences (e.g., 'for 2 weeks')"
 }
 
 LANGUAGE RULES:
@@ -286,16 +291,35 @@ DATE PARSING RULES (English & Arabic):
 - Do NOT include "date" for recurring/daily reminders
 
 RELATIVE TIME RULES:
-- "in X minutes"/"بعد X دقائق" = add to current time (${currentTime})
-- "in X hours"/"بعد X ساعات" = add hours to current time
-- Always calculate the actual HH:MM result
+- "in X minutes"/"بعد X دقائق" = add to current time (${currentTime}) → frequency="once"
+- "in X hours"/"بعد X ساعات" = add hours to current time → frequency="once"
+- "every X minutes"/"كل X دقائق" = INTERVAL reminder (frequency="interval")
+- "every X hours"/"كل X ساعات" = INTERVAL reminder (frequency="interval")
+
+RRULE PATTERNS (for scheduleType="rrule"):
+- "every Sunday at 8am" → FREQ=WEEKLY;BYDAY=SU;BYHOUR=8;BYMINUTE=0
+- "weekdays at 9am" → FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0
+- "1st of every month at 8am" → FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=8;BYMINUTE=0
+- "first Monday monthly at 9am" → FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1;BYHOUR=9;BYMINUTE=0
+- "every day at 9am and 5pm" → create TWO separate reminders (simple approach)
+
+BOUNDED RECURRENCES:
+- "every day at 8am for 2 weeks" → frequency="daily", until="2026-02-22"
+- "weekdays at 9 until March 1st" → rrule with UNTIL
 
 INTERVAL RULES:
 - "every 8 hours"/"كل 8 ساعات" = frequency="interval" and intervalHours=8
 - "every 30 minutes"/"كل 30 دقيقة" = frequency="interval" and intervalMinutes=30
 - "in 8 hours"/"بعد 8 ساعات" = ONE-TIME reminder (frequency="once")
 - For interval reminders: do NOT include a specific date. time can be omitted.
-- Minimum interval: 15 minutes. Maximum interval: 168 hours.
+- Minimum interval: 5 minutes. Maximum interval: 365 days.
+- If user asks for less than 5 minutes, set to 5 minutes with a note.
+
+FREQUENCY RULES (deterministic):
+- If days are provided → frequency="custom" (weekly on specific days)
+- "every day"/"daily" → frequency="daily" (not "custom")
+- "every Sunday" → rrule pattern (FREQ=WEEKLY;BYDAY=SU) OR frequency="custom", days=["sun"]
+- "weekdays" → frequency="custom", days=["mon","tue","wed","thu","fri"] OR rrule
 
 ARABIC TIME EXPRESSIONS:
 - "الساعة ثمانية صباحاً" = 08:00
@@ -330,8 +354,50 @@ If no frequency specified, assume "once".`,
     const description = normalizeReminderDescription(parsed.description);
 
     const rawFrequency = String(parsed.frequency || "once").toLowerCase();
-    const frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
-    const days = frequency === "custom" ? (parsed.days as string[] | undefined) : undefined;
+    let frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
+
+    const normalizeDay = (value: unknown): string | null => {
+      const token = String(value ?? "").toLowerCase().trim();
+      const map: Record<string, string> = {
+        sun: "sun",
+        su: "sun",
+        sunday: "sun",
+        mon: "mon",
+        mo: "mon",
+        monday: "mon",
+        tue: "tue",
+        tu: "tue",
+        tues: "tue",
+        tuesday: "tue",
+        wed: "wed",
+        we: "wed",
+        weds: "wed",
+        wednesday: "wed",
+        thu: "thu",
+        th: "thu",
+        thur: "thu",
+        thurs: "thu",
+        thursday: "thu",
+        fri: "fri",
+        fr: "fri",
+        friday: "fri",
+        sat: "sat",
+        sa: "sat",
+        saturday: "sat",
+      };
+      return map[token] ?? null;
+    };
+
+    let days: string[] | undefined = undefined;
+    const modelDaysRaw = Array.isArray(parsed.days) ? (parsed.days as unknown[]) : [];
+    const modelDaysNormalized = modelDaysRaw
+      .map(normalizeDay)
+      .filter((d): d is string => Boolean(d));
+
+    // Initialize days if the model provided them (even if it chose the wrong frequency)
+    if (modelDaysNormalized.length > 0) {
+      days = modelDaysNormalized;
+    }
     // Only use date for one-time reminders
     const date = frequency === "once" && parsed.date ? (parsed.date as string) : undefined;
 
@@ -343,6 +409,38 @@ If no frequency specified, assume "once".`,
     })();
     const time = typeof parsed.time === "string" && parsed.time ? (parsed.time as string) : currentTimeHm;
 
+    // Parse warnings for normalization issues
+    const parseWarnings: string[] = [];
+
+    // Normalize frequency based on provided fields
+    // Rule: If days are provided, force frequency to "custom"
+    if (days && days.length > 0 && frequency !== "custom") {
+      parseWarnings.push("Coerced frequency to custom because days were provided.");
+      frequency = "custom";
+    }
+
+    // Rule: If transcript implies weekly but model returns daily, coerce
+    const transcriptLower = transcript.toLowerCase();
+    const impliesWeekly = /every\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday|week|weekly)/.test(transcriptLower);
+    if (impliesWeekly && frequency === "daily") {
+      parseWarnings.push("Transcript implies weekly but model returned daily. Coercing to custom weekly.");
+      frequency = "custom";
+      if (!days || days.length === 0) {
+        const match = transcriptLower.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
+        const inferred = normalizeDay(match?.[1]);
+        if (inferred) {
+          days = [inferred];
+        }
+      }
+    }
+
+    // Rule: "weekdays" implies custom MO-FR.
+    if (/\bweekdays?\b/.test(transcriptLower) && frequency !== "interval") {
+      frequency = "custom";
+      days = ["mon", "tue", "wed", "thu", "fri"];
+      parseWarnings.push("Transcript implies weekdays. Coercing to custom MO-FR.");
+    }
+
     // Interval normalization
     let intervalMs: number | undefined;
     let anchorAt: number | undefined;
@@ -352,12 +450,93 @@ If no frequency specified, assume "once".`,
       const totalMinutes = hours * 60 + minutes;
 
       intervalMs = totalMinutes * 60 * 1000;
-      // Clamp to valid range
-      const MIN_MS = 15 * 60 * 1000;
-      const MAX_MS = 7 * 24 * 60 * 60 * 1000;
-      intervalMs = Math.max(MIN_MS, Math.min(MAX_MS, intervalMs || 0));
+      // Updated constraints: 5 min minimum, 365 days maximum
+      const MIN_MS = 5 * 60 * 1000;
+      const MAX_MS = 365 * 24 * 60 * 60 * 1000;
+      
+      if (intervalMs < MIN_MS) {
+        parseWarnings.push(`Minimum interval is 5 minutes. Adjusted from ${Math.round(intervalMs / 60000)} minutes.`);
+        intervalMs = MIN_MS;
+      } else if (intervalMs > MAX_MS) {
+        parseWarnings.push(`Maximum interval is 365 days. Adjusted.`);
+        intervalMs = MAX_MS;
+      }
 
       anchorAt = Date.now();
+    }
+
+    // NEW: Unified schedule system fields
+    let scheduleType: "once" | "interval" | "rrule" | undefined;
+    let onceAt: number | undefined;
+    let rrule: string | undefined;
+    let dtstart: number | undefined;
+    let until: number | undefined;
+
+    // Infer scheduleType from parsed data
+    if (parsed.scheduleType && ["once", "interval", "rrule"].includes(parsed.scheduleType)) {
+      scheduleType = parsed.scheduleType;
+    } else if (frequency === "interval") {
+      scheduleType = "interval";
+    } else if (parsed.rrule) {
+      scheduleType = "rrule";
+    } else if (frequency === "once") {
+      scheduleType = "once";
+      // Calculate onceAt timestamp
+      if (date) {
+        const [year, month, dayNum] = date.split("-").map(Number);
+        const [hours, minutes] = time.split(":").map(Number);
+        onceAt = new Date(year, month - 1, dayNum, hours, minutes).getTime();
+      } else {
+        const [hours, minutes] = time.split(":").map(Number);
+        const target = new Date();
+        target.setHours(hours, minutes, 0, 0);
+        // Interpret "at HH:MM" as the next occurrence (today or tomorrow).
+        if (target.getTime() <= Date.now()) {
+          target.setDate(target.getDate() + 1);
+        }
+        onceAt = target.getTime();
+      }
+    } else {
+      // Daily/weekly/custom → can be represented as rrule or legacy
+      scheduleType = "rrule";
+      
+      // Build RRULE from legacy fields
+      const [hours, minutes] = time.split(":").map(Number);
+      
+      if (frequency === "daily") {
+        rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
+      } else if (frequency === "custom" && days && days.length > 0) {
+        const byday = days.map((d: string) => {
+          const map: Record<string, string> = {
+            sun: "SU", mon: "MO", tue: "TU", wed: "WE",
+            thu: "TH", fri: "FR", sat: "SA"
+          };
+          return map[d.toLowerCase()] || "MO";
+        }).join(",");
+        rrule = `FREQ=WEEKLY;BYDAY=${byday};BYHOUR=${hours};BYMINUTE=${minutes}`;
+      } else {
+        // Fallback to daily
+        rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
+      }
+      
+      dtstart = Date.now();
+    }
+
+    // Handle explicit RRULE from GPT
+    if (parsed.rrule) {
+      rrule = parsed.rrule;
+      scheduleType = "rrule";
+      dtstart = Date.now();
+    }
+
+    // Handle until/bounds
+    if (parsed.until) {
+      const ms = new Date(parsed.until).getTime();
+      if (Number.isFinite(ms)) {
+        until = ms;
+      } else {
+        parseWarnings.push(`Invalid until date "${String(parsed.until)}" ignored.`);
+      }
     }
 
     // 3. Generate TTS
@@ -400,6 +579,14 @@ If no frequency specified, assume "once".`,
 
       intervalMs,
       anchorAt,
+      
+      // New unified schedule fields
+      scheduleType,
+      onceAt,
+      rrule,
+      dtstart,
+      until,
+      parseWarnings: parseWarnings.length > 0 ? parseWarnings : undefined,
     };
 
     console.log("[VR] === STEP 4: Final Result to App ===");

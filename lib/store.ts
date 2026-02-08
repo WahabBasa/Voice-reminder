@@ -1,13 +1,14 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createTraceId, perfLog } from './perf';
+import { migrateLegacySchedule } from './schedule';
 
 const REMINDERS_KEY = '@reminders';
 const HISTORY_KEY = '@reminder_history';
 const MAX_HISTORY_ENTRIES = 1000;
 
-export const INTERVAL_MIN_MS = 15 * 60 * 1000; // 15 minutes
-export const INTERVAL_MAX_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const INTERVAL_MIN_MS = 5 * 60 * 1000; // 5 minutes (changed from 15)
+export const INTERVAL_MAX_MS = 365 * 24 * 60 * 60 * 1000; // 365 days (changed from 7)
 
 export type VolumeStyle = 'standard' | 'progressive';
 
@@ -41,8 +42,17 @@ export interface Reminder {
     intervalDays?: number; // Every N days (calendar-based)
     scheduledFor?: number; // Next computed occurrence timestamp (stable cadence)
 
+    // New unified schedule system (Step 1-3)
+    scheduleType?: 'once' | 'interval' | 'rrule'; // Canonical schedule type
+    onceAt?: number; // Absolute timestamp for one-time reminders
+    rrule?: string; // RFC5545 RRULE string for complex recurrences
+    dtstart?: number; // Start date for RRULE in ms
+    tzid?: string; // Timezone identifier
+    until?: number; // End date for bounded recurrences in ms
+    parseWarnings?: string[]; // Warnings from parsing/normalization
+
     // Schema version for migrations
-    schemaVersion?: number; // 1 = legacy, 2 = interval support, 3 = custom repetition
+    schemaVersion?: number; // 1 = legacy, 2 = interval support, 3 = custom repetition, 4 = unified schedule
 }
 
 // History types
@@ -128,16 +138,74 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
                 perfLog(traceId, 'device.storage', 'getReminders_parse_start', { t: tParse0 });
                 let parsed = JSON.parse(data) as Reminder[];
 
-                // Migrate legacy reminders
+                // Migrate legacy reminders to schemaVersion 4 (unified schedule system)
+                let didMigrateAny = false;
                 parsed = parsed.map((r) => {
-                    if (!r.schemaVersion) {
-                        return {
-                            ...r,
-                            schemaVersion: 1,
-                        };
+                    // v4+ reminders: ensure tzid exists, otherwise leave unchanged.
+                    if (r.schemaVersion && r.schemaVersion >= 4) {
+                        if (!r.tzid) {
+                            didMigrateAny = true;
+                            return {
+                                ...r,
+                                tzid: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                            };
+                        }
+                        return r;
                     }
-                    return r;
+
+                    didMigrateAny = true;
+
+                    // Migrate to v4: unified schedule system
+                    const migrated = { ...r };
+
+                    // If already has scheduleType, just bump version
+                    if (migrated.scheduleType) {
+                        migrated.schemaVersion = 4;
+                    } else if (migrated.frequency === 'interval' && migrated.intervalMs && migrated.anchorAt) {
+                        // Derive schedule fields from legacy format
+                        migrated.scheduleType = 'interval';
+                        migrated.schemaVersion = 4;
+                    } else if (migrated.frequency === 'once') {
+                        migrated.scheduleType = 'once';
+                        if (migrated.scheduledFor) {
+                            migrated.onceAt = migrated.scheduledFor;
+                        } else if (migrated.date && migrated.time) {
+                            const [year, month, day] = migrated.date.split('-').map(Number);
+                            const [hours, minutes] = migrated.time.split(':').map(Number);
+                            migrated.onceAt = new Date(year, month - 1, day, hours, minutes).getTime();
+                        }
+                        migrated.schemaVersion = 4;
+                    } else if (migrated.frequency === 'daily' || migrated.frequency === 'custom' || migrated.frequency === 'weekly') {
+                        // Convert to RRULE
+                        const schedule = migrateLegacySchedule(migrated);
+                        if (schedule.type === 'rrule') {
+                            migrated.scheduleType = 'rrule';
+                            migrated.rrule = schedule.rrule;
+                            migrated.dtstart = schedule.dtstart;
+                            migrated.tzid = schedule.tzid;
+                        }
+                        migrated.schemaVersion = 4;
+                    } else {
+                        // Unknown legacy frequency - still bump schema version for consistency
+                        migrated.schemaVersion = 4;
+                    }
+
+                    // Default tzid if not set
+                    if (!migrated.tzid) {
+                        migrated.tzid = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                    }
+
+                    return migrated;
                 });
+
+                // Persist migrated reminders back to storage only if any changes were applied
+                if (didMigrateAny) {
+                    try {
+                        await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(parsed));
+                    } catch {
+                        // ignore save errors during migration
+                    }
+                }
                 const t2 = Date.now();
                 perfLog(traceId, 'device.storage', 'getReminders_parse_done', {
                     t: t2, ms: t2 - tParse0, count: parsed.length,
@@ -188,7 +256,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
             snoozeDuration: reminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
             volume: reminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
             volumeStyle: reminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
-            schemaVersion: reminder.schemaVersion ?? 3,
+            schemaVersion: reminder.schemaVersion ?? 4,
         };
 
         const currentReminders = get().reminders;
@@ -226,7 +294,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
             snoozeDuration: updatedReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
             volume: updatedReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
             volumeStyle: updatedReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
-            schemaVersion: updatedReminder.schemaVersion ?? 3,
+            schemaVersion: updatedReminder.schemaVersion ?? 4,
         };
 
         const newReminders = [...currentReminders];

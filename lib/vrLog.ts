@@ -1,13 +1,29 @@
 /**
  * Centralized logging helper for VoiceReminder debugging.
- * 
+ *
  * Provides structured, single-line logs that are easy to grep in logcat.
  * All logs use the [VR][JS][scope] prefix for consistency.
- * 
+ *
  * Usage:
  *   vrLog('notifee', 'DELIVERED', { traceId: '...', id: '...' })
  *   → [VR][JS][notifee] ts=1234567890 event=DELIVERED traceId=... id=...
  */
+
+// Build identifier - update this on each release
+// Format: YYYYMMDD-HHMM-commit
+const BUILD_ID = '20250208-1730-unified-schedule-v4';
+const APP_VERSION = '1.0.0';
+
+/**
+ * Log build info on app startup to detect stale bundles
+ */
+export function logBuildInfo(): void {
+  vrLog('startup', 'build_info', {
+    appVersion: APP_VERSION,
+    buildId: BUILD_ID,
+    timestamp: Date.now(),
+  });
+}
 
 export interface VrLogFields {
   [key: string]: string | number | boolean | undefined | null;
@@ -66,11 +82,18 @@ export function buildTraceId(
 ): string {
   if (!notification) return "no_notification";
   const data = notification.data || {};
-  const id = notification.id || "";
-  const reminderId = data.reminderId || "";
-  const scheduledFor = data.scheduledFor || "";
-  const kind = data.kind || "";
-  const reposted = data.__reposted || "0";
+
+  function normalizeSegment(value: unknown, fallback: string): string {
+    if (value === undefined || value === null) return fallback;
+    const str = String(value);
+    return str.length === 0 ? fallback : str;
+  }
+
+  const id = normalizeSegment(notification.id, "na");
+  const reminderId = normalizeSegment(data.reminderId, "na");
+  const scheduledFor = normalizeSegment(data.scheduledFor, "na");
+  const kind = normalizeSegment(data.kind, "na");
+  const reposted = normalizeSegment(data.__reposted, "0");
   return `${id}|${reminderId}|${scheduledFor}|${kind}|repost=${reposted}`;
 }
 

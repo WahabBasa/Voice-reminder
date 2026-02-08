@@ -971,7 +971,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                 frequency === "interval" && intervalMs
                                     ? (
                                         intervalMs % (60 * 60 * 1000) !== 0
-                                            ? Math.max(15, Math.round(intervalMs / (60 * 1000)))
+                                            ? Math.max(Math.round(INTERVAL_MIN_MS / (60 * 1000)), Math.round(intervalMs / (60 * 1000)))
                                             : Math.max(1, Math.round(intervalMs / (60 * 60 * 1000)))
                                     )
                                     : (frequency === "daily" ? (intervalDays || 1) : 1)

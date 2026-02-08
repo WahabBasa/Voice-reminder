@@ -98,7 +98,7 @@ export function AlarmOverlay({
 
   useEffect(() => {
     // Enhanced mount logging (pastebin Step 4.4)
-    const traceId = buildTraceId({ id: notificationId, data: { reminderId, kind } as any });
+    const traceId = buildTraceId({ id: notificationId, data: { reminderId, kind, scheduledFor } as any });
     vrLog('alarm_overlay', 'mount', { 
       traceId,
       notificationId, 
@@ -174,11 +174,23 @@ export function AlarmOverlay({
       }
     }
 
-    const success = await alarmAudioService.play(audioPath, {
-      volume: targetVolume,
-      streamType: "alarm",
-      loop: true,
-    });
+    // Use ensurePlaying to prevent double-start, with fallback for stale singletons
+    let success: boolean;
+    if (typeof alarmAudioService.ensurePlaying === "function") {
+      success = await alarmAudioService.ensurePlaying(audioPath, {
+        volume: targetVolume,
+        streamType: "alarm",
+        loop: true,
+      });
+    } else {
+      // Defensive fallback for stale singletons (Step 6B)
+      console.log("[VR] ensurePlaying not available, using play() fallback");
+      success = await alarmAudioService.play(audioPath, {
+        volume: targetVolume,
+        streamType: "alarm",
+        loop: true,
+      });
+    }
 
     if (isMountedRef.current) {
       setIsPlaying(success);

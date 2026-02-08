@@ -23,6 +23,13 @@ import { getNextIntervalOccurrence, getNextTriggerTime, ReminderSchedule } from 
 import { Reminder, ReminderHistory, useReminderStore } from "./store";
 import { vrLog, buildTraceId } from "./vrLog";
 import { logAppTaskState } from "./activityControl";
+import { 
+  getNextOccurrence, 
+  migrateLegacySchedule, 
+  normalizeSchedule,
+  Schedule,
+  ScheduleWarning,
+} from "./schedule";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
 
 export class ExactAlarmPermissionError extends Error {
@@ -32,6 +39,16 @@ export class ExactAlarmPermissionError extends Error {
     super(message);
     this.name = "ExactAlarmPermissionError";
     this.notificationSettings = notificationSettings;
+  }
+}
+
+export class NoFutureOccurrenceError extends Error {
+  public readonly scheduleType?: string;
+
+  constructor(message: string, scheduleType?: string) {
+    super(message);
+    this.name = "NoFutureOccurrenceError";
+    this.scheduleType = scheduleType;
   }
 }
 
@@ -117,18 +134,15 @@ export async function getPendingAlarm(): Promise<PendingAlarm | null> {
   try {
     const raw = await AsyncStorage.getItem(PENDING_ALARM_KEY);
     if (!raw) {
-      console.log(`[VR] pending_get id=null`);
       return null;
     }
     const parsed = JSON.parse(raw) as PendingAlarm;
     if (!parsed?.notification?.id) {
-      console.log(`[VR] pending_get id=null (invalid)`);
       return null;
     }
 
     let needsResave = false;
     if ((parsed as any).handledAt && !parsed.resolvedAt) {
-      console.log(`[VR] pending_get legacy_handledAt found, migrating id=${parsed.notification.id}`);
       delete (parsed as any).handledAt;
       needsResave = true;
     }
@@ -141,7 +155,6 @@ export async function getPendingAlarm(): Promise<PendingAlarm | null> {
       }
     }
 
-    console.log(`[VR] pending_get id=${parsed.notification.id} ringingAt=${parsed.ringingAt || "none"} uiShownAt=${parsed.uiShownAt || "none"} resolvedAt=${parsed.resolvedAt || "none"}`);
     return parsed;
   } catch (e) {
     console.log("[VR] Failed to read pending alarm:", e);
@@ -393,6 +406,15 @@ export interface ReminderNotification {
   anchorAt?: number;
   intervalDays?: number;
   scheduledFor?: number;
+
+  // New unified schedule system
+  scheduleType?: 'once' | 'interval' | 'rrule';
+  onceAt?: number;
+  rrule?: string;
+  dtstart?: number;
+  tzid?: string;
+  until?: number;
+  parseWarnings?: string[];
 }
 
 function getLocalAudioPath(reminderId: string): string {
@@ -491,10 +513,34 @@ export async function scheduleReminder(
     localAudioPath
   );
 
-  // Calculate next trigger time
+  // Calculate next trigger time using unified scheduling engine
   let triggerTimestamp: number;
 
-  if (reminder.frequency === "interval" && reminder.anchorAt && reminder.intervalMs) {
+  // Try new unified schedule system first
+  if (reminder.scheduleType) {
+    const schedule: Schedule = {
+      type: reminder.scheduleType,
+      onceAt: reminder.onceAt,
+      intervalMs: reminder.intervalMs,
+      anchorAt: reminder.anchorAt,
+      rrule: reminder.rrule,
+      dtstart: reminder.dtstart,
+      tzid: reminder.tzid,
+      until: reminder.until,
+    } as Schedule;
+
+    const nextOccurrence = getNextOccurrence(schedule, Date.now());
+    if (nextOccurrence) {
+      triggerTimestamp = nextOccurrence;
+    } else {
+      // No future occurrence (e.g., expired once reminder or bounded RRULE finished)
+      throw new NoFutureOccurrenceError(
+        `No future occurrence for schedule type ${reminder.scheduleType}`,
+        reminder.scheduleType
+      );
+    }
+  } else if (reminder.frequency === "interval" && reminder.anchorAt && reminder.intervalMs) {
+    // Legacy interval support
     if (reminder.scheduledFor && reminder.scheduledFor > Date.now()) {
       triggerTimestamp = reminder.scheduledFor;
     } else {
@@ -506,6 +552,7 @@ export async function scheduleReminder(
       triggerTimestamp = scheduledFor;
     }
   } else {
+    // Legacy schedule support
     const schedule: ReminderSchedule = {
       time: reminder.time,
       date: reminder.date,
@@ -520,10 +567,22 @@ export async function scheduleReminder(
   // Safety check: Notifee requires timestamp to be in the future
   // If calculated time is in the past, schedule for 5 seconds from now
   const now = Date.now();
-  if (triggerTimestamp <= now) {
-    console.warn(`[VR] Trigger time ${new Date(triggerTimestamp).toLocaleString()} is in the past, adjusting to now + 5s`);
-    triggerTimestamp = now + 5000;
-  }
+    if (triggerTimestamp <= now) {
+      // For one-time reminders that are in the past, don't schedule them as "now + 5s"
+      // This prevents expired reminders from firing immediately
+      const scheduleType = reminder.scheduleType;
+      const isOnceReminder = scheduleType === 'once' || (!scheduleType && reminder.frequency === 'once');
+      
+      if (isOnceReminder) {
+        console.warn(`[VR] One-time reminder ${new Date(triggerTimestamp).toLocaleString()} is in the past, not scheduling (expired)`);
+        throw new Error("Reminder time is in the past. Please choose a future time.");
+      }
+      
+      // For recurring reminders, this shouldn't happen with proper getNextOccurrence logic
+      // but as a safety net, schedule slightly in the future
+      console.warn(`[VR] Trigger time ${new Date(triggerTimestamp).toLocaleString()} is in the past, adjusting to now + 5s`);
+      triggerTimestamp = now + 5000;
+    }
 
   const trigger: TimestampTrigger = {
     type: TriggerType.TIMESTAMP,
@@ -595,6 +654,14 @@ export async function scheduleReminder(
         intervalDays: String(reminder.intervalDays ?? ""),
         scheduledFor: String(triggerTimestamp),
         kind: "reminder_occurrence",
+
+        // New unified schedule fields
+        scheduleType: reminder.scheduleType ?? "",
+        onceAt: String(reminder.onceAt ?? ""),
+        rrule: reminder.rrule ?? "",
+        dtstart: String(reminder.dtstart ?? ""),
+        tzid: reminder.tzid ?? "",
+        until: String(reminder.until ?? ""),
       },
     },
     trigger
@@ -626,7 +693,7 @@ export async function cancelReminder(reminderId: string): Promise<void> {
   // Note: NOT deleting local audio file here - it's needed for rescheduling
   // Audio is only deleted when reminder is fully deleted via deleteReminderWithAudio()
 
-  console.log(`[VR] Cancelled ${toCancel.length} notifications for reminder ${reminderId}`);
+  console.log(`[VR] Cancelled ${toCancel.length} trigger notifications for reminder ${reminderId}`);
 }
 
 // Use this when fully deleting a reminder (not just rescheduling)
@@ -713,11 +780,23 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     const rawVolume = Number(notificationData?.volume ?? "1");
     const targetVolume = Math.max(0, Math.min(1, Number.isFinite(rawVolume) ? rawVolume : 1));
 
-    const ok = await alarmAudioService.play(localAudioPath, {
-      volume: targetVolume,
-      streamType: "alarm",
-      loop: true,
-    });
+    // Use ensurePlaying to prevent double-start, with fallback for stale singletons (Step 6B)
+    let ok: boolean;
+    if (typeof alarmAudioService.ensurePlaying === "function") {
+      ok = await alarmAudioService.ensurePlaying(localAudioPath, {
+        volume: targetVolume,
+        streamType: "alarm",
+        loop: true,
+      });
+    } else {
+      // Defensive fallback for stale singletons
+      console.log("[VR] ensurePlaying not available, using play() fallback");
+      ok = await alarmAudioService.play(localAudioPath, {
+        volume: targetVolume,
+        streamType: "alarm",
+        loop: true,
+      });
+    }
     if (!ok) {
       console.log("[VR] Alarm audio playback failed to start");
     } else {
@@ -972,13 +1051,14 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     }
 
     // Check if we need to reschedule recurring reminders
+    // Try new unified schedule system first, fall back to legacy
+    const scheduleType = typeof data?.scheduleType === "string" && data.scheduleType 
+      ? (data.scheduleType as 'once' | 'interval' | 'rrule') 
+      : null;
     const frequency = typeof data?.frequency === "string" ? (data.frequency as string) : "";
-    if (!frequency) {
-      console.log("[VR] Notification missing frequency, skipping reschedule");
-      return;
-    }
-    if (!["once", "daily", "weekly", "custom", "interval"].includes(frequency)) {
-      console.log(`[VR] Unknown frequency "${frequency}", skipping reschedule`);
+    
+    if (!scheduleType && !frequency) {
+      console.log("[VR] Notification missing schedule type and frequency, skipping reschedule");
       return;
     }
     if (!data?.reminderId) {
@@ -986,37 +1066,68 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       return;
     }
 
-    if (frequency !== "once") {
+    // Determine if this is a one-time reminder
+    const isOneTime = scheduleType === 'once' || (!scheduleType && frequency === 'once');
+    
+    if (!isOneTime) {
       const kind = (data.kind as string) || "reminder_occurrence";
       if (kind === "snooze_occurrence") {
         console.log("[VR] Snooze notification delivered, not rescheduling");
         return;
       }
 
-      let nextTrigger: number;
-      if (frequency === "interval") {
-        const intervalMs = Number(data.intervalMs);
-        const anchorAt = Number(data.anchorAt);
-        const scheduledFor = Number(data.scheduledFor);
+      let nextTrigger: number | null = null;
+      
+      // Try unified schedule system first
+      if (scheduleType) {
+        const schedule: Schedule = {
+          type: scheduleType,
+          onceAt: data.onceAt ? Number(data.onceAt) : undefined,
+          intervalMs: data.intervalMs ? Number(data.intervalMs) : undefined,
+          anchorAt: data.anchorAt ? Number(data.anchorAt) : undefined,
+          rrule: data.rrule as string | undefined,
+          dtstart: data.dtstart ? Number(data.dtstart) : undefined,
+          tzid: data.tzid as string | undefined,
+          until: data.until ? Number(data.until) : undefined,
+        } as Schedule;
+        
+        nextTrigger = getNextOccurrence(schedule, Date.now());
+      }
+      
+      // Fall back to legacy scheduling
+      if (nextTrigger === null && frequency) {
+        if (frequency === "interval") {
+          const intervalMs = Number(data.intervalMs);
+          const anchorAt = Number(data.anchorAt);
+          const scheduledFor = Number(data.scheduledFor);
 
-        if (!intervalMs || !anchorAt) {
-          console.warn("[VR] Interval reminder missing data, skipping reschedule");
-          return;
+          if (intervalMs && anchorAt) {
+            // Stable cadence + skip missed: compute from the later of (scheduledFor, now)
+            const ref = Math.max(scheduledFor || Date.now(), Date.now());
+            const { scheduledFor: next } = getNextIntervalOccurrence(anchorAt, intervalMs, ref);
+            nextTrigger = next;
+          }
+        } else if (["daily", "weekly", "custom"].includes(frequency)) {
+          const schedule: ReminderSchedule = {
+            time: data.time as string,
+            frequency,
+            days: data.days ? (data.days as string).split(",") : undefined,
+            intervalDays: data.intervalDays ? Number(data.intervalDays) : undefined,
+            scheduledFor: Number(data.scheduledFor),
+          };
+          nextTrigger = getNextTriggerTime(schedule);
         }
-
-        // Stable cadence + skip missed: compute from the later of (scheduledFor, now)
-        const ref = Math.max(scheduledFor || Date.now(), Date.now());
-        const { scheduledFor: next } = getNextIntervalOccurrence(anchorAt, intervalMs, ref);
-        nextTrigger = next;
-      } else {
-        const schedule: ReminderSchedule = {
-          time: data.time as string,
-          frequency,
-          days: data.days ? (data.days as string).split(",") : undefined,
-          intervalDays: data.intervalDays ? Number(data.intervalDays) : undefined,
-          scheduledFor: Number(data.scheduledFor),
-        };
-        nextTrigger = getNextTriggerTime(schedule);
+      }
+      
+      if (nextTrigger === null) {
+        // Check if this is due to until boundary
+        const until = data.until ? Number(data.until) : undefined;
+        if (until && Date.now() >= until) {
+          console.log(`[VR] Recurrence stopped: until boundary reached (${new Date(until).toLocaleString()})`);
+        } else {
+          console.warn("[VR] Could not compute next occurrence, skipping reschedule");
+        }
+        return;
       }
 
       const now = Date.now();
@@ -1112,7 +1223,10 @@ export async function syncRemindersOnStartup(
       }
 
       // Skip "once" reminders that are completed today or in the past
-      if (reminder.frequency === "once") {
+      const isOneTime = reminder.scheduleType === 'once' || 
+                        (!reminder.scheduleType && reminder.frequency === 'once');
+      
+      if (isOneTime) {
         if (completedTodayIds.has(reminder.id)) {
           skipped++;
           continue;
@@ -1128,17 +1242,22 @@ export async function syncRemindersOnStartup(
 
         // If this one-time reminder is already past due, don't resurrect it as "now + 5s".
         // It can be shown as overdue in UI, but it should not keep scheduling.
-        const due = getNextTriggerTime(
-          {
-            time: reminder.time,
-            date: reminder.date,
-            frequency: reminder.frequency,
-            days: reminder.days,
-            intervalDays: reminder.intervalDays,
-            scheduledFor: reminder.scheduledFor,
-          },
-          now
-        );
+        let due: number;
+        if (reminder.scheduleType === 'once' && reminder.onceAt) {
+          due = reminder.onceAt;
+        } else {
+          due = getNextTriggerTime(
+            {
+              time: reminder.time,
+              date: reminder.date,
+              frequency: reminder.frequency,
+              days: reminder.days,
+              intervalDays: reminder.intervalDays,
+              scheduledFor: reminder.scheduledFor,
+            },
+            now
+          );
+        }
         if (due <= now) {
           skipped++;
           continue;
@@ -1172,6 +1291,14 @@ export async function syncRemindersOnStartup(
           anchorAt: reminder.anchorAt,
           intervalDays: reminder.intervalDays,
           scheduledFor: reminder.scheduledFor,
+          // New unified schedule fields
+          scheduleType: reminder.scheduleType,
+          onceAt: reminder.onceAt,
+          rrule: reminder.rrule,
+          dtstart: reminder.dtstart,
+          tzid: reminder.tzid,
+          until: reminder.until,
+          parseWarnings: reminder.parseWarnings,
         };
 
         const { triggerTimestamp } = await scheduleReminder(notificationInput);
@@ -1189,6 +1316,10 @@ export async function syncRemindersOnStartup(
       } catch (e: any) {
         if (e?.name === "ExactAlarmPermissionError") {
           permissionError = true;
+        }
+        if (e?.name === "NoFutureOccurrenceError") {
+          skipped++;
+          continue;
         }
         console.log(`[VR] Sync failed for ${reminder.id}:`, e?.message || e);
         failed++;

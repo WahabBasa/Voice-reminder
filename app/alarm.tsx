@@ -76,7 +76,8 @@ export default function AlarmScreen() {
     useEffect(() => {
         // Enhanced mount logging (pastebin Step 4.4)
         // NOTE: This /alarm route is DEBUG-ONLY. Production alarms use AlarmActivity -> AlarmRoot path.
-        const traceId = buildTraceId({ id: notificationId, data: { reminderId, kind: 'reminder_occurrence' } as any });
+        const scheduledFor = params.scheduledFor;
+        const traceId = buildTraceId({ id: notificationId, data: { reminderId, kind: 'reminder_occurrence', scheduledFor } as any });
         vrLog('alarm_screen', 'mount', { 
             traceId,
             notificationId, 
@@ -123,7 +124,7 @@ export default function AlarmScreen() {
         console.log("[VR] Audio path:", audioPath);
 
         // Use native AlarmAudioModule with USAGE_ALARM to bypass silent mode
-        const success = await alarmAudioService.play(audioPath, {
+        const success = await alarmAudioService.ensurePlaying(audioPath, {
             volume: targetVolume,
             streamType: "alarm", // Uses native AlarmAudioModule with USAGE_ALARM
             loop: true,
