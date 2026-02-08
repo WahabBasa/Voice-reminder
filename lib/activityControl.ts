@@ -1,4 +1,5 @@
 import { NativeModules, Platform } from "react-native";
+import { vrLog } from "./vrLog";
 
 const { ActivityControl } = NativeModules as any;
 
@@ -110,6 +111,40 @@ export async function finishCurrentTask(): Promise<boolean> {
     return Boolean(didFinish);
   } catch (e) {
     console.log("[VR] Failed to finish current task:", e);
+    return false;
+  }
+}
+
+/**
+ * Logs current app task state for debugging (pastebin Step 4.5).
+ * Calls native ActivityControlModule.logAppTaskState() which in turn
+ * calls ActivityTracker.logCurrentState() and dumps ActivityManager state.
+ * 
+ * Call this at key decision points:
+ * - Notifee DELIVERED arrives (before/after repost)
+ * - PRESS / ACTION_PRESS
+ * - Alarm UI mounts
+ * - Dismiss/snooze pressed (before finish + after finish attempt)
+ */
+export async function logAppTaskState(reason: string): Promise<boolean> {
+  if (Platform.OS !== "android") {
+    vrLog('activity', 'logAppTaskState_skipped', { reason, platform: Platform.OS });
+    return false;
+  }
+  
+  if (!ActivityControl?.logAppTaskState) {
+    logMissingModuleOnce();
+    vrLog('activity', 'logAppTaskState_unavailable', { reason });
+    return false;
+  }
+  
+  try {
+    vrLog('activity', 'logAppTaskState_calling', { reason });
+    const result = await ActivityControl.logAppTaskState(reason);
+    vrLog('activity', 'logAppTaskState_complete', { reason, result });
+    return Boolean(result);
+  } catch (e) {
+    vrLog('activity', 'logAppTaskState_error', { reason, error: String(e) });
     return false;
   }
 }

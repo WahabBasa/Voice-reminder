@@ -1,7 +1,8 @@
 import "react-native-gesture-handler";
 import { AppRegistry } from "react-native";
 import notifee, { EventType } from "@notifee/react-native";
-import { handleNotificationEvent, buildAlarmTrace, eventTypeName } from "./lib/notifications";
+import { handleNotificationEvent, eventTypeName } from "./lib/notifications";
+import { buildTraceId } from "./lib/vrLog";
 import AlarmRoot from "./alarm/AlarmRoot";
 
 // Separate root for AlarmActivity (lockscreen UI) to avoid mounting expo-router in the alarm task.
@@ -9,7 +10,7 @@ AppRegistry.registerComponent("alarm", () => AlarmRoot);
 
 // Register background handler before app loads
 notifee.onBackgroundEvent(async (event) => {
-  const trace = buildAlarmTrace(event.detail.notification);
+  const trace = buildTraceId(event.detail.notification as any);
   console.log(`[VR] BG_EVENT type=${eventTypeName(event.type)} trace=${trace}`);
 
   // Background-to-activity launches are heavily restricted on Android.
@@ -29,7 +30,7 @@ notifee.onBackgroundEvent(async (event) => {
 
 // Register foreground handler
 notifee.onForegroundEvent(async (event) => {
-  const trace = buildAlarmTrace(event.detail.notification);
+  const trace = buildTraceId(event.detail.notification as any);
   console.log(`[VR] FG_EVENT type=${eventTypeName(event.type)} trace=${trace}`);
   await handleNotificationEvent(event);
 });

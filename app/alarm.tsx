@@ -22,12 +22,15 @@ import * as FileSystem from "expo-file-system/legacy";
 import { useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { cancelDisplayedAlarmNotifications, clearPendingAlarm } from "../lib/notifications";
+import { buildTraceId } from "../lib/vrLog";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
 import { alarmAudioService } from "../lib/AudioService";
 import { getNextIntervalOccurrence } from "../lib/time";
 import { useReminderStore } from "../lib/store";
 import { removeReminderFully } from "../lib/reminderRemoval";
+import { vrLog, logAlarmLifecycle } from "../lib/vrLog";
+import { logAppTaskState } from "../lib/activityControl";
 
 const { width, height } = Dimensions.get("window");
 const ANDROID_ALARM_ACTIVITY = "com.wahabbasa.VoiceReminder.AlarmActivity";
@@ -71,7 +74,21 @@ export default function AlarmScreen() {
     const targetVolume = Math.max(0, Math.min(1, Number(params.volume ?? "1") || 1));
 
     useEffect(() => {
-        console.log(`[VR] alarm_screen_mount router.canGoBack=${router.canGoBack()} notificationId=${notificationId} reminderId=${reminderId}`);
+        // Enhanced mount logging (pastebin Step 4.4)
+        // NOTE: This /alarm route is DEBUG-ONLY. Production alarms use AlarmActivity -> AlarmRoot path.
+        const traceId = buildTraceId({ id: notificationId, data: { reminderId, kind: 'reminder_occurrence' } as any });
+        vrLog('alarm_screen', 'mount', { 
+            traceId,
+            notificationId, 
+            reminderId,
+            canGoBack: router.canGoBack(),
+            rootType: 'debug_route',
+            component: '/alarm',
+            note: 'DEBUG_ONLY_DO_NOT_USE_IN_PRODUCTION',
+        });
+        logAlarmLifecycle('screen_mount', { traceId, notificationId, reminderId, source: 'alarm.tsx' });
+        void logAppTaskState('alarm_screen_mount');
+        
         isMountedRef.current = true;
         isExplicitDismissRef.current = false;
 
@@ -82,7 +99,7 @@ export default function AlarmScreen() {
         startVibration();
 
         return () => {
-            console.log("[VR] AlarmScreen: useEffect cleanup, isExplicitDismiss:", isExplicitDismissRef.current);
+            vrLog('alarm_screen', 'unmount', { traceId, notificationId, reminderId, isExplicitDismiss: isExplicitDismissRef.current });
             isMountedRef.current = false;
 
             // Only stop audio if this is an explicit user action (dismiss/snooze)
@@ -90,7 +107,7 @@ export default function AlarmScreen() {
             if (isExplicitDismissRef.current) {
                 stopAudio();
             } else {
-                console.log("[VR] AlarmScreen: Skipping audio stop - not an explicit dismiss");
+                vrLog('alarm_screen', 'cleanup_skip_audio_stop', { traceId, notificationId, reason: 'not_explicit_dismiss' });
             }
             stopVibration();
         };

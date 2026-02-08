@@ -2,9 +2,10 @@
  * Expo config plugin to add AlarmAudioModule native Android module.
  * This adds:
  * 1. AlarmAudioModule.kt - Native module with USAGE_ALARM for alarm stream audio
- * 2. ActivityControlModule.kt - Native helpers for AlarmActivity/task handling
- * 3. AlarmAudioPackage.kt - React Native package registration
- * 4. Modifies MainApplication.kt to register the package
+ * 2. ActivityControlModule.kt - Native helpers for AlarmActivity/task handling + logAppTaskState
+ * 3. ActivityTracker.kt - Application-level activity lifecycle tracking
+ * 4. AlarmAudioPackage.kt - React Native package registration
+ * 5. Modifies MainApplication.kt to register the package and ActivityTracker
  */
 
 const { withProjectBuildGradle, withMainApplication, withDangerousMod } = require("@expo/config-plugins");
@@ -122,12 +123,108 @@ class AlarmAudioModule(private val reactContext: ReactApplicationContext) : Reac
     }
 }`;
 
-// ActivityControlModule.kt content
+// ActivityTracker.kt content - Application-level activity lifecycle tracking
+const ACTIVITY_TRACKER_KT = `package com.wahabbasa.VoiceReminder
+
+import android.app.Activity
+import android.app.Application
+import android.os.Bundle
+import android.util.Log
+
+/**
+ * Activity lifecycle tracker for debugging.
+ * Logs all activity transitions and maintains state about the last resumed activity.
+ * Registered in MainApplication.onCreate()
+ */
+object ActivityTracker : Application.ActivityLifecycleCallbacks {
+    
+    @Volatile
+    var lastResumedActivityName: String? = null
+        private set
+    
+    @Volatile
+    var lastResumedAt: Long = 0
+        private set
+    
+    private const val LOG_TAG = "VR"
+    
+    init {
+        Log.i(LOG_TAG, "[VR][NATIVE][ActivityTracker] initialized")
+    }
+    
+    private fun logLifecycle(event: String, activity: Activity) {
+        val name = activity.javaClass.simpleName
+        val taskId = activity.taskId
+        val isTaskRoot = activity.isTaskRoot
+        val timestamp = System.currentTimeMillis()
+        
+        Log.i(LOG_TAG, "[VR][NATIVE][Lifecycle] event=\$event activity=\$name taskId=\$taskId isTaskRoot=\$isTaskRoot ts=\$timestamp")
+    }
+    
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+        val intentAction = activity.intent?.action ?: "null"
+        val intentData = activity.intent?.dataString ?: "null"
+        val intentFlags = activity.intent?.flags ?: 0
+        val extrasKeys = activity.intent?.extras?.keySet()?.toList() ?: emptyList()
+        val extrasSummary = extrasKeys.joinToString(",") { key ->
+            val value = activity.intent?.extras?.get(key)
+            val valueStr = when (value) {
+                is String -> value.take(50)
+                is Number -> value.toString()
+                is Boolean -> value.toString()
+                else -> "[\${value?.javaClass?.simpleName ?: "null"}]"
+            }
+            "\$key=\$valueStr"
+        }
+        
+        Log.i(LOG_TAG, "[VR][NATIVE][Lifecycle] event=onCreated activity=\${activity.javaClass.simpleName} taskId=\${activity.taskId} isTaskRoot=\${activity.isTaskRoot} action=\$intentAction data=\$intentData flags=\$intentFlags extras=[\$extrasSummary]")
+    }
+    
+    override fun onActivityStarted(activity: Activity) {
+        logLifecycle("onStarted", activity)
+    }
+    
+    override fun onActivityResumed(activity: Activity) {
+        val name = activity.javaClass.name
+        lastResumedActivityName = name
+        lastResumedAt = System.currentTimeMillis()
+        
+        Log.i(LOG_TAG, "[VR][NATIVE][Lifecycle] event=onResumed activity=\${activity.javaClass.simpleName} taskId=\${activity.taskId} isTaskRoot=\${activity.isTaskRoot} lastResumed=\$lastResumedAt")
+    }
+    
+    override fun onActivityPaused(activity: Activity) {
+        logLifecycle("onPaused", activity)
+    }
+    
+    override fun onActivityStopped(activity: Activity) {
+        logLifecycle("onStopped", activity)
+    }
+    
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {
+        // Not logging to reduce noise
+    }
+    
+    override fun onActivityDestroyed(activity: Activity) {
+        logLifecycle("onDestroyed", activity)
+    }
+    
+    /**
+     * Logs current state for debugging.
+     * Called from JS via ActivityControlModule.logAppTaskState()
+     */
+    fun logCurrentState(reason: String) {
+        Log.i(LOG_TAG, "[VR][NATIVE][StateDump] reason=\$reason lastResumedActivity=\$lastResumedActivityName lastResumedAt=\$lastResumedAt")
+    }
+}`;
+
+// ActivityControlModule.kt content with logAppTaskState method
 const ACTIVITY_CONTROL_MODULE_KT = `package com.wahabbasa.VoiceReminder
 
+import android.app.ActivityManager
 import android.app.KeyguardManager
 import android.content.Context
 import android.os.Build
+import android.util.Log
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -136,8 +233,14 @@ import com.facebook.react.bridge.ReactMethod
 /**
  * Native helpers for distinguishing AlarmActivity vs MainActivity and closing
  * the AlarmActivity task after dismiss/snooze so the main app UI does not show.
+ * 
+ * Also provides logAppTaskState() for debugging (pastebin Step 3.3)
  */
 class ActivityControlModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+
+  companion object {
+    private const val LOG_TAG = "VR"
+  }
 
   override fun getName(): String = "ActivityControl"
 
@@ -203,18 +306,23 @@ class ActivityControlModule(private val reactContext: ReactApplicationContext) :
       return
     }
 
+    Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finishIfAlarmActivity taskId=\${activity.taskId}")
+
     activity.runOnUiThread {
       try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
           activity.finishAndRemoveTask()
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finishAndRemoveTask called")
         } else {
           activity.finish()
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finish called")
         }
       } catch (_: Exception) {
         try {
           activity.finish()
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finish called (fallback)")
         } catch (_: Exception) {
-          // ignore
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finish failed")
         }
       }
     }
@@ -223,7 +331,7 @@ class ActivityControlModule(private val reactContext: ReactApplicationContext) :
 
   /**
    * Finishes the current activity task (AlarmActivity or MainActivity).
-   * Returns true if a finish was requested.
+   * Returns true if a finish was actually requested.
    */
   @ReactMethod
   fun finishCurrentTask(promise: Promise) {
@@ -233,22 +341,76 @@ class ActivityControlModule(private val reactContext: ReactApplicationContext) :
       return
     }
 
+    Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finishCurrentTask activity=\${activity.javaClass.simpleName} taskId=\${activity.taskId}")
+
     activity.runOnUiThread {
       try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
           activity.finishAndRemoveTask()
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finishAndRemoveTask called")
         } else {
           activity.finish()
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finish called")
         }
       } catch (_: Exception) {
         try {
           activity.finish()
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finish called (fallback)")
         } catch (_: Exception) {
-          // ignore
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] finish failed")
         }
       }
     }
     promise.resolve(true)
+  }
+
+  /**
+   * Logs current app task state for debugging (pastebin Step 3.3).
+   * Called from JS at key decision points.
+   */
+  @ReactMethod
+  fun logAppTaskState(reason: String, promise: Promise) {
+    try {
+      // Log from ActivityTracker (pastebin Step 3.2)
+      ActivityTracker.logCurrentState(reason)
+
+      // Log current activity info
+      val currentAct = reactContext.currentActivity
+      val currentActivityName = currentAct?.javaClass?.name ?: "null"
+      val currentTaskId = currentAct?.taskId ?: -1
+      
+      Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] logAppTaskState reason=\$reason currentActivity=\$currentActivityName currentTaskId=\$currentTaskId")
+
+      // Log app tasks from ActivityManager
+      try {
+        val am = reactContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        if (am != null) {
+          val appTasks = am.appTasks
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] logAppTaskState appTasksCount=\${appTasks.size}")
+          
+          appTasks.forEachIndexed { index, appTask ->
+            try {
+              val taskInfo = appTask.taskInfo
+              val topActivity = taskInfo?.topActivity?.className ?: "null"
+              val taskId = taskInfo?.taskId ?: -1
+              val numActivities = taskInfo?.numActivities ?: 0
+              Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] logAppTaskState task[\$index] id=\$taskId topActivity=\$topActivity numActivities=\$numActivities")
+            } catch (e: Exception) {
+              Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] logAppTaskState task[\$index] error=\${e.message}")
+            }
+          }
+        } else {
+          Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] logAppTaskState ActivityManager not available")
+        }
+      } catch (e: Exception) {
+        Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] logAppTaskState failed to get appTasks: \${e.message}")
+      }
+
+      promise.resolve(true)
+    } catch (e: Exception) {
+      Log.i(LOG_TAG, "[VR][NATIVE][ActivityControl] logAppTaskState error: \${e.message}")
+      promise.resolve(false)
+    }
   }
 }`;
 
@@ -299,6 +461,11 @@ function withAlarmAudioModule(config) {
             fs.writeFileSync(activityControlFile, ACTIVITY_CONTROL_MODULE_KT, "utf-8");
             console.log("[withAlarmAudioModule] Created ActivityControlModule.kt");
 
+            // Write ActivityTracker.kt
+            const activityTrackerFile = path.join(packageDir, "ActivityTracker.kt");
+            fs.writeFileSync(activityTrackerFile, ACTIVITY_TRACKER_KT, "utf-8");
+            console.log("[withAlarmAudioModule] Created ActivityTracker.kt");
+
             // Write AlarmAudioPackage.kt
             const packageFile = path.join(packageDir, "AlarmAudioPackage.kt");
             fs.writeFileSync(packageFile, ALARM_AUDIO_PACKAGE_KT, "utf-8");
@@ -308,7 +475,7 @@ function withAlarmAudioModule(config) {
         },
     ]);
 
-    // Step 2: Modify MainApplication.kt to register the package
+    // Step 2: Modify MainApplication.kt to register the package and ActivityTracker
     config = withMainApplication(config, (config) => {
         let contents = config.modResults.contents;
 
@@ -342,8 +509,47 @@ function withAlarmAudioModule(config) {
             }
         }
 
+        // Add ActivityTracker import if not present
+        const trackerImport = "import com.wahabbasa.VoiceReminder.ActivityTracker";
+        if (!contents.includes(trackerImport)) {
+            const lastImportIndex = contents.lastIndexOf("import ");
+            if (lastImportIndex !== -1) {
+                const endOfLine = contents.indexOf("\n", lastImportIndex);
+                contents =
+                    contents.slice(0, endOfLine + 1) +
+                    trackerImport + "\n" +
+                    contents.slice(endOfLine + 1);
+            }
+        }
+
+        // Register ActivityTracker in onCreate if not present
+        const trackerRegistration = "registerActivityLifecycleCallbacks(ActivityTracker)";
+        if (!contents.includes(trackerRegistration)) {
+            // Find onCreate and add registration
+            const onCreateMatch = contents.match(/override fun onCreate\(\) \{\s*super\.onCreate\(\)/);
+            if (onCreateMatch) {
+                const insertPoint = contents.indexOf(onCreateMatch[0]) + onCreateMatch[0].length;
+                contents =
+                    contents.slice(0, insertPoint) +
+                    `\n    \n    // Register ActivityTracker for lifecycle logging (pastebin Step 3.2)\n    ${trackerRegistration}\n    Log.i("VR", "[VR][NATIVE][MainApplication] ActivityTracker registered")` +
+                    contents.slice(insertPoint);
+            }
+        }
+
+        // Add Log import if not present
+        if (!contents.includes("import android.util.Log")) {
+            const lastImportIndex = contents.lastIndexOf("import ");
+            if (lastImportIndex !== -1) {
+                const endOfLine = contents.indexOf("\n", lastImportIndex);
+                contents =
+                    contents.slice(0, endOfLine + 1) +
+                    "import android.util.Log\n" +
+                    contents.slice(endOfLine + 1);
+            }
+        }
+
         config.modResults.contents = contents;
-        console.log("[withAlarmAudioModule] Modified MainApplication.kt to register AlarmAudioPackage");
+        console.log("[withAlarmAudioModule] Modified MainApplication.kt to register AlarmAudioPackage and ActivityTracker");
         return config;
     });
 

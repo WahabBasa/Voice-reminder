@@ -9,8 +9,10 @@ import {
   getPendingAlarm,
   markPendingAlarmResolved,
   setPendingAlarm,
+  markPendingAlarmLaunchedExternally,
 } from "../lib/notifications";
-import { finishCurrentTask, finishIfAlarmActivity } from "../lib/activityControl";
+import { finishCurrentTask, finishIfAlarmActivity, logAppTaskState } from "../lib/activityControl";
+import { vrLog, logAlarmLifecycle, buildTraceId } from "../lib/vrLog";
 
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string);
 
@@ -19,6 +21,7 @@ function buildOverlayProps(pending: PendingAlarm): AlarmOverlayProps | null {
   if (!notificationId) return null;
 
   const data: any = pending.notification?.data || {};
+  const traceId = buildTraceId(pending.notification);
 
   const base: Omit<AlarmOverlayProps, "onDismiss" | "onSnooze"> = {
     notificationId,
@@ -43,20 +46,32 @@ function buildOverlayProps(pending: PendingAlarm): AlarmOverlayProps | null {
   return {
     ...base,
     onDismiss: async () => {
+      // Primary path resolve behavior (pastebin Step 4.3):
+      // - mark pending resolved + clear pending
+      // - call finishIfAlarmActivity() (and only fallback to finishCurrentTask() if needed)
+      logAlarmLifecycle('resolve_start', { traceId, notificationId, action: 'dismiss', source: 'AlarmRoot' });
+      void logAppTaskState(`alarm_resolve_dismiss_before_${notificationId}`);
       await markPendingAlarmResolved(notificationId, "dismiss");
       await clearPendingAlarm();
       const didFinish = await finishIfAlarmActivity();
+      logAlarmLifecycle('resolve_finish', { traceId, notificationId, action: 'dismiss', didFinish });
       if (!didFinish) {
+        // Fallback only if finishIfAlarmActivity didn't work
         await finishCurrentTask();
       }
+      void logAppTaskState(`alarm_resolve_dismiss_after_${notificationId}`);
     },
     onSnooze: async () => {
+      logAlarmLifecycle('resolve_start', { traceId, notificationId, action: 'snooze', source: 'AlarmRoot' });
+      void logAppTaskState(`alarm_resolve_snooze_before_${notificationId}`);
       await markPendingAlarmResolved(notificationId, "snooze");
       await clearPendingAlarm();
       const didFinish = await finishIfAlarmActivity();
+      logAlarmLifecycle('resolve_finish', { traceId, notificationId, action: 'snooze', didFinish });
       if (!didFinish) {
         await finishCurrentTask();
       }
+      void logAppTaskState(`alarm_resolve_snooze_after_${notificationId}`);
     },
     shouldExitOnResolve: true,
   };
@@ -66,9 +81,12 @@ export default function AlarmRoot() {
   const [activeAlarm, setActiveAlarm] = useState<AlarmOverlayProps | null>(null);
 
   useEffect(() => {
-    console.log("[VR] AlarmRoot mount");
+    // Enhanced mount logging (pastebin Step 4.4)
+    vrLog('alarm_root', 'mount', { rootType: 'AlarmRoot', component: 'alarm' });
+    void logAppTaskState('AlarmRoot_mount');
+    
     return () => {
-      console.log("[VR] AlarmRoot unmount");
+      vrLog('alarm_root', 'unmount', { rootType: 'AlarmRoot' });
     };
   }, []);
 
@@ -85,6 +103,12 @@ export default function AlarmRoot() {
           if (!pending || pending.notification?.id !== initialNotification.id) {
             await setPendingAlarm(initialNotification);
           }
+          // Mark as externally launched (AlarmActivity launched from full-screen intent/press)
+          await markPendingAlarmLaunchedExternally(initialNotification.id, "press");
+          vrLog('alarm_root', 'seeded_from_initial', { 
+            notificationId: initialNotification.id,
+            traceId: buildTraceId(initialNotification),
+          });
         }
       } catch {
         // ignore
@@ -97,6 +121,12 @@ export default function AlarmRoot() {
       if (cancelled) return;
 
       if (!pending || pending.resolvedAt) {
+        if (activeAlarm) {
+          vrLog('alarm_root', 'alarm_cleared', { 
+            notificationId: pending?.notification?.id,
+            resolvedAt: pending?.resolvedAt,
+          });
+        }
         setActiveAlarm(null);
         return;
       }
@@ -106,6 +136,13 @@ export default function AlarmRoot() {
 
       setActiveAlarm((prev) => {
         if (prev?.notificationId === props.notificationId) return prev;
+        // Log when alarm UI is first shown
+        vrLog('alarm_root', 'alarm_ui_showing', {
+          notificationId: props.notificationId,
+          traceId: buildTraceId(pending.notification),
+          resolvedAt: pending.resolvedAt,
+          uiShownAt: pending.uiShownAt,
+        });
         return props;
       });
     }

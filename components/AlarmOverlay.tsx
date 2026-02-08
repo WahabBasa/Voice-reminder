@@ -26,12 +26,15 @@ import {
   cancelDisplayedAlarmNotifications,
   markPendingAlarmUiShown,
 } from "../lib/notifications";
+import { buildTraceId } from "../lib/vrLog";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
 import { alarmAudioService } from "../lib/AudioService";
 import { getNextIntervalOccurrence } from "../lib/time";
 import { useReminderStore } from "../lib/store";
 import { removeReminderFully } from "../lib/reminderRemoval";
+import { vrLog, logAlarmLifecycle } from "../lib/vrLog";
+import { logAppTaskState } from "../lib/activityControl";
 
 const { width, height } = Dimensions.get("window");
 const ANDROID_ALARM_ACTIVITY = "com.wahabbasa.VoiceReminder.AlarmActivity";
@@ -94,7 +97,18 @@ export function AlarmOverlay({
   const targetVolume = Math.max(0, Math.min(1, Number(volumeStr) || 1));
 
   useEffect(() => {
-    console.log(`[VR] alarm_overlay_mount notificationId=${notificationId} reminderId=${reminderId}`);
+    // Enhanced mount logging (pastebin Step 4.4)
+    const traceId = buildTraceId({ id: notificationId, data: { reminderId, kind } as any });
+    vrLog('alarm_overlay', 'mount', { 
+      traceId,
+      notificationId, 
+      reminderId,
+      rootType: 'AlarmOverlay_component',
+      source: kind?.includes('snooze') ? 'snooze' : 'reminder',
+    });
+    logAlarmLifecycle('overlay_mount', { traceId, notificationId, reminderId, source: 'AlarmOverlay' });
+    void logAppTaskState('alarm_overlay_mount');
+    
     isMountedRef.current = true;
     isExplicitDismissRef.current = false;
 
@@ -107,13 +121,22 @@ export function AlarmOverlay({
     startVibration();
 
     return () => {
-      console.log("[VR] AlarmOverlay: cleanup, isExplicitDismiss:", isExplicitDismissRef.current);
+      vrLog('alarm_overlay', 'unmount', { 
+        traceId, 
+        notificationId, 
+        reminderId, 
+        isExplicitDismiss: isExplicitDismissRef.current 
+      });
       isMountedRef.current = false;
 
       if (isExplicitDismissRef.current) {
         stopAudio();
       } else {
-        console.log("[VR] AlarmOverlay: Skipping audio stop - not an explicit dismiss");
+        vrLog('alarm_overlay', 'cleanup_skip_audio_stop', { 
+          traceId, 
+          notificationId, 
+          reason: 'not_explicit_dismiss' 
+        });
       }
       stopVibration();
     };
@@ -127,6 +150,30 @@ export function AlarmOverlay({
     const audioPath = `${FileSystem.documentDirectory}reminder_${reminderId}.mp3`;
     console.log("[VR] Audio path:", audioPath);
 
+    // Check if file exists before playing
+    let fileInfo = await FileSystem.getInfoAsync(audioPath);
+    console.log(`[VR] Audio file check: exists=${fileInfo.exists}, size=${fileInfo.exists ? (fileInfo as any).size : 'N/A'}`);
+
+    // If file is missing or empty, try to download it
+    if (!fileInfo.exists || !(fileInfo as any).size) {
+      console.log("[VR] Audio file missing or empty, attempting download...");
+      if (audioUrl) {
+        try {
+          console.log(`[VR] Downloading audio from: ${audioUrl}`);
+          const downloadResult = await FileSystem.downloadAsync(audioUrl, audioPath);
+          console.log(`[VR] Download complete: status=${downloadResult.status}`);
+
+          // Re-check file after download
+          fileInfo = await FileSystem.getInfoAsync(audioPath);
+          console.log(`[VR] Post-download check: exists=${fileInfo.exists}, size=${fileInfo.exists ? (fileInfo as any).size : 'N/A'}`);
+        } catch (downloadErr) {
+          console.log("[VR] ❌ Failed to download audio:", downloadErr);
+        }
+      } else {
+        console.log("[VR] No audioUrl provided, cannot download missing audio");
+      }
+    }
+
     const success = await alarmAudioService.play(audioPath, {
       volume: targetVolume,
       streamType: "alarm",
@@ -139,7 +186,7 @@ export function AlarmOverlay({
     if (success) {
       console.log("[VR] ✅ Alarm overlay audio playing");
     } else {
-      console.log("[VR] ❌ Failed to start alarm overlay audio");
+      console.log(`[VR] ❌ Failed to start alarm overlay audio. File exists=${fileInfo.exists}, size=${fileInfo.exists ? (fileInfo as any).size : 'N/A'}, audioUrl=${audioUrl ? 'present' : 'missing'}`);
     }
   };
 

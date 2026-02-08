@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AppState, InteractionManager, Platform } from "react-native";
+import { InteractionManager } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { ConvexProvider, ConvexReactClient, useMutation } from "convex/react";
 import { StatusBar } from "expo-status-bar";
@@ -8,28 +8,16 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { PortalProvider } from "@gorhom/portal";
 import ToastProvider, { useToast } from "../components/ToastProvider";
 import { initializePurchases } from "../lib/purchases";
-import notifee, { EventType } from "@notifee/react-native";
 import { useReminderStore } from "../lib/store";
-import {
-  getPendingAlarm,
-  setPendingAlarm,
-  syncRemindersOnStartup,
-  buildAlarmTrace,
-  eventTypeName,
-  markPendingAlarmResolved,
-  clearPendingAlarm,
-} from "../lib/notifications";
+import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, cancelDisplayedAlarmNotifications } from "../lib/notifications";
 import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
+import { vrLog } from "../lib/vrLog";
+import { logAppTaskState, isAlarmActivity } from "../lib/activityControl";
+import { alarmAudioService } from "../lib/AudioService";
 import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
-import {
-  finishCurrentTask,
-  finishIfAlarmActivity,
-  getCurrentActivityName,
-  isAlarmActivity,
-  isKeyguardLocked,
-} from "../lib/activityControl";
+import { buildTraceId } from "../lib/vrLog";
 
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string);
 
@@ -101,375 +89,64 @@ function StartupTasks() {
   return null;
 }
 
-export default function RootLayout() {
-  const router = useRouter();
-  const initialNotificationHandledRef = useRef<string | null>(null);
-  const lastAlarmRoutedIdRef = useRef<string | null>(null);
-  const pendingRouteInFlightRef = useRef(false);
+/**
+ * Fallback alarm overlay for when app is in foreground (MainActivity).
+ * Shows AlarmOverlay on top of current screen without navigation.
+ * This is the fallback path - primary path is AlarmActivity -> AlarmRoot.
+ */
+function AlarmOverlayFallback() {
   const [activeAlarm, setActiveAlarm] = useState<AlarmOverlayProps | null>(null);
-  const isAlarmActivityRef = useRef<boolean>(false);
-  const exitInFlightRef = useRef<{ id: string; at: number } | null>(null);
-
-  // Detect AlarmActivity early and refresh before showing overlay
-  useEffect(() => {
-    async function detectActivity() {
-      const name = await getCurrentActivityName();
-      const isAlarm = await isAlarmActivity();
-      isAlarmActivityRef.current = isAlarm;
-      console.log(`[VR] activity_detect name=${name ?? "null"} isAlarmActivity=${isAlarm}`);
-    }
-    detectActivity();
-  }, []);
+  const [isInAlarmActivity, setIsInAlarmActivity] = useState(false);
 
   useEffect(() => {
-    // Defer RevenueCat initialization to not block app startup
-    const task = InteractionManager.runAfterInteractions(() => {
-      void initializePurchases();
-    });
-    return () => task.cancel();
-  }, []);
-
-  useEffect(() => {
-    // If the app was cold-started from a notification press/full-screen intent, route to the alarm screen.
     let cancelled = false;
+    let interval: NodeJS.Timeout | null = null;
 
-    async function routeToAlarmFromNotification(notification: any, reason: string, allowReposted = false): Promise<void> {
-      // Skip navigation entirely if we're in AlarmActivity - overlay handles the UI
+    async function poll() {
+      if (cancelled) return;
+      
+      // Check if we're in AlarmActivity (if so, don't show fallback)
       const inAlarmActivity = await isAlarmActivity();
+      setIsInAlarmActivity(inAlarmActivity);
+      
       if (inAlarmActivity) {
-        console.log(`[VR] skip_route reason=in_alarm_activity`);
-        return;
-      }
-
-      const notificationId = notification?.id || "";
-      const trace = buildAlarmTrace(notification);
-      console.log(`[VR] route_check reason=${reason} allowReposted=${allowReposted} trace=${trace}`);
-      if (!notificationId) {
-        console.log(`[VR] skip_route reason=no_id trace=${trace}`);
-        return;
-      }
-
-      // Ignore reposted/display-only alarm notifications to avoid loops (unless explicitly allowed for PRESS events).
-      const data: any = notification?.data || {};
-      const repostFlag = data?.__reposted;
-      const isReposted = repostFlag === "1" || repostFlag === 1 || repostFlag === true;
-      const isAlarmDisplay = typeof notificationId === "string" && notificationId.startsWith("alarm_display_");
-      if ((isReposted || isAlarmDisplay) && !allowReposted) {
-        console.log(`[VR] skip_route reason=${isReposted ? "reposted" : "alarm_display_id"} id=${notificationId} repost=${repostFlag} kind=${data?.kind}`);
-        return;
-      }
-
-      // Debounce duplicates across startup/foreground/app-active paths.
-      if (lastAlarmRoutedIdRef.current === notificationId) {
-        console.log(`[VR] skip_route reason=dedupe lastId=${lastAlarmRoutedIdRef.current} currentId=${notificationId}`);
-        return;
-      }
-      lastAlarmRoutedIdRef.current = notificationId;
-
-      console.log(`[VR] route_execute reason=${reason} id=${notificationId}`);
-
-      router.push({
-        pathname: "/alarm",
-        params: {
-          notificationId,
-          reminderId: String(data?.reminderId ?? ""),
-          title: String(data?.title ?? notification?.title ?? ""),
-          description: String(data?.description ?? notification?.body ?? ""),
-          snoozeEnabled: String(data?.snoozeEnabled ?? "true"),
-          snoozeDuration: String(data?.snoozeDuration ?? "5"),
-          volume: String(data?.volume ?? "1"),
-          volumeStyle: String(data?.volumeStyle ?? "standard"),
-
-          // Preserve data needed for snooze + reschedule without relying on store hydration.
-          audioUrl: String(data?.audioUrl ?? ""),
-          frequency: String(data?.frequency ?? ""),
-          time: String(data?.time ?? ""),
-          days: String(data?.days ?? ""),
-          intervalDays: String(data?.intervalDays ?? ""),
-
-          // Occurrence + interval metadata
-          scheduledFor: String(data?.scheduledFor ?? ""),
-          intervalMs: String(data?.intervalMs ?? ""),
-          anchorAt: String(data?.anchorAt ?? ""),
-          kind: String(data?.kind ?? ""),
-        },
-      });
-    }
-
-    async function maybeRouteToPendingAlarm(reason: string): Promise<void> {
-      console.log(`[VR] maybeRoute reason=${reason} inFlight=${pendingRouteInFlightRef.current}`);
-      if (pendingRouteInFlightRef.current) {
-        console.log(`[VR] maybeRoute_skip reason=inFlight`);
-        return;
-      }
-      pendingRouteInFlightRef.current = true;
-      try {
-        const pending = await getPendingAlarm();
-        console.log(`[VR] maybeRoute_pending exists=${!!pending} resolvedAt=${pending?.resolvedAt || "none"} id=${pending?.notification?.id || "none"}`);
-        if (!pending || pending.resolvedAt) {
-          console.log(`[VR] maybeRoute_skip reason=${!pending ? "no_pending" : "already_resolved"}`);
-          return;
-        }
-        if (!pending.notification?.id) {
-          console.log(`[VR] maybeRoute_skip reason=no_notification_id`);
-          return;
-        }
-        await routeToAlarmFromNotification(pending.notification, reason);
-      } catch (e) {
-        console.log("[VR] Failed to route pending alarm:", e);
-      } finally {
-        pendingRouteInFlightRef.current = false;
-      }
-    }
-
-    const task = InteractionManager.runAfterInteractions(async () => {
-      try {
-        const initial = await notifee.getInitialNotification();
-        const notification = initial?.notification;
-        if (cancelled || !notification) return;
-
-        const notificationId = notification.id || "";
-        if (notificationId && initialNotificationHandledRef.current === notificationId) return;
-        initialNotificationHandledRef.current = notificationId || "__handled__";
-
-        // Ensure pending alarm exists so we can mark it handled consistently.
-        await setPendingAlarm(notification as any);
-        // Allow reposted notifications for initial_notification since user explicitly tapped
-        await routeToAlarmFromNotification(notification, "initial_notification", true);
-      } catch (e) {
-        console.log("[VR] Failed to read initial notification:", e);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      task.cancel();
-    };
-  }, [router]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function maybeRouteToPendingAlarm(reason: string): Promise<void> {
-      console.log(`[VR] maybeRoute2 reason=${reason} inFlight=${pendingRouteInFlightRef.current}`);
-      if (pendingRouteInFlightRef.current) {
-        console.log(`[VR] maybeRoute2_skip reason=inFlight`);
-        return;
-      }
-      pendingRouteInFlightRef.current = true;
-      try {
-        const pending = await getPendingAlarm();
-        console.log(`[VR] maybeRoute2_pending exists=${!!pending} resolvedAt=${pending?.resolvedAt || "none"} id=${pending?.notification?.id || "none"}`);
-        if (!pending || pending.resolvedAt) {
-          console.log(`[VR] maybeRoute2_skip reason=${!pending ? "no_pending" : "already_resolved"}`);
-          return;
-        }
-        if (!pending.notification?.id) {
-          console.log(`[VR] maybeRoute2_skip reason=no_notification_id`);
-          return;
-        }
-
-        const notificationId = pending.notification.id || "";
-        if (!notificationId) {
-          console.log(`[VR] maybeRoute2_skip reason=empty_id`);
-          return;
-        }
-        if (lastAlarmRoutedIdRef.current === notificationId) {
-          console.log(`[VR] maybeRoute2_skip reason=dedupe lastId=${lastAlarmRoutedIdRef.current}`);
-          return;
-        }
-
-        // Mirror the same routing params as the initial-notification path.
-        const notification: any = pending.notification;
-        const data: any = notification?.data || {};
-        const repostFlag = data?.__reposted;
-        const isReposted = repostFlag === "1" || repostFlag === 1 || repostFlag === true;
-        const isAlarmDisplay = typeof notificationId === "string" && notificationId.startsWith("alarm_display_");
-        if (isReposted || isAlarmDisplay) {
-          console.log(`[VR] maybeRoute2_skip reason=${isReposted ? "reposted" : "alarm_display_id"} id=${notificationId}`);
-          return;
-        }
-
-        lastAlarmRoutedIdRef.current = notificationId;
-        console.log(`[VR] route2_execute reason=${reason} id=${notificationId}`);
-
-        router.push({
-          pathname: "/alarm",
-          params: {
-            notificationId,
-            reminderId: String(data?.reminderId ?? ""),
-            title: String(data?.title ?? notification?.title ?? ""),
-            description: String(data?.description ?? notification?.body ?? ""),
-            snoozeEnabled: String(data?.snoozeEnabled ?? "true"),
-            snoozeDuration: String(data?.snoozeDuration ?? "5"),
-            volume: String(data?.volume ?? "1"),
-            volumeStyle: String(data?.volumeStyle ?? "standard"),
-
-            audioUrl: String(data?.audioUrl ?? ""),
-            frequency: String(data?.frequency ?? ""),
-            time: String(data?.time ?? ""),
-            days: String(data?.days ?? ""),
-            intervalDays: String(data?.intervalDays ?? ""),
-
-            scheduledFor: String(data?.scheduledFor ?? ""),
-            intervalMs: String(data?.intervalMs ?? ""),
-            anchorAt: String(data?.anchorAt ?? ""),
-            kind: String(data?.kind ?? ""),
-          },
-        });
-      } catch (e) {
-        console.log("[VR] Failed to route pending alarm:", e);
-      } finally {
-        pendingRouteInFlightRef.current = false;
-      }
-    }
-
-    const unsubAppState = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        void maybeRouteToPendingAlarm("app_active");
-      }
-    });
-
-    const unsubNotifee = notifee.onForegroundEvent(async (event) => {
-      if (cancelled) return;
-      const trace = buildAlarmTrace(event.detail.notification);
-      console.log(`[VR] layout_fg_event type=${eventTypeName(event.type)} trace=${trace}`);
-
-      if (event.type !== EventType.DELIVERED && event.type !== EventType.PRESS) {
-        console.log(`[VR] layout_fg_skip reason=wrong_type type=${eventTypeName(event.type)}`);
-        return;
-      }
-      const notification: any = event.detail.notification;
-      const data: any = notification?.data || {};
-      const kind = typeof data?.kind === "string" ? (data.kind as string) : "";
-      if (kind !== "reminder_occurrence" && kind !== "snooze_occurrence") {
-        console.log(`[VR] layout_fg_skip reason=wrong_kind kind=${kind}`);
-        return;
-      }
-
-      const id = notification?.id || "";
-      const repostFlag = data?.__reposted;
-      const isReposted = repostFlag === "1" || repostFlag === 1 || repostFlag === true;
-      const isAlarmDisplay = typeof id === "string" && id.startsWith("alarm_display_");
-
-      // For DELIVERED events, skip reposted notifications to prevent loops
-      // For PRESS events, allow them through since user explicitly tapped
-      if (event.type === EventType.DELIVERED && (isAlarmDisplay || isReposted)) {
-        console.log(`[VR] layout_fg_skip reason=${isAlarmDisplay ? "alarm_display_id" : "reposted"} id=${id} eventType=DELIVERED`);
-        return;
-      }
-
-      console.log(`[VR] layout_fg_qualifies id=${id} kind=${kind} eventType=${eventTypeName(event.type)} isReposted=${isReposted}`);
-
-      // Persist pending alarm here too (best-effort) so routing can work even
-      // if handler ordering differs.
-      if (event.type === EventType.DELIVERED) {
-        await setPendingAlarm(notification as any);
-      }
-
-      // For PRESS events on reposted notifications, route directly to alarm
-      if (event.type === EventType.PRESS && (isAlarmDisplay || isReposted)) {
-        // Route directly with allowReposted=true
-        const notificationId = notification?.id || "";
-        if (!notificationId) return;
-        if (lastAlarmRoutedIdRef.current === notificationId) {
-          console.log(`[VR] layout_fg_skip reason=dedupe id=${notificationId}`);
-          return;
-        }
-        lastAlarmRoutedIdRef.current = notificationId;
-        console.log(`[VR] layout_fg_route_direct id=${notificationId} isReposted=${isReposted}`);
-
-        router.push({
-          pathname: "/alarm",
-          params: {
-            notificationId,
-            reminderId: String(data?.reminderId ?? ""),
-            title: String(data?.title ?? notification?.title ?? ""),
-            description: String(data?.description ?? notification?.body ?? ""),
-            snoozeEnabled: String(data?.snoozeEnabled ?? "true"),
-            snoozeDuration: String(data?.snoozeDuration ?? "5"),
-            volume: String(data?.volume ?? "1"),
-            volumeStyle: String(data?.volumeStyle ?? "standard"),
-            audioUrl: String(data?.audioUrl ?? ""),
-            frequency: String(data?.frequency ?? ""),
-            time: String(data?.time ?? ""),
-            days: String(data?.days ?? ""),
-            intervalDays: String(data?.intervalDays ?? ""),
-            scheduledFor: String(data?.scheduledFor ?? ""),
-            intervalMs: String(data?.intervalMs ?? ""),
-            anchorAt: String(data?.anchorAt ?? ""),
-            kind: String(data?.kind ?? ""),
-          },
-        });
-        return;
-      }
-
-      // Route immediately while app is already in foreground.
-      await maybeRouteToPendingAlarm("foreground_event");
-    });
-
-    const task = InteractionManager.runAfterInteractions(() => {
-      void maybeRouteToPendingAlarm("startup");
-    });
-
-    return () => {
-      cancelled = true;
-      unsubAppState.remove();
-      unsubNotifee();
-      task.cancel();
-    };
-  }, [router]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let checkInterval: NodeJS.Timeout | null = null;
-
-    async function checkAndShowAlarm() {
-      if (cancelled) return;
-      const pending = await getPendingAlarm();
-      if (cancelled) return;
-
-      if (!pending || pending.resolvedAt) {
-        const exit = exitInFlightRef.current;
-        const isExitInFlightForActive =
-          Boolean(exit && activeAlarm?.notificationId && exit.id === activeAlarm.notificationId && Date.now() - exit.at < 5000);
-        if (activeAlarm && !isExitInFlightForActive) {
-          console.log(`[VR] overlay_hide reason=${!pending ? "cleared" : "resolved"}`);
+        // Primary path is handling this, hide fallback
+        if (activeAlarm) {
           setActiveAlarm(null);
         }
         return;
       }
 
-      const notificationId = pending.notification?.id;
-      if (!notificationId) return;
+      const pending = await getPendingAlarm();
+      if (cancelled) return;
 
-      if (activeAlarm?.notificationId === notificationId) {
+      if (!pending || pending.resolvedAt) {
+        if (activeAlarm) {
+          vrLog('alarm_overlay_fallback', 'alarm_cleared', { 
+            notificationId: pending?.notification?.id,
+            resolvedAt: pending?.resolvedAt,
+          });
+          setActiveAlarm(null);
+        }
         return;
       }
 
-      // Native detection: determine if we're in AlarmActivity
-      const inAlarmActivity = await isAlarmActivity();
-      isAlarmActivityRef.current = inAlarmActivity;
-      const activityName = await getCurrentActivityName();
-      const keyguardLocked = await isKeyguardLocked();
+      // Build overlay props
+      const notificationId = pending.notification?.id || "";
+      if (!notificationId) return;
 
       const data: any = pending.notification?.data || {};
-      console.log(
-        `[VR] overlay_show id=${notificationId} activity=${activityName ?? "null"} inAlarmActivity=${inAlarmActivity} keyguardLocked=${keyguardLocked}`
-      );
+      const traceId = buildTraceId(pending.notification);
 
-      // New alarm - clear any previous exit latch.
-      exitInFlightRef.current = null;
-
-      const alarmProps: AlarmOverlayProps = {
+      const overlayProps: AlarmOverlayProps = {
         notificationId,
         reminderId: String(data?.reminderId ?? ""),
         title: String(data?.title ?? pending.notification?.title ?? ""),
         description: String(data?.description ?? pending.notification?.body ?? ""),
         audioUrl: String(data?.audioUrl ?? ""),
         frequency: String(data?.frequency ?? ""),
-        time: String(data?.time ?? ""),
         days: String(data?.days ?? ""),
+        time: String(data?.time ?? ""),
         intervalDays: String(data?.intervalDays ?? ""),
         snoozeEnabled: String(data?.snoozeEnabled ?? "true"),
         snoozeDuration: String(data?.snoozeDuration ?? "5"),
@@ -479,90 +156,73 @@ export default function RootLayout() {
         intervalMs: String(data?.intervalMs ?? ""),
         anchorAt: String(data?.anchorAt ?? ""),
         kind: String(data?.kind ?? ""),
+        // Fallback resolve behavior (pastebin Step 4.2):
+        // - mark pending resolved + clear pending
+        // - stop audio
+        // - cancel displayed alarm notifications
+        // - hide overlay (set state null)
+        // - do NOT call finishCurrentTask() / exitApp()
         onDismiss: async () => {
+          vrLog('alarm_overlay_fallback', 'resolve_start', { traceId, notificationId, action: 'dismiss' });
           await markPendingAlarmResolved(notificationId, "dismiss");
           await clearPendingAlarm();
+          await alarmAudioService.stop();
+          await cancelDisplayedAlarmNotifications(notificationId);
+          setActiveAlarm(null);
+          vrLog('alarm_overlay_fallback', 'resolve_complete', { traceId, notificationId, action: 'dismiss' });
         },
         onSnooze: async () => {
+          vrLog('alarm_overlay_fallback', 'resolve_start', { traceId, notificationId, action: 'snooze' });
           await markPendingAlarmResolved(notificationId, "snooze");
           await clearPendingAlarm();
+          await alarmAudioService.stop();
+          await cancelDisplayedAlarmNotifications(notificationId);
+          setActiveAlarm(null);
+          vrLog('alarm_overlay_fallback', 'resolve_complete', { traceId, notificationId, action: 'snooze' });
         },
-        shouldExitOnResolve: inAlarmActivity || keyguardLocked,
+        shouldExitOnResolve: false, // Don't exit app in fallback mode
       };
 
-      setActiveAlarm(alarmProps);
+      setActiveAlarm((prev) => {
+        if (prev?.notificationId === overlayProps.notificationId) return prev;
+        vrLog('alarm_overlay_fallback', 'alarm_ui_showing', {
+          notificationId: overlayProps.notificationId,
+          traceId,
+        });
+        return overlayProps;
+      });
     }
 
-    // Run immediately for cold start / lockscreen responsiveness
-    checkAndShowAlarm();
-
-    checkInterval = setInterval(() => {
-      if (!cancelled) {
-        checkAndShowAlarm();
-      }
-    }, 1000);
+    // Poll immediately and then every 500ms
+    void poll();
+    interval = setInterval(() => {
+      void poll();
+    }, 500);
 
     return () => {
       cancelled = true;
-      if (checkInterval) clearInterval(checkInterval);
+      if (interval) clearInterval(interval);
     };
-  }, [activeAlarm]);
+  }, []);
 
-  const handleOverlayDismiss = async () => {
-    if (!activeAlarm) return;
-    const notificationId = activeAlarm.notificationId;
+  // Only render if we have an active alarm and we're NOT in AlarmActivity
+  if (!activeAlarm || isInAlarmActivity) return null;
 
-    const inAlarmActivity = await isAlarmActivity();
-    const keyguardLocked = await isKeyguardLocked();
-    const shouldExitTask = inAlarmActivity || keyguardLocked;
-    if (shouldExitTask) {
-      exitInFlightRef.current = { id: notificationId, at: Date.now() };
-    }
+  return <AlarmOverlay {...activeAlarm} />;
+}
 
-    await markPendingAlarmResolved(notificationId, "dismiss");
-    await clearPendingAlarm();
-
-    let didFinish = false;
-    if (shouldExitTask) {
-      didFinish = inAlarmActivity ? await finishIfAlarmActivity() : await finishCurrentTask();
-    }
-    console.log(
-      `[VR] handleOverlayDismiss exit=${shouldExitTask} inAlarmActivity=${inAlarmActivity} keyguardLocked=${keyguardLocked} didFinish=${didFinish}`
-    );
-
-    if (!shouldExitTask || !didFinish) {
-      exitInFlightRef.current = null;
-      setActiveAlarm(null);
-    }
-  };
-
-  const handleOverlaySnooze = async () => {
-    if (!activeAlarm) return;
-    const notificationId = activeAlarm.notificationId;
-
-    const inAlarmActivity = await isAlarmActivity();
-    const keyguardLocked = await isKeyguardLocked();
-    const shouldExitTask = inAlarmActivity || keyguardLocked;
-    if (shouldExitTask) {
-      exitInFlightRef.current = { id: notificationId, at: Date.now() };
-    }
-
-    await markPendingAlarmResolved(notificationId, "snooze");
-    await clearPendingAlarm();
-
-    let didFinish = false;
-    if (shouldExitTask) {
-      didFinish = inAlarmActivity ? await finishIfAlarmActivity() : await finishCurrentTask();
-    }
-    console.log(
-      `[VR] handleOverlaySnooze exit=${shouldExitTask} inAlarmActivity=${inAlarmActivity} keyguardLocked=${keyguardLocked} didFinish=${didFinish}`
-    );
-
-    if (!shouldExitTask || !didFinish) {
-      exitInFlightRef.current = null;
-      setActiveAlarm(null);
-    }
-  };
+export default function RootLayout() {
+  useEffect(() => {
+    // Log router root mount (pastebin Step 4.4)
+    vrLog('router', 'root_mounted', { rootType: 'expo-router', component: 'main' });
+    void logAppTaskState('router_root_mounted');
+    
+    // Defer RevenueCat initialization to not block app startup
+    const task = InteractionManager.runAfterInteractions(() => {
+      void initializePurchases();
+    });
+    return () => task.cancel();
+  }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -571,13 +231,6 @@ export default function RootLayout() {
           <ConvexProvider client={convex}>
             <ToastProvider>
               <StartupTasks />
-              {activeAlarm && (
-                <AlarmOverlay
-                  {...activeAlarm}
-                  onDismiss={handleOverlayDismiss}
-                  onSnooze={handleOverlaySnooze}
-                />
-              )}
               <StatusBar style="light" />
               <Stack
                 screenOptions={{
@@ -622,17 +275,9 @@ export default function RootLayout() {
                     contentStyle: { backgroundColor: "white" },
                   }}
                 />
-                <Stack.Screen
-                  name="alarm"
-                  options={{
-                    animation: "fade",
-                    animationDuration: 150,
-                    presentation: "fullScreenModal",
-                    headerShown: false,
-                    gestureEnabled: false,
-                  }}
-                />
               </Stack>
+              {/* Fallback alarm overlay for foreground app (pastebin Step 4.1) */}
+              <AlarmOverlayFallback />
             </ToastProvider>
           </ConvexProvider>
         </SafeAreaProvider>

@@ -21,6 +21,8 @@ import {
 } from "expo-file-system/legacy";
 import { getNextIntervalOccurrence, getNextTriggerTime, ReminderSchedule } from "./time";
 import { Reminder, ReminderHistory, useReminderStore } from "./store";
+import { vrLog, buildTraceId } from "./vrLog";
+import { logAppTaskState } from "./activityControl";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
 
 export class ExactAlarmPermissionError extends Error {
@@ -54,17 +56,8 @@ export function eventTypeName(type: EventType): string {
   return EVENT_TYPE_NAMES[type] || `UNKNOWN(${type})`;
 }
 
-export function buildAlarmTrace(notification?: { id?: string; data?: Record<string, any> } | null): string {
-  if (!notification) return "no_notification";
-  const data = notification.data || {};
-  const id = notification.id || "";
-  const reminderId = data.reminderId || "";
-  const scheduledFor = data.scheduledFor || "";
-  const kind = data.kind || "";
-  const reposted = data.__reposted || "0";
-  return `${id}|${reminderId}|${scheduledFor}|${kind}|repost=${reposted}`;
-}
-
+// Note: buildTraceId() has been moved to vrLog.ts - use that instead
+// Keeping re-export for backwards compatibility during transition
 type PendingAlarmNotification = {
   id?: string;
   title?: string;
@@ -79,6 +72,8 @@ export type PendingAlarm = {
   uiShownAt?: number;
   resolvedAt?: number;
   resolvedAction?: "dismiss" | "snooze";
+  launchOrigin?: "fullScreen" | "press" | "unknown";
+  launchedExternallyAt?: number;
 };
 
 function toPendingNotification(notification?: PendingAlarmNotification | null): PendingAlarmNotification {
@@ -104,7 +99,15 @@ export async function setPendingAlarm(
   try {
     await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(payload));
     const data = notification.data || {};
-    console.log(`[VR] pending_set id=${notification.id} kind=${data.kind || ""} repost=${data.__reposted || "0"}`);
+    const trace = buildTraceId(notification);
+    vrLog('pending_alarm', 'state_transition', {
+      state: 'pending_set',
+      traceId: trace,
+      notificationId: notification.id,
+      incomingId: notification.id,
+      kind: data.kind || "",
+      repost: data.__reposted || "0",
+    });
   } catch (e) {
     console.log("[VR] Failed to persist pending alarm:", e);
   }
@@ -170,7 +173,12 @@ export async function markPendingAlarmRinging(notificationId: string): Promise<v
     if (pending.ringingAt) return;
     pending.ringingAt = Date.now();
     await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(pending));
-    console.log(`[VR] alarm_state ringing_set id=${notificationId}`);
+    const trace = buildTraceId(pending.notification);
+    vrLog('pending_alarm', 'state_transition', {
+      state: 'ringing_set',
+      traceId: trace,
+      notificationId,
+    });
   } catch (e) {
     console.log("[VR] Failed to mark alarm ringing:", e);
   }
@@ -186,7 +194,12 @@ export async function markPendingAlarmUiShown(notificationId: string): Promise<v
     if (pending.uiShownAt) return;
     pending.uiShownAt = Date.now();
     await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(pending));
-    console.log(`[VR] alarm_state ui_shown_set id=${notificationId}`);
+    const trace = buildTraceId(pending.notification);
+    vrLog('pending_alarm', 'state_transition', {
+      state: 'ui_shown_set',
+      traceId: trace,
+      notificationId,
+    });
   } catch (e) {
     console.log("[VR] Failed to mark alarm UI shown:", e);
   }
@@ -203,16 +216,50 @@ export async function markPendingAlarmResolved(notificationId: string, action: "
     pending.resolvedAt = Date.now();
     pending.resolvedAction = action;
     await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(pending));
-    console.log(`[VR] alarm_state resolved_set id=${notificationId} action=${action}`);
+    const trace = buildTraceId(pending.notification);
+    vrLog('pending_alarm', 'state_transition', {
+      state: 'resolved_set',
+      traceId: trace,
+      notificationId,
+      action,
+    });
   } catch (e) {
     console.log("[VR] Failed to mark alarm resolved:", e);
   }
 }
 
+export async function markPendingAlarmLaunchedExternally(
+  notificationId: string,
+  origin: "fullScreen" | "press" | "unknown"
+): Promise<void> {
+  if (!notificationId) return;
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_ALARM_KEY);
+    if (!raw) return;
+    const pending = JSON.parse(raw) as PendingAlarm;
+    if (pending?.notification?.id !== notificationId) return;
+    // Only set if not already set (latched)
+    if (pending.launchedExternallyAt) return;
+    pending.launchOrigin = origin;
+    pending.launchedExternallyAt = Date.now();
+    await AsyncStorage.setItem(PENDING_ALARM_KEY, JSON.stringify(pending));
+    console.log(`[VR] alarm_origin_set id=${notificationId} origin=${origin}`);
+  } catch (e) {
+    console.log("[VR] Failed to mark alarm launched externally:", e);
+  }
+}
+
 export async function clearPendingAlarm(): Promise<void> {
   try {
+    // Get trace info before clearing
+    const pending = await getPendingAlarm();
+    const trace = pending ? buildTraceId(pending.notification) : "no_pending";
+    
     await AsyncStorage.removeItem(PENDING_ALARM_KEY);
-    console.log(`[VR] pending_clear`);
+    vrLog('pending_alarm', 'state_transition', {
+      state: 'pending_clear',
+      traceId: trace,
+    });
   } catch (e) {
     console.log("[VR] Failed to clear pending alarm:", e);
   }
@@ -591,28 +638,60 @@ export async function deleteReminderWithAudio(reminderId: string): Promise<void>
 
 export async function handleNotificationEvent(event: Event): Promise<void> {
   const { type, detail } = event;
-  const trace = buildAlarmTrace(detail.notification);
-  console.log(`[VR] handleEvent type=${eventTypeName(type)} trace=${trace}`);
-
+  const trace = buildTraceId(detail.notification);
+  
+  // Strengthened logging (pastebin Step 4.2)
   const notificationData = detail.notification?.data;
-  const kind = typeof notificationData?.kind === "string" ? (notificationData.kind as string) : "";
-  const reminderId =
-    typeof notificationData?.reminderId === "string" ? (notificationData.reminderId as string) : "";
   const notificationId = detail.notification?.id || "";
+  const kind = typeof notificationData?.kind === "string" ? notificationData.kind : "";
+  const reminderId = typeof notificationData?.reminderId === "string" ? notificationData.reminderId : "";
+  const scheduledFor = String(notificationData?.scheduledFor || "");
+  const repostFlag = (notificationData as any)?.__reposted;
+  const isRepostedFlag = repostFlag === "1" || repostFlag === 1 || repostFlag === true;
+  const isAlarmDisplayNotification = notificationId.startsWith("alarm_display_");
+  const pressActionId = detail.pressAction?.id || "";
+  
+  vrLog('notifee', 'handleEvent_start', {
+    traceId: trace,
+    type: eventTypeName(type),
+    id: notificationId,
+    pressActionId,
+    kind,
+    reminderId,
+    scheduledFor,
+    repost: isRepostedFlag,
+    alarmDisplay: isAlarmDisplayNotification,
+  });
+  
+  // Call native state dump at key events (pastebin Step 4.5) - non-blocking
+  void logAppTaskState(`notifee_${eventTypeName(type)}_${notificationId}`);
 
   const shouldHandleAsAlarm =
     Boolean(reminderId) && (kind === "reminder_occurrence" || kind === "snooze_occurrence");
 
-  const repostFlag = (notificationData as any)?.__reposted;
-  const isRepostedFlag = repostFlag === "1" || repostFlag === 1 || repostFlag === true;
-  const isAlarmDisplayNotification =
-    typeof notificationId === "string" && notificationId.startsWith("alarm_display_");
   const isRepostNotification = isAlarmDisplayNotification || isRepostedFlag;
 
-  console.log(`[VR] handleEvent_flags alarm=${shouldHandleAsAlarm} repostFlag=${isRepostedFlag} alarmDisplayId=${isAlarmDisplayNotification} isRepost=${isRepostNotification}`);
+  vrLog('notifee', 'handleEvent_flags', {
+    traceId: trace,
+    shouldHandleAsAlarm,
+    repostFlag: isRepostedFlag,
+    alarmDisplayId: isAlarmDisplayNotification,
+    isRepost: isRepostNotification,
+  });
 
   if (type === EventType.DELIVERED && shouldHandleAsAlarm && !isRepostNotification) {
     await setPendingAlarm(detail.notification as PendingAlarmNotification);
+  }
+
+  // Handle PRESS events - mark as externally launched for alarm notifications
+  if (type === EventType.PRESS && shouldHandleAsAlarm) {
+    // Skip alarm_display_* notifications - their IDs don't match the real pending alarm
+    if (!isAlarmDisplayNotification) {
+      // Ensure pending exists before marking origin
+      await setPendingAlarm(detail.notification as PendingAlarmNotification);
+      // Mark as externally launched (user tapped notification)
+      await markPendingAlarmLaunchedExternally(notificationId, "press");
+    }
   }
 
   async function startAlarmAudioIfPossible(): Promise<void> {

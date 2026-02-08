@@ -1,205 +1,136 @@
-Confirm intended semantics
+Revised Agent Handoff Plan (Primary AlarmActivity + Fallback In‑App Overlay, no router navigation)
 
-Treat “active reminder” as: “a reminder that can still fire in the future.”
-For frequency="once": after the user dismisses/marks done, it should become inactive and free a slot.
-For recurring reminders: dismissing an occurrence should NOT remove the reminder (it’s still active).
-Stop hiding “active” state behind history
+Target behavior (non-negotiables)
+When alarm fires on lockscreen/background: only alarm UI is visible (no tabs/home beneath), audio plays, dismiss/snooze works, and the alarm task closes on resolve.
+When alarm fires while app is already open (foreground): show an overlay in MainActivity (no navigation), dismiss/snooze hides overlay and returns user to where they were.
+No alarm flow should ever navigate expo-router to /alarm automatically. /alarm may exist only as a manual/debug route.
+1) Establish canonical architecture (write this at top of pastebin.md)
+Primary UI path: Notifee fullScreenAction ➜ AlarmActivity ➜ React root "alarm" ➜ AlarmRoot ➜ AlarmOverlay.
+Fallback UI path: Notifee events while app is foreground ➜ store pending alarm ➜ RootLayout renders AlarmOverlay over the app.
+Forbidden: router.push("/alarm"), Linking.openURL(".../alarm"), or any background navigation attempts.
+Acceptance
 
-Extract a shared helper isReminderActive(reminder, history, now) (or similar) that returns whether a reminder should count as active.
-Use that helper for both:
-Home list rendering (what “All” shows)
-Gating count (what blocks creation)
-This removes the current mismatch: “All empty” vs “active count is 5”.
-Make one-time reminders actually become inactive
+Grepping repo shows no automatic routing to /alarm from notification handlers.
+2) Fix “android is ignored” problem (make native logging + modules survive prebuild)
+Your repo ignores /android (.gitignore), so all native changes must be produced by config plugins.
 
-When an alarm is dismissed for a one-time reminder:
-Delete or archive the reminder record (recommended: delete from useReminderStore.reminders + storage, and remove Convex reminder/audio + local audio file + cancel triggers).
-When a reminder is marked done from the list (not via alarm screen):
-Apply the same rule: if it’s frequency="once", delete/archive it instead of only writing history.
-Files to touch (agent handoff):
+2.1 Move current native logging into plugins
+Update withAlarmAudioModule.js to generate:
+ActivityTracker.kt (lifecycle callbacks + lastResumed state + logCurrentState(reason)).
+ActivityControlModule.kt with:
+existing methods (getCurrentActivityName, isAlarmActivity, isKeyguardLocked, finishIfAlarmActivity, finishCurrentTask)
+new logAppTaskState(reason) that:
+calls ActivityTracker.logCurrentState(reason)
+logs reactContext.currentActivity + taskId
+logs ActivityManager.appTasks topActivity/numActivities
+Ensure AlarmAudioPackage.kt registers both modules.
+2.2 Ensure MainApplication.kt registers the tracker (plugin-generated)
+Extend withMainApplication patch logic to:
+add registerActivityLifecycleCallbacks(ActivityTracker)
+add any required imports
+be idempotent (running prebuild twice must not duplicate)
+Acceptance
 
-alarm.tsx: after recording completion, if reminder is once, call the unified “remove reminder fully” path.
-index.tsx: handleMarkDone / bulk done path should also remove once reminders.
-Centralize deletion into one function used by both (avoid duplicating “delete store + delete audio + remove Convex”).
-Add a startup cleanup for existing “ghost actives”
+After npx.cmd expo prebuild --platform android --clean, the generated Android project contains the tracker + updated module, and build succeeds without manually editing /android.
+3) Make Activity logging deterministic and versioned (native, via plugins)
+3.1 AlarmActivity generation
+In withFullScreenAlarm.js:
+Keep writing AlarmActivity.kt with:
+ALARM_ACTIVITY_LOG_VERSION
+lifecycle logs (onCreate, onNewIntent, onResume, onPause, onStop, onDestroy)
+sanitized extras dump
+getMainComponentName() = "alarm"
+Ensure the manifest entry stays correct: taskAffinity, excludeFromRecents, showWhenLocked, turnScreenOn.
+3.2 MainActivity patching
+In withFullScreenAlarm.js:
+Patch/write MainActivity.kt to include:
+MAIN_ACTIVITY_LOG_VERSION
+same lifecycle logs + sanitized extras
+Make patching idempotent using the version marker (if marker exists, skip).
+Acceptance
 
-On app start (after reminders + history loaded), scan for frequency="once" reminders that already have a “completed/dismissed” history entry for their occurrence and are past-due, then delete/archive them.
-This fixes users who already accumulated hidden reminders.
-Likely place:
+Logcat shows [VR][NATIVE][AlarmActivity] ... version=... and [VR][NATIVE][MainActivity] ... version=... in real runs, proving correct native build.
+4) Implement the fallback overlay in expo-router RootLayout (without navigation)
+4.1 Re-introduce overlay rendering in _layout.tsx
+Add state for activeAlarmOverlayProps and mount AlarmOverlay at the top level (as before), but do not add a Stack route for alarm and do not call router navigation.
+The overlay should show when:
+app is in foreground AND
+there is a pending alarm not resolved AND
+we are not in AlarmActivity (use native isAlarmActivity() if available, otherwise treat as not-alarm).
+4.2 Define overlay resolve behavior
+On dismiss/snooze inside MainActivity:
+mark pending resolved + clear pending
+stop audio
+cancel displayed alarm notifications
+hide overlay (set state null)
+do not call finishCurrentTask() / exitApp() (since user is using the app)
+4.3 Primary path resolve behavior (AlarmRoot)
+In AlarmRoot.tsx resolve callbacks:
+mark pending resolved + clear pending
+call finishIfAlarmActivity() (and only fallback to finishCurrentTask() if needed)
+This ensures “only alarm UI” and closes it cleanly.
+Acceptance
 
-_layout.tsx startup task or a store action like cleanupExpiredOnceReminders().
-Update Completed tab behavior
+Foreground alarm: overlay appears over current screen, dismiss returns to same screen.
+Lockscreen alarm: AlarmActivity closes on dismiss, does not reveal main app UI.
+5) Remove automatic /alarm route usage (keep only manual/debug if desired)
+Ensure notifications.ts + index.ts never attempt to open /alarm via linking or router.
+If /alarm route exists, label it as debug/manual only.
+Update alarm.tsx semantics:
+It should not try to “exit app” in general; it’s a debug route in MainActivity context.
+Consider adding a banner log: rootType=debug_route.
+Acceptance
 
-After deleting once reminders, Completed entries won’t have a backing reminder to open/edit.
-Decide behavior:
-Press does nothing + toast (“This one-time reminder was completed and removed”), or
-Open a read-only “history detail” view.
-Validation checklist
+No production alarm flow depends on /alarm.
+6) Logging cleanup (make it “cut and clear” with minimal duplication)
+6.1 One canonical traceId
+Pick one function for correlation:
+either keep buildAlarmTrace() and remove buildTraceId(), or vice versa.
+Ensure trace includes: notificationId, reminderId, scheduledFor, kind, repost.
+6.2 Remove double-logging of pending state transitions
+Choose one line per state write:
+either logPendingAlarmState(...) only, or vrLog(...) only.
+Ensure every state transition prints: state=... traceId=... notificationId=... incomingId=... action=...
+6.3 Don’t block Notifee background handler
+Calls to logAppTaskState() from handleNotificationEvent() should be non-blocking:
+do void logAppTaskState(...) (or gate behind a debug flag).
+Keep the structured vrLog for Notifee events (cheap).
+Acceptance
 
-Create 5 one-time reminders → 6th blocked.
-Let them fire and dismiss → active list drops (slots free) → can create again.
-Mark a one-time reminder done from list → it is removed and frees a slot.
-Recurring reminder dismissed → stays active and still counts.
-After restart, “All” and gating agree (no more “All empty but upgrade required”).
-Handoff Plan (agent execution plan, with target files)
+Grepping logcat for traceId=... yields a clean single timeline without 2–3 duplicate lines per event.
+7) Remove confusing duplicates / dead files
+Delete AlarmScreen.tsx if it’s not used.
+Ensure only one alarm UI implementation is “real”:
+AlarmActivity path uses AlarmRoot + AlarmOverlay.
+Fallback uses AlarmOverlay.
+/alarm route is debug-only (optional).
+Acceptance
 
-Goal
-
-When an alarm fires on a locked device: only the alarm UI shows (full-screen), audio plays, and Dismiss/Snooze works reliably without reopening the main app UI or causing navigation errors.
-Core issues to fix
-
-Dual-launch: Notifee launches AlarmActivity, but JS also deep-links voicereminder:///alarm... which launches MainActivity too.
-Multiple React roots: AlarmActivity + MainActivity both mounting expo-router triggers the “linking configured in multiple places” warning and unstable navigation.
-Re-fire loop: one-time reminders without a persisted scheduledFor get re-scheduled by startup sync after delivery, hit “past => now+5s”, and keep firing.
-Dismiss errors: dismiss tries router.replace while expo-router root isn’t ready due to churn/multiple roots.
-Step 1 — Establish a clean, reproducible baseline
-Run a clean native regen/build so you’re not debugging stale /android output (since /android is gitignored).
-Repro checklist: create a single “once in 2–5 min” reminder → lock screen → let it fire → dismiss.
-Capture logs confirming whether index.ts is still doing Linking.openURL during that flow.
-Files (read-only for this step):
-
-index.ts (line 61)
-_layout.tsx (line 105)
-Step 2 — Remove deep-link navigation as the alarm routing mechanism
-Objective: Stop launching MainActivity via voicereminder:///alarm....
-
-Actions:
-
-Remove/disable all alarm UI routing via Linking.openURL(...) from index.ts.
-Ensure index.ts never tries to navigate the UI; it should only record state (pending alarm) and let the mounted router decide.
-Files to change:
-
-index.ts (line 1) (remove expo-linking usage for alarm routing)
-index.ts (line 34) (the navigateToAlarmScreen function)
-index.ts (line 134) (AppState “active” pending-alarm navigation)
-Expected outcome:
-
-Alarm flow no longer triggers MainActivity by deep link, reducing the “app screen shows up” symptom and the expo-router linking warning.
-Step 3 — Centralize alarm routing inside expo-router (RootLayout only)
-Objective: Only navigate once the router is mounted/ready, and do it from a single place.
-
-Actions:
-
-In _layout.tsx, add a single “alarm bootstrap” routine that decides whether to show /alarm based on:
-notifee.getInitialNotification() (covers cold-start/full-screen launches)
-persisted pending alarm (getPendingAlarm() from notifications.ts)
-Ensure this routing runs after the router is ready (avoid the “Attempted to navigate before mounting Root Layout” class of errors).
-Files to change:
-
-_layout.tsx (line 86) (the existing getInitialNotification() effect; extend it)
-notifications.ts (line 863) (may need coordination with startup sync; see Step 6/7)
-Potentially add a small helper module for “router-ready gating”:
-new file (if needed): routerReady.ts (or similar)
-Expected outcome:
-
-Alarm UI routing becomes deterministic and happens only when the navigation tree exists.
-Step 4 — Ensure only one activity is lock-screen-capable
-Objective: Prevent the “normal app UI” from being allowed on the lock screen.
-
-Actions:
-
-Make MainActivity not set setShowWhenLocked(true) / setTurnScreenOn(true).
-Keep lock-screen flags only in AlarmActivity.
-Important note:
-
-/android is gitignored (.gitignore has /android), so the durable fix must be via plugins + expo prebuild --clean, not manual edits to generated native files.
-Files to change:
-
-If MainActivity lockscreen flags are being injected by a plugin, fix the plugin. Candidates:
-withFullScreenAlarm.js (extend it to ensure MainActivity is NOT modified)
-If another plugin is responsible, update that plugin instead.
-Verify generated output after prebuild (but don’t commit /android):
-MainActivity.kt (verification only)
-Expected outcome:
-
-Even if MainActivity launches for any reason, it won’t present over the lock screen.
-Step 5 — Make “pending alarm” the single source of truth for “alarm is active”
-Objective: Avoid repeated opens and simplify “what should happen when an alarm delivered while backgrounded”.
-
-Actions:
-
-Ensure handleNotificationEvent(EventType.DELIVERED) always writes pending-alarm state for trigger notifications.
-Ensure every successful “open alarm UI” path marks it handled exactly once.
-Ensure Dismiss/Snooze clears pending alarm.
-Files to change:
-
-notifications.ts (line 484) (handleNotificationEvent)
-notifications.ts pending-alarm helpers (setPendingAlarm, getPendingAlarm, markPendingAlarmHandled, clearPendingAlarm)
-alarm.tsx (line 158) (handleDismiss) and alarm.tsx (line 203) (handleSnooze) already call clear helpers—keep behavior consistent.
-Expected outcome:
-
-No more “alarm delivered in background → app active → open alarm → reopen again” loops.
-Step 6 — Persist scheduledFor for one-time reminders (fix the reschedule loop)
-Objective: Prevent “once” reminders from being rescheduled after they already fired.
-
-Root cause:
-
-If a once reminder doesn’t store its scheduled occurrence timestamp, syncRemindersOnStartup can treat it as unscheduled and recreate it. Since the intended time is now in the past, scheduleReminder falls back to “now + 5s” and the alarm keeps firing.
-Actions:
-
-Whenever a reminder is scheduled, persist the returned triggerTimestamp into the reminder record as scheduledFor.
-Ensure this is applied for:
-voice-created reminders
-manually-created reminders
-edited reminders (reschedule path)
-Files to change:
-
-notifications.ts (line 298) (scheduleReminder returns triggerTimestamp; ensure call sites store it)
-Call sites (search for scheduleReminder():
-likely index.tsx (voice reminder flow)
-new.tsx (manual create)
-anywhere rescheduling happens after edits
-Data model:
-store.ts (Reminder type + update action)
-storage.ts (serialization/migration if needed)
-Expected outcome:
-
-Once an alarm fires, a restart doesn’t recreate it as “now + 5s”.
-Step 7 — Harden startup sync so it cannot resurrect fired one-time alarms
-Objective: Even if old data exists (missing scheduledFor), prevent rapid reschedule loops.
-
-Actions:
-
-In syncRemindersOnStartup, add logic to skip scheduling once reminders that are “logically expired”:
-If frequency === "once" and computed due time is in the past, do not schedule.
-If there is a pending alarm for that reminder/occurrence, do not schedule a new trigger.
-Optionally add a one-time migration: if a once reminder has no scheduledFor, compute and store it once.
-Files to change:
-
-notifications.ts (line 863) (syncRemindersOnStartup)
-time.ts (line 240) (getNextTriggerTime, for consistent computation)
-Expected outcome:
-
-Startup sync can’t become an alarm generator.
-Step 8 — Make dismiss/snooze navigation resilient
-Objective: Dismiss never throws “navigate before mounting Root Layout”.
-
-Actions:
-
-Ensure AlarmScreen closing does not call router actions until the router is ready.
-If needed, replace “close via router” with “close via activity finish” for AlarmActivity (native bridge), but only if router-ready gating is insufficient.
-Files to change:
-
-alarm.tsx (line 132) (closeAlarmScreen)
-(Optional, if needed) add a small native module/plugin to finish AlarmActivity:
-withFullScreenAlarm.js (generate Kotlin helper)
-JS wrapper in AlarmActivityControl.ts
-Expected outcome:
-
-Pressing Dismiss/Snooze never cascades into repeated promise rejections.
-Step 9 — Validation matrix (must-pass)
-Locked screen fire: alarm UI only, no main UI underneath.
-Dismiss:
-stops audio immediately
-closes alarm UI
-no further deliveries for once reminders
-Snooze:
-schedules exactly one snooze
-fires once at snooze time
-Repeating reminders:
-dismiss stops current ring
-next occurrence remains scheduled
-No logs:
-no “configured linking in multiple places”
-no “Attempted to navigate before mounting Root Layout”
-no repeated “Trigger time is in the past, adjusting to now + 5s” loops
+Search results for “AlarmScreen” / “/alarm” don’t show duplicate unused implementations.
+8) Verification script (agent must run)
+Clean native regen:
+npx.cmd expo prebuild --platform android --clean
+npx.cmd expo run:android
+Logging capture:
+adb logcat -c
+adb logcat -v time | rg "\[VR\]"
+Scenarios:
+App killed → alarm fires (lockscreen) → dismiss
+App background → alarm fires → snooze
+App foreground → alarm fires → overlay shows → dismiss (no navigation)
+Verify repost path (alarm_display_*) still results in AlarmActivity UI and trace is consistent
+Pass criteria:
+Lockscreen: native logs show AlarmActivity resumed; JS logs show AlarmRoot mount; resolve logs show finishIfAlarmActivity called; no router UI visible.
+Foreground: native logs show MainActivity resumed; JS logs show AlarmOverlay mount in router root; dismiss hides overlay; no task finish.
+9) Final deliverables for the agent
+Updated plugins:
+withAlarmAudioModule.js (generates tracker + updated ActivityControlModule + registers tracker)
+withFullScreenAlarm.js (AlarmActivity + MainActivity logging/idempotent)
+JS:
+_layout.tsx overlay fallback restored (no navigation)
+notifications.ts no /alarm routing; non-blocking dumps; clean traceId + pending-state logs
+AlarmRoot.tsx primary resolve closes AlarmActivity
+vrLog.ts cleaned up (single traceId function, no duplicate state logs)
+Cleanup:
+remove AlarmScreen.tsx (if unused)
+optional: clarify alarm.tsx is debug-only or remove from app routes
