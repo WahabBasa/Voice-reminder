@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createTraceId, perfLog } from './perf';
 import { migrateLegacySchedule } from './schedule';
+import { checkCanCreateWithCount, ReminderLimitExceededError } from './usageGate';
+import { getNextTriggerTime, type ReminderSchedule } from './time';
 
 const REMINDERS_KEY = '@reminders';
 const HISTORY_KEY = '@reminder_history';
@@ -100,6 +102,49 @@ interface ReminderState {
 }
 
 let loadRemindersInFlight: Promise<void> | null = null;
+
+function hasAnyCompletionEntry(history: ReminderHistory[], reminderId: string): boolean {
+    for (const entry of history) {
+        if (entry.reminderId !== reminderId) continue;
+        if (entry.status === 'completed' || entry.status === 'missed') return true;
+    }
+    return false;
+}
+
+function getOnceTargetTimestamp(reminder: Reminder, nowMs: number): number {
+    if (!reminder.time) return nowMs;
+    const [hours, minutes] = reminder.time.split(':').map(Number);
+
+    if (reminder.date) {
+        const [year, month, day] = reminder.date.split('-').map(Number);
+        return new Date(year, month - 1, day, hours, minutes, 0, 0).getTime();
+    }
+
+    const schedule: ReminderSchedule = {
+        time: reminder.time,
+        frequency: 'once',
+        intervalDays: reminder.intervalDays,
+        scheduledFor: reminder.scheduledFor,
+    };
+    return getNextTriggerTime(schedule, nowMs);
+}
+
+function isReminderActiveForGate(reminder: Reminder, history: ReminderHistory[], nowMs: number): boolean {
+    if (reminder.frequency === 'interval') return true;
+    if (reminder.frequency !== 'once') return true;
+    if (hasAnyCompletionEntry(history, reminder.id)) return false;
+    const target = getOnceTargetTimestamp(reminder, nowMs);
+    return target > nowMs;
+}
+
+function getActiveReminderCountForGate(reminders: Reminder[], history: ReminderHistory[]): number {
+    const nowMs = Date.now();
+    let count = 0;
+    for (const reminder of reminders) {
+        if (isReminderActiveForGate(reminder, history, nowMs)) count += 1;
+    }
+    return count;
+}
 
 export const useReminderStore = create<ReminderState>((set, get) => ({
     // Initial state
@@ -232,7 +277,6 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
     // Add a new reminder
     addReminder: async (reminder) => {
         // Check if user can create more reminders (enforces free tier limit)
-        const { checkCanCreateWithCount, getActiveReminderCount, ReminderLimitExceededError } = await import('./usage');
         const gateTraceId = createTraceId('gate');
 
         // Close cold-start race: ensure reminders are loaded before counting.
@@ -243,7 +287,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
             await get().loadReminders();
         }
 
-        const currentCount = getActiveReminderCount();
+        const currentCount = getActiveReminderCountForGate(get().reminders, get().history);
         const { canCreate, limit } = await checkCanCreateWithCount(currentCount);
 
         if (!canCreate) {

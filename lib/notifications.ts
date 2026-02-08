@@ -521,9 +521,29 @@ export async function scheduleReminder(
 
   // Try new unified schedule system first
   if (reminder.scheduleType) {
+    // Backward/fast-path safety: if we have a one-time scheduleType but no onceAt,
+    // derive it from `date` + `time` on-device (local timezone).
+    let onceAt = reminder.onceAt;
+    if (reminder.scheduleType === "once" && !onceAt && reminder.time) {
+      const [hours, minutes] = reminder.time.split(":").map(Number);
+      if (reminder.date) {
+        const [year, month, day] = reminder.date.split("-").map(Number);
+        const derived = new Date(year, month - 1, day, hours, minutes, 0, 0).getTime();
+        if (Number.isFinite(derived)) onceAt = derived;
+      } else if (Number.isFinite(hours) && Number.isFinite(minutes)) {
+        const target = new Date();
+        target.setHours(hours, minutes, 0, 0);
+        if (target.getTime() <= Date.now()) {
+          target.setDate(target.getDate() + 1);
+        }
+        const derived = target.getTime();
+        if (Number.isFinite(derived)) onceAt = derived;
+      }
+    }
+
     const schedule: Schedule = {
       type: reminder.scheduleType,
-      onceAt: reminder.onceAt,
+      onceAt,
       intervalMs: reminder.intervalMs,
       anchorAt: reminder.anchorAt,
       rrule: reminder.rrule,
