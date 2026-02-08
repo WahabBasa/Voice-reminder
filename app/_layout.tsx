@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { InteractionManager } from "react-native";
 import { Stack, useRouter } from "expo-router";
-import { ConvexProvider, ConvexReactClient, useMutation } from "convex/react";
+import { ConvexProvider, useMutation } from "convex/react";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -18,8 +18,8 @@ import { logAppTaskState, isAlarmActivity } from "../lib/activityControl";
 import { alarmAudioService } from "../lib/AudioService";
 import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
 import { buildTraceId } from "../lib/vrLog";
-
-const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string);
+import { convex } from "../lib/convexClient";
+import { hydrateReminderAudio } from "../lib/audioHydration";
 
 function StartupTasks() {
   const router = useRouter();
@@ -85,6 +85,39 @@ function StartupTasks() {
       }
     });
   }, [reminders, history, router, toast]);
+
+  // Hydrate reminders with pending audio (max 2 concurrent)
+  useEffect(() => {
+    const pendingReminders = reminders.filter(
+      (r) => r.convexId && r.audioStatus === "pending" && !r.audioUrl
+    );
+
+    if (pendingReminders.length === 0) return;
+
+    console.log(`[VR] Startup: ${pendingReminders.length} reminders need audio hydration`);
+
+    // Cap concurrency at 2
+    const toHydrate = pendingReminders.slice(0, 2);
+
+    for (const reminder of toHydrate) {
+      if (!reminder.convexId) continue;
+
+      hydrateReminderAudio({
+        convexClient: convex,
+        convexId: reminder.convexId,
+        localReminderId: reminder.id,
+        updateLocal: async (patch) => {
+          const store = useReminderStore.getState();
+          const current = store.getReminderById(reminder.id);
+          if (current) {
+            await store.updateReminder({ ...current, ...patch });
+          }
+        },
+      }).catch((e) => {
+        console.error(`[VR] Startup hydration failed for ${reminder.id}:`, e);
+      });
+    }
+  }, [reminders]);
 
   return null;
 }

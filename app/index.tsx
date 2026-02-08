@@ -26,12 +26,15 @@ import Animated, {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import { useAction } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
+import { convex } from "../lib/convexClient";
 import { colors, scaleFontSize } from "../lib/theme";
 import { formatReminderTime, isOverdue } from "../lib/time";
 import { readFileAsBase64 } from "../lib/convex";
+import { uploadRecordingToConvex } from "../lib/convexUpload";
 import { scheduleReminder } from "../lib/notifications";
+import { hydrateReminderAudio } from "../lib/audioHydration";
 import { useReminderStore, Reminder, ReminderHistory } from "../lib/store";
 import RecordingOverlay from "../components/RecordingOverlay";
 import EditReminderSheet from "../components/EditReminderSheet";
@@ -43,7 +46,6 @@ import { checkCanCreateWithCount, getFreeActiveLimit } from "../lib/usage";
 import { getReminderNextDueTimestamp, isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import NetInfo from "@react-native-community/netinfo";
-import { useMutation } from "convex/react";
 
 type HomeView = "all" | "completed";
 
@@ -91,6 +93,8 @@ function formatIntervalNextIn(targetMs: number, nowMs: number = Date.now()): str
 export default function HomeScreen() {
   const router = useRouter();
   const processVoiceReminder = useAction(api.actions.processVoiceReminder);
+  const processVoiceReminderFast = useAction(api.actions.processVoiceReminderFast);
+  const generateAudioUploadUrl = useMutation(api.reminders.generateAudioUploadUrl);
   const removeConvexReminder = useMutation(api.reminders.remove);
   const insets = useSafeAreaInsets();
   const toast = useToast();
@@ -325,31 +329,59 @@ export default function HomeScreen() {
     try {
       perfLog(traceId, "device.processing", "handleRecordingComplete_start", { audioUri });
 
-      const tBase64 = Date.now();
-      const base64 = await readFileAsBase64(audioUri);
-      perfLog(traceId, "device.processing", "audio_base64_done", {
-        ms: Date.now() - tBase64,
-        base64Chars: base64.length,
-      });
-
-      const tAction = Date.now();
       // Send device's LOCAL time (not UTC) so GPT can parse relative times correctly
       const now = new Date();
-      // Format as local YYYY-MM-DD HH:MM:SS to avoid UTC conversion issues
       const pad = (n: number) => n.toString().padStart(2, '0');
       const deviceLocalDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
       const deviceLocalTime = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
       const deviceTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const result = await processVoiceReminder({
-        audioBase64: base64,
-        traceId,
-        deviceLocalDate,
-        deviceLocalTime,
-        deviceTimezone,
-      });
-      perfLog(traceId, "device.processing", "processVoiceReminder_done", {
-        ms: Date.now() - tAction,
-      });
+
+      let result: any;
+      let usedFastPath = false;
+
+      // Try FAST PATH: binary upload + async TTS
+      try {
+        perfLog(traceId, "device.processing", "upload_start");
+        const { uploadUrl } = await generateAudioUploadUrl();
+        const { storageId } = await uploadRecordingToConvex(uploadUrl, audioUri);
+        perfLog(traceId, "device.processing", "upload_done", { storageId });
+
+        const tAction = Date.now();
+        result = await processVoiceReminderFast({
+          audioStorageId: storageId as any,
+          traceId,
+          deviceLocalDate,
+          deviceLocalTime,
+          deviceTimezone,
+        });
+        perfLog(traceId, "device.processing", "processVoiceReminderFast_done", {
+          ms: Date.now() - tAction,
+        });
+        usedFastPath = true;
+      } catch (fastPathError) {
+        // FALLBACK: use base64 path
+        console.log("[VR] Fast path failed, falling back to base64:", fastPathError);
+        perfLog(traceId, "device.processing", "fallback_to_base64");
+
+        const tBase64 = Date.now();
+        const base64 = await readFileAsBase64(audioUri);
+        perfLog(traceId, "device.processing", "audio_base64_done", {
+          ms: Date.now() - tBase64,
+          base64Chars: base64.length,
+        });
+
+        const tAction = Date.now();
+        result = await processVoiceReminder({
+          audioBase64: base64,
+          traceId,
+          deviceLocalDate,
+          deviceLocalTime,
+          deviceTimezone,
+        });
+        perfLog(traceId, "device.processing", "processVoiceReminder_done", {
+          ms: Date.now() - tAction,
+        });
+      }
 
       // Check if cancelled while processing
       if (cancelledRef.current) {
@@ -359,10 +391,6 @@ export default function HomeScreen() {
 
       if ((result as any)?.perf) {
         perfLog(traceId, "device.processing", "convex_perf", (result as any).perf);
-      }
-
-      if (!result.audioUrl) {
-        throw new Error("Failed to get audio URL");
       }
 
       const frequency = result.frequency === "weekly" ? "custom" : result.frequency;
@@ -384,6 +412,9 @@ export default function HomeScreen() {
       // Determine timezone
       const deviceTzid = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+      // If using fast path, audio is pending
+      const audioStatus = usedFastPath ? "pending" : (result.audioUrl ? "ready" : undefined);
+
       const newReminder = await storeAddReminder({
         convexId: result.id,
         title: result.title,
@@ -392,7 +423,8 @@ export default function HomeScreen() {
         date: (result as any).date,
         frequency,
         days,
-        audioUrl: result.audioUrl,
+        audioUrl: result.audioUrl || "",
+        audioStatus,
 
         intervalMs: Number.isFinite(intervalMs) ? intervalMs : undefined,
         anchorAt: Number.isFinite(anchorAt) ? anchorAt : undefined,
@@ -413,6 +445,25 @@ export default function HomeScreen() {
         reminderId: newReminder.id,
       });
 
+      // If using fast path, start hydration
+      if (usedFastPath && result.id) {
+        console.log("[VR] Starting audio hydration for", result.id);
+        // Fire-and-forget hydration
+        hydrateReminderAudio({
+          convexClient: convex,
+          convexId: result.id,
+          localReminderId: newReminder.id,
+          updateLocal: async (patch) => {
+            const current = useReminderStore.getState().getReminderById(newReminder.id);
+            if (current) {
+              await storeUpdateReminder({ ...current, ...patch });
+            }
+          },
+        }).catch((e) => {
+          console.error("[VR] Hydration failed:", e);
+        });
+      }
+
       setShowRecording(false);
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       // Store already updated - no need for setReminders
@@ -420,12 +471,9 @@ export default function HomeScreen() {
       setEditingReminder(newReminder);
 
       InteractionManager.runAfterInteractions(() => {
-        if (!newReminder.audioUrl) return;
         perfLog(traceId, "device.notifications", "scheduleReminder_start");
         (async () => {
           try {
-            const audioUrl = newReminder.audioUrl;
-            if (!audioUrl) return;
             const { triggerTimestamp } = await scheduleReminder(
               {
                 id: newReminder.id,
@@ -435,7 +483,7 @@ export default function HomeScreen() {
                 date: newReminder.date,
                 frequency: newReminder.frequency,
                 days: newReminder.days,
-                audioUrl,
+                audioUrl: newReminder.audioUrl,
                 snoozeEnabled: newReminder.snoozeEnabled,
                 snoozeDuration: newReminder.snoozeDuration,
                 volume: newReminder.volume,

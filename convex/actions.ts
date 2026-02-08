@@ -1,6 +1,6 @@
 "use node";
 
-import { action } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
@@ -74,6 +74,157 @@ function normalizeReminderDescription(input: unknown): string {
   );
 
   return normalized.trim();
+}
+
+// Shared helper: normalize day tokens
+function normalizeDay(value: unknown): string | null {
+  const token = String(value ?? "").toLowerCase().trim();
+  const map: Record<string, string> = {
+    sun: "sun", su: "sun", sunday: "sun",
+    mon: "mon", mo: "mon", monday: "mon",
+    tue: "tue", tu: "tue", tues: "tue", tuesday: "tue",
+    wed: "wed", we: "wed", weds: "wed", wednesday: "wed",
+    thu: "thu", th: "thu", thur: "thu", thurs: "thu", thursday: "thu",
+    fri: "fri", fr: "fri", friday: "fri",
+    sat: "sat", sa: "sat", saturday: "sat",
+  };
+  return map[token] ?? null;
+}
+
+// Shared helper: get current time in HH:MM format
+function getCurrentTimeHM(currentTime: string): string {
+  const match = String(currentTime).match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return "09:00";
+  return `${match[1].padStart(2, "0")}:${match[2]}`;
+}
+
+// Shared helper: coerce frequency based on transcript and days
+function coerceFrequency(
+  frequency: string,
+  days: string[] | undefined,
+  transcript: string,
+  parseWarnings: string[]
+): { frequency: string; days: string[] | undefined; warnings: string[] } {
+  const warnings = [...parseWarnings];
+  let coercedFrequency = frequency;
+  let coercedDays = days;
+  const transcriptLower = transcript.toLowerCase();
+
+  // Rule: If days are provided, force frequency to "custom"
+  if (coercedDays && coercedDays.length > 0 && coercedFrequency !== "custom") {
+    warnings.push("Coerced frequency to custom because days were provided.");
+    coercedFrequency = "custom";
+  }
+
+  // Rule: If transcript implies weekly but model returns daily, coerce
+  const impliesWeekly = /every\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday|week|weekly)/.test(transcriptLower);
+  if (impliesWeekly && coercedFrequency === "daily") {
+    warnings.push("Transcript implies weekly but model returned daily. Coercing to custom weekly.");
+    coercedFrequency = "custom";
+    if (!coercedDays || coercedDays.length === 0) {
+      const match = transcriptLower.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
+      const inferred = normalizeDay(match?.[1]);
+      if (inferred) {
+        coercedDays = [inferred];
+      }
+    }
+  }
+
+  // Rule: "weekdays" implies custom MO-FR.
+  if (/\bweekdays?\b/.test(transcriptLower) && coercedFrequency !== "interval") {
+    coercedFrequency = "custom";
+    coercedDays = ["mon", "tue", "wed", "thu", "fri"];
+    warnings.push("Transcript implies weekdays. Coercing to custom MO-FR.");
+  }
+
+  return { frequency: coercedFrequency, days: coercedDays, warnings };
+}
+
+// Shared helper: build system prompt for GPT
+function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string }): string {
+  return `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
+
+Return exactly this format:
+{
+  "title": "short title (2-4 words)",
+  "description": "what to say when reminder fires",
+  "time": "HH:MM in 24-hour format",
+  "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
+  "frequency": "once" | "daily" | "custom" | "interval",
+  "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom),
+  "intervalHours": number (only if frequency is interval),
+  "intervalMinutes": number (only if frequency is interval),
+  "scheduleType": "once" | "interval" | "rrule",
+  "rrule": "RFC5545 RRULE string (for complex patterns)",
+  "until": "ISO date for bounded recurrences"
+}
+
+LANGUAGE RULES:
+- If the input is in Arabic, return "title" and "description" in Arabic
+- If the input is in English, return "title" and "description" in English
+- The JSON field names and "frequency"/"days" values always remain in English
+- For Arabic days: الأحد=sun, الاثنين=mon, الثلاثاء=tue, الأربعاء=wed, الخميس=thu, الجمعة=fri, السبت=sat
+
+CURRENT CONTEXT:
+- Current date: ${context.currentDate} (${context.currentDayOfWeek})
+- Current time: ${context.currentTime}
+- User's timezone: ${context.timezone}
+
+DATE PARSING RULES (English & Arabic):
+- "Sunday"/"يوم الأحد", "tomorrow"/"غداً", "today"/"اليوم" → calculate actual YYYY-MM-DD
+- "next Sunday"/"الأحد القادم" → find the NEXT occurrence
+- "in 3 days"/"بعد ثلاثة أيام" → add days to current date
+- ONLY include "date" for one-time reminders (frequency: "once")
+- Do NOT include "date" for recurring/daily reminders
+
+RELATIVE TIME RULES:
+- "in X minutes"/"بعد X دقائق" = add to current time (${context.currentTime}) → frequency="once"
+- "in X hours"/"بعد X ساعات" = add hours to current time → frequency="once"
+- "every X minutes"/"كل X دقائق" = INTERVAL reminder (frequency="interval")
+- "every X hours"/"كل X ساعات" = INTERVAL reminder (frequency="interval")
+
+RRULE PATTERNS (for scheduleType="rrule"):
+- "every Sunday at 8am" → FREQ=WEEKLY;BYDAY=SU;BYHOUR=8;BYMINUTE=0
+- "weekdays at 9am" → FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0
+- "1st of every month at 8am" → FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=8;BYMINUTE=0
+- "first Monday monthly at 9am" → FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1;BYHOUR=9;BYMINUTE=0
+- "every day at 9am and 5pm" → create TWO separate reminders (simple approach)
+
+BOUNDED RECURRENCES:
+- "every day at 8am for 2 weeks" → frequency="daily", until="2026-02-22"
+- "weekdays at 9 until March 1st" → rrule with UNTIL
+
+INTERVAL RULES:
+- "every 8 hours"/"كل 8 ساعات" = frequency="interval" and intervalHours=8
+- "every 30 minutes"/"كل 30 دقيقة" = frequency="interval" and intervalMinutes=30
+- "in 8 hours"/"بعد 8 ساعات" = ONE-TIME reminder (frequency="once")
+- For interval reminders: do NOT include a specific date. time can be omitted.
+- Minimum interval: 5 minutes. Maximum interval: 365 days.
+- If user asks for less than 5 minutes, set to 5 minutes with a note.
+
+FREQUENCY RULES (deterministic):
+- If days are provided → frequency="custom" (weekly on specific days)
+- "every day"/"daily" → frequency="daily" (not "custom")
+- "every Sunday" → rrule pattern (FREQ=WEEKLY;BYDAY=SU) OR frequency="custom", days=["sun"]
+- "weekdays" → frequency="custom", days=["mon","tue","wed","thu","fri"] OR rrule
+
+ARABIC TIME EXPRESSIONS:
+- "الساعة ثمانية صباحاً" = 08:00
+- "الساعة تسعة مساءً" = 21:00
+- "صباحاً" = AM, "مساءً" = PM
+
+INTENT + TONE RULES:
+- Keep the exact intent (do not add meaning or extra context)
+- Do not add greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم")
+- Keep the description short, direct, and reminder-like
+- Arabic example: "حان وقت تناول الدواء" (Time to take your medicine)
+
+TIME PARSING (Speech-to-text quirks):
+- "10 4 p.m." = 22:04, "9 30 a.m." = 09:30
+- The first number is hours, the second is minutes
+
+If no time specified, use a reasonable default.
+If no frequency specified, assume "once".`;
 }
 
 let cachedResembleProjectUuid: string | null = null;
@@ -356,38 +507,6 @@ If no frequency specified, assume "once".`,
     const rawFrequency = String(parsed.frequency || "once").toLowerCase();
     let frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
 
-    const normalizeDay = (value: unknown): string | null => {
-      const token = String(value ?? "").toLowerCase().trim();
-      const map: Record<string, string> = {
-        sun: "sun",
-        su: "sun",
-        sunday: "sun",
-        mon: "mon",
-        mo: "mon",
-        monday: "mon",
-        tue: "tue",
-        tu: "tue",
-        tues: "tue",
-        tuesday: "tue",
-        wed: "wed",
-        we: "wed",
-        weds: "wed",
-        wednesday: "wed",
-        thu: "thu",
-        th: "thu",
-        thur: "thu",
-        thurs: "thu",
-        thursday: "thu",
-        fri: "fri",
-        fr: "fri",
-        friday: "fri",
-        sat: "sat",
-        sa: "sat",
-        saturday: "sat",
-      };
-      return map[token] ?? null;
-    };
-
     let days: string[] | undefined = undefined;
     const modelDaysRaw = Array.isArray(parsed.days) ? (parsed.days as unknown[]) : [];
     const modelDaysNormalized = modelDaysRaw
@@ -402,44 +521,17 @@ If no frequency specified, assume "once".`,
     const date = frequency === "once" && parsed.date ? (parsed.date as string) : undefined;
 
     // Ensure time is always a valid HH:MM string (Convex schema requires it)
-    const currentTimeHm = (() => {
-      const match = String(currentTime).match(/^(\d{1,2}):(\d{2})/);
-      if (!match) return "09:00";
-      return `${match[1].padStart(2, "0")}:${match[2]}`;
-    })();
+    const currentTimeHm = getCurrentTimeHM(currentTime);
     const time = typeof parsed.time === "string" && parsed.time ? (parsed.time as string) : currentTimeHm;
 
     // Parse warnings for normalization issues
-    const parseWarnings: string[] = [];
+    let parseWarnings: string[] = [];
 
-    // Normalize frequency based on provided fields
-    // Rule: If days are provided, force frequency to "custom"
-    if (days && days.length > 0 && frequency !== "custom") {
-      parseWarnings.push("Coerced frequency to custom because days were provided.");
-      frequency = "custom";
-    }
-
-    // Rule: If transcript implies weekly but model returns daily, coerce
-    const transcriptLower = transcript.toLowerCase();
-    const impliesWeekly = /every\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday|week|weekly)/.test(transcriptLower);
-    if (impliesWeekly && frequency === "daily") {
-      parseWarnings.push("Transcript implies weekly but model returned daily. Coercing to custom weekly.");
-      frequency = "custom";
-      if (!days || days.length === 0) {
-        const match = transcriptLower.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
-        const inferred = normalizeDay(match?.[1]);
-        if (inferred) {
-          days = [inferred];
-        }
-      }
-    }
-
-    // Rule: "weekdays" implies custom MO-FR.
-    if (/\bweekdays?\b/.test(transcriptLower) && frequency !== "interval") {
-      frequency = "custom";
-      days = ["mon", "tue", "wed", "thu", "fri"];
-      parseWarnings.push("Transcript implies weekdays. Coercing to custom MO-FR.");
-    }
+    // Coerce frequency based on transcript and days
+    const coercionResult = coerceFrequency(frequency, days, transcript, parseWarnings);
+    frequency = coercionResult.frequency;
+    days = coercionResult.days;
+    parseWarnings = coercionResult.warnings;
 
     // Interval normalization
     let intervalMs: number | undefined;
@@ -670,11 +762,21 @@ export const regenerateReminderAudio = action({
     const newStorageId = await ctx.storage.store(blob);
 
     // 4. Delete old audio and update reminder
-    await ctx.runMutation(internal.reminders.updateAudio, {
-      id: args.reminderId,
-      oldStorageId: reminder.audioStorageId,
-      newStorageId,
-    });
+    if (reminder.audioStorageId) {
+      await ctx.runMutation(internal.reminders.updateAudio, {
+        id: args.reminderId,
+        oldStorageId: reminder.audioStorageId,
+        newStorageId,
+      });
+    } else {
+      // No existing audio, just update with new storage ID
+      await ctx.runMutation(internal.reminders.setAudio, {
+        id: args.reminderId,
+        audioStorageId: newStorageId,
+        audioStatus: "ready",
+        audioUpdatedAt: Date.now(),
+      });
+    }
 
     // 5. Get new audio URL
     const audioUrl = await ctx.storage.getUrl(newStorageId);
@@ -683,5 +785,271 @@ export const regenerateReminderAudio = action({
       audioUrl,
       soundText: args.soundText,
     };
+  },
+});
+
+// =================== FAST VOICE REMINDER (no base64, TTS in background) ===================
+
+export const processVoiceReminderFast = action({
+  args: {
+    audioStorageId: v.id("_storage"),
+    traceId: v.optional(v.string()),
+    deviceLocalDate: v.optional(v.string()),
+    deviceLocalTime: v.optional(v.string()),
+    deviceTimezone: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+
+    // 1. Load audio blob from storage
+    const audioBlob = await ctx.storage.get(args.audioStorageId);
+    if (!audioBlob) {
+      throw new Error("Audio not found in storage");
+    }
+
+    // Wrap STT+GPT processing in try/finally to ensure uploaded recording is deleted
+    try {
+      // 2. Whisper STT
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioFile = new File([arrayBuffer], "recording.m4a", {
+        type: "audio/mp4",
+      });
+
+      const transcription = await openai.audio.transcriptions.create({
+        file: audioFile,
+        model: "whisper-1",
+      });
+
+      const transcript = transcription.text;
+      console.log("[VR] === STEP 1: STT Transcription ===");
+      console.log("[VR] Transcript:", transcript);
+
+      // 3. GPT Parse (same as processVoiceReminder)
+      const currentDate = args.deviceLocalDate || new Date().toISOString().split('T')[0];
+      const currentTime = args.deviceLocalTime || new Date().toLocaleTimeString('en-US', { hour12: false });
+      const now = new Date(`${currentDate}T${currentTime}`);
+      const currentDayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
+      const timezone = args.deviceTimezone || 'UTC';
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: buildSystemPrompt({ currentDate, currentDayOfWeek, currentTime, timezone }),
+          },
+          {
+            role: "user",
+            content: transcript,
+          },
+        ],
+      });
+
+      const rawGptResponse = completion.choices[0].message.content || "{}";
+      const parsed = JSON.parse(rawGptResponse);
+      const description = normalizeReminderDescription(parsed.description);
+
+      let frequency = String(parsed.frequency || "once").toLowerCase();
+      if (frequency === "weekly") frequency = "custom";
+
+      // Normalize days from model output
+      let days: string[] | undefined = undefined;
+      const modelDaysRaw = Array.isArray(parsed.days) ? (parsed.days as unknown[]) : [];
+      const modelDaysNormalized = modelDaysRaw
+        .map(normalizeDay)
+        .filter((d): d is string => Boolean(d));
+      if (modelDaysNormalized.length > 0) {
+        days = modelDaysNormalized;
+      }
+
+      const date = frequency === "once" && parsed.date ? (parsed.date as string) : undefined;
+      const time = typeof parsed.time === "string" && parsed.time 
+        ? (parsed.time as string) 
+        : getCurrentTimeHM(currentTime);
+
+      // Parse warnings and coerce frequency
+      let parseWarnings: string[] = [];
+      const coercionResult = coerceFrequency(frequency, days, transcript, parseWarnings);
+      frequency = coercionResult.frequency;
+      days = coercionResult.days;
+      parseWarnings = coercionResult.warnings;
+
+      // Interval normalization
+      let intervalMs: number | undefined;
+      let anchorAt: number | undefined;
+      if (frequency === "interval") {
+        const hours = Number(parsed.intervalHours ?? 0);
+        const minutes = Number(parsed.intervalMinutes ?? 0);
+        const totalMinutes = hours * 60 + minutes;
+        intervalMs = totalMinutes * 60 * 1000;
+        const MIN_MS = 5 * 60 * 1000;
+        const MAX_MS = 365 * 24 * 60 * 60 * 1000;
+        if (intervalMs < MIN_MS) {
+          parseWarnings.push(`Minimum interval is 5 minutes. Adjusted from ${Math.round(intervalMs / 60000)} minutes.`);
+          intervalMs = MIN_MS;
+        } else if (intervalMs > MAX_MS) {
+          parseWarnings.push(`Maximum interval is 365 days. Adjusted.`);
+          intervalMs = MAX_MS;
+        }
+        anchorAt = Date.now();
+      }
+
+      // Unified schedule fields
+      let scheduleType: "once" | "interval" | "rrule" | undefined;
+      let onceAt: number | undefined;
+      let rrule: string | undefined;
+      let dtstart: number | undefined;
+      let until: number | undefined;
+
+      if (parsed.scheduleType && ["once", "interval", "rrule"].includes(parsed.scheduleType)) {
+        scheduleType = parsed.scheduleType;
+      } else if (frequency === "interval") {
+        scheduleType = "interval";
+      } else if (parsed.rrule) {
+        scheduleType = "rrule";
+      } else if (frequency === "once") {
+        scheduleType = "once";
+        if (date) {
+          const [year, month, dayNum] = date.split("-").map(Number);
+          const [hours, minutes] = time.split(":").map(Number);
+          onceAt = new Date(year, month - 1, dayNum, hours, minutes).getTime();
+        } else {
+          const [hours, minutes] = time.split(":").map(Number);
+          const target = new Date();
+          target.setHours(hours, minutes, 0, 0);
+          // Interpret "at HH:MM" as the next occurrence (today or tomorrow)
+          if (target.getTime() <= Date.now()) {
+            target.setDate(target.getDate() + 1);
+          }
+          onceAt = target.getTime();
+        }
+      } else {
+        scheduleType = "rrule";
+        const [hours, minutes] = time.split(":").map(Number);
+        if (frequency === "daily") {
+          rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
+        } else if (frequency === "custom" && days && days.length > 0) {
+          const byday = days.map((d: string) => {
+            const map: Record<string, string> = {
+              sun: "SU", mon: "MO", tue: "TU", wed: "WE",
+              thu: "TH", fri: "FR", sat: "SA"
+            };
+            return map[d.toLowerCase()] || "MO";
+          }).join(",");
+          rrule = `FREQ=WEEKLY;BYDAY=${byday};BYHOUR=${hours};BYMINUTE=${minutes}`;
+        } else {
+          rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
+        }
+        dtstart = Date.now();
+      }
+
+      if (parsed.rrule) {
+        rrule = parsed.rrule;
+        scheduleType = "rrule";
+        dtstart = Date.now();
+      }
+
+      if (parsed.until) {
+        const ms = new Date(parsed.until).getTime();
+        if (Number.isFinite(ms)) {
+          until = ms;
+        } else {
+          parseWarnings.push(`Invalid until date "${String(parsed.until)}" ignored.`);
+        }
+      }
+
+      // 4. Create reminder in DB immediately (audio pending)
+      const ttsText = description || String(parsed.description ?? "");
+      const reminderId: Id<"reminders"> = await ctx.runMutation(
+        internal.reminders.create,
+        {
+          title: parsed.title as string,
+          description,
+          time,
+          date,
+          frequency,
+          days,
+          audioStorageId: undefined,
+          audioStatus: "pending",
+          audioUpdatedAt: Date.now(),
+        }
+      );
+
+      // 5. Enqueue background TTS generation
+      await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
+        reminderId,
+        title: parsed.title as string,
+        ttsText,
+      });
+
+      // 6. Return immediately
+      return {
+        id: reminderId as string,
+        title: parsed.title as string,
+        description,
+        time,
+        date,
+        frequency,
+        days,
+        transcript,
+        audioStatus: "pending",
+        intervalMs,
+        anchorAt,
+        scheduleType,
+        onceAt,
+        rrule,
+        dtstart,
+        until,
+        parseWarnings: parseWarnings.length > 0 ? parseWarnings : undefined,
+      };
+    } finally {
+      // 7. Delete uploaded recording audio (always cleanup)
+      try {
+        await ctx.storage.delete(args.audioStorageId);
+      } catch (e) {
+        console.error("[VR] Failed to delete uploaded recording:", e);
+      }
+    }
+  },
+});
+
+export const generateReminderTtsForReminder = internalAction({
+  args: {
+    reminderId: v.id("reminders"),
+    title: v.string(),
+    ttsText: v.string(),
+  },
+  handler: async (ctx, args) => {
+    try {
+      // 1. Generate TTS
+      const ttsBuffer = await synthesizeReminderTts({
+        text: args.ttsText,
+        title: args.title,
+      });
+
+      // 2. Store in Convex storage
+      const blob = new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" });
+      const newAudioStorageId = await ctx.storage.store(blob);
+
+      // 3. Update reminder with new audio
+      await ctx.runMutation(internal.reminders.setAudio, {
+        id: args.reminderId,
+        audioStorageId: newAudioStorageId,
+        audioStatus: "ready",
+        audioUpdatedAt: Date.now(),
+      });
+    } catch (e) {
+      // 4. On failure, mark as failed
+      console.error("[VR] TTS generation failed:", e);
+      await ctx.runMutation(internal.reminders.setAudio, {
+        id: args.reminderId,
+        audioStatus: "failed",
+        audioError: String(e).slice(0, 500),
+        audioUpdatedAt: Date.now(),
+      });
+    }
   },
 });

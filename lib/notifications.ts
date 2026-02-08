@@ -395,7 +395,7 @@ export interface ReminderNotification {
   date?: string; // YYYY-MM-DD for one-time reminders on specific days
   frequency: string;
   days?: string[];
-  audioUrl: string;
+  audioUrl?: string;
   snoozeEnabled?: boolean;
   snoozeDuration?: number; // minutes
   volume?: number; // 0-1
@@ -503,14 +503,17 @@ export async function scheduleReminder(
 
   await assertAndroidExactAlarmAccess();
 
-  // Download audio to device
-  const localAudioPath = await downloadReminderAudio(reminder.id, reminder.audioUrl);
+  // Download audio to device (skip if no audioUrl - will use default sound)
+  let localAudioPath: string | null = null;
+  if (reminder.audioUrl) {
+    localAudioPath = await downloadReminderAudio(reminder.id, reminder.audioUrl);
+  }
 
-  // Create channel with custom sound
+  // Create channel (uses default sound if no custom audio)
   const channelId = await createReminderChannel(
     reminder.id,
     reminder.title,
-    localAudioPath
+    localAudioPath || ""
   );
 
   // Calculate next trigger time using unified scheduling engine
@@ -643,7 +646,7 @@ export async function scheduleReminder(
         days: reminder.days?.join(",") || "",
         title: reminder.title,
         description: reminder.description,
-        audioUrl: reminder.audioUrl,
+        audioUrl: reminder.audioUrl ?? "",
         snoozeEnabled: String(reminder.snoozeEnabled ?? true),
         snoozeDuration: String(reminder.snoozeDuration ?? 5),
         volume: String(reminder.volume ?? 1),
@@ -701,6 +704,49 @@ export async function deleteReminderWithAudio(reminderId: string): Promise<void>
   await cancelReminder(reminderId);
   await deleteLocalAudio(reminderId);
   console.log(`[VR] Deleted reminder ${reminderId} with audio`);
+}
+
+/**
+ * Refresh scheduled notification data after audio becomes available.
+ * Updates the notification data to include the audioUrl without changing the trigger time.
+ */
+export async function refreshNotificationWithAudio(
+  reminderId: string,
+  audioUrl: string
+): Promise<void> {
+  try {
+    // Get all trigger notifications
+    const allNotifications = await notifee.getTriggerNotifications();
+    
+    for (const notification of allNotifications) {
+      const id = notification.notification.id;
+      if (!id || !id.startsWith(`reminder_${reminderId}_`)) continue;
+
+      try {
+        // Update data with audioUrl
+        const updatedData = {
+          ...notification.notification.data,
+          audioUrl,
+        };
+
+        // Cancel and recreate with updated data but same trigger
+        await notifee.cancelTriggerNotification(id);
+        await notifee.createTriggerNotification(
+          {
+            ...notification.notification,
+            data: updatedData,
+          },
+          notification.trigger as TimestampTrigger
+        );
+
+        console.log(`[VR] Refreshed notification ${id} with audioUrl`);
+      } catch (e) {
+        console.error(`[VR] Failed to refresh notification ${id}:`, e);
+      }
+    }
+  } catch (e) {
+    console.error(`[VR] Failed to refresh notifications for ${reminderId}:`, e);
+  }
 }
 
 export async function handleNotificationEvent(event: Event): Promise<void> {
@@ -1217,11 +1263,6 @@ export async function syncRemindersOnStartup(
     let permissionError = false;
 
     for (const reminder of reminders) {
-      if (!reminder.audioUrl) {
-        skipped++;
-        continue;
-      }
-
       // Skip "once" reminders that are completed today or in the past
       const isOneTime = reminder.scheduleType === 'once' || 
                         (!reminder.scheduleType && reminder.frequency === 'once');
@@ -1282,7 +1323,7 @@ export async function syncRemindersOnStartup(
           date: reminder.date,
           frequency: reminder.frequency,
           days: reminder.days,
-          audioUrl: reminder.audioUrl,
+          audioUrl: reminder.audioUrl ?? "",
           snoozeEnabled: reminder.snoozeEnabled,
           snoozeDuration: reminder.snoozeDuration,
           volume: reminder.volume,

@@ -30,6 +30,8 @@ export interface Reminder {
     frequency: string;
     days: string[];
     audioUrl?: string;
+    audioStatus?: 'pending' | 'ready' | 'failed';
+    audioError?: string;
     createdAt: string;
     snoozeEnabled?: boolean;
     snoozeDuration?: number; // minutes
