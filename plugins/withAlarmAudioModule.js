@@ -247,7 +247,7 @@ class ActivityControlModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun getCurrentActivityName(promise: Promise) {
     try {
-      val activity = currentActivity
+      val activity = reactContext.currentActivity
       promise.resolve(activity?.javaClass?.name)
     } catch (e: Exception) {
       promise.resolve(null)
@@ -259,7 +259,7 @@ class ActivityControlModule(private val reactContext: ReactApplicationContext) :
    */
   @ReactMethod
   fun isAlarmActivity(promise: Promise) {
-    val activity = currentActivity
+    val activity = reactContext.currentActivity
     if (activity == null) {
       promise.resolve(false)
       return
@@ -295,7 +295,7 @@ class ActivityControlModule(private val reactContext: ReactApplicationContext) :
    */
   @ReactMethod
   fun finishIfAlarmActivity(promise: Promise) {
-    val activity = currentActivity
+    val activity = reactContext.currentActivity
     if (activity == null) {
       promise.resolve(false)
       return
@@ -335,7 +335,7 @@ class ActivityControlModule(private val reactContext: ReactApplicationContext) :
    */
   @ReactMethod
   fun finishCurrentTask(promise: Promise) {
-    val activity = currentActivity
+    val activity = reactContext.currentActivity
     if (activity == null) {
       promise.resolve(false)
       return
@@ -436,124 +436,124 @@ class AlarmAudioPackage : ReactPackage {
 }`;
 
 function withAlarmAudioModule(config) {
-    // Step 1: Add the Kotlin files during prebuild
-    config = withDangerousMod(config, [
-        "android",
-        async (config) => {
-            const projectRoot = config.modRequest.projectRoot;
-            const packageDir = path.join(
-                projectRoot,
-                "android/app/src/main/java/com/wahabbasa/VoiceReminder"
-            );
+  // Step 1: Add the Kotlin files during prebuild
+  config = withDangerousMod(config, [
+    "android",
+    async (config) => {
+      const projectRoot = config.modRequest.projectRoot;
+      const packageDir = path.join(
+        projectRoot,
+        "android/app/src/main/java/com/wahabbasa/VoiceReminder"
+      );
 
-            // Ensure directory exists
-            if (!fs.existsSync(packageDir)) {
-                fs.mkdirSync(packageDir, { recursive: true });
-            }
+      // Ensure directory exists
+      if (!fs.existsSync(packageDir)) {
+        fs.mkdirSync(packageDir, { recursive: true });
+      }
 
-            // Write AlarmAudioModule.kt
-            const moduleFile = path.join(packageDir, "AlarmAudioModule.kt");
-            fs.writeFileSync(moduleFile, ALARM_AUDIO_MODULE_KT, "utf-8");
-            console.log("[withAlarmAudioModule] Created AlarmAudioModule.kt");
+      // Write AlarmAudioModule.kt
+      const moduleFile = path.join(packageDir, "AlarmAudioModule.kt");
+      fs.writeFileSync(moduleFile, ALARM_AUDIO_MODULE_KT, "utf-8");
+      console.log("[withAlarmAudioModule] Created AlarmAudioModule.kt");
 
-            // Write ActivityControlModule.kt
-            const activityControlFile = path.join(packageDir, "ActivityControlModule.kt");
-            fs.writeFileSync(activityControlFile, ACTIVITY_CONTROL_MODULE_KT, "utf-8");
-            console.log("[withAlarmAudioModule] Created ActivityControlModule.kt");
+      // Write ActivityControlModule.kt
+      const activityControlFile = path.join(packageDir, "ActivityControlModule.kt");
+      fs.writeFileSync(activityControlFile, ACTIVITY_CONTROL_MODULE_KT, "utf-8");
+      console.log("[withAlarmAudioModule] Created ActivityControlModule.kt");
 
-            // Write ActivityTracker.kt
-            const activityTrackerFile = path.join(packageDir, "ActivityTracker.kt");
-            fs.writeFileSync(activityTrackerFile, ACTIVITY_TRACKER_KT, "utf-8");
-            console.log("[withAlarmAudioModule] Created ActivityTracker.kt");
+      // Write ActivityTracker.kt
+      const activityTrackerFile = path.join(packageDir, "ActivityTracker.kt");
+      fs.writeFileSync(activityTrackerFile, ACTIVITY_TRACKER_KT, "utf-8");
+      console.log("[withAlarmAudioModule] Created ActivityTracker.kt");
 
-            // Write AlarmAudioPackage.kt
-            const packageFile = path.join(packageDir, "AlarmAudioPackage.kt");
-            fs.writeFileSync(packageFile, ALARM_AUDIO_PACKAGE_KT, "utf-8");
-            console.log("[withAlarmAudioModule] Created AlarmAudioPackage.kt");
+      // Write AlarmAudioPackage.kt
+      const packageFile = path.join(packageDir, "AlarmAudioPackage.kt");
+      fs.writeFileSync(packageFile, ALARM_AUDIO_PACKAGE_KT, "utf-8");
+      console.log("[withAlarmAudioModule] Created AlarmAudioPackage.kt");
 
-            return config;
-        },
-    ]);
+      return config;
+    },
+  ]);
 
-    // Step 2: Modify MainApplication.kt to register the package and ActivityTracker
-    config = withMainApplication(config, (config) => {
-        let contents = config.modResults.contents;
+  // Step 2: Modify MainApplication.kt to register the package and ActivityTracker
+  config = withMainApplication(config, (config) => {
+    let contents = config.modResults.contents;
 
-        // Add import if not present
-        const importStatement = "import com.wahabbasa.VoiceReminder.AlarmAudioPackage";
-        if (!contents.includes(importStatement)) {
-            // Add import after other imports
-            const lastImportIndex = contents.lastIndexOf("import ");
-            if (lastImportIndex !== -1) {
-                const endOfLine = contents.indexOf("\n", lastImportIndex);
-                contents =
-                    contents.slice(0, endOfLine + 1) +
-                    importStatement + "\n" +
-                    contents.slice(endOfLine + 1);
-            }
-        }
+    // Add import if not present
+    const importStatement = "import com.wahabbasa.VoiceReminder.AlarmAudioPackage";
+    if (!contents.includes(importStatement)) {
+      // Add import after other imports
+      const lastImportIndex = contents.lastIndexOf("import ");
+      if (lastImportIndex !== -1) {
+        const endOfLine = contents.indexOf("\n", lastImportIndex);
+        contents =
+          contents.slice(0, endOfLine + 1) +
+          importStatement + "\n" +
+          contents.slice(endOfLine + 1);
+      }
+    }
 
-        // Add package to getPackages() if not present
-        const packageRegistration = "add(AlarmAudioPackage())";
-        if (!contents.includes(packageRegistration)) {
-            // Find the getPackages function and add our package
-            const packagesMatch = contents.match(
-                /PackageList\(this\)\.packages\.apply\s*\{[\s\S]*?\/\/.*can be added manually here[\s\S]*?\n/
-            );
-            if (packagesMatch) {
-                const insertPoint = contents.indexOf(packagesMatch[0]) + packagesMatch[0].length;
-                contents =
-                    contents.slice(0, insertPoint) +
-                    `              ${packageRegistration}\n` +
-                    contents.slice(insertPoint);
-            }
-        }
+    // Add package to getPackages() if not present
+    const packageRegistration = "add(AlarmAudioPackage())";
+    if (!contents.includes(packageRegistration)) {
+      // Find the getPackages function and add our package
+      const packagesMatch = contents.match(
+        /PackageList\(this\)\.packages\.apply\s*\{[\s\S]*?\/\/.*can be added manually here[\s\S]*?\n/
+      );
+      if (packagesMatch) {
+        const insertPoint = contents.indexOf(packagesMatch[0]) + packagesMatch[0].length;
+        contents =
+          contents.slice(0, insertPoint) +
+          `              ${packageRegistration}\n` +
+          contents.slice(insertPoint);
+      }
+    }
 
-        // Add ActivityTracker import if not present
-        const trackerImport = "import com.wahabbasa.VoiceReminder.ActivityTracker";
-        if (!contents.includes(trackerImport)) {
-            const lastImportIndex = contents.lastIndexOf("import ");
-            if (lastImportIndex !== -1) {
-                const endOfLine = contents.indexOf("\n", lastImportIndex);
-                contents =
-                    contents.slice(0, endOfLine + 1) +
-                    trackerImport + "\n" +
-                    contents.slice(endOfLine + 1);
-            }
-        }
+    // Add ActivityTracker import if not present
+    const trackerImport = "import com.wahabbasa.VoiceReminder.ActivityTracker";
+    if (!contents.includes(trackerImport)) {
+      const lastImportIndex = contents.lastIndexOf("import ");
+      if (lastImportIndex !== -1) {
+        const endOfLine = contents.indexOf("\n", lastImportIndex);
+        contents =
+          contents.slice(0, endOfLine + 1) +
+          trackerImport + "\n" +
+          contents.slice(endOfLine + 1);
+      }
+    }
 
-        // Register ActivityTracker in onCreate if not present
-        const trackerRegistration = "registerActivityLifecycleCallbacks(ActivityTracker)";
-        if (!contents.includes(trackerRegistration)) {
-            // Find onCreate and add registration
-            const onCreateMatch = contents.match(/override fun onCreate\(\) \{\s*super\.onCreate\(\)/);
-            if (onCreateMatch) {
-                const insertPoint = contents.indexOf(onCreateMatch[0]) + onCreateMatch[0].length;
-                contents =
-                    contents.slice(0, insertPoint) +
-                    `\n    \n    // Register ActivityTracker for lifecycle logging (pastebin Step 3.2)\n    ${trackerRegistration}\n    Log.i("VR", "[VR][NATIVE][MainApplication] ActivityTracker registered")` +
-                    contents.slice(insertPoint);
-            }
-        }
+    // Register ActivityTracker in onCreate if not present
+    const trackerRegistration = "registerActivityLifecycleCallbacks(ActivityTracker)";
+    if (!contents.includes(trackerRegistration)) {
+      // Find onCreate and add registration
+      const onCreateMatch = contents.match(/override fun onCreate\(\) \{\s*super\.onCreate\(\)/);
+      if (onCreateMatch) {
+        const insertPoint = contents.indexOf(onCreateMatch[0]) + onCreateMatch[0].length;
+        contents =
+          contents.slice(0, insertPoint) +
+          `\n    \n    // Register ActivityTracker for lifecycle logging (pastebin Step 3.2)\n    ${trackerRegistration}\n    Log.i("VR", "[VR][NATIVE][MainApplication] ActivityTracker registered")` +
+          contents.slice(insertPoint);
+      }
+    }
 
-        // Add Log import if not present
-        if (!contents.includes("import android.util.Log")) {
-            const lastImportIndex = contents.lastIndexOf("import ");
-            if (lastImportIndex !== -1) {
-                const endOfLine = contents.indexOf("\n", lastImportIndex);
-                contents =
-                    contents.slice(0, endOfLine + 1) +
-                    "import android.util.Log\n" +
-                    contents.slice(endOfLine + 1);
-            }
-        }
+    // Add Log import if not present
+    if (!contents.includes("import android.util.Log")) {
+      const lastImportIndex = contents.lastIndexOf("import ");
+      if (lastImportIndex !== -1) {
+        const endOfLine = contents.indexOf("\n", lastImportIndex);
+        contents =
+          contents.slice(0, endOfLine + 1) +
+          "import android.util.Log\n" +
+          contents.slice(endOfLine + 1);
+      }
+    }
 
-        config.modResults.contents = contents;
-        console.log("[withAlarmAudioModule] Modified MainApplication.kt to register AlarmAudioPackage and ActivityTracker");
-        return config;
-    });
-
+    config.modResults.contents = contents;
+    console.log("[withAlarmAudioModule] Modified MainApplication.kt to register AlarmAudioPackage and ActivityTracker");
     return config;
+  });
+
+  return config;
 }
 
 module.exports = withAlarmAudioModule;

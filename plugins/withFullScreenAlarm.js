@@ -169,10 +169,11 @@ class AlarmActivity : ReactActivity() {
     Log.i(LOG_TAG, "[VR][NATIVE][AlarmActivity] onCreate complete taskId=\$taskId")
   }
 
-  override fun onNewIntent(intent: android.content.Intent?) {
+  @Suppress("OVERRIDE_DEPRECATION")
+  override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
-    val action = intent?.action ?: "null"
-    val data = intent?.dataString ?: "null"
+    val action = intent.action ?: "null"
+    val data = intent.dataString ?: "null"
     Log.i(LOG_TAG, "[VR][NATIVE][AlarmActivity] onNewIntent taskId=\$taskId action=\$action data=\$data")
   }
 
