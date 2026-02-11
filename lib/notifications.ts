@@ -53,8 +53,12 @@ export class NoFutureOccurrenceError extends Error {
 }
 
 const PENDING_ALARM_KEY = "@pending_alarm";
+const PENDING_ALARM_QUEUE_KEY = "@pending_alarm_queue";
 const ANDROID_ALARM_ACTIVITY = "com.wahabbasa.VoiceReminder.AlarmActivity";
 const DISPLAYED_ALARM_KEY = "@displayed_alarm_id";
+const ALARM_RING_TIMEOUT_MS = 3 * 60_000;
+const AUTO_SNOOZE_DELAY_MINUTES = 5;
+const MAX_AUTO_SNOOZE_COUNT = 1;
 
 // Event type name mapping for readable logs
 const EVENT_TYPE_NAMES: Record<number, string> = {
@@ -71,6 +75,32 @@ const EVENT_TYPE_NAMES: Record<number, string> = {
 
 export function eventTypeName(type: EventType): string {
   return EVENT_TYPE_NAMES[type] || `UNKNOWN(${type})`;
+}
+
+// When we intentionally cancel a displayed notification (e.g. trigger -> repost),
+// Android can emit a DISMISSED event. Track those IDs briefly so we don't treat
+// them as user dismissals and clear active alarm state.
+const INTERNAL_DISMISS_IGNORE_WINDOW_MS = 60_000;
+const internalDismissIgnore = new Map<string, number>();
+
+function markInternalDismissIgnore(notificationId?: string): void {
+  if (!notificationId) return;
+  const now = Date.now();
+  internalDismissIgnore.set(notificationId, now + INTERNAL_DISMISS_IGNORE_WINDOW_MS);
+}
+
+function shouldIgnoreInternalDismiss(notificationId?: string): boolean {
+  if (!notificationId) return false;
+  const now = Date.now();
+  for (const [id, expiresAt] of internalDismissIgnore) {
+    if (expiresAt <= now) {
+      internalDismissIgnore.delete(id);
+    }
+  }
+  const expiresAt = internalDismissIgnore.get(notificationId);
+  if (!expiresAt || expiresAt <= now) return false;
+  internalDismissIgnore.delete(notificationId);
+  return true;
 }
 
 // Note: buildTraceId() has been moved to vrLog.ts - use that instead
@@ -93,6 +123,16 @@ export type PendingAlarm = {
   launchedExternallyAt?: number;
 };
 
+type QueuedAlarm = {
+  notification: PendingAlarmNotification;
+  enqueuedAt: number;
+};
+
+let activeAlarmTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+let activeAlarmTimeoutNotificationId: string | null = null;
+let queuePromotionInFlight = false;
+const timeoutHandlingInFlight = new Set<string>();
+
 function toPendingNotification(notification?: PendingAlarmNotification | null): PendingAlarmNotification {
   if (!notification) return {};
   const data =
@@ -105,10 +145,257 @@ function toPendingNotification(notification?: PendingAlarmNotification | null): 
   };
 }
 
+function getNotificationKind(notification?: PendingAlarmNotification | null): string {
+  const kind = notification?.data?.kind;
+  return typeof kind === "string" ? kind : "";
+}
+
+function isAlarmOccurrenceNotification(notification?: PendingAlarmNotification | null): boolean {
+  const kind = getNotificationKind(notification);
+  return kind === "reminder_occurrence" || kind === "snooze_occurrence";
+}
+
+function clearActiveAlarmTimeout(notificationId?: string): void {
+  if (!activeAlarmTimeoutHandle) return;
+  if (notificationId && activeAlarmTimeoutNotificationId !== notificationId) return;
+  clearTimeout(activeAlarmTimeoutHandle);
+  activeAlarmTimeoutHandle = null;
+  activeAlarmTimeoutNotificationId = null;
+}
+
+async function getAlarmQueue(): Promise<QueuedAlarm[]> {
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_ALARM_QUEUE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as QueuedAlarm[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item) => Boolean(item?.notification?.id));
+  } catch (e) {
+    console.log("[VR] Failed to read alarm queue:", e);
+    return [];
+  }
+}
+
+async function setAlarmQueue(queue: QueuedAlarm[]): Promise<void> {
+  try {
+    if (!queue.length) {
+      await AsyncStorage.removeItem(PENDING_ALARM_QUEUE_KEY);
+      return;
+    }
+    await AsyncStorage.setItem(PENDING_ALARM_QUEUE_KEY, JSON.stringify(queue));
+  } catch (e) {
+    console.log("[VR] Failed to persist alarm queue:", e);
+  }
+}
+
+async function enqueueAlarmNotification(notification?: PendingAlarmNotification | null): Promise<boolean> {
+  const normalized = toPendingNotification(notification);
+  const id = normalized.id;
+  if (!id) return false;
+
+  try {
+    const queue = await getAlarmQueue();
+    const exists = queue.some((item) => item.notification.id === id);
+    if (exists) return false;
+    queue.push({
+      notification: normalized,
+      enqueuedAt: Date.now(),
+    });
+    await setAlarmQueue(queue);
+    const trace = buildTraceId(normalized);
+    vrLog("pending_alarm", "queued", {
+      traceId: trace,
+      notificationId: id,
+      queueLength: queue.length,
+    });
+    return true;
+  } catch (e) {
+    console.log("[VR] Failed to enqueue alarm notification:", e);
+    return false;
+  }
+}
+
+async function dequeueAlarmNotification(): Promise<QueuedAlarm | null> {
+  const queue = await getAlarmQueue();
+  if (!queue.length) return null;
+  const [head, ...rest] = queue;
+  await setAlarmQueue(rest);
+  return head;
+}
+
+async function startAlarmAudioFromNotification(notification?: PendingAlarmNotification | null): Promise<void> {
+  if (!notification?.id) return;
+  const data = notification.data || {};
+  const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
+  if (!reminderId) return;
+  const localAudioPath = getLocalAudioPath(reminderId);
+  try {
+    const fileInfo = await getInfoAsync(localAudioPath);
+    if (!fileInfo.exists || !fileInfo.size) {
+      return;
+    }
+  } catch {
+    return;
+  }
+
+  const rawVolume = Number(data.volume ?? "1");
+  const targetVolume = Math.max(0, Math.min(1, Number.isFinite(rawVolume) ? rawVolume : 1));
+  const ok = await alarmAudioService.ensurePlaying(localAudioPath, {
+    volume: targetVolume,
+    streamType: "alarm",
+    loop: true,
+  });
+  if (ok) {
+    await markPendingAlarmRinging(notification.id);
+  }
+}
+
+async function scheduleSnoozeOccurrenceFromNotification(
+  notification: PendingAlarmNotification,
+  snoozeMinutes: number,
+  extraData?: Record<string, string>
+): Promise<void> {
+  const data = notification.data || {};
+  const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
+  if (!reminderId) return;
+
+  const triggerTimestamp = Date.now() + snoozeMinutes * 60_000;
+  const trigger: TimestampTrigger = {
+    type: TriggerType.TIMESTAMP,
+    timestamp: triggerTimestamp,
+    alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
+  };
+  const channelId = `reminder_${reminderId}`;
+  const title = (data.title as string) || notification.title || "Reminder";
+  const body = (data.description as string) || notification.body || "";
+
+  await notifee.createTriggerNotification(
+    {
+      id: `snooze_${reminderId}_${Date.now()}`,
+      title,
+      body,
+      android: {
+        channelId,
+        importance: AndroidImportance.HIGH,
+        category: AndroidCategory.ALARM,
+        visibility: AndroidVisibility.PUBLIC,
+        autoCancel: false,
+        lightUpScreen: true,
+        actions: [
+          { title: "Dismiss", pressAction: { id: "dismiss_action" } },
+          { title: "Snooze 5m", pressAction: { id: "snooze_action" } },
+        ],
+        fullScreenAction: {
+          id: "default",
+          launchActivity: ANDROID_ALARM_ACTIVITY,
+          launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+        },
+        pressAction: {
+          id: "default",
+          launchActivity: ANDROID_ALARM_ACTIVITY,
+          launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+        },
+      },
+      data: {
+        ...data,
+        ...(extraData || {}),
+        kind: "snooze_occurrence",
+        originalScheduledFor: data.scheduledFor || "",
+        scheduledFor: String(triggerTimestamp),
+      },
+    },
+    trigger
+  );
+}
+
+async function promoteNextQueuedAlarm(reason: string): Promise<boolean> {
+  if (queuePromotionInFlight) return false;
+  queuePromotionInFlight = true;
+  try {
+    const existing = await getPendingAlarm();
+    if (existing?.notification?.id && !existing.resolvedAt) return false;
+
+    while (true) {
+      const next = await dequeueAlarmNotification();
+      if (!next?.notification?.id) return false;
+
+      const data = next.notification.data || {};
+      const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
+      const reminderExists = reminderId
+        ? Boolean(useReminderStore.getState().getReminderById(reminderId))
+        : true;
+      if (!reminderExists) {
+        vrLog("pending_alarm", "queue_drop_missing_reminder", {
+          notificationId: next.notification.id,
+          reminderId,
+          reason,
+        });
+        continue;
+      }
+
+      await setPendingAlarm(next.notification);
+
+      const scheduledForKey =
+        typeof data.scheduledFor === "string" && data.scheduledFor
+          ? data.scheduledFor
+          : String(Date.now());
+      const repostId = `alarm_display_${reminderId || "na"}_${scheduledForKey}_${Date.now()}`;
+      try {
+        await notifee.displayNotification({
+          id: repostId,
+          title: next.notification.title || "Reminder",
+          body: next.notification.body || "",
+          android: {
+            channelId: `reminder_${reminderId}`,
+            importance: AndroidImportance.HIGH,
+            category: AndroidCategory.ALARM,
+            visibility: AndroidVisibility.PUBLIC,
+            autoCancel: false,
+            lightUpScreen: true,
+            actions: [
+              { title: "Dismiss", pressAction: { id: "dismiss_action" } },
+              { title: "Snooze 5m", pressAction: { id: "snooze_action" } },
+            ],
+            pressAction: {
+              id: "default",
+              launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+            },
+            fullScreenAction: {
+              id: "default",
+              launchActivity: ANDROID_ALARM_ACTIVITY,
+              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+            },
+          },
+          data: {
+            ...data,
+            __reposted: "1",
+            __fromQueue: "1",
+          },
+        });
+        await setDisplayedAlarm(repostId);
+      } catch (e) {
+        console.log("[VR] Failed to display promoted queued alarm:", e);
+      }
+
+      await startAlarmAudioFromNotification(next.notification);
+      vrLog("pending_alarm", "queue_promoted", {
+        notificationId: next.notification.id,
+        reminderId,
+        reason,
+      });
+      return true;
+    }
+  } finally {
+    queuePromotionInFlight = false;
+  }
+}
+
 export async function setPendingAlarm(
   notification?: PendingAlarmNotification | null
 ): Promise<void> {
   if (!notification?.id) return;
+  clearActiveAlarmTimeout();
   const payload: PendingAlarm = {
     notification: toPendingNotification(notification),
     storedAt: Date.now(),
@@ -127,6 +414,13 @@ export async function setPendingAlarm(
     });
   } catch (e) {
     console.log("[VR] Failed to persist pending alarm:", e);
+  }
+
+  if (isAlarmOccurrenceNotification(notification)) {
+    activeAlarmTimeoutNotificationId = notification.id;
+    activeAlarmTimeoutHandle = setTimeout(() => {
+      void handlePendingAlarmTimeout(notification.id!, "timer");
+    }, ALARM_RING_TIMEOUT_MS);
   }
 }
 
@@ -220,6 +514,7 @@ export async function markPendingAlarmUiShown(notificationId: string): Promise<v
 
 export async function markPendingAlarmResolved(notificationId: string, action: "dismiss" | "snooze"): Promise<void> {
   if (!notificationId) return;
+  clearActiveAlarmTimeout(notificationId);
   try {
     const raw = await AsyncStorage.getItem(PENDING_ALARM_KEY);
     if (!raw) return;
@@ -262,7 +557,9 @@ export async function markPendingAlarmLaunchedExternally(
   }
 }
 
-export async function clearPendingAlarm(): Promise<void> {
+export async function clearPendingAlarm(options?: { promoteNext?: boolean }): Promise<void> {
+  const promoteNext = options?.promoteNext ?? true;
+  clearActiveAlarmTimeout();
   try {
     // Get trace info before clearing
     const pending = await getPendingAlarm();
@@ -275,6 +572,9 @@ export async function clearPendingAlarm(): Promise<void> {
     });
   } catch (e) {
     console.log("[VR] Failed to clear pending alarm:", e);
+  }
+  if (promoteNext) {
+    await promoteNextQueuedAlarm("pending_cleared");
   }
 }
 
@@ -322,6 +622,115 @@ export async function cancelDisplayedAlarmNotifications(
   }
 
   await clearDisplayedAlarm();
+}
+
+export async function handlePendingAlarmTimeout(
+  notificationId: string,
+  source: "timer" | "poll"
+): Promise<boolean> {
+  if (!notificationId) return false;
+  if (timeoutHandlingInFlight.has(notificationId)) return false;
+  timeoutHandlingInFlight.add(notificationId);
+  try {
+    const pending = await getPendingAlarm();
+    if (!pending?.notification?.id || pending.notification.id !== notificationId) return false;
+    if (pending.resolvedAt) return false;
+    if (!isAlarmOccurrenceNotification(pending.notification)) return false;
+
+    const now = Date.now();
+    const startedAt = pending.ringingAt || pending.uiShownAt || pending.storedAt || now;
+    if (now - startedAt < ALARM_RING_TIMEOUT_MS) return false;
+
+    const data = pending.notification.data || {};
+    const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
+    const snoozeEnabled = String(data.snoozeEnabled ?? "true") !== "false";
+    const autoSnoozeCount = Math.max(0, Number(data.autoSnoozeCount ?? "0") || 0);
+    const canAutoSnooze = snoozeEnabled && autoSnoozeCount < MAX_AUTO_SNOOZE_COUNT;
+
+    vrLog("pending_alarm", "timeout_fired", {
+      notificationId,
+      reminderId,
+      source,
+      autoSnoozeCount,
+      canAutoSnooze,
+    });
+
+    await alarmAudioService.stop().catch(() => {});
+    try {
+      await notifee.cancelNotification(notificationId);
+    } catch {
+      // ignore
+    }
+    await cancelDisplayedAlarmNotifications(notificationId);
+
+    if (canAutoSnooze) {
+      await scheduleSnoozeOccurrenceFromNotification(pending.notification, AUTO_SNOOZE_DELAY_MINUTES, {
+        autoSnoozeCount: String(autoSnoozeCount + 1),
+        autoSnoozeReason: "ring_timeout",
+      });
+      await markPendingAlarmResolved(notificationId, "snooze");
+      await clearPendingAlarm({ promoteNext: true });
+      return true;
+    }
+
+    if (reminderId) {
+      try {
+        const store = useReminderStore.getState();
+        const reminder = store.getReminderById(reminderId);
+        if (reminder) {
+          const scheduledForRaw = Number(data.scheduledFor);
+          const scheduledFor = Number.isFinite(scheduledForRaw) ? scheduledForRaw : undefined;
+          await store.recordCompletion(reminderId, reminder.title, "missed", {
+            scheduledFor,
+            action: "auto_missed",
+          });
+        }
+      } catch (e) {
+        console.log("[VR] Failed to record auto-missed reminder:", e);
+      }
+    }
+
+    await markPendingAlarmResolved(notificationId, "dismiss");
+    await clearPendingAlarm({ promoteNext: true });
+    return true;
+  } finally {
+    timeoutHandlingInFlight.delete(notificationId);
+  }
+}
+
+export async function enforcePendingAlarmTimeout(): Promise<void> {
+  const pending = await getPendingAlarm();
+  const id = pending?.notification?.id || "";
+  if (!id) {
+    clearActiveAlarmTimeout();
+    await promoteNextQueuedAlarm("no_active_pending");
+    return;
+  }
+  if (pending?.resolvedAt || !isAlarmOccurrenceNotification(pending?.notification)) {
+    clearActiveAlarmTimeout();
+    return;
+  }
+  if (!pending) {
+    clearActiveAlarmTimeout();
+    return;
+  }
+  const activePending = pending;
+  const now = Date.now();
+  const startedAt =
+    activePending.ringingAt || activePending.uiShownAt || activePending.storedAt || now;
+  const elapsed = now - startedAt;
+  if (elapsed >= ALARM_RING_TIMEOUT_MS) {
+    await handlePendingAlarmTimeout(id, "poll");
+    return;
+  }
+  if (activeAlarmTimeoutNotificationId === id && activeAlarmTimeoutHandle) {
+    return;
+  }
+  clearActiveAlarmTimeout();
+  activeAlarmTimeoutNotificationId = id;
+  activeAlarmTimeoutHandle = setTimeout(() => {
+    void handlePendingAlarmTimeout(id, "timer");
+  }, Math.max(500, ALARM_RING_TIMEOUT_MS - elapsed));
 }
 
 function isAndroidAlarmEnabled(value: any): boolean {
@@ -677,6 +1086,7 @@ export async function scheduleReminder(
         intervalDays: String(reminder.intervalDays ?? ""),
         scheduledFor: String(triggerTimestamp),
         kind: "reminder_occurrence",
+        autoSnoozeCount: "0",
 
         // New unified schedule fields
         scheduleType: reminder.scheduleType ?? "",
@@ -819,14 +1229,45 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     isRepost: isRepostNotification,
   });
 
+  await enforcePendingAlarmTimeout();
+
+  let queuedThisDelivery = false;
   if (type === EventType.DELIVERED && shouldHandleAsAlarm && !isRepostNotification) {
-    await setPendingAlarm(detail.notification as PendingAlarmNotification);
+    const existing = await getPendingAlarm();
+    const existingId = existing?.notification?.id || "";
+    const hasActive = Boolean(existingId) && !existing?.resolvedAt;
+    if (hasActive && existingId !== notificationId) {
+      queuedThisDelivery = await enqueueAlarmNotification(detail.notification as PendingAlarmNotification);
+      if (queuedThisDelivery) {
+        vrLog("pending_alarm", "delivered_queued_instead_of_activate", {
+          traceId: trace,
+          notificationId,
+          activeNotificationId: existingId,
+        });
+        try {
+          markInternalDismissIgnore(notificationId);
+          await notifee.cancelDisplayedNotification(notificationId);
+        } catch {
+          // ignore
+        }
+      }
+    } else {
+      await setPendingAlarm(detail.notification as PendingAlarmNotification);
+    }
   }
 
   // Handle PRESS events - mark as externally launched for alarm notifications
   if (type === EventType.PRESS && shouldHandleAsAlarm) {
     // Skip alarm_display_* notifications - their IDs don't match the real pending alarm
     if (!isAlarmDisplayNotification) {
+      // Don't override an active alarm; queue this press-notification instead.
+      const existing = await getPendingAlarm();
+      const existingId = existing?.notification?.id || "";
+      const hasActive = Boolean(existingId) && !existing?.resolvedAt;
+      if (hasActive && existingId !== notificationId) {
+        await enqueueAlarmNotification(detail.notification as PendingAlarmNotification);
+        return;
+      }
       // Ensure pending exists before marking origin
       await setPendingAlarm(detail.notification as PendingAlarmNotification);
       // Mark as externally launched (user tapped notification)
@@ -837,44 +1278,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   async function startAlarmAudioIfPossible(): Promise<void> {
     if (!shouldHandleAsAlarm) return;
     if (Platform.OS !== "android") return;
-
-    const localAudioPath = getLocalAudioPath(reminderId);
-    try {
-      const fileInfo = await getInfoAsync(localAudioPath);
-      if (!fileInfo.exists || !fileInfo.size) {
-        console.log("[VR] Alarm audio file missing, skipping playback:", localAudioPath);
-        return;
-      }
-    } catch (e) {
-      console.log("[VR] Failed to stat alarm audio file:", e);
-      return;
-    }
-
-    const rawVolume = Number(notificationData?.volume ?? "1");
-    const targetVolume = Math.max(0, Math.min(1, Number.isFinite(rawVolume) ? rawVolume : 1));
-
-    // Use ensurePlaying to prevent double-start, with fallback for stale singletons (Step 6B)
-    let ok: boolean;
-    if (typeof alarmAudioService.ensurePlaying === "function") {
-      ok = await alarmAudioService.ensurePlaying(localAudioPath, {
-        volume: targetVolume,
-        streamType: "alarm",
-        loop: true,
-      });
-    } else {
-      // Defensive fallback for stale singletons
-      console.log("[VR] ensurePlaying not available, using play() fallback");
-      ok = await alarmAudioService.play(localAudioPath, {
-        volume: targetVolume,
-        streamType: "alarm",
-        loop: true,
-      });
-    }
-    if (!ok) {
-      console.log("[VR] Alarm audio playback failed to start");
-    } else {
-      await markPendingAlarmRinging(notificationId);
-    }
+    await startAlarmAudioFromNotification(detail.notification as PendingAlarmNotification);
   }
 
   async function stopAlarmAudioIfPlaying(): Promise<void> {
@@ -888,8 +1292,42 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
 
   if (type === EventType.DISMISSED) {
     if (shouldHandleAsAlarm) {
-      await clearPendingAlarm();
+      if (shouldIgnoreInternalDismiss(notificationId)) {
+        vrLog('notifee', 'dismiss_ignored_internal', {
+          traceId: trace,
+          id: notificationId,
+          reason: 'internal_cancel_or_repost',
+        });
+        return;
+      }
+
+      // Ignore stale dismiss events from old alarms so they don't clear
+      // currently active pending/displayed alarms.
+      const pending = await getPendingAlarm();
+      const displayed = await getDisplayedAlarm();
+      const pendingId = pending?.notification?.id || "";
+      const displayedId = displayed || "";
+      const isCurrentPending = pendingId === notificationId;
+      const isCurrentDisplayed = displayedId === notificationId;
+
+      if (!isCurrentPending && !isCurrentDisplayed) {
+        vrLog('notifee', 'dismiss_ignored_stale', {
+          traceId: trace,
+          id: notificationId,
+          pendingId,
+          displayedId,
+        });
+        return;
+      }
+
+      await stopAlarmAudioIfPlaying();
       await cancelDisplayedAlarmNotifications(notificationId);
+      const resolveId = isCurrentPending ? notificationId : pendingId;
+      if (resolveId) {
+        await markPendingAlarmResolved(resolveId, "dismiss");
+      }
+      await clearPendingAlarm({ promoteNext: true });
+      return;
     }
     await stopAlarmAudioIfPlaying();
     return;
@@ -899,18 +1337,68 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   if (type === EventType.ACTION_PRESS) {
     const actionId = detail.pressAction?.id;
     console.log(`[VR] Action pressed: ${actionId}`);
+    const isKnownAlarmAction = actionId === "dismiss_action" || actionId === "snooze_action";
+
+    // Ignore non-action presses here (e.g. "default" routed via ACTION_PRESS on some devices).
+    if (shouldHandleAsAlarm && !isKnownAlarmAction) {
+      vrLog('notifee', 'action_press_ignored', {
+        traceId: trace,
+        id: notificationId,
+        actionId,
+      });
+      return;
+    }
 
     if (shouldHandleAsAlarm) {
-      if (actionId === "dismiss_action") {
-        await markPendingAlarmResolved(notificationId, "dismiss");
-      } else if (actionId === "snooze_action") {
-        await markPendingAlarmResolved(notificationId, "snooze");
+      const pending = await getPendingAlarm();
+      const displayed = await getDisplayedAlarm();
+      const pendingId = pending?.notification?.id || "";
+      const displayedId = displayed || "";
+      const isCurrentPending = pendingId === notificationId;
+      const isCurrentDisplayed = displayedId === notificationId;
+      if (!isCurrentPending && !isCurrentDisplayed) {
+        vrLog("notifee", "action_press_ignored_stale", {
+          traceId: trace,
+          id: notificationId,
+          actionId,
+          pendingId,
+          displayedId,
+        });
+        return;
       }
-      await clearPendingAlarm();
-    }
-    await stopAlarmAudioIfPlaying();
 
-    await cancelDisplayedAlarmNotifications(notificationId);
+      await stopAlarmAudioIfPlaying();
+      await cancelDisplayedAlarmNotifications(notificationId);
+      const resolveId = isCurrentPending ? notificationId : pendingId;
+
+      if (actionId === "snooze_action" && reminderId) {
+        console.log("[VR] Snooze action from notification");
+        const snoozeDuration = Number(notificationData?.snoozeDuration ?? "5") || 5;
+        const autoSnoozeCount = Math.max(0, Number(notificationData?.autoSnoozeCount ?? "0") || 0);
+        await scheduleSnoozeOccurrenceFromNotification(
+          detail.notification as PendingAlarmNotification,
+          snoozeDuration,
+          {
+            autoSnoozeCount: String(autoSnoozeCount),
+            autoSnoozeReason: "manual_action",
+          }
+        );
+        console.log(`[VR] Snoozed for ${snoozeDuration} minutes`);
+      }
+
+      if (actionId === "dismiss_action") {
+        if (resolveId) {
+          await markPendingAlarmResolved(resolveId, "dismiss");
+        }
+      } else if (actionId === "snooze_action") {
+        if (resolveId) {
+          await markPendingAlarmResolved(resolveId, "snooze");
+        }
+      }
+      await clearPendingAlarm({ promoteNext: true });
+    } else {
+      await stopAlarmAudioIfPlaying();
+    }
 
     // Handle dismiss action
     if (actionId === "dismiss_action" && reminderId) {
@@ -932,63 +1420,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       return;
     }
 
-    // Handle snooze action
-    if (actionId === "snooze_action" && reminderId) {
-      console.log("[VR] Snooze action from notification");
-      const snoozeDuration = Number(notificationData?.snoozeDuration ?? "5") || 5;
-      const triggerTimestamp = Date.now() + snoozeDuration * 60_000;
-      const channelId = `reminder_${reminderId}`;
-      const title = (notificationData?.title as string) || "Reminder";
-      const body = (notificationData?.description as string) || "";
-
-      const trigger: TimestampTrigger = {
-        type: TriggerType.TIMESTAMP,
-        timestamp: triggerTimestamp,
-        alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
-      };
-
-      await notifee.createTriggerNotification(
-        {
-          id: `snooze_${reminderId}_${Date.now()}`,
-          title,
-          body,
-          android: {
-            channelId,
-            importance: AndroidImportance.HIGH,
-            category: AndroidCategory.ALARM,
-            visibility: AndroidVisibility.PUBLIC,
-            autoCancel: false,
-            lightUpScreen: true,
-            actions: [
-              { title: "Dismiss", pressAction: { id: "dismiss_action" } },
-              { title: "Snooze 5m", pressAction: { id: "snooze_action" } },
-            ],
-            fullScreenAction: {
-              id: "default",
-              launchActivity: ANDROID_ALARM_ACTIVITY,
-              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
-            },
-            pressAction: {
-              id: "default",
-              launchActivity: ANDROID_ALARM_ACTIVITY,
-              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
-            },
-          },
-          data: {
-            ...notificationData,
-            kind: "snooze_occurrence",
-            scheduledFor: String(triggerTimestamp),
-            // Preserve essential fields for snooze to work properly
-            audioUrl: notificationData?.audioUrl || "",
-            frequency: notificationData?.frequency || "once",
-            originalScheduledFor: notificationData?.scheduledFor || "",
-          },
-        },
-        trigger
-      );
-      console.log(`[VR] Snoozed for ${snoozeDuration} minutes`);
-      return;
-    }
+    if (actionId === "snooze_action") return;
 
     return;
   }
@@ -1010,7 +1442,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
 
     // Cancel+repost lifecycle: cancel any previously displayed alarm to ensure
     // full-screen intent can trigger (many devices block full-screen if channel has uncleared notifications)
-    if (shouldHandleAsAlarm && isTriggerNotification && !isRepostNotification) {
+    if (shouldHandleAsAlarm && isTriggerNotification && !isRepostNotification && !queuedThisDelivery) {
       const previouslyDisplayed = await getDisplayedAlarm();
       if (previouslyDisplayed && previouslyDisplayed !== notificationId) {
         console.log("[VR] Cancelling previous displayed alarm:", previouslyDisplayed);
@@ -1027,6 +1459,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
         // Cancel the delivered trigger notification first
         if (notificationId) {
           try {
+            markInternalDismissIgnore(notificationId);
             await notifee.cancelDisplayedNotification(notificationId);
           } catch {
             // ignore
@@ -1102,7 +1535,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       }
     }
 
-    if (!isRepostNotification) {
+    if (!isRepostNotification && !queuedThisDelivery) {
       await startAlarmAudioIfPossible();
     }
 

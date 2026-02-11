@@ -56,6 +56,7 @@ export default function AlarmScreen() {
         intervalMs?: string;
         anchorAt?: string;
         kind?: string;
+        autoSnoozeCount?: string;
     }>();
 
     const [isPlaying, setIsPlaying] = useState(true);
@@ -311,6 +312,7 @@ export default function AlarmScreen() {
                         intervalMs: String(params.intervalMs ?? ""),
                         anchorAt: String(params.anchorAt ?? ""),
                         scheduledFor: String(triggerTimestamp),
+                        autoSnoozeCount: String(params.autoSnoozeCount ?? "0"),
                     },
                 },
                 trigger

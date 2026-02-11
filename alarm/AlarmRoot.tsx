@@ -6,6 +6,7 @@ import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
 import {
   PendingAlarm,
   clearPendingAlarm,
+  enforcePendingAlarmTimeout,
   getPendingAlarm,
   markPendingAlarmResolved,
   setPendingAlarm,
@@ -41,6 +42,7 @@ function buildOverlayProps(pending: PendingAlarm): AlarmOverlayProps | null {
     intervalMs: String(data?.intervalMs ?? ""),
     anchorAt: String(data?.anchorAt ?? ""),
     kind: String(data?.kind ?? ""),
+    autoSnoozeCount: String(data?.autoSnoozeCount ?? "0"),
   };
 
   return {
@@ -53,6 +55,15 @@ function buildOverlayProps(pending: PendingAlarm): AlarmOverlayProps | null {
       void logAppTaskState(`alarm_resolve_dismiss_before_${notificationId}`);
       await markPendingAlarmResolved(notificationId, "dismiss");
       await clearPendingAlarm();
+      const pendingAfter = await getPendingAlarm();
+      if (pendingAfter?.notification?.id && !pendingAfter.resolvedAt) {
+        logAlarmLifecycle('resolve_keep_activity_for_queued', {
+          traceId,
+          notificationId: pendingAfter.notification.id,
+          action: 'dismiss',
+        });
+        return;
+      }
       const didFinish = await finishIfAlarmActivity();
       logAlarmLifecycle('resolve_finish', { traceId, notificationId, action: 'dismiss', didFinish });
       if (!didFinish) {
@@ -66,6 +77,15 @@ function buildOverlayProps(pending: PendingAlarm): AlarmOverlayProps | null {
       void logAppTaskState(`alarm_resolve_snooze_before_${notificationId}`);
       await markPendingAlarmResolved(notificationId, "snooze");
       await clearPendingAlarm();
+      const pendingAfter = await getPendingAlarm();
+      if (pendingAfter?.notification?.id && !pendingAfter.resolvedAt) {
+        logAlarmLifecycle('resolve_keep_activity_for_queued', {
+          traceId,
+          notificationId: pendingAfter.notification.id,
+          action: 'snooze',
+        });
+        return;
+      }
       const didFinish = await finishIfAlarmActivity();
       logAlarmLifecycle('resolve_finish', { traceId, notificationId, action: 'snooze', didFinish });
       if (!didFinish) {
@@ -117,6 +137,7 @@ export default function AlarmRoot() {
 
     async function poll() {
       if (cancelled) return;
+      await enforcePendingAlarmTimeout();
       const pending = await getPendingAlarm();
       if (cancelled) return;
 

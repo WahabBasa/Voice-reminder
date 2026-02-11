@@ -57,6 +57,7 @@ export interface AlarmOverlayProps {
   intervalMs: string;
   anchorAt: string;
   kind: string;
+  autoSnoozeCount: string;
   onDismiss: () => Promise<void>;
   onSnooze: () => Promise<void>;
   shouldExitOnResolve?: boolean;
@@ -80,6 +81,7 @@ export function AlarmOverlay({
   intervalMs,
   anchorAt,
   kind,
+  autoSnoozeCount,
   onDismiss,
   onSnooze,
   shouldExitOnResolve = false,
@@ -358,6 +360,7 @@ export function AlarmOverlay({
             intervalMs: intervalMs ?? "",
             anchorAt: anchorAt ?? "",
             scheduledFor: String(triggerTimestamp),
+            autoSnoozeCount: String(autoSnoozeCount ?? "0"),
           },
         },
         trigger

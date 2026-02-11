@@ -9,13 +9,12 @@ import { PortalProvider } from "@gorhom/portal";
 import ToastProvider, { useToast } from "../components/ToastProvider";
 import { initializePurchases } from "../lib/purchases";
 import { useReminderStore } from "../lib/store";
-import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, cancelDisplayedAlarmNotifications } from "../lib/notifications";
+import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, enforcePendingAlarmTimeout } from "../lib/notifications";
 import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
 import { vrLog, logBuildInfo } from "../lib/vrLog";
 import { logAppTaskState, isAlarmActivity } from "../lib/activityControl";
-import { alarmAudioService } from "../lib/AudioService";
 import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
 import { buildTraceId } from "../lib/vrLog";
 import { convex } from "../lib/convexClient";
@@ -137,6 +136,7 @@ function AlarmOverlayFallback() {
 
     async function poll() {
       if (cancelled) return;
+      await enforcePendingAlarmTimeout();
       
       // Check if we're in AlarmActivity (if so, don't show fallback)
       const inAlarmActivity = await isAlarmActivity();
@@ -189,6 +189,7 @@ function AlarmOverlayFallback() {
         intervalMs: String(data?.intervalMs ?? ""),
         anchorAt: String(data?.anchorAt ?? ""),
         kind: String(data?.kind ?? ""),
+        autoSnoozeCount: String(data?.autoSnoozeCount ?? "0"),
         // Fallback resolve behavior (pastebin Step 4.2):
         // - mark pending resolved + clear pending
         // - stop audio
@@ -199,8 +200,6 @@ function AlarmOverlayFallback() {
           vrLog('alarm_overlay_fallback', 'resolve_start', { traceId, notificationId, action: 'dismiss' });
           await markPendingAlarmResolved(notificationId, "dismiss");
           await clearPendingAlarm();
-          await alarmAudioService.stop();
-          await cancelDisplayedAlarmNotifications(notificationId);
           setActiveAlarm(null);
           vrLog('alarm_overlay_fallback', 'resolve_complete', { traceId, notificationId, action: 'dismiss' });
         },
@@ -208,8 +207,6 @@ function AlarmOverlayFallback() {
           vrLog('alarm_overlay_fallback', 'resolve_start', { traceId, notificationId, action: 'snooze' });
           await markPendingAlarmResolved(notificationId, "snooze");
           await clearPendingAlarm();
-          await alarmAudioService.stop();
-          await cancelDisplayedAlarmNotifications(notificationId);
           setActiveAlarm(null);
           vrLog('alarm_overlay_fallback', 'resolve_complete', { traceId, notificationId, action: 'snooze' });
         },
