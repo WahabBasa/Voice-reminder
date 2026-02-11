@@ -690,6 +690,13 @@ export async function scheduleReminder(
     trigger
   );
 
+  const logNow = Date.now();
+  const deltaMs = triggerTimestamp - logNow;
+  const scheduleSource = _options?.traceId ? "create_flow" : "sync_or_internal";
+  console.log(
+    `[VR] schedule_debug source=${scheduleSource} id=${reminder.id} freq=${reminder.frequency} scheduleType=${reminder.scheduleType ?? "legacy"} now=${new Date(logNow).toISOString()} trigger=${new Date(triggerTimestamp).toISOString()} deltaMs=${deltaMs} deltaMin=${Math.round(deltaMs / 60000)}`
+  );
+
   console.log(
     `[VR] Scheduled notification for ${new Date(triggerTimestamp).toLocaleString()}`
   );
@@ -1268,12 +1275,10 @@ export async function syncRemindersOnStartup(
         : "";
     const pendingScheduledFor = Number(pending?.notification?.data?.scheduledFor);
 
-    // Get today's completions for "once" reminder skip logic
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const completedTodayIds = new Set(
+    // One-time reminders with any terminal history should never be rescheduled.
+    const terminalHistoryIds = new Set(
       history
-        .filter((h) => h.status === "completed" && new Date(h.timestamp) >= todayStart)
+        .filter((h) => h.status === "completed" || h.status === "missed")
         .map((h) => h.reminderId)
     );
 
@@ -1283,12 +1288,12 @@ export async function syncRemindersOnStartup(
     let permissionError = false;
 
     for (const reminder of reminders) {
-      // Skip "once" reminders that are completed today or in the past
+      // One-time reminders: skip if already completed/missed.
       const isOneTime = reminder.scheduleType === 'once' || 
                         (!reminder.scheduleType && reminder.frequency === 'once');
       
       if (isOneTime) {
-        if (completedTodayIds.has(reminder.id)) {
+        if (terminalHistoryIds.has(reminder.id)) {
           skipped++;
           continue;
         }
@@ -1320,6 +1325,19 @@ export async function syncRemindersOnStartup(
           );
         }
         if (due <= now) {
+          // Record a missed occurrence so overdue one-time reminders are visible in history.
+          // Keep the reminder itself; UI can still show it as overdue in "All".
+          try {
+            const store = useReminderStore.getState();
+            await store.recordCompletion(reminder.id, reminder.title, "missed", {
+              scheduledFor: Number.isFinite(due) ? due : undefined,
+              action: "auto_missed",
+            });
+            terminalHistoryIds.add(reminder.id);
+            console.log(`[VR] Auto-recorded missed one-time reminder ${reminder.id}`);
+          } catch (missErr) {
+            console.log(`[VR] Failed to auto-record missed reminder ${reminder.id}:`, missErr);
+          }
           skipped++;
           continue;
         }

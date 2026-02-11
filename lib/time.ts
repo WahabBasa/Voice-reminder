@@ -107,22 +107,15 @@ export function getDueTimestamp(schedule: ReminderSchedule, nowDate = new Date()
     return getNextTriggerTime(schedule, nowDate.getTime());
   }
 
-  const todayTarget = new Date(now);
-  todayTarget.setHours(hours, minutes, 0, 0);
-
   if (schedule.frequency === "daily") {
-    if (schedule.intervalDays && schedule.intervalDays > 1) {
-      return getNextTriggerTime(schedule, nowDate.getTime());
-    }
-    return todayTarget.getTime();
+    // For repeating reminders, always show the next future occurrence.
+    // This avoids newly-created reminders appearing immediately overdue when
+    // today's scheduled time already passed.
+    return getNextTriggerTime(schedule, nowDate.getTime());
   }
 
   if (schedule.frequency === "weekly" || schedule.frequency === "custom") {
-    const todayKey = DAY_KEYS[now.getDay()];
-    const days = schedule.days?.map((d) => d.toLowerCase()) ?? [];
-    if (days.includes(todayKey)) {
-      return todayTarget.getTime();
-    }
+    // Always compute the next future weekly/custom occurrence.
     return getNextTriggerTime(schedule, nowDate.getTime());
   }
 

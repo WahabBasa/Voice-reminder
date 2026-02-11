@@ -69,7 +69,7 @@ export interface ReminderHistory {
 
     // Occurrence tracking
     scheduledFor?: number;
-    action?: 'dismissed' | 'snoozed' | 'fired' | 'auto_completed';
+    action?: 'dismissed' | 'snoozed' | 'fired' | 'auto_completed' | 'auto_missed';
 }
 
 // Store state interface

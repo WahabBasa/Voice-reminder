@@ -12,10 +12,10 @@ function getDayBoundsMs(nowMs: number): { start: number; end: number } {
   return { start, end: start + 24 * 60 * 60 * 1000 };
 }
 
-function hasAnyCompletionEntry(history: ReminderHistory[], reminderId: string): boolean {
+function hasCompletedEntry(history: ReminderHistory[], reminderId: string): boolean {
   for (const entry of history) {
     if (entry.reminderId !== reminderId) continue;
-    if (entry.status === "completed" || entry.status === "missed") return true;
+    if (entry.status === "completed") return true;
   }
   return false;
 }
@@ -59,11 +59,9 @@ export function isReminderActive(
   // Interval reminders always recur.
   if (reminder.frequency === "interval") return true;
 
-  // One-time reminders become inactive after any completion/miss.
+  // One-time reminders stay visible (including overdue/missed) until explicitly completed.
   if (reminder.frequency === "once") {
-    if (hasAnyCompletionEntry(history, reminder.id)) return false;
-    const target = getOnceTargetTimestamp(reminder, nowMs);
-    return target > nowMs;
+    return !hasCompletedEntry(history, reminder.id);
   }
 
   // Recurring reminders remain active.
@@ -108,8 +106,8 @@ export function shouldCleanupGhostOnceReminder(
   nowMs: number = Date.now()
 ): boolean {
   if (reminder.frequency !== "once") return false;
-  // Only cleanup if we have evidence it already fired/was handled.
-  if (!hasAnyCompletionEntry(history, reminder.id)) return false;
+  // Only cleanup if the reminder was explicitly completed.
+  if (!hasCompletedEntry(history, reminder.id)) return false;
   // Past-due guard for dated one-time reminders.
   if (reminder.date) {
     return getOnceTargetTimestamp(reminder, nowMs) <= nowMs;

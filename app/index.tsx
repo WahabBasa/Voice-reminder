@@ -732,7 +732,9 @@ export default function HomeScreen() {
   }, [reminders]);
 
   const filteredCompletedHistory = useMemo(() => {
-    return history.filter((entry) => entry.status === "completed");
+    return history.filter(
+      (entry) => entry.status === "completed" || entry.status === "missed"
+    );
   }, [history]);
 
   const remindersBySection = useMemo(() => {
