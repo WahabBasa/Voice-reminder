@@ -25,6 +25,7 @@ import { api } from "../convex/_generated/api";
 import AppIcon from "./AppIcon";
 import DaySelector from "./DaySelector";
 import RepeatTaskModal from "./RepeatTaskModal";
+import DatePickerModal from "./DatePickerModal";
 import { cancelReminder, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
 import { createTraceId, perfLog } from "../lib/perf";
 import { DEFAULT_ALARM_SETTINGS, VolumeStyle } from "../lib/storage";
@@ -170,6 +171,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
     // Log mount/unmount and cleanup audio on unmount
     useEffect(() => {
+        console.log("[VR] EditReminderSheet mounted (floating date modal build)");
         perfLog(traceId, "overlay.edit", "sheet_mount", { t: Date.now(), reminderId: initialReminder.id });
 
         return () => {
@@ -325,7 +327,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     title: reminder.title,
                     description: soundText.trim(),
                     time: timeStr,
-                    date: frequency === "once" ? dateStr : undefined,
+                    date: dateStr,
                     frequency,
                     days: frequency === "custom" ? days : [],
                     audioUrl: result.audioUrl,
@@ -429,7 +431,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             title: title.trim(),
             description,
             time: timeStr,
-            date: frequency === "once" ? dateStr : undefined,
+            date: dateStr,
             frequency,
             days: frequency === "custom" ? days : [],
             snoozeEnabled,
@@ -711,148 +713,15 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             onPress={() => setShowTimePicker(true)}
                         />
 
-                        {/* Date picker for "once" frequency */}
-                        {frequency === "once" && (
-                            <>
-                                <SettingsRow
-                                    icon="calendar"
-                                    label="Date"
-                                    value={dateLabel}
-                                    onPress={() => setShowDatePicker((v) => !v)}
-                                />
-                                {showDatePicker && (
-                                    <View style={styles.datePickerInline}>
-                                        <View style={styles.dateChipsRow}>
-                                            <TouchableOpacity
-                                                style={[
-                                                    styles.dateChip,
-                                                    dateLabel === "Today" && styles.dateChipSelected,
-                                                ]}
-                                                onPress={() => {
-                                                    const today = new Date();
-                                                    today.setHours(0, 0, 0, 0);
-                                                    setSelectedDate(today);
-                                                }}
-                                            >
-                                                <Text style={[
-                                                    styles.dateChipText,
-                                                    dateLabel === "Today" && styles.dateChipTextSelected,
-                                                ]}>Today</Text>
-                                            </TouchableOpacity>
-                                            <TouchableOpacity
-                                                style={[
-                                                    styles.dateChip,
-                                                    dateLabel === "Tomorrow" && styles.dateChipSelected,
-                                                ]}
-                                                onPress={() => {
-                                                    const tomorrow = new Date();
-                                                    tomorrow.setDate(tomorrow.getDate() + 1);
-                                                    tomorrow.setHours(0, 0, 0, 0);
-                                                    setSelectedDate(tomorrow);
-                                                }}
-                                            >
-                                                <Text style={[
-                                                    styles.dateChipText,
-                                                    dateLabel === "Tomorrow" && styles.dateChipTextSelected,
-                                                ]}>Tomorrow</Text>
-                                            </TouchableOpacity>
-                                            <TouchableOpacity
-                                                style={styles.dateChip}
-                                                onPress={() => {
-                                                    const nextWeek = new Date();
-                                                    nextWeek.setDate(nextWeek.getDate() + 7);
-                                                    nextWeek.setHours(0, 0, 0, 0);
-                                                    setSelectedDate(nextWeek);
-                                                }}
-                                            >
-                                                <Text style={styles.dateChipText}>Next Week</Text>
-                                            </TouchableOpacity>
-                                        </View>
-                                        {/* Simple calendar grid - current month */}
-                                        <View style={styles.miniCalendar}>
-                                            <View style={styles.miniCalendarHeader}>
-                                                <TouchableOpacity
-                                                    onPress={() => {
-                                                        const prev = selectedDate ? new Date(selectedDate) : new Date();
-                                                        prev.setMonth(prev.getMonth() - 1);
-                                                        setSelectedDate(prev);
-                                                    }}
-                                                    style={styles.miniCalendarNav}
-                                                >
-                                                    <AppIcon name="chevron-left" size={18} color={stylesVars.iconColor} />
-                                                </TouchableOpacity>
-                                                <Text style={styles.miniCalendarTitle}>
-                                                    {(selectedDate || new Date()).toLocaleDateString("default", { month: "long", year: "numeric" })}
-                                                </Text>
-                                                <TouchableOpacity
-                                                    onPress={() => {
-                                                        const next = selectedDate ? new Date(selectedDate) : new Date();
-                                                        next.setMonth(next.getMonth() + 1);
-                                                        setSelectedDate(next);
-                                                    }}
-                                                    style={styles.miniCalendarNav}
-                                                >
-                                                    <AppIcon name="chevron-right" size={18} color={stylesVars.iconColor} />
-                                                </TouchableOpacity>
-                                            </View>
-                                            <View style={styles.miniCalendarDays}>
-                                                {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
-                                                    <Text key={i} style={styles.miniCalendarDayHeader}>{d}</Text>
-                                                ))}
-                                            </View>
-                                            <View style={styles.miniCalendarGrid}>
-                                                {(() => {
-                                                    const viewDate = selectedDate || new Date();
-                                                    const year = viewDate.getFullYear();
-                                                    const month = viewDate.getMonth();
-                                                    const firstDay = new Date(year, month, 1);
-                                                    const lastDay = new Date(year, month + 1, 0);
-                                                    const startDayOfWeek = firstDay.getDay();
-                                                    const daysInMonth = lastDay.getDate();
-
-                                                    const cells = [];
-                                                    // Empty cells before first day
-                                                    for (let i = 0; i < startDayOfWeek; i++) {
-                                                        cells.push(<View key={`empty-${i}`} style={styles.miniCalendarCell} />);
-                                                    }
-                                                    // Day cells
-                                                    for (let day = 1; day <= daysInMonth; day++) {
-                                                        const cellDate = new Date(year, month, day);
-                                                        const isSelected = selectedDate &&
-                                                            cellDate.getDate() === selectedDate.getDate() &&
-                                                            cellDate.getMonth() === selectedDate.getMonth() &&
-                                                            cellDate.getFullYear() === selectedDate.getFullYear();
-                                                        const isToday = new Date().toDateString() === cellDate.toDateString();
-
-                                                        cells.push(
-                                                            <TouchableOpacity
-                                                                key={day}
-                                                                style={[
-                                                                    styles.miniCalendarCell,
-                                                                    isSelected && styles.miniCalendarCellSelected,
-                                                                ]}
-                                                                onPress={() => {
-                                                                    setSelectedDate(new Date(year, month, day));
-                                                                }}
-                                                            >
-                                                                <Text style={[
-                                                                    styles.miniCalendarCellText,
-                                                                    isToday && !isSelected && styles.miniCalendarCellToday,
-                                                                    isSelected && styles.miniCalendarCellTextSelected,
-                                                                ]}>
-                                                                    {day}
-                                                                </Text>
-                                                            </TouchableOpacity>
-                                                        );
-                                                    }
-                                                    return cells;
-                                                })()}
-                                            </View>
-                                        </View>
-                                    </View>
-                                )}
-                            </>
-                        )}
+                        <SettingsRow
+                            icon="calendar"
+                            label="Date"
+                            value={dateLabel}
+                            onPress={() => {
+                                console.log("[VR] Opening floating DatePickerModal");
+                                setShowDatePicker(true);
+                            }}
+                        />
 
                         <SettingsRow icon="refresh-cw" label="Repeat" value={frequencyLabel} onPress={openFrequencyPicker} />
 
@@ -953,6 +822,21 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             styles={{ theme: "light" }}
                             useAmPmWheel
                             use12HourPicker
+                        />
+                    ) : null}
+
+                    {showDatePicker ? (
+                        <DatePickerModal
+                            visible={showDatePicker}
+                            initialDate={selectedDate}
+                            initialTime={{ hours: time.getHours(), minutes: time.getMinutes() }}
+                            dateOnly
+                            onCancel={() => setShowDatePicker(false)}
+                            onConfirm={({ date }) => {
+                                console.log("[VR] DatePickerModal confirmed date:", date?.toISOString?.() ?? "none");
+                                setSelectedDate(date);
+                                setShowDatePicker(false);
+                            }}
                         />
                     ) : null}
 
@@ -1237,94 +1121,5 @@ const styles = StyleSheet.create({
         fontSize: scaleFontSize(15),
         fontWeight: "600",
         color: "white",
-    },
-    // Date picker styles
-    datePickerInline: {
-        paddingLeft: 38,
-        paddingBottom: 12,
-        paddingTop: 4,
-    },
-    dateChipsRow: {
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 8,
-        marginBottom: 16,
-    },
-    dateChip: {
-        backgroundColor: stylesVars.chipBg,
-        borderRadius: 16,
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        borderWidth: 1,
-        borderColor: "transparent",
-    },
-    dateChipSelected: {
-        backgroundColor: colors.accent + "20",
-        borderColor: colors.accent,
-    },
-    dateChipText: {
-        fontSize: scaleFontSize(13),
-        fontWeight: "500",
-        color: stylesVars.chipText,
-    },
-    dateChipTextSelected: {
-        color: colors.accent,
-    },
-    miniCalendar: {
-        backgroundColor: stylesVars.chipBg,
-        borderRadius: 12,
-        padding: 12,
-    },
-    miniCalendarHeader: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: 12,
-    },
-    miniCalendarNav: {
-        padding: 6,
-    },
-    miniCalendarTitle: {
-        fontSize: scaleFontSize(14),
-        fontWeight: "600",
-        color: stylesVars.headerText,
-    },
-    miniCalendarDays: {
-        flexDirection: "row",
-        justifyContent: "space-around",
-        marginBottom: 8,
-    },
-    miniCalendarDayHeader: {
-        width: "14.28%",
-        textAlign: "center",
-        fontSize: scaleFontSize(11),
-        fontWeight: "500",
-        color: stylesVars.mutedText,
-    },
-    miniCalendarGrid: {
-        flexDirection: "row",
-        flexWrap: "wrap",
-    },
-    miniCalendarCell: {
-        width: "14.28%",
-        aspectRatio: 1,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    miniCalendarCellSelected: {
-        backgroundColor: colors.accent,
-        borderRadius: 100,
-    },
-    miniCalendarCellText: {
-        fontSize: scaleFontSize(13),
-        color: stylesVars.labelText,
-    },
-    miniCalendarCellToday: {
-        color: colors.accent,
-        fontWeight: "600",
-    },
-    miniCalendarCellTextSelected: {
-        color: "white",
-        fontWeight: "600",
     },
 });

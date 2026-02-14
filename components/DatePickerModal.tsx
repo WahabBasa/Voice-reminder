@@ -62,6 +62,7 @@ type DatePickerModalProps = {
   initialTime?: { hours: number; minutes: number } | null;
   initialReminder?: string;
   initialRepeat?: string;
+  dateOnly?: boolean;
   onConfirm: (data: {
     date: Date | null;
     time: { hours: number; minutes: number };
@@ -77,6 +78,7 @@ export default function DatePickerModal({
   initialTime,
   initialReminder = "none",
   initialRepeat = "none",
+  dateOnly = false,
   onConfirm,
   onCancel,
 }: DatePickerModalProps) {
@@ -280,30 +282,31 @@ export default function DatePickerModal({
             </TouchableOpacity>
           </View>
 
-          {/* Settings Rows */}
-          <View style={styles.settingsSection}>
-            <View style={styles.separator} />
-            <SettingsRow
-              icon="clock"
-              label="Time"
-              value={formatTime(selectedTime)}
-              onPress={openTimePicker}
-            />
-            <View style={styles.separator} />
-            <SettingsRow
-              icon="bell"
-              label="Reminder"
-              value={reminderLabel}
-              onPress={openReminderPicker}
-            />
-            <View style={styles.separator} />
-            <SettingsRow
-              icon="refresh-cw"
-              label="Repeat"
-              value={repeatLabel}
-              onPress={openRepeatPicker}
-            />
-          </View>
+          {!dateOnly ? (
+            <View style={styles.settingsSection}>
+              <View style={styles.separator} />
+              <SettingsRow
+                icon="clock"
+                label="Time"
+                value={formatTime(selectedTime)}
+                onPress={openTimePicker}
+              />
+              <View style={styles.separator} />
+              <SettingsRow
+                icon="bell"
+                label="Reminder"
+                value={reminderLabel}
+                onPress={openReminderPicker}
+              />
+              <View style={styles.separator} />
+              <SettingsRow
+                icon="refresh-cw"
+                label="Repeat"
+                value={repeatLabel}
+                onPress={openRepeatPicker}
+              />
+            </View>
+          ) : null}
 
           {/* Action Buttons */}
           <View style={styles.actions}>
@@ -320,7 +323,7 @@ export default function DatePickerModal({
         </View>
       </GestureHandlerRootView>
 
-      {showTimePicker ? (
+      {!dateOnly && showTimePicker ? (
         <TimerPickerModal
           closeOnOverlayPress
           LinearGradient={LinearGradient}
@@ -347,33 +350,37 @@ export default function DatePickerModal({
         />
       ) : null}
 
-      <PickerSheet
-        visible={showReminderPicker}
-        title="Reminder"
-        mode="list"
-        options={REMINDER_OPTIONS}
-        selected={selectedReminder}
-        onSelect={(value) => {
-          setSelectedReminder(String(value));
-          setShowReminderPicker(false);
-        }}
-        onDismiss={() => setShowReminderPicker(false)}
-        hostName={portalHostName}
-      />
+      {!dateOnly ? (
+        <PickerSheet
+          visible={showReminderPicker}
+          title="Reminder"
+          mode="list"
+          options={REMINDER_OPTIONS}
+          selected={selectedReminder}
+          onSelect={(value) => {
+            setSelectedReminder(String(value));
+            setShowReminderPicker(false);
+          }}
+          onDismiss={() => setShowReminderPicker(false)}
+          hostName={portalHostName}
+        />
+      ) : null}
 
-      <PickerSheet
-        visible={showRepeatPicker}
-        title="Repeat"
-        mode="list"
-        options={REPEAT_OPTIONS}
-        selected={selectedRepeat}
-        onSelect={(value) => {
-          setSelectedRepeat(String(value));
-          setShowRepeatPicker(false);
-        }}
-        onDismiss={() => setShowRepeatPicker(false)}
-        hostName={portalHostName}
-      />
+      {!dateOnly ? (
+        <PickerSheet
+          visible={showRepeatPicker}
+          title="Repeat"
+          mode="list"
+          options={REPEAT_OPTIONS}
+          selected={selectedRepeat}
+          onSelect={(value) => {
+            setSelectedRepeat(String(value));
+            setShowRepeatPicker(false);
+          }}
+          onDismiss={() => setShowRepeatPicker(false)}
+          hostName={portalHostName}
+        />
+      ) : null}
     </Modal>
   );
 }
