@@ -24,8 +24,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.wahabbasa.VoiceReminder",
-      "navigationBarColor": "#FAFAFA"
+      "package": "com.wahabbasa.VoiceReminder"
     },
     "web": {
       "favicon": "./assets/favicon.png"
