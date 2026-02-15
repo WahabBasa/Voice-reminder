@@ -103,6 +103,25 @@ function shouldIgnoreInternalDismiss(notificationId?: string): boolean {
   return true;
 }
 
+async function cancelExistingReminderOccurrenceTriggers(reminderId: string, exceptId?: string): Promise<number> {
+  if (!reminderId) return 0;
+  try {
+    const prefix = `reminder_${reminderId}_`;
+    const scheduledIds = await notifee.getTriggerNotificationIds();
+    const toCancel = scheduledIds.filter((id) => id.startsWith(prefix) && id !== exceptId);
+    for (const id of toCancel) {
+      try {
+        await notifee.cancelTriggerNotification(id);
+      } catch {
+        // ignore
+      }
+    }
+    return toCancel.length;
+  } catch {
+    return 0;
+  }
+}
+
 // Note: buildTraceId() has been moved to vrLog.ts - use that instead
 // Keeping re-export for backwards compatibility during transition
 type PendingAlarmNotification = {
@@ -1026,6 +1045,11 @@ export async function scheduleReminder(
 
   const notificationId = `reminder_${reminder.id}_${triggerTimestamp}`;
 
+  // Defensive: ensure we only ever have a single upcoming "reminder_*" trigger per reminder.
+  // Some Android/Notifee edge cases can leave multiple triggers around, which then fire duplicates.
+  // Snoozes use the "snooze_*" prefix and are intentionally not canceled here.
+  await cancelExistingReminderOccurrenceTriggers(reminder.id, notificationId);
+
   // Define notification action buttons for lockscreen use
   const actions: AndroidAction[] = [
     {
@@ -1236,7 +1260,41 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     const existing = await getPendingAlarm();
     const existingId = existing?.notification?.id || "";
     const hasActive = Boolean(existingId) && !existing?.resolvedAt;
+    if (hasActive && existingId === notificationId) {
+      // Some devices/libraries can emit duplicate DELIVERED events for the same notification.
+      // Treat it as idempotent: if it's already active, don't re-run lifecycle (repost/audio/reschedule).
+      vrLog("pending_alarm", "delivered_duplicate_id_ignored", {
+        traceId: trace,
+        notificationId,
+      });
+      return;
+    }
     if (hasActive && existingId !== notificationId) {
+      const existingData: any = existing?.notification?.data || {};
+      const existingReminderId =
+        typeof existingData?.reminderId === "string" ? (existingData.reminderId as string) : "";
+      const existingScheduledFor =
+        typeof existingData?.scheduledFor === "string" ? (existingData.scheduledFor as string) : String(existingData?.scheduledFor ?? "");
+
+      // If two notifications represent the same reminder occurrence, ignore the duplicate entirely.
+      // This can happen if multiple triggers exist for the same reminder/timestamp.
+      if (existingReminderId && existingReminderId === reminderId && existingScheduledFor && existingScheduledFor === scheduledFor) {
+        vrLog("pending_alarm", "delivered_duplicate_occurrence_ignored", {
+          traceId: trace,
+          notificationId,
+          activeNotificationId: existingId,
+          reminderId,
+          scheduledFor,
+        });
+        try {
+          markInternalDismissIgnore(notificationId);
+          await notifee.cancelDisplayedNotification(notificationId);
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
       queuedThisDelivery = await enqueueAlarmNotification(detail.notification as PendingAlarmNotification);
       if (queuedThisDelivery) {
         vrLog("pending_alarm", "delivered_queued_instead_of_activate", {
@@ -1643,6 +1701,10 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       }
 
       const newNotificationId = `reminder_${data.reminderId}_${nextTrigger}`;
+
+      // Defensive: cancel any existing reminder triggers before scheduling the next one.
+      // Prevents accumulating duplicates if older versions/edge cases created more than one.
+      await cancelExistingReminderOccurrenceTriggers(data.reminderId as string);
 
       const trigger: TimestampTrigger = {
         type: TriggerType.TIMESTAMP,

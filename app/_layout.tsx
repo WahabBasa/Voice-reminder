@@ -14,7 +14,7 @@ import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
 import { vrLog, logBuildInfo } from "../lib/vrLog";
-import { logAppTaskState, isAlarmActivity } from "../lib/activityControl";
+import { logAppTaskState, isAlarmActivity, isKeyguardLocked } from "../lib/activityControl";
 import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
 import { buildTraceId } from "../lib/vrLog";
 import { convex } from "../lib/convexClient";
@@ -137,16 +137,23 @@ function AlarmOverlayFallback() {
     async function poll() {
       if (cancelled) return;
       await enforcePendingAlarmTimeout();
-      
+
+      // If the device is locked, never show the MainActivity fallback overlay.
+      // The primary path is Notifee full-screen intent -> AlarmActivity over the lockscreen.
+      const locked = await isKeyguardLocked();
+      if (locked) {
+        setIsInAlarmActivity(false);
+        setActiveAlarm((prev) => (prev ? null : prev));
+        return;
+      }
+       
       // Check if we're in AlarmActivity (if so, don't show fallback)
       const inAlarmActivity = await isAlarmActivity();
       setIsInAlarmActivity(inAlarmActivity);
-      
+       
       if (inAlarmActivity) {
         // Primary path is handling this, hide fallback
-        if (activeAlarm) {
-          setActiveAlarm(null);
-        }
+        setActiveAlarm((prev) => (prev ? null : prev));
         return;
       }
 
@@ -154,13 +161,14 @@ function AlarmOverlayFallback() {
       if (cancelled) return;
 
       if (!pending || pending.resolvedAt) {
-        if (activeAlarm) {
+        setActiveAlarm((prev) => {
+          if (!prev) return prev;
           vrLog('alarm_overlay_fallback', 'alarm_cleared', { 
             notificationId: pending?.notification?.id,
             resolvedAt: pending?.resolvedAt,
           });
-          setActiveAlarm(null);
-        }
+          return null;
+        });
         return;
       }
 
