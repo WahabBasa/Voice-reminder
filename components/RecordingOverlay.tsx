@@ -29,6 +29,8 @@ import {
 } from "../lib/audio";
 import { createTraceId, perfLog } from "../lib/perf";
 
+const MAX_RECORDING_SECONDS = 120; // 2 minute cap
+
 type RecordingState = "idle" | "recording" | "paused" | "processing";
 
 interface RecordingOverlayProps {
@@ -126,6 +128,18 @@ export default function RecordingOverlay({
       hasAutoStarted.current = false;
     }
   }, [visible, autoStart, canStartRecording, state]);
+
+  // Auto-stop when recording hits the max duration
+  const autoStopTriggered = useRef(false);
+  useEffect(() => {
+    if (state === "recording" && duration >= MAX_RECORDING_SECONDS && !autoStopTriggered.current) {
+      autoStopTriggered.current = true;
+      handlePrimaryPress(); // triggers stop path since state === "recording"
+    }
+    if (state === "idle") {
+      autoStopTriggered.current = false;
+    }
+  }, [duration, state]);
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);

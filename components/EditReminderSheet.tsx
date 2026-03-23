@@ -26,7 +26,8 @@ import AppIcon from "./AppIcon";
 import DaySelector from "./DaySelector";
 import RepeatTaskModal from "./RepeatTaskModal";
 import DatePickerModal from "./DatePickerModal";
-import { cancelReminder, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
+import { cancelReminder, deleteLocalAudio, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
+import { migrateLegacySchedule } from "../lib/schedule";
 import { createTraceId, perfLog } from "../lib/perf";
 import { DEFAULT_ALARM_SETTINGS, VolumeStyle } from "../lib/storage";
 import { INTERVAL_MAX_MS, INTERVAL_MIN_MS, useReminderStore, Reminder } from "../lib/store";
@@ -322,6 +323,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     : undefined;
 
                 await cancelReminder(reminder.id);
+                // Delete stale local audio so downloadReminderAudio fetches the new file
+                await deleteLocalAudio(reminder.id);
                 const { triggerTimestamp } = await scheduleReminder({
                     id: reminder.id,
                     title: reminder.title,
@@ -426,6 +429,17 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             ? `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`
             : undefined;
 
+        // Derive canonical schedule fields from the edited legacy fields so
+        // startup sync (which trusts canonical fields) stays consistent.
+        const canonicalSchedule = migrateLegacySchedule({
+            frequency,
+            time: timeStr,
+            date: dateStr,
+            days: frequency === "custom" ? days : [],
+            intervalMs: frequency === "interval" ? intervalMs : undefined,
+            anchorAt: frequency === "interval" ? anchorAt : undefined,
+        });
+
         const updatedReminder: Reminder = {
             ...reminder,
             title: title.trim(),
@@ -442,7 +456,14 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             intervalMs: frequency === "interval" ? intervalMs : undefined,
             anchorAt: frequency === "interval" ? anchorAt : undefined,
             intervalDays: frequency === "daily" ? intervalDays : undefined,
-            schemaVersion: 3,
+            schemaVersion: 4,
+
+            // Canonical schedule fields
+            scheduleType: canonicalSchedule.type,
+            onceAt: canonicalSchedule.type === 'once' ? canonicalSchedule.onceAt : undefined,
+            rrule: canonicalSchedule.type === 'rrule' ? canonicalSchedule.rrule : undefined,
+            dtstart: canonicalSchedule.type === 'rrule' ? canonicalSchedule.dtstart : undefined,
+            tzid: Intl.DateTimeFormat().resolvedOptions().timeZone,
         };
 
         try {

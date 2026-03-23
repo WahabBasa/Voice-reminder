@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { InteractionManager } from "react-native";
+import { InteractionManager, LogBox } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { ConvexProvider, useMutation } from "convex/react";
 import { StatusBar } from "expo-status-bar";
@@ -19,6 +19,15 @@ import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
 import { buildTraceId } from "../lib/vrLog";
 import { convex } from "../lib/convexClient";
 import { hydrateReminderAudio } from "../lib/audioHydration";
+import ErrorBoundary from "../components/ErrorBoundary";
+
+// Suppress RevenueCat network errors from Expo's LogBox/error overlay.
+// These fire when the device has no internet (e.g. USB-only dev) and are non-critical.
+LogBox.ignoreLogs([
+  /\[RevenueCat\]/,
+  /PurchasesError/,
+  /react-native-purchases/,
+]);
 
 function StartupTasks() {
   const router = useRouter();
@@ -266,6 +275,7 @@ export default function RootLayout() {
   }, []);
 
   return (
+    <ErrorBoundary>
     <GestureHandlerRootView style={{ flex: 1 }}>
       <PortalProvider>
         <SafeAreaProvider>
@@ -324,5 +334,6 @@ export default function RootLayout() {
         </SafeAreaProvider>
       </PortalProvider>
     </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }

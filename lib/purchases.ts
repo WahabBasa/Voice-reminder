@@ -29,7 +29,9 @@ export function getCachedProStatus(): { isPro: boolean | null; updatedAtMs: numb
 export async function initializePurchases(): Promise<void> {
   try {
     if (__DEV__) {
-      Purchases.setLogLevel(LOG_LEVEL.DEBUG);
+      // Use WARN instead of DEBUG to prevent RevenueCat ERROR-level logs
+      // from triggering Expo's red error overlay (LogBox).
+      Purchases.setLogLevel(LOG_LEVEL.WARN);
     }
 
     const apiKey = Platform.OS === 'ios'

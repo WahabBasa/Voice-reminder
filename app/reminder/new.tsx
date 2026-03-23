@@ -136,57 +136,52 @@ export default function NewReminderScreen() {
         audioUrl: result.audioUrl,
       });
 
+      // Schedule the notification BEFORE telling the user it worked.
+      const audioUrl = newReminder.audioUrl;
+      if (audioUrl) {
+        const { triggerTimestamp } = await scheduleReminder({
+          id: newReminder.id,
+          title: newReminder.title,
+          description: newReminder.description,
+          time: newReminder.time,
+          frequency: newReminder.frequency,
+          days: newReminder.days,
+          audioUrl,
+          snoozeEnabled: newReminder.snoozeEnabled,
+          snoozeDuration: newReminder.snoozeDuration,
+          volume: newReminder.volume,
+          volumeStyle: newReminder.volumeStyle,
+        });
+
+        const current = useReminderStore.getState().getReminderById(newReminder.id);
+        if (current) {
+          await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
+        }
+      }
+
       toast.show({ title: "Reminder created", message: newReminder.title, type: "success" });
       router.back();
-
-      InteractionManager.runAfterInteractions(() => {
-        (async () => {
-          const audioUrl = newReminder.audioUrl;
-          if (!audioUrl) return;
-          try {
-            const { triggerTimestamp } = await scheduleReminder({
-              id: newReminder.id,
-              title: newReminder.title,
-              description: newReminder.description,
-              time: newReminder.time,
-              frequency: newReminder.frequency,
-              days: newReminder.days,
-              audioUrl,
-              snoozeEnabled: newReminder.snoozeEnabled,
-              snoozeDuration: newReminder.snoozeDuration,
-              volume: newReminder.volume,
-              volumeStyle: newReminder.volumeStyle,
-            });
-
-            const current = useReminderStore.getState().getReminderById(newReminder.id);
-            if (current) {
-              await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
-            }
-          } catch (e: any) {
-            console.log("[VR] Failed to schedule reminder:", e);
-            if (e?.name === "ExactAlarmPermissionError") {
-              Alert.alert(
-                "Enable Alarms & reminders",
-                "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
-                [
-                  { text: "Open diagnostics", onPress: () => router.push("/diagnostics") },
-                  { text: "OK" },
-                ]
-              );
-            }
-          }
-        })();
-      });
     } catch (error: any) {
       console.error("[VR] Create error:", error);
 
-      // Check if this is a limit exceeded error
       if (error?.name === "ReminderLimitExceededError") {
         router.push("/paywall");
         return;
       }
 
-      Alert.alert("Error", "Failed to create reminder");
+      if (error?.name === "ExactAlarmPermissionError") {
+        Alert.alert(
+          "Enable Alarms & reminders",
+          "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+          [
+            { text: "Open diagnostics", onPress: () => router.push("/diagnostics") },
+            { text: "OK" },
+          ]
+        );
+        return;
+      }
+
+      Alert.alert("Error", "Failed to create reminder. Please try again.");
     }
   };
 

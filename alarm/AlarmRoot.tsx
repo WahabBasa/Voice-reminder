@@ -14,6 +14,7 @@ import {
 } from "../lib/notifications";
 import { finishCurrentTask, finishIfAlarmActivity, logAppTaskState } from "../lib/activityControl";
 import { vrLog, logAlarmLifecycle, buildTraceId } from "../lib/vrLog";
+import ErrorBoundary from "../components/ErrorBoundary";
 
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string);
 
@@ -181,11 +182,13 @@ export default function AlarmRoot() {
   }, []);
 
   return (
-    <ConvexProvider client={convex}>
-      <View style={styles.container}>
-        {activeAlarm ? <AlarmOverlay {...activeAlarm} /> : <ActivityIndicator size="large" color="#fff" />}
-      </View>
-    </ConvexProvider>
+    <ErrorBoundary fallbackTitle="Alarm error">
+      <ConvexProvider client={convex}>
+        <View style={styles.container}>
+          {activeAlarm ? <AlarmOverlay {...activeAlarm} /> : <ActivityIndicator size="large" color="#fff" />}
+        </View>
+      </ConvexProvider>
+    </ErrorBoundary>
   );
 }
 
