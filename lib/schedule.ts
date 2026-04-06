@@ -117,11 +117,9 @@ function getNextRRuleOccurrence(schedule: RRuleSchedule, referenceTime: number):
     const dtstart = schedule.dtstart ? new Date(schedule.dtstart) : new Date();
     const until = schedule.until ? new Date(schedule.until) : undefined;
     
-    // Build RRule options
-    const options: Partial<RRuleOptions> = {
-      dtstart,
-      until,
-    };
+    // Build RRule options — only include defined values (rrulestr chokes on undefined)
+    const options: Partial<RRuleOptions> = { dtstart };
+    if (until) options.until = until;
 
     // Parse the RRULE string
     // rrulestr expects a full RRULE line, but we might just have the rule part

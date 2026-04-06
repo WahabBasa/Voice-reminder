@@ -23,13 +23,36 @@ import { getNextIntervalOccurrence, getNextTriggerTime, ReminderSchedule } from 
 import { Reminder, ReminderHistory, useReminderStore } from "./store";
 import { vrLog, buildTraceId } from "./vrLog";
 import { logAppTaskState } from "./activityControl";
-import { 
-  getNextOccurrence, 
-  migrateLegacySchedule, 
+import {
+  getNextOccurrence,
+  migrateLegacySchedule,
   normalizeSchedule,
   Schedule,
   ScheduleWarning,
 } from "./schedule";
+import {
+  isAlarmOccurrenceNotification as isAlarmOccurrenceKind,
+  isTriggerNotification as isTriggerNotificationId,
+  isOneTimeReminder,
+  isSnoozeOccurrence,
+  parseRepostFlag,
+  isRepostNotification as isRepostNotificationCheck,
+  shouldHandleAsAlarm as shouldHandleAsAlarmCheck,
+  isDuplicateDeliveredEvent,
+  isDuplicateOccurrence,
+  shouldQueueInsteadOfActivate,
+  filterDuplicateTriggerIds,
+  getAlarmStartTime,
+  shouldHandleTimeout,
+  hasActivePendingAlarm,
+  parseSnoozeEnabled,
+  parseAutoSnoozeCount,
+  canAutoSnooze as canAutoSnoozeCheck,
+  adjustPastDueTrigger,
+  shouldRecordAsMissedInstead,
+  isKnownAlarmAction as isKnownAlarmActionCheck,
+  isCurrentActiveAlarm,
+} from "./notificationDecisions";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
 
 export class ExactAlarmPermissionError extends Error {
@@ -106,9 +129,8 @@ function shouldIgnoreInternalDismiss(notificationId?: string): boolean {
 async function cancelExistingReminderOccurrenceTriggers(reminderId: string, exceptId?: string): Promise<number> {
   if (!reminderId) return 0;
   try {
-    const prefix = `reminder_${reminderId}_`;
     const scheduledIds = await notifee.getTriggerNotificationIds();
-    const toCancel = scheduledIds.filter((id) => id.startsWith(prefix) && id !== exceptId);
+    const toCancel = filterDuplicateTriggerIds(scheduledIds, reminderId, exceptId);
     for (const id of toCancel) {
       try {
         await notifee.cancelTriggerNotification(id);
@@ -170,8 +192,7 @@ function getNotificationKind(notification?: PendingAlarmNotification | null): st
 }
 
 function isAlarmOccurrenceNotification(notification?: PendingAlarmNotification | null): boolean {
-  const kind = getNotificationKind(notification);
-  return kind === "reminder_occurrence" || kind === "snooze_occurrence";
+  return isAlarmOccurrenceKind(getNotificationKind(notification));
 }
 
 function clearActiveAlarmTimeout(notificationId?: string): void {
@@ -657,14 +678,14 @@ export async function handlePendingAlarmTimeout(
     if (!isAlarmOccurrenceNotification(pending.notification)) return false;
 
     const now = Date.now();
-    const startedAt = pending.ringingAt || pending.uiShownAt || pending.storedAt || now;
-    if (now - startedAt < ALARM_RING_TIMEOUT_MS) return false;
+    const startedAt = getAlarmStartTime(pending.ringingAt, pending.uiShownAt, pending.storedAt || now);
+    if (!shouldHandleTimeout(now - startedAt, ALARM_RING_TIMEOUT_MS)) return false;
 
     const data = pending.notification.data || {};
     const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
-    const snoozeEnabled = String(data.snoozeEnabled ?? "true") !== "false";
-    const autoSnoozeCount = Math.max(0, Number(data.autoSnoozeCount ?? "0") || 0);
-    const canAutoSnooze = snoozeEnabled && autoSnoozeCount < MAX_AUTO_SNOOZE_COUNT;
+    const snoozeEnabled = parseSnoozeEnabled(data.snoozeEnabled);
+    const autoSnoozeCount = parseAutoSnoozeCount(data.autoSnoozeCount);
+    const canAutoSnooze = canAutoSnoozeCheck(snoozeEnabled, autoSnoozeCount, MAX_AUTO_SNOOZE_COUNT);
 
     vrLog("pending_alarm", "timeout_fired", {
       notificationId,
@@ -735,10 +756,9 @@ export async function enforcePendingAlarmTimeout(): Promise<void> {
   }
   const activePending = pending;
   const now = Date.now();
-  const startedAt =
-    activePending.ringingAt || activePending.uiShownAt || activePending.storedAt || now;
+  const startedAt = getAlarmStartTime(activePending.ringingAt, activePending.uiShownAt, activePending.storedAt || now);
   const elapsed = now - startedAt;
-  if (elapsed >= ALARM_RING_TIMEOUT_MS) {
+  if (shouldHandleTimeout(elapsed, ALARM_RING_TIMEOUT_MS)) {
     await handlePendingAlarmTimeout(id, "poll");
     return;
   }
@@ -1221,7 +1241,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   const reminderId = typeof notificationData?.reminderId === "string" ? notificationData.reminderId : "";
   const scheduledFor = String(notificationData?.scheduledFor || "");
   const repostFlag = (notificationData as any)?.__reposted;
-  const isRepostedFlag = repostFlag === "1" || repostFlag === 1 || repostFlag === true;
+  const isRepostedFlag = parseRepostFlag(repostFlag);
   const isAlarmDisplayNotification = notificationId.startsWith("alarm_display_");
   const pressActionId = detail.pressAction?.id || "";
   
@@ -1240,10 +1260,9 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   // Call native state dump at key events (pastebin Step 4.5) - non-blocking
   void logAppTaskState(`notifee_${eventTypeName(type)}_${notificationId}`);
 
-  const shouldHandleAsAlarm =
-    Boolean(reminderId) && (kind === "reminder_occurrence" || kind === "snooze_occurrence");
+  const shouldHandleAsAlarm = shouldHandleAsAlarmCheck(reminderId, kind);
 
-  const isRepostNotification = isAlarmDisplayNotification || isRepostedFlag;
+  const isRepostNotification = isRepostNotificationCheck(notificationId, repostFlag);
 
   vrLog('notifee', 'handleEvent_flags', {
     traceId: trace,
@@ -1395,7 +1414,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   if (type === EventType.ACTION_PRESS) {
     const actionId = detail.pressAction?.id;
     console.log(`[VR] Action pressed: ${actionId}`);
-    const isKnownAlarmAction = actionId === "dismiss_action" || actionId === "snooze_action";
+    const isKnownAlarmAction = isKnownAlarmActionCheck(actionId);
 
     // Ignore non-action presses here (e.g. "default" routed via ACTION_PRESS on some devices).
     if (shouldHandleAsAlarm && !isKnownAlarmAction) {
@@ -1432,7 +1451,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       if (actionId === "snooze_action" && reminderId) {
         console.log("[VR] Snooze action from notification");
         const snoozeDuration = Number(notificationData?.snoozeDuration ?? "5") || 5;
-        const autoSnoozeCount = Math.max(0, Number(notificationData?.autoSnoozeCount ?? "0") || 0);
+        const autoSnoozeCount = parseAutoSnoozeCount(notificationData?.autoSnoozeCount);
         await scheduleSnoozeOccurrenceFromNotification(
           detail.notification as PendingAlarmNotification,
           snoozeDuration,
@@ -1487,9 +1506,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     console.log(`[VR] DELIVERED processing trace=${trace}`);
     const data = notificationData;
 
-    const isTriggerNotification =
-      typeof notificationId === "string" &&
-      (notificationId.startsWith("reminder_") || notificationId.startsWith("snooze_"));
+    const isTriggerNotification = isTriggerNotificationId(notificationId);
 
     // Ignore reposted "alarm_display_*" notifications for alarm lifecycle processing.
     // They exist only to deliver full-screen UI reliably and can otherwise cause loops/duplicate reschedules.
@@ -1631,11 +1648,11 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     }
 
     // Determine if this is a one-time reminder
-    const isOneTime = scheduleType === 'once' || (!scheduleType && frequency === 'once');
-    
+    const isOneTime = isOneTimeReminder(scheduleType || null, frequency);
+
     if (!isOneTime) {
       const kind = (data.kind as string) || "reminder_occurrence";
-      if (kind === "snooze_occurrence") {
+      if (isSnoozeOccurrence(kind)) {
         console.log("[VR] Snooze notification delivered, not rescheduling");
         return;
       }
@@ -1695,10 +1712,11 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       }
 
       const now = Date.now();
-      if (nextTrigger <= now) {
-        console.warn("[VR] Next trigger in past, adjusting to now + 5s");
-        nextTrigger = now + 5000;
+      const adjustedTrigger = adjustPastDueTrigger(nextTrigger, now);
+      if (adjustedTrigger !== nextTrigger) {
+        console.warn("[VR] Next trigger in past, adjusted to now + 5s");
       }
+      nextTrigger = adjustedTrigger;
 
       const newNotificationId = `reminder_${data.reminderId}_${nextTrigger}`;
 
@@ -1784,8 +1802,7 @@ export async function syncRemindersOnStartup(
 
     for (const reminder of reminders) {
       // One-time reminders: skip if already completed/missed.
-      const isOneTime = reminder.scheduleType === 'once' || 
-                        (!reminder.scheduleType && reminder.frequency === 'once');
+      const isOneTime = isOneTimeReminder(reminder.scheduleType || null, reminder.frequency);
       
       if (isOneTime) {
         if (terminalHistoryIds.has(reminder.id)) {

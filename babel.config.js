@@ -10,6 +10,9 @@ module.exports = function (api) {
         },
       ],
     ],
-    plugins: ["react-native-reanimated/plugin"],
+    plugins: [
+      "@babel/plugin-transform-dynamic-import",
+      "react-native-reanimated/plugin",
+    ],
   };
 };
