@@ -1,5 +1,14 @@
 module.exports = function (api) {
-  api.cache(true);
+  api.cache.using(() => process.env.NODE_ENV);
+
+  const plugins = ["react-native-reanimated/plugin"];
+
+  // Only transform dynamic import() in test environment (Jest needs CJS require)
+  // Metro handles dynamic imports natively — this plugin breaks it
+  if (process.env.NODE_ENV === "test") {
+    plugins.unshift("@babel/plugin-transform-dynamic-import");
+  }
+
   return {
     presets: [
       [
@@ -10,9 +19,6 @@ module.exports = function (api) {
         },
       ],
     ],
-    plugins: [
-      "@babel/plugin-transform-dynamic-import",
-      "react-native-reanimated/plugin",
-    ],
+    plugins,
   };
 };
