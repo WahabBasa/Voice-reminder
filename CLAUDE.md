@@ -162,18 +162,29 @@ C:\Users\AtheA\AppData\Local\Android\Sdk\platform-tools\adb.exe reverse tcp:8085
 npx expo run:android
 ```
 
-## 📦 Play Store Build
+## 📦 Release Builds
+
+### When to use `--clean` prebuild
+
+- **`npx.cmd expo prebuild --platform android --clean`** — Wipes the entire `android/` folder and regenerates it. Use ONLY when native config changed (plugins, `app.json`, native deps). Full rebuild takes ~20-25 min.
+- **`npx.cmd expo prebuild --platform android`** (no `--clean`) — Incremental. Use when only JS/TS code changed. Keeps cached native artifacts.
+- **Skip prebuild entirely** — If nothing in `app.json` or `plugins/` changed, just run `gradlew.bat assembleRelease` directly. Fastest option for JS-only changes.
+
+### Build commands
 
 ```powershell
-# 1. Prebuild (regenerates android folder with signing config)
-npx.cmd expo prebuild --platform android --clean
+# Release APK (for device testing) — faster, installs via adb
+cd android
+CI=true .\gradlew.bat assembleRelease --no-daemon
+# Output: android\app\build\outputs\apk\release\app-release.apk
 
-# 2. Build release AAB
+# Release AAB (for Play Store upload)
 cd android
 .\gradlew.bat bundleRelease
-
 # Output: android\app\build\outputs\bundle\release\app-release.aab
 ```
+
+**CI=true and --no-daemon** are required on Windows to avoid `kill EPERM` errors from Metro's jest-worker cleanup.
 
 **Signing credentials** (keep safe, not in git):
 - Keystore: `voicereminder.keystore`

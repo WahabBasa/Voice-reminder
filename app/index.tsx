@@ -38,6 +38,7 @@ import { hydrateReminderAudio } from "../lib/audioHydration";
 import { useReminderStore, Reminder, ReminderHistory } from "../lib/store";
 import RecordingOverlay from "../components/RecordingOverlay";
 import EditReminderSheet from "../components/EditReminderSheet";
+import { arePermissionsGranted, showPermissionPrompt } from "../components/PermissionPrompt";
 import SwipeableCard from "../components/SwipeableCard";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
@@ -231,6 +232,14 @@ export default function HomeScreen() {
     if (!isConnected) {
       perfLog(traceId, "ui.recording", "open_blocked_offline");
       setShowOfflineMessage(true);
+      return;
+    }
+
+    // Check permissions before letting user create a reminder
+    const permsOk = await arePermissionsGranted();
+    if (!permsOk) {
+      perfLog(traceId, "ui.recording", "open_blocked_permissions");
+      showPermissionPrompt();
       return;
     }
 
@@ -512,14 +521,7 @@ export default function HomeScreen() {
           } catch (e: any) {
             console.log("[VR] Failed to schedule reminder:", e);
             if (e?.name === "ExactAlarmPermissionError") {
-              Alert.alert(
-                "Enable Alarms & reminders",
-                "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
-                [
-                  { text: "Open diagnostics", onPress: () => router.push("/diagnostics") },
-                  { text: "OK" },
-                ]
-              );
+              showPermissionPrompt();
             }
             perfLog(traceId, "device.notifications", "scheduleReminder_error", {
               error: String(e),

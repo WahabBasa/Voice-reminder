@@ -7,6 +7,37 @@ import Constants from "expo-constants";
 import { colors, scaleFontSize } from "../lib/theme";
 import AppIcon from "../components/AppIcon";
 
+type SettingsRowProps = {
+  icon: Parameters<typeof AppIcon>[0]["name"];
+  label: string;
+  subtitle?: string;
+  onPress?: () => void;
+  accent?: boolean;
+  showChevron?: boolean;
+};
+
+function SettingsRow({ icon, label, subtitle, onPress, accent, showChevron = true }: SettingsRowProps) {
+  return (
+    <TouchableOpacity
+      style={styles.row}
+      onPress={onPress}
+      activeOpacity={0.6}
+      disabled={!onPress}
+    >
+      <View style={[styles.rowIcon, accent && styles.rowIconAccent]}>
+        <AppIcon name={icon} size={20} color={accent ? "#fff" : colors.textSecondary} />
+      </View>
+      <View style={styles.rowTextWrap}>
+        <Text style={[styles.rowTitle, accent && styles.rowTitleAccent]}>{label}</Text>
+        {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
+      </View>
+      {showChevron && onPress ? (
+        <AppIcon name="chevron-right" size={18} color={colors.textTertiary} />
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
 
@@ -31,98 +62,67 @@ export default function SettingsScreen() {
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.backButton}
-          activeOpacity={0.85}
+          activeOpacity={0.7}
         >
-          <AppIcon name="chevron-left" size={26} color={colors.textPrimary} />
+          <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
         <View style={styles.headerSpacer} />
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>General</Text>
-
-        <TouchableOpacity
-          style={[styles.row, styles.proRow]}
-          onPress={() => router.push("/paywall")}
-          activeOpacity={0.85}
-        >
-          <View style={styles.rowLeft}>
-            <View style={[styles.rowIcon, styles.proIcon]}>
-              <AppIcon name="crown" size={18} color="#fff" />
-            </View>
-            <View>
-              <Text style={styles.rowTitle}>Upgrade to Pro</Text>
-              <Text style={styles.rowSubtitle}>Unlimited reminders & no ads</Text>
-            </View>
+      {/* Pro upgrade card */}
+      <TouchableOpacity
+        style={styles.proCard}
+        onPress={() => router.push("/paywall")}
+        activeOpacity={0.7}
+      >
+        <View style={styles.proLeft}>
+          <View style={styles.proIconWrap}>
+            <AppIcon name="crown" size={20} color="#fff" />
           </View>
-          <AppIcon name="chevron-right" size={18} color={colors.accent} />
-        </TouchableOpacity>
+          <View>
+            <Text style={styles.proTitle}>Upgrade to Pro</Text>
+            <Text style={styles.proSubtitle}>Unlimited reminders & no ads</Text>
+          </View>
+        </View>
+        <AppIcon name="chevron-right" size={18} color={colors.accent} />
+      </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.row}
+      {/* General section */}
+      <Text style={styles.sectionLabel}>General</Text>
+      <View style={styles.card}>
+        <SettingsRow
+          icon="bell"
+          label="Notifications"
+          subtitle="Manage notification settings"
           onPress={handleOpenAppSettings}
-          activeOpacity={0.85}
-        >
-          <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}>
-              <AppIcon name="bell" size={18} color={colors.textSecondary} />
-            </View>
-            <View>
-              <Text style={styles.rowTitle}>Notifications</Text>
-              <Text style={styles.rowSubtitle}>Open system settings</Text>
-            </View>
-          </View>
-          <AppIcon name="chevron-right" size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.row}
+        />
+        <View style={styles.separator} />
+        <SettingsRow
+          icon="zap"
+          label="Alarm diagnostics"
+          subtitle="Permissions & scheduled alarms"
           onPress={() => router.push("/diagnostics")}
-          activeOpacity={0.85}
-        >
-          <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}>
-              <AppIcon name="zap" size={18} color={colors.textSecondary} />
-            </View>
-            <View>
-              <Text style={styles.rowTitle}>Alarm diagnostics</Text>
-              <Text style={styles.rowSubtitle}>Permissions & scheduled alarms</Text>
-            </View>
-          </View>
-          <AppIcon name="chevron-right" size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.row}
+        />
+        <View style={styles.separator} />
+        <SettingsRow
+          icon="clock"
+          label="History"
+          subtitle="Completed and missed reminders"
           onPress={() => router.push("/history")}
-          activeOpacity={0.85}
-        >
-          <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}>
-              <AppIcon name="clock" size={18} color={colors.textSecondary} />
-            </View>
-            <View>
-              <Text style={styles.rowTitle}>History</Text>
-              <Text style={styles.rowSubtitle}>Completed and missed reminders</Text>
-            </View>
-          </View>
-          <AppIcon name="chevron-right" size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
+        />
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>About</Text>
-
-        <View style={[styles.row, styles.rowStatic]}>
-          <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}>
-              <AppIcon name="info" size={18} color={colors.textSecondary} />
-            </View>
-            <View>
-              <Text style={styles.rowTitle}>Voice Reminder</Text>
-              <Text style={styles.rowSubtitle}>{versionLabel}</Text>
-            </View>
+      {/* About section */}
+      <Text style={styles.sectionLabel}>About</Text>
+      <View style={styles.card}>
+        <View style={styles.aboutRow}>
+          <View style={styles.rowIcon}>
+            <AppIcon name="info" size={20} color={colors.textSecondary} />
+          </View>
+          <View>
+            <Text style={styles.rowTitle}>Voice Reminder</Text>
+            <Text style={styles.rowSubtitle}>{versionLabel}</Text>
           </View>
         </View>
       </View>
@@ -138,7 +138,7 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingTop: Platform.OS === "ios" ? 20 : 8,
-    paddingBottom: 14,
+    paddingBottom: 20,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -146,7 +146,7 @@ const styles = StyleSheet.create({
   backButton: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.surface,
@@ -159,60 +159,107 @@ const styles = StyleSheet.create({
   headerSpacer: {
     width: 40,
   },
-  section: {
-    marginTop: 14,
-  },
-  sectionTitle: {
-    fontSize: scaleFontSize(14),
-    fontWeight: "700",
-    color: colors.textLabel,
-    marginBottom: 10,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
-  },
-  row: {
+
+  // Pro card
+  proCard: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: colors.surface,
-    borderRadius: 18,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    marginBottom: 10,
+    backgroundColor: colors.accent + "12",
+    borderWidth: 1.5,
+    borderColor: colors.accent + "30",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 24,
   },
-  rowStatic: {
-    justifyContent: "flex-start",
-  },
-  rowLeft: {
+  proLeft: {
     flexDirection: "row",
     alignItems: "center",
-    flex: 1,
+    gap: 12,
+  },
+  proIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  proTitle: {
+    fontSize: scaleFontSize(16),
+    fontWeight: "700",
+    color: colors.accent,
+  },
+  proSubtitle: {
+    fontSize: scaleFontSize(13),
+    color: colors.accent,
+    opacity: 0.7,
+    marginTop: 1,
+  },
+
+  // Section
+  sectionLabel: {
+    fontSize: scaleFontSize(13),
+    fontWeight: "600",
+    color: colors.textTertiary,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    marginBottom: 24,
+    overflow: "hidden",
+  },
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginLeft: 64,
+  },
+
+  // Row
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
   rowIcon: {
     width: 36,
     height: 36,
-    borderRadius: 12,
-    backgroundColor: colors.muted,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 10,
+    marginRight: 12,
+  },
+  rowIconAccent: {
+    backgroundColor: colors.accent,
+  },
+  rowTextWrap: {
+    flex: 1,
   },
   rowTitle: {
     fontSize: scaleFontSize(16),
-    fontWeight: "700",
+    fontWeight: "600",
     color: colors.textPrimary,
   },
+  rowTitleAccent: {
+    color: colors.accent,
+  },
   rowSubtitle: {
-    marginTop: 2,
     fontSize: scaleFontSize(13),
     color: colors.textSecondary,
+    marginTop: 1,
   },
-  proRow: {
-    borderWidth: 1,
-    borderColor: colors.accent + "40",
-    backgroundColor: colors.accent + "10",
-  },
-  proIcon: {
-    backgroundColor: colors.accent,
+
+  // About
+  aboutRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
 });

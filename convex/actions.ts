@@ -329,6 +329,10 @@ export const processVoiceReminder = action({
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
+    const openrouter = new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: "https://openrouter.ai/api/v1",
+    });
     // 1. Whisper STT
     const audioBuffer = Buffer.from(args.audioBase64, "base64");
     const audioFile = new File([audioBuffer], "recording.m4a", {
@@ -356,8 +360,8 @@ export const processVoiceReminder = action({
     console.log("[VR] Device Local Time:", args.deviceLocalTime);
     console.log("[VR] Parsed as:", { currentDate, currentTime, currentDayOfWeek, timezone });
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+    const completion = await openrouter.chat.completions.create({
+      model: "google/gemini-3.1-flash-lite-preview",
       response_format: { type: "json_object" },
       messages: [
         {
@@ -761,6 +765,11 @@ export const processVoiceReminderFast = action({
       apiKey: process.env.OPENAI_API_KEY,
     });
 
+    const openrouter = new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: "https://openrouter.ai/api/v1",
+    });
+
     // 1. Load audio blob from storage
     const audioBlob = await ctx.storage.get(args.audioStorageId);
     if (!audioBlob) {
@@ -784,15 +793,15 @@ export const processVoiceReminderFast = action({
       console.log("[VR] === STEP 1: STT Transcription ===");
       console.log("[VR] Transcript:", transcript);
 
-      // 3. GPT Parse (same as processVoiceReminder)
+      // 3. Parse with Gemini Flash via OpenRouter
       const currentDate = args.deviceLocalDate || new Date().toISOString().split('T')[0];
       const currentTime = args.deviceLocalTime || new Date().toLocaleTimeString('en-US', { hour12: false });
       const now = new Date(`${currentDate}T${currentTime}`);
       const currentDayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
       const timezone = args.deviceTimezone || 'UTC';
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+      const completion = await openrouter.chat.completions.create({
+        model: "google/gemini-3.1-flash-lite-preview",
         response_format: { type: "json_object" },
         messages: [
           {

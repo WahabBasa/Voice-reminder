@@ -469,76 +469,71 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         try {
             // Update via Zustand store (handles state + persistence)
             await storeUpdateReminder(updatedReminder);
-            onSave(updatedReminder);
-            onClose();
 
             const reminderId = reminder.id;
             const convexId = reminder.convexId;
             const audioUrl = reminder.audioUrl;
             const scheduleDays = frequency === "custom" ? days : [];
 
-            InteractionManager.runAfterInteractions(() => {
-                if (convexId) {
-                    updateConvexReminder({
-                        id: convexId as any,
+            // Cancel + reschedule BEFORE closing (onClose unmounts the component)
+            if (audioUrl) {
+                try {
+                    await cancelReminder(reminderId);
+                    const { triggerTimestamp } = await scheduleReminder({
+                        id: reminderId,
                         title: updatedReminder.title,
                         description,
                         time: timeStr,
+                        date: dateStr,
                         frequency,
-                        days: frequency === "custom" ? days : undefined,
-                    }).catch((e) => {
-                        console.log("[VR] Failed to update Convex reminder:", e);
+                        days: scheduleDays,
+                        audioUrl,
+                        snoozeEnabled,
+                        snoozeDuration,
+                        volume,
+                        volumeStyle,
+
+                        intervalMs: frequency === "interval" ? intervalMs : undefined,
+                        anchorAt: frequency === "interval" ? anchorAt : undefined,
+                        intervalDays: frequency === "daily" ? intervalDays : undefined,
                     });
+
+                    const current = useReminderStore.getState().getReminderById(reminderId);
+                    if (current) {
+                        await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
+                    }
+                } catch (e) {
+                    console.log("[VR] Failed to reschedule reminder:", e);
+                    if ((e as any)?.name === "ExactAlarmPermissionError") {
+                        Alert.alert(
+                            "Enable Alarms & reminders",
+                            "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+                            [
+                                { text: "Open permission", onPress: () => openAlarmPermissionSettingsSafe() },
+                                { text: "OK" },
+                            ]
+                        );
+                    }
                 }
+            }
 
-                (async () => {
-                    try {
-                        await cancelReminder(reminderId);
-                    } catch (e) {
-                        console.log("[VR] Failed to cancel notification:", e);
-                    }
+            // Now safe to close
+            onSave(updatedReminder);
+            onClose();
 
-                    if (!audioUrl) return;
-
-                    try {
-                        const { triggerTimestamp } = await scheduleReminder({
-                            id: reminderId,
-                            title: updatedReminder.title,
-                            description,
-                            time: timeStr,
-                            date: dateStr,
-                            frequency,
-                            days: scheduleDays,
-                            audioUrl,
-                            snoozeEnabled,
-                            snoozeDuration,
-                            volume,
-                            volumeStyle,
-
-                            intervalMs: frequency === "interval" ? intervalMs : undefined,
-                            anchorAt: frequency === "interval" ? anchorAt : undefined,
-                            intervalDays: frequency === "daily" ? intervalDays : undefined,
-                        });
-
-                        const current = useReminderStore.getState().getReminderById(reminderId);
-                        if (current) {
-                            await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
-                        }
-                    } catch (e) {
-                        console.log("[VR] Failed to schedule reminder:", e);
-                        if ((e as any)?.name === "ExactAlarmPermissionError") {
-                            Alert.alert(
-                                "Enable Alarms & reminders",
-                                "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
-                                [
-                                    { text: "Open permission", onPress: () => openAlarmPermissionSettingsSafe() },
-                                    { text: "OK" },
-                                ]
-                            );
-                        }
-                    }
-                })();
-            });
+            // Convex sync can be deferred — it doesn't affect local scheduling
+            if (convexId) {
+                updateConvexReminder({
+                    id: convexId as any,
+                    title: updatedReminder.title,
+                    description,
+                    time: timeStr,
+                    frequency,
+                    days: frequency === "custom" ? days : undefined,
+                }).catch((e) => {
+                    console.log("[VR] Failed to update Convex reminder:", e);
+                });
+            }
         } catch (error) {
             console.error("[VR] Save error:", error);
             Alert.alert("Error", "Failed to save reminder");
@@ -663,11 +658,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     });
                     // Close immediately when animation starts so FAB reappears instantly
                     if (toIndex === -1) {
-                        if (hasChanges()) {
-                            handleSave();
-                        } else {
-                            onClose();
-                        }
+                        onClose();
                     }
                 }}
                 handleIndicatorStyle={styles.handleIndicator}
@@ -717,11 +708,11 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             style={[styles.regenerateButton, isRegenerating && styles.regenerateButtonDisabled]}
                             onPress={handleRegenerate}
                             disabled={isRegenerating}
-                            activeOpacity={0.8}
+                            activeOpacity={0.7}
                         >
-                            <AppIcon name="refresh-cw" size={18} color="white" />
+                            <AppIcon name="refresh-cw" size={14} color={colors.accent} />
                             <Text style={styles.regenerateButtonText}>
-                                {isRegenerating ? "Regenerating..." : "Regenerate Reminder"}
+                                {isRegenerating ? "Regenerating..." : "Regenerate"}
                             </Text>
                         </TouchableOpacity>
                     </View>
@@ -886,6 +877,27 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             onConfirm={handleRepeatConfirm}
                         />
                     )}
+
+                    {/* Save / Delete buttons */}
+                    <View style={styles.bottomActions}>
+                        <TouchableOpacity
+                            style={styles.saveButton}
+                            onPress={handleSave}
+                            activeOpacity={0.7}
+                        >
+                            <AppIcon name="check" size={18} color="white" />
+                            <Text style={styles.saveButtonText}>Save Changes</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.deleteButton}
+                            onPress={handleDelete}
+                            activeOpacity={0.7}
+                        >
+                            <AppIcon name="trash-2" size={16} color={colors.destructive} />
+                            <Text style={styles.deleteButtonText}>Delete</Text>
+                        </TouchableOpacity>
+                    </View>
 
                     <View style={{ height: 40 }} />
                 </BottomSheetScrollView>
@@ -1126,21 +1138,57 @@ const styles = StyleSheet.create({
         minHeight: 80,
     },
     regenerateButton: {
-        marginTop: 14,
+        marginTop: 12,
+        flexDirection: "row",
+        alignItems: "center",
+        alignSelf: "flex-start",
+        gap: 6,
+        backgroundColor: colors.accent + "12",
+        borderRadius: 10,
+        paddingVertical: 8,
+        paddingHorizontal: 14,
+        borderWidth: 1,
+        borderColor: colors.accent + "30",
+    },
+    regenerateButtonDisabled: {
+        opacity: 0.5,
+    },
+    regenerateButtonText: {
+        fontSize: scaleFontSize(13),
+        fontWeight: "600",
+        color: colors.accent,
+    },
+    bottomActions: {
+        marginTop: 28,
+        gap: 10,
+    },
+    saveButton: {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
         gap: 8,
         backgroundColor: colors.accent,
-        borderRadius: 12,
+        borderRadius: 14,
         paddingVertical: 14,
     },
-    regenerateButtonDisabled: {
-        opacity: 0.6,
+    saveButtonDisabled: {
+        opacity: 0.4,
     },
-    regenerateButtonText: {
-        fontSize: scaleFontSize(15),
-        fontWeight: "600",
+    saveButtonText: {
+        fontSize: scaleFontSize(16),
+        fontWeight: "700",
         color: "white",
+    },
+    deleteButton: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6,
+        paddingVertical: 12,
+    },
+    deleteButtonText: {
+        fontSize: scaleFontSize(14),
+        fontWeight: "600",
+        color: colors.destructive,
     },
 });

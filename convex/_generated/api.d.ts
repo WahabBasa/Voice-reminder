@@ -9,6 +9,7 @@
  */
 
 import type * as actions from "../actions.js";
+import type * as helpers from "../helpers.js";
 import type * as reminders from "../reminders.js";
 
 import type {
@@ -19,6 +20,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   actions: typeof actions;
+  helpers: typeof helpers;
   reminders: typeof reminders;
 }>;
 

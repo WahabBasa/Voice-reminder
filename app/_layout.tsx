@@ -20,6 +20,7 @@ import { buildTraceId } from "../lib/vrLog";
 import { convex } from "../lib/convexClient";
 import { hydrateReminderAudio } from "../lib/audioHydration";
 import ErrorBoundary from "../components/ErrorBoundary";
+import PermissionPrompt from "../components/PermissionPrompt";
 
 // Suppress RevenueCat network errors from Expo's LogBox/error overlay.
 // These fire when the device has no internet (e.g. USB-only dev) and are non-critical.
@@ -282,12 +283,13 @@ export default function RootLayout() {
           <ConvexProvider client={convex}>
             <ToastProvider>
               <StartupTasks />
+              <PermissionPrompt />
               <StatusBar style="light" />
               <Stack
                 screenOptions={{
                   headerShown: false,
                   animation: "fade",
-                  animationDuration: 100,
+                  animationDuration: 50,
                   freezeOnBlur: true,
                 }}
               >
@@ -298,7 +300,7 @@ export default function RootLayout() {
                   options={{
                     contentStyle: { backgroundColor: "white" },
                     animation: "slide_from_right",
-                    animationDuration: 180,
+                    animationDuration: 100,
                   }}
                 />
                 <Stack.Screen
@@ -306,14 +308,14 @@ export default function RootLayout() {
                   options={{
                     contentStyle: { backgroundColor: "white" },
                     animation: "slide_from_right",
-                    animationDuration: 180,
+                    animationDuration: 100,
                   }}
                 />
                 <Stack.Screen
                   name="reminder/new"
                   options={{
                     animation: "fade",
-                    animationDuration: 100,
+                    animationDuration: 50,
                     presentation: "modal",
                   }}
                 />
@@ -321,7 +323,7 @@ export default function RootLayout() {
                   name="paywall"
                   options={{
                     animation: "fade",
-                    animationDuration: 100,
+                    animationDuration: 50,
                     presentation: "modal",
                     contentStyle: { backgroundColor: "white" },
                   }}
