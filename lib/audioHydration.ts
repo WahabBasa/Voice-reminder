@@ -1,6 +1,6 @@
 import { api } from "../convex/_generated/api";
 import { ConvexReactClient } from "convex/react";
-import { downloadReminderAudio, refreshNotificationWithAudio } from "./notifications";
+import { downloadPreReminderAudio, downloadReminderAudio, downloadVariantAudios, refreshNotificationWithAudio } from "./notifications";
 
 const MAX_ATTEMPTS = 30;
 const POLL_INTERVAL_MS = 1000;
@@ -13,7 +13,7 @@ export async function hydrateReminderAudio(params: {
   convexClient: ConvexReactClient;
   convexId: string;
   localReminderId: string;
-  updateLocal: (patch: { audioUrl?: string; audioStatus: 'ready' | 'failed'; audioError?: string }) => Promise<void>;
+  updateLocal: (patch: { audioUrl?: string; preAudioUrl?: string; variants?: string[]; variantAudioUrls?: string[]; audioStatus: 'ready' | 'failed'; audioError?: string }) => Promise<void>;
   onSuccess?: (audioUrl: string) => Promise<void>;
 }): Promise<void> {
   const { convexClient, convexId, localReminderId, updateLocal, onSuccess } = params;
@@ -39,13 +39,43 @@ export async function hydrateReminderAudio(params: {
             try {
               // Download to local storage
               await downloadReminderAudio(localReminderId, result.audioUrl);
+
+              // Pre-alert line is optional: hydrate it when present, but never
+              // let it block the main audio (notification-only pre-alert is fine).
+              const preAudioUrl = (result as any).preAudioUrl as string | undefined;
+              if (preAudioUrl) {
+                try {
+                  await downloadPreReminderAudio(localReminderId, preAudioUrl);
+                } catch (preErr) {
+                  console.log(`[VR] Hydration: pre-alert download failed for ${convexId}:`, preErr);
+                }
+              }
+
+              // Replay variant lines/audios (optional, lockstep arrays from
+              // the backend). Downloads are best-effort — ringing falls back
+              // to the base line for any missing file.
+              const variants = (result as any).variants as string[] | undefined;
+              const variantAudioUrls = (result as any).variantAudioUrls as string[] | undefined;
+              if (variantAudioUrls?.length) {
+                await downloadVariantAudios(localReminderId, variantAudioUrls);
+              }
+
               // Update local reminder
-              await updateLocal({ audioUrl: result.audioUrl, audioStatus: 'ready' });
+              await updateLocal({
+                audioUrl: result.audioUrl,
+                ...(preAudioUrl ? { preAudioUrl } : {}),
+                ...(variants ? { variants } : {}),
+                ...(variantAudioUrls ? { variantAudioUrls } : {}),
+                audioStatus: 'ready',
+              });
               console.log(`[VR] Hydration: complete for ${convexId}`);
-              
-              // Refresh scheduled notifications with the new audioUrl
-              await refreshNotificationWithAudio(localReminderId, result.audioUrl);
-              
+
+              // Refresh scheduled notifications with the new audio URLs
+              await refreshNotificationWithAudio(localReminderId, result.audioUrl, preAudioUrl || undefined, {
+                variants,
+                variantAudioUrls,
+              });
+
               // Call optional success callback
               if (onSuccess) {
                 await onSuccess(result.audioUrl);

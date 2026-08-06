@@ -21,6 +21,7 @@ import {
   Square,
   Sun,
   Trash2,
+  User,
   Volume1,
   Volume2,
   WifiOff,
@@ -58,6 +59,7 @@ export type AppIconName =
   | "square"
   | "sun"
   | "trash-2"
+  | "user"
   | "volume-1"
   | "volume-2"
   | "wifi-off"
@@ -87,6 +89,7 @@ const iconByName: Record<AppIconName, ComponentType<BaseIconProps>> = {
   square: Square,
   sun: Sun,
   "trash-2": Trash2,
+  user: User,
   "volume-1": Volume1,
   "volume-2": Volume2,
   "wifi-off": WifiOff,

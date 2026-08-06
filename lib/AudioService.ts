@@ -43,6 +43,59 @@ export class AudioService {
     private streamType: StreamType = "music";
     private onPlaybackEnd: (() => void) | null = null;
     private currentUri: string | null = null;
+    private nativeEndPoller: ReturnType<typeof setInterval> | null = null;
+
+    /**
+     * True when the native alarm module can play a file exactly once
+     * (loop:false) — requires the AlarmAudioModule.playWithOptions method added
+     * for OLD-53. Older installed binaries only expose the always-looping
+     * play(); callers must check this before designing non-looping cadences.
+     */
+    supportsOneShotAlarmPlayback(): boolean {
+        return (
+            Platform.OS === "android" &&
+            Boolean(AlarmAudioModule) &&
+            typeof AlarmAudioModule.playWithOptions === "function"
+        );
+    }
+
+    private clearNativeEndPoller(): void {
+        if (this.nativeEndPoller) {
+            clearInterval(this.nativeEndPoller);
+            this.nativeEndPoller = null;
+        }
+    }
+
+    /**
+     * The native module has no completion event, so one-shot native playback
+     * is finished-detected by polling isPlaying(). Fires onPlaybackEnd once.
+     */
+    private startNativeEndPoller(): void {
+        this.clearNativeEndPoller();
+        const marker = this.sound;
+        this.nativeEndPoller = setInterval(async () => {
+            // A newer play()/stop() replaced this playback — stop polling.
+            if (this.sound !== marker) {
+                this.clearNativeEndPoller();
+                return;
+            }
+            try {
+                const playing = await AlarmAudioModule.isPlaying();
+                if (playing) return;
+                this.clearNativeEndPoller();
+                if (this.sound !== marker) return;
+                this.sound = null;
+                this.isPlaying = false;
+                this.currentUri = null;
+                const callback = this.onPlaybackEnd;
+                this.onPlaybackEnd = null;
+                await this.restoreVolume();
+                if (callback) callback();
+            } catch {
+                // transient bridge error — keep polling
+            }
+        }, 500);
+    }
 
     /**
      * Play audio from a file path or URL
@@ -66,7 +119,7 @@ export class AudioService {
             // This bypasses silent mode and plays through the alarm volume stream
             if (Platform.OS === "android" && streamType === "alarm" && AlarmAudioModule) {
                 console.log("[AudioService] Using native AlarmAudioModule for alarm stream");
-                console.log(`[AudioService] File: ${uri}, Volume: ${volume}`);
+                console.log(`[AudioService] File: ${uri}, Volume: ${volume}, Loop: ${loop}`);
 
                 try {
                     // Set alarm volume via VolumeManager
@@ -77,11 +130,21 @@ export class AudioService {
                         console.log(`[AudioService] Set ALARM volume to ${volume}`);
                     }
 
-                    const success = await AlarmAudioModule.play(uri, volume);
+                    // One-shot (loop:false) needs the newer playWithOptions; the
+                    // legacy play() always loops. When one-shot is unavailable we
+                    // degrade to looping — callers gate cadence design on
+                    // supportsOneShotAlarmPlayback().
+                    const useOneShot = !loop && this.supportsOneShotAlarmPlayback();
+                    const success = useOneShot
+                        ? await AlarmAudioModule.playWithOptions(uri, volume, false)
+                        : await AlarmAudioModule.play(uri, volume);
                     if (success) {
                         this.isPlaying = true;
                         this.currentUri = uri;
                         this.sound = { isNative: true }; // marker for native playback
+                        if (useOneShot) {
+                            this.startNativeEndPoller();
+                        }
                         console.log("[AudioService] ✅ Playing via native AlarmAudioModule (USAGE_ALARM)");
                         return true;
                     }
@@ -227,6 +290,7 @@ export class AudioService {
      * Stop current playback and restore volume
      */
     async stop(): Promise<void> {
+        this.clearNativeEndPoller();
         if (this.sound) {
             try {
                 // Check if this is native AlarmAudioModule playback

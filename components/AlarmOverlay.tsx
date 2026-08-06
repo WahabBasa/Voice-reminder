@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BackHandler,
   StyleSheet,
@@ -24,8 +24,18 @@ import { useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import {
   cancelDisplayedAlarmNotifications,
+  getLocalVariantAudioPath,
   markPendingAlarmUiShown,
 } from "../lib/notifications";
+import {
+  ALTERNATE_LINE_GAP_MS,
+  ROUTINE_SECOND_UTTERANCE_GAP_MS,
+  nextAlternateIndex,
+  parseVariantCount,
+  parseVariantList,
+  ringCadenceMode,
+  variantLineForIndex,
+} from "../lib/notificationDecisions";
 import { buildTraceId } from "../lib/vrLog";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
@@ -58,6 +68,14 @@ export interface AlarmOverlayProps {
   anchorAt: string;
   kind: string;
   autoSnoozeCount: string;
+  // Assistant-style replays (OLD-53); all optional stringly-typed data fields.
+  urgency?: string;
+  persistent?: string;
+  variants?: string; // JSON-encoded string[]
+  variantAudioUrls?: string; // JSON-encoded string[]
+  variantCount?: string;
+  followUpCount?: string;
+  variantIndex?: string;
   onDismiss: () => Promise<void>;
   onSnooze: () => Promise<void>;
   shouldExitOnResolve?: boolean;
@@ -82,6 +100,13 @@ export function AlarmOverlay({
   anchorAt,
   kind,
   autoSnoozeCount,
+  urgency = "",
+  persistent = "false",
+  variants: variantsStr = "",
+  variantAudioUrls: variantAudioUrlsStr = "",
+  variantCount: variantCountStr = "0",
+  followUpCount = "0",
+  variantIndex: variantIndexStr = "-1",
   onDismiss,
   onSnooze,
   shouldExitOnResolve = false,
@@ -91,12 +116,22 @@ export function AlarmOverlay({
   const [isPlaying, setIsPlaying] = useState(true);
   const [isHandlingAction, setIsHandlingAction] = useState(false);
   const vibrationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const cadenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const cadenceStoppedRef = useRef(false);
   const isMountedRef = useRef(true);
   const isExplicitDismissRef = useRef(false);
 
   const snoozeEnabled = snoozeEnabledStr !== "false";
   const snoozeDurationMinutes = Math.max(1, Math.min(60, Number(snoozeDurationStr) || 5));
   const targetVolume = Math.max(0, Math.min(1, Number(volumeStr) || 1));
+
+  // The escalated spoken line for this occurrence (base description for the
+  // original ring, a firmer variant for follow-ups).
+  const variantList = useMemo(() => parseVariantList(variantsStr), [variantsStr]);
+  const displayLine = useMemo(
+    () => variantLineForIndex(variantList, Number(variantIndexStr), description),
+    [variantList, variantIndexStr, description]
+  );
 
   useEffect(() => {
     // Enhanced mount logging (pastebin Step 4.4)
@@ -123,21 +158,26 @@ export function AlarmOverlay({
     startVibration();
 
     return () => {
-      vrLog('alarm_overlay', 'unmount', { 
-        traceId, 
-        notificationId, 
-        reminderId, 
-        isExplicitDismiss: isExplicitDismissRef.current 
+      vrLog('alarm_overlay', 'unmount', {
+        traceId,
+        notificationId,
+        reminderId,
+        isExplicitDismiss: isExplicitDismissRef.current
       });
       isMountedRef.current = false;
+
+      // This instance's cadence must never fire after unmount; a remount
+      // starts its own cadence with fresh refs.
+      cadenceStoppedRef.current = true;
+      clearCadenceTimer();
 
       if (isExplicitDismissRef.current) {
         stopAudio();
       } else {
-        vrLog('alarm_overlay', 'cleanup_skip_audio_stop', { 
-          traceId, 
-          notificationId, 
-          reason: 'not_explicit_dismiss' 
+        vrLog('alarm_overlay', 'cleanup_skip_audio_stop', {
+          traceId,
+          notificationId,
+          reason: 'not_explicit_dismiss'
         });
       }
       stopVibration();
@@ -176,22 +216,53 @@ export function AlarmOverlay({
       }
     }
 
-    // Use ensurePlaying to prevent double-start, with fallback for stale singletons
+    // Collect the playable spoken lines: base description first, then every
+    // replay variant whose TTS file is on disk.
+    const playableFiles: string[] = [];
+    if (fileInfo.exists && (fileInfo as any).size) {
+      playableFiles.push(audioPath);
+    }
+    const variantCount = parseVariantCount(variantCountStr);
+    for (let i = 0; i < variantCount; i++) {
+      const variantPath = getLocalVariantAudioPath(reminderId, i);
+      try {
+        const variantInfo = await FileSystem.getInfoAsync(variantPath);
+        if (variantInfo.exists && (variantInfo as any).size) {
+          playableFiles.push(variantPath);
+        }
+      } catch {
+        // skip unreadable variant
+      }
+    }
+
+    // Start at this occurrence's own line (a follow-up leads with its firmer
+    // variant); fall back to the base line.
+    const variantIndexNum = Number(variantIndexStr);
+    let startIndex = 0;
+    if (Number.isFinite(variantIndexNum) && variantIndexNum >= 0) {
+      const found = playableFiles.indexOf(getLocalVariantAudioPath(reminderId, variantIndexNum));
+      if (found >= 0) startIndex = found;
+    }
+    const primaryFile = playableFiles[startIndex] ?? audioPath;
+
+    // Cadence by tier — orchestrated here because this UI stays alive while
+    // the alarm rings (headless JS does not; it only gets the degraded loop).
+    const supportsOneShot =
+      typeof alarmAudioService.supportsOneShotAlarmPlayback === "function" &&
+      alarmAudioService.supportsOneShotAlarmPlayback();
+    const mode = ringCadenceMode(urgency, playableFiles.length, supportsOneShot);
+    console.log(
+      `[VR] Alarm cadence mode=${mode} files=${playableFiles.length} urgency=${urgency || "(none)"} oneShot=${supportsOneShot}`
+    );
+
+    cadenceStoppedRef.current = false;
     let success: boolean;
-    if (typeof alarmAudioService.ensurePlaying === "function") {
-      success = await alarmAudioService.ensurePlaying(audioPath, {
-        volume: targetVolume,
-        streamType: "alarm",
-        loop: true,
-      });
+    if (mode === "alternate") {
+      success = await playAlternating(playableFiles, startIndex);
+    } else if (mode === "speak_twice") {
+      success = await playSpeakTwice(primaryFile, 1);
     } else {
-      // Defensive fallback for stale singletons (Step 6B)
-      console.log("[VR] ensurePlaying not available, using play() fallback");
-      success = await alarmAudioService.play(audioPath, {
-        volume: targetVolume,
-        streamType: "alarm",
-        loop: true,
-      });
+      success = await playContinuousLoop(primaryFile);
     }
 
     if (isMountedRef.current) {
@@ -204,8 +275,86 @@ export function AlarmOverlay({
     }
   };
 
+  const clearCadenceTimer = () => {
+    if (cadenceTimerRef.current) {
+      clearTimeout(cadenceTimerRef.current);
+      cadenceTimerRef.current = null;
+    }
+  };
+
+  // Today's behavior: one file, native loop, rings until resolved/timeout.
+  const playContinuousLoop = async (file: string): Promise<boolean> => {
+    if (typeof alarmAudioService.ensurePlaying === "function") {
+      return alarmAudioService.ensurePlaying(file, {
+        volume: targetVolume,
+        streamType: "alarm",
+        loop: true,
+      });
+    }
+    // Defensive fallback for stale singletons (Step 6B)
+    console.log("[VR] ensurePlaying not available, using play() fallback");
+    return alarmAudioService.play(file, {
+      volume: targetVolume,
+      streamType: "alarm",
+      loop: true,
+    });
+  };
+
+  // Urgent tier: continuous audio that alternates between the available
+  // spoken lines (v0, then v1, then v0…). Sequenced from this UI because the
+  // native module has no completion event chain of its own.
+  const playAlternating = async (files: string[], index: number): Promise<boolean> => {
+    if (cadenceStoppedRef.current || !isMountedRef.current) return false;
+    const ok = await alarmAudioService.play(
+      files[index],
+      { volume: targetVolume, streamType: "alarm", loop: false },
+      () => {
+        if (cadenceStoppedRef.current || !isMountedRef.current) return;
+        clearCadenceTimer();
+        cadenceTimerRef.current = setTimeout(() => {
+          void playAlternating(files, nextAlternateIndex(index, files.length));
+        }, ALTERNATE_LINE_GAP_MS);
+      }
+    );
+    if (!ok) {
+      // Any one-shot failure degrades to the reliable continuous loop.
+      return playContinuousLoop(files[0]);
+    }
+    return true;
+  };
+
+  // Routine tier: speak twice (~20s apart), then go silent. The notification
+  // and this UI stay; the ring timeout still drives the follow-up ladder.
+  const playSpeakTwice = async (file: string, utterance: number): Promise<boolean> => {
+    if (cadenceStoppedRef.current || !isMountedRef.current) return false;
+    const ok = await alarmAudioService.play(
+      file,
+      { volume: targetVolume, streamType: "alarm", loop: false },
+      () => {
+        if (cadenceStoppedRef.current || !isMountedRef.current) return;
+        if (utterance >= 2) {
+          if (isMountedRef.current) {
+            setIsPlaying(false);
+          }
+          stopVibration();
+          return;
+        }
+        clearCadenceTimer();
+        cadenceTimerRef.current = setTimeout(() => {
+          void playSpeakTwice(file, utterance + 1);
+        }, ROUTINE_SECOND_UTTERANCE_GAP_MS);
+      }
+    );
+    if (!ok) {
+      return playContinuousLoop(file);
+    }
+    return true;
+  };
+
   const stopAudio = async () => {
     console.log("[VR] Stopping alarm overlay audio...");
+    cadenceStoppedRef.current = true;
+    clearCadenceTimer();
     await alarmAudioService.stop();
     if (isMountedRef.current) {
       setIsPlaying(false);
@@ -323,7 +472,7 @@ export function AlarmOverlay({
         {
           id: `snooze_${reminderId}_${Date.now()}`,
           title,
-          body: description,
+          body: displayLine,
           android: {
             channelId,
             importance: AndroidImportance.HIGH,
@@ -361,6 +510,14 @@ export function AlarmOverlay({
             anchorAt: anchorAt ?? "",
             scheduledFor: String(triggerTimestamp),
             autoSnoozeCount: String(autoSnoozeCount ?? "0"),
+            // Keep the escalation ladder state across a manual "Later".
+            urgency: urgency ?? "",
+            persistent: persistent ?? "false",
+            variants: variantsStr ?? "",
+            variantAudioUrls: variantAudioUrlsStr ?? "",
+            variantCount: variantCountStr ?? "0",
+            followUpCount: followUpCount ?? "0",
+            variantIndex: variantIndexStr ?? "-1",
           },
         },
         trigger
@@ -434,6 +591,14 @@ export function AlarmOverlay({
                 anchorAt: String(remAnchorAt),
                 scheduledFor: String(nextTriggerSafe),
                 kind: "reminder_occurrence",
+                // Fresh occurrence: ladder restarts from the base line.
+                urgency: urgency ?? "",
+                persistent: persistent ?? "false",
+                variants: variantsStr ?? "",
+                variantAudioUrls: variantAudioUrlsStr ?? "",
+                variantCount: variantCountStr ?? "0",
+                followUpCount: "0",
+                variantIndex: "-1",
               },
             },
             nextTriggerObj
@@ -466,7 +631,7 @@ export function AlarmOverlay({
         </Text>
 
         <Text style={styles.title}>{title}</Text>
-        {description ? <Text style={styles.description}>{description}</Text> : null}
+        {displayLine ? <Text style={styles.description}>{displayLine}</Text> : null}
 
         {isPlaying && (
           <View style={styles.playingIndicator}>
@@ -480,13 +645,13 @@ export function AlarmOverlay({
         {snoozeEnabled ? (
           <TouchableOpacity style={styles.snoozeButton} onPress={handleSnooze} activeOpacity={0.8}>
             <AppIcon name="clock" size={24} color="white" />
-            <Text style={styles.snoozeText}>Snooze {snoozeDurationMinutes} min</Text>
+            <Text style={styles.snoozeText}>Later</Text>
           </TouchableOpacity>
         ) : null}
 
         <TouchableOpacity style={styles.dismissButton} onPress={handleDismiss} activeOpacity={0.8}>
-          <AppIcon name="x" size={24} color="white" />
-          <Text style={styles.dismissText}>Dismiss</Text>
+          <AppIcon name="check" size={24} color="white" />
+          <Text style={styles.dismissText}>Done</Text>
         </TouchableOpacity>
       </View>
     </View>

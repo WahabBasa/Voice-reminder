@@ -9,6 +9,7 @@ import { PortalProvider } from "@gorhom/portal";
 import ToastProvider, { useToast } from "../components/ToastProvider";
 import { initializePurchases } from "../lib/purchases";
 import { useReminderStore } from "../lib/store";
+import { useSettingsStore } from "../lib/settingsStore";
 import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, enforcePendingAlarmTimeout } from "../lib/notifications";
 import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
@@ -45,6 +46,7 @@ function StartupTasks() {
   useEffect(() => {
     // Load reminders early to close cold-start gating window.
     void loadReminders();
+    void useSettingsStore.getState().loadSettings();
     let cancelled = false;
     const task = InteractionManager.runAfterInteractions(async () => {
       try {

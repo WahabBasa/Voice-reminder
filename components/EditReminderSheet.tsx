@@ -43,6 +43,14 @@ const FREQUENCIES = [
     { value: "yearly", label: "Yearly" },
 ];
 
+const PRE_REMINDER_OPTIONS = [
+    { value: 0, label: "None" },
+    { value: 5, label: "5 min" },
+    { value: 10, label: "10 min" },
+    { value: 15, label: "15 min" },
+    { value: 30, label: "30 min" },
+];
+
 type SettingsRowProps = {
     icon: Parameters<typeof AppIcon>[0]["name"];
     label: string;
@@ -135,6 +143,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     });
     const [showDatePicker, setShowDatePicker] = useState(false);
 
+    const [preReminderMinutes, setPreReminderMinutes] = useState<number>(initialReminder.preReminderMinutes ?? 0);
+    const [persistent, setPersistent] = useState<boolean>(initialReminder.persistent ?? false);
     const [snoozeEnabled, setSnoozeEnabled] = useState(initialReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled);
     const [snoozeDuration, setSnoozeDuration] = useState(initialReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration);
     const [volume, setVolume] = useState(initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume);
@@ -206,6 +216,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             frequency !== initialReminder.frequency ||
             currentDays !== originalDays ||
             currentDateStr !== initialReminder.date ||
+            (initialReminder.preReminderMinutes ?? 0) !== preReminderMinutes ||
+            (initialReminder.persistent ?? false) !== persistent ||
             (initialReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled) !== snoozeEnabled ||
             (initialReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration) !== snoozeDuration ||
             (initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume) !== volume ||
@@ -214,7 +226,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             (initialReminder.anchorAt ?? undefined) !== (anchorAt ?? undefined) ||
             (initialReminder.intervalDays ?? undefined) !== (intervalDays ?? undefined)
         );
-    }, [days, frequency, initialReminder, time, title, description, selectedDate, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt]);
+    }, [days, frequency, initialReminder, time, title, description, selectedDate, preReminderMinutes, persistent, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt]);
 
     const frequencyLabel = useMemo(() => {
         if (frequency === "interval" && intervalMs) {
@@ -334,6 +346,12 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     frequency,
                     days: frequency === "custom" ? days : [],
                     audioUrl: result.audioUrl,
+                    preReminderMinutes,
+                    preAudioUrl: reminder.preAudioUrl,
+                    urgency: reminder.urgency,
+                    persistent,
+                    variants: reminder.variants,
+                    variantAudioUrls: reminder.variantAudioUrls,
                     snoozeEnabled,
                     snoozeDuration,
                     volume,
@@ -448,6 +466,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             date: dateStr,
             frequency,
             days: frequency === "custom" ? days : [],
+            preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
+            persistent: persistent || undefined,
             snoozeEnabled,
             snoozeDuration,
             volume,
@@ -488,6 +508,12 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         frequency,
                         days: scheduleDays,
                         audioUrl,
+                        preReminderMinutes,
+                        preAudioUrl: reminder.preAudioUrl,
+                        urgency: reminder.urgency,
+                        persistent,
+                        variants: reminder.variants,
+                        variantAudioUrls: reminder.variantAudioUrls,
                         snoozeEnabled,
                         snoozeDuration,
                         volume,
@@ -530,6 +556,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     time: timeStr,
                     frequency,
                     days: frequency === "custom" ? days : undefined,
+                    preReminderMinutes,
+                    persistent,
                 }).catch((e) => {
                     console.log("[VR] Failed to update Convex reminder:", e);
                 });
@@ -538,7 +566,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             console.error("[VR] Save error:", error);
             Alert.alert("Error", "Failed to save reminder");
         }
-    }, [reminder, title, time, description, frequency, days, selectedDate, storeUpdateReminder, updateConvexReminder, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt, onSave, onClose]);
+    }, [reminder, title, time, description, frequency, days, selectedDate, storeUpdateReminder, updateConvexReminder, preReminderMinutes, persistent, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt, onSave, onClose]);
 
     const handleDelete = () => {
         setShowDeleteConfirm(true);
@@ -747,6 +775,37 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                 ) : null}
                             </>
                         ) : null}
+
+                        <View style={styles.preAlertRow}>
+                            <View style={styles.rowLeft}>
+                                <AppIcon name="bell" size={22} color={stylesVars.iconColor} />
+                                <Text style={styles.rowLabel}>Heads up before</Text>
+                            </View>
+                        </View>
+                        <View style={styles.preAlertOptionsRow}>
+                            {PRE_REMINDER_OPTIONS.map((option) => {
+                                const selected = preReminderMinutes === option.value;
+                                return (
+                                    <TouchableOpacity
+                                        key={option.value}
+                                        style={[styles.preAlertOption, selected && styles.preAlertOptionSelected]}
+                                        onPress={() => setPreReminderMinutes(option.value)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Text style={[styles.preAlertOptionText, selected && styles.preAlertOptionTextSelected]}>
+                                            {option.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+
+                        <SettingsRow
+                            icon="zap"
+                            label="Keep reminding until done"
+                            value={persistent ? "On" : "Off"}
+                            onPress={() => setPersistent((v) => !v)}
+                        />
 
                         <SettingsRow
                             icon="clock"
@@ -1111,6 +1170,38 @@ const styles = StyleSheet.create({
         paddingLeft: 38,
         paddingBottom: 12,
         paddingTop: 4,
+    },
+    preAlertRow: {
+        paddingTop: 14,
+        paddingBottom: 10,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+    },
+    preAlertOptionsRow: {
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: 8,
+        paddingLeft: 38,
+        paddingBottom: 14,
+    },
+    preAlertOption: {
+        backgroundColor: stylesVars.chipBg,
+        borderRadius: 16,
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+    },
+    preAlertOptionSelected: {
+        backgroundColor: colors.accent,
+    },
+    preAlertOptionText: {
+        fontSize: scaleFontSize(13),
+        fontWeight: "400",
+        color: stylesVars.chipText,
+    },
+    preAlertOptionTextSelected: {
+        color: "white",
+        fontWeight: "600",
     },
     soundSection: {
         marginTop: 24,

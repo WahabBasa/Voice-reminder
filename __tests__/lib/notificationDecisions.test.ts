@@ -18,8 +18,33 @@ import {
   canAutoSnooze,
   adjustPastDueTrigger,
   shouldRecordAsMissedInstead,
+  isStaleDelivery,
+  STALE_DELIVERY_THRESHOLD_MS,
   isKnownAlarmAction,
   isCurrentActiveAlarm,
+  isPreAlert,
+  parsePreReminderMinutes,
+  shouldSchedulePreAlert,
+  preAlertTriggerTime,
+  filterPreAlertTriggerIds,
+  buildPreAlertBody,
+  PRE_ALERT_MIN_SLACK_MS,
+  parsePersistentFlag,
+  parseFollowUpCount,
+  parseVariantCount,
+  normalizeUrgencyTier,
+  shouldContinueFollowUps,
+  followUpDelayMinutes,
+  followUpVariantIndex,
+  parseVariantList,
+  variantLineForIndex,
+  ringCadenceMode,
+  nextAlternateIndex,
+  MAX_REPLAY_VARIANTS,
+  MAX_FOLLOW_UPS,
+  FOLLOW_UP_DELAY_MINUTES,
+  FOLLOW_UP_POLITE_AFTER,
+  FOLLOW_UP_POLITE_DELAY_MINUTES,
 } from "../../lib/notificationDecisions";
 
 // ─── Group 1: Notification classification and repost detection ──────────────
@@ -351,6 +376,40 @@ describe("shouldRecordAsMissedInstead", () => {
   });
 });
 
+describe("isStaleDelivery", () => {
+  const now = 1_700_000_000_000;
+
+  it("returns false for on-time delivery", () => {
+    expect(isStaleDelivery(now, now)).toBe(false);
+  });
+
+  it("returns false for delivery within the threshold", () => {
+    expect(isStaleDelivery(now - STALE_DELIVERY_THRESHOLD_MS, now)).toBe(false);
+  });
+
+  it("returns true just past the threshold", () => {
+    expect(isStaleDelivery(now - STALE_DELIVERY_THRESHOLD_MS - 1, now)).toBe(true);
+  });
+
+  it("returns true for months-late delivery", () => {
+    const ninetyNineDays = 99 * 24 * 60 * 60_000;
+    expect(isStaleDelivery(now - ninetyNineDays, now)).toBe(true);
+  });
+
+  it("returns false for NaN scheduledFor", () => {
+    expect(isStaleDelivery(NaN, now)).toBe(false);
+  });
+
+  it("returns false for zero/missing scheduledFor", () => {
+    expect(isStaleDelivery(0, now)).toBe(false);
+  });
+
+  it("respects a custom threshold", () => {
+    expect(isStaleDelivery(now - 5000, now, 1000)).toBe(true);
+    expect(isStaleDelivery(now - 500, now, 1000)).toBe(false);
+  });
+});
+
 // ─── Group 5: Action recognition ────────────────────────────────────────────
 
 describe("isKnownAlarmAction", () => {
@@ -390,5 +449,468 @@ describe("isCurrentActiveAlarm", () => {
 
   it("handles both undefined", () => {
     expect(isCurrentActiveAlarm(undefined, undefined, "abc")).toBe(false);
+  });
+});
+
+// ─── Group 6: Pre-alerts ────────────────────────────────────────────────────
+
+describe("isPreAlert", () => {
+  it("returns true for pre_alert", () => {
+    expect(isPreAlert("pre_alert")).toBe(true);
+  });
+
+  it("returns false for reminder_occurrence", () => {
+    expect(isPreAlert("reminder_occurrence")).toBe(false);
+  });
+
+  it("returns false for snooze_occurrence", () => {
+    expect(isPreAlert("snooze_occurrence")).toBe(false);
+  });
+
+  it("returns false for undefined", () => {
+    expect(isPreAlert(undefined)).toBe(false);
+  });
+});
+
+describe("pre_alert is never an alarm occurrence", () => {
+  it("isAlarmOccurrenceNotification rejects pre_alert", () => {
+    expect(isAlarmOccurrenceNotification("pre_alert")).toBe(false);
+  });
+
+  it("shouldHandleAsAlarm rejects pre_alert even with a reminderId", () => {
+    expect(shouldHandleAsAlarm("rem_abc", "pre_alert")).toBe(false);
+  });
+});
+
+describe("parsePreReminderMinutes", () => {
+  it("parses a numeric string", () => {
+    expect(parsePreReminderMinutes("15")).toBe(15);
+  });
+
+  it("parses a number", () => {
+    expect(parsePreReminderMinutes(10)).toBe(10);
+  });
+
+  it("rounds fractional minutes", () => {
+    expect(parsePreReminderMinutes(12.6)).toBe(13);
+  });
+
+  it("returns 0 for undefined", () => {
+    expect(parsePreReminderMinutes(undefined)).toBe(0);
+  });
+
+  it("returns 0 for empty string", () => {
+    expect(parsePreReminderMinutes("")).toBe(0);
+  });
+
+  it("returns 0 for a negative value", () => {
+    expect(parsePreReminderMinutes(-5)).toBe(0);
+  });
+
+  it("returns 0 for zero", () => {
+    expect(parsePreReminderMinutes(0)).toBe(0);
+  });
+
+  it("returns 0 for NaN string", () => {
+    expect(parsePreReminderMinutes("abc")).toBe(0);
+  });
+
+  it("returns 0 for Infinity", () => {
+    expect(parsePreReminderMinutes(Infinity)).toBe(0);
+  });
+});
+
+describe("shouldSchedulePreAlert", () => {
+  const min = 60_000;
+
+  it("returns false when minutes is 0", () => {
+    expect(shouldSchedulePreAlert(60 * min, 0)).toBe(false);
+  });
+
+  it("returns false when minutes is negative", () => {
+    expect(shouldSchedulePreAlert(60 * min, -5)).toBe(false);
+  });
+
+  it("returns true when lead comfortably exceeds minutes + slack", () => {
+    expect(shouldSchedulePreAlert(60 * min, 15)).toBe(true);
+  });
+
+  it("returns false when lead equals minutes + slack exactly", () => {
+    expect(shouldSchedulePreAlert(15 * min + PRE_ALERT_MIN_SLACK_MS, 15)).toBe(false);
+  });
+
+  it("returns true just past minutes + slack", () => {
+    expect(shouldSchedulePreAlert(15 * min + PRE_ALERT_MIN_SLACK_MS + 1, 15)).toBe(true);
+  });
+
+  it("returns false when the event is closer than the lead time", () => {
+    expect(shouldSchedulePreAlert(10 * min, 15)).toBe(false);
+  });
+
+  it("respects a custom slack", () => {
+    expect(shouldSchedulePreAlert(15 * min + 5000, 15, 1000)).toBe(true);
+    expect(shouldSchedulePreAlert(15 * min + 500, 15, 1000)).toBe(false);
+  });
+});
+
+describe("preAlertTriggerTime", () => {
+  it("subtracts the lead time from the main trigger", () => {
+    const mainTs = 1_700_000_000_000;
+    expect(preAlertTriggerTime(mainTs, 15)).toBe(mainTs - 15 * 60_000);
+  });
+
+  it("handles 5 minutes", () => {
+    expect(preAlertTriggerTime(600_000, 5)).toBe(300_000);
+  });
+});
+
+describe("filterPreAlertTriggerIds", () => {
+  it("finds matching prealert prefixes", () => {
+    const ids = ["prealert_abc_1", "prealert_abc_2", "prealert_xyz_1", "reminder_abc_1"];
+    expect(filterPreAlertTriggerIds(ids, "abc")).toEqual([
+      "prealert_abc_1",
+      "prealert_abc_2",
+    ]);
+  });
+
+  it("excludes exceptId", () => {
+    const ids = ["prealert_abc_1", "prealert_abc_2"];
+    expect(filterPreAlertTriggerIds(ids, "abc", "prealert_abc_1")).toEqual([
+      "prealert_abc_2",
+    ]);
+  });
+
+  it("returns empty array when no matches", () => {
+    expect(filterPreAlertTriggerIds(["reminder_abc_1"], "abc")).toEqual([]);
+  });
+
+  it("handles empty input array", () => {
+    expect(filterPreAlertTriggerIds([], "abc")).toEqual([]);
+  });
+});
+
+describe("buildPreAlertBody", () => {
+  it("builds the heads-up line", () => {
+    expect(buildPreAlertBody("Meeting with Ahmed", 15)).toBe(
+      "Heads up — Meeting with Ahmed in 15 minutes"
+    );
+  });
+
+  it("uses singular unit for one minute", () => {
+    expect(buildPreAlertBody("Standup", 1)).toBe("Heads up — Standup in 1 minute");
+  });
+
+  it("falls back for an empty title", () => {
+    expect(buildPreAlertBody("", 10)).toBe("Heads up — your reminder in 10 minutes");
+  });
+
+  it("falls back for a whitespace title", () => {
+    expect(buildPreAlertBody("   ", 5)).toBe("Heads up — your reminder in 5 minutes");
+  });
+
+  it("falls back for an undefined title", () => {
+    expect(buildPreAlertBody(undefined, 30)).toBe(
+      "Heads up — your reminder in 30 minutes"
+    );
+  });
+});
+
+// ─── Group 7: Assistant-style replays (escalation ladder + ring cadence) ────
+
+describe("parsePersistentFlag", () => {
+  it("returns true for boolean true", () => {
+    expect(parsePersistentFlag(true)).toBe(true);
+  });
+
+  it('returns true for "true"', () => {
+    expect(parsePersistentFlag("true")).toBe(true);
+  });
+
+  it('returns true for "1"', () => {
+    expect(parsePersistentFlag("1")).toBe(true);
+  });
+
+  it('returns false for "false"', () => {
+    expect(parsePersistentFlag("false")).toBe(false);
+  });
+
+  it("returns false for undefined", () => {
+    expect(parsePersistentFlag(undefined)).toBe(false);
+  });
+
+  it("returns false for empty string", () => {
+    expect(parsePersistentFlag("")).toBe(false);
+  });
+
+  it("returns false for random string", () => {
+    expect(parsePersistentFlag("yes please")).toBe(false);
+  });
+});
+
+describe("parseFollowUpCount", () => {
+  it("parses valid number", () => {
+    expect(parseFollowUpCount("2")).toBe(2);
+  });
+
+  it("returns 0 for undefined", () => {
+    expect(parseFollowUpCount(undefined)).toBe(0);
+  });
+
+  it("clamps negative to 0", () => {
+    expect(parseFollowUpCount("-3")).toBe(0);
+  });
+
+  it("returns 0 for NaN string", () => {
+    expect(parseFollowUpCount("abc")).toBe(0);
+  });
+});
+
+describe("parseVariantCount", () => {
+  it("parses valid count", () => {
+    expect(parseVariantCount("2")).toBe(2);
+  });
+
+  it("caps at MAX_REPLAY_VARIANTS", () => {
+    expect(parseVariantCount("99")).toBe(MAX_REPLAY_VARIANTS);
+  });
+
+  it("floors fractional counts", () => {
+    expect(parseVariantCount("1.9")).toBe(1);
+  });
+
+  it("returns 0 for undefined", () => {
+    expect(parseVariantCount(undefined)).toBe(0);
+  });
+
+  it("returns 0 for negative", () => {
+    expect(parseVariantCount("-1")).toBe(0);
+  });
+
+  it("returns 0 for NaN string", () => {
+    expect(parseVariantCount("abc")).toBe(0);
+  });
+
+  it("returns 0 for Infinity", () => {
+    expect(parseVariantCount(Infinity)).toBe(0);
+  });
+});
+
+describe("normalizeUrgencyTier", () => {
+  it("passes urgent through", () => {
+    expect(normalizeUrgencyTier("urgent")).toBe("urgent");
+  });
+
+  it("passes routine through", () => {
+    expect(normalizeUrgencyTier("routine")).toBe("routine");
+  });
+
+  it("passes notice through", () => {
+    expect(normalizeUrgencyTier("notice")).toBe("notice");
+  });
+
+  it("normalizes case and whitespace", () => {
+    expect(normalizeUrgencyTier("  URGENT ")).toBe("urgent");
+  });
+
+  it("defaults unknown values to notice (legacy behavior)", () => {
+    expect(normalizeUrgencyTier("critical")).toBe("notice");
+  });
+
+  it("defaults undefined to notice", () => {
+    expect(normalizeUrgencyTier(undefined)).toBe("notice");
+  });
+});
+
+describe("shouldContinueFollowUps", () => {
+  it("continues for the first follow-up of a default reminder", () => {
+    expect(shouldContinueFollowUps(false, 0)).toBe(true);
+  });
+
+  it("continues for the second follow-up of a default reminder", () => {
+    expect(shouldContinueFollowUps(false, 1)).toBe(true);
+  });
+
+  it("stops a default reminder after MAX_FOLLOW_UPS follow-ups", () => {
+    expect(shouldContinueFollowUps(false, MAX_FOLLOW_UPS)).toBe(false);
+  });
+
+  it("persistent reminders never stop", () => {
+    expect(shouldContinueFollowUps(true, 50)).toBe(true);
+  });
+
+  it("respects a custom max", () => {
+    expect(shouldContinueFollowUps(false, 3, 4)).toBe(true);
+    expect(shouldContinueFollowUps(false, 4, 4)).toBe(false);
+  });
+});
+
+describe("followUpDelayMinutes", () => {
+  it("uses the base delay for the first follow-up", () => {
+    expect(followUpDelayMinutes(1)).toBe(FOLLOW_UP_DELAY_MINUTES);
+  });
+
+  it("uses the base delay up to the polite threshold", () => {
+    expect(followUpDelayMinutes(FOLLOW_UP_POLITE_AFTER)).toBe(FOLLOW_UP_DELAY_MINUTES);
+  });
+
+  it("caps interval growth after the polite threshold", () => {
+    expect(followUpDelayMinutes(FOLLOW_UP_POLITE_AFTER + 1)).toBe(
+      FOLLOW_UP_POLITE_DELAY_MINUTES
+    );
+  });
+
+  it("stays at the cap for later follow-ups", () => {
+    expect(followUpDelayMinutes(20)).toBe(FOLLOW_UP_POLITE_DELAY_MINUTES);
+  });
+});
+
+describe("followUpVariantIndex", () => {
+  it("returns -1 (base line) when there are no variants", () => {
+    expect(followUpVariantIndex(1, 0)).toBe(-1);
+    expect(followUpVariantIndex(5, 0)).toBe(-1);
+  });
+
+  it("walks the ladder in order while variants remain", () => {
+    expect(followUpVariantIndex(1, 3)).toBe(0);
+    expect(followUpVariantIndex(2, 3)).toBe(1);
+    expect(followUpVariantIndex(3, 3)).toBe(2);
+  });
+
+  it("cycles the firmest two variants once the ladder is exhausted", () => {
+    expect(followUpVariantIndex(4, 3)).toBe(1);
+    expect(followUpVariantIndex(5, 3)).toBe(2);
+    expect(followUpVariantIndex(6, 3)).toBe(1);
+    expect(followUpVariantIndex(7, 3)).toBe(2);
+  });
+
+  it("cycles both variants when only two exist", () => {
+    expect(followUpVariantIndex(1, 2)).toBe(0);
+    expect(followUpVariantIndex(2, 2)).toBe(1);
+    expect(followUpVariantIndex(3, 2)).toBe(0);
+    expect(followUpVariantIndex(4, 2)).toBe(1);
+  });
+
+  it("alternates a single variant with the base line", () => {
+    expect(followUpVariantIndex(1, 1)).toBe(0);
+    expect(followUpVariantIndex(2, 1)).toBe(-1);
+    expect(followUpVariantIndex(3, 1)).toBe(0);
+    expect(followUpVariantIndex(4, 1)).toBe(-1);
+  });
+
+  it("never repeats an index back-to-back", () => {
+    for (const variantCount of [1, 2, 3]) {
+      let prev = -2;
+      for (let n = 1; n <= 10; n++) {
+        const idx = followUpVariantIndex(n, variantCount);
+        expect(idx).not.toBe(prev);
+        prev = idx;
+      }
+    }
+  });
+});
+
+describe("parseVariantList", () => {
+  it("parses a JSON array of lines", () => {
+    expect(parseVariantList('["a","b"]')).toEqual(["a", "b"]);
+  });
+
+  it("trims and drops empty entries", () => {
+    expect(parseVariantList('[" a ","","  "]')).toEqual(["a"]);
+  });
+
+  it("returns [] for a JSON non-array", () => {
+    expect(parseVariantList('{"a":1}')).toEqual([]);
+  });
+
+  it("returns [] for invalid JSON", () => {
+    expect(parseVariantList("not json")).toEqual([]);
+  });
+
+  it("returns [] for empty string", () => {
+    expect(parseVariantList("")).toEqual([]);
+  });
+
+  it("returns [] for non-string input", () => {
+    expect(parseVariantList(undefined)).toEqual([]);
+    expect(parseVariantList(42)).toEqual([]);
+  });
+
+  it("stringifies non-string entries", () => {
+    expect(parseVariantList("[1,null]")).toEqual(["1"]);
+  });
+});
+
+describe("variantLineForIndex", () => {
+  const variants = ["first", "second"];
+
+  it("returns the variant at a valid index", () => {
+    expect(variantLineForIndex(variants, 0, "base")).toBe("first");
+    expect(variantLineForIndex(variants, 1, "base")).toBe("second");
+  });
+
+  it("returns the base line for -1", () => {
+    expect(variantLineForIndex(variants, -1, "base")).toBe("base");
+  });
+
+  it("returns the base line for an out-of-range index", () => {
+    expect(variantLineForIndex(variants, 2, "base")).toBe("base");
+  });
+
+  it("returns the base line for NaN", () => {
+    expect(variantLineForIndex(variants, NaN, "base")).toBe("base");
+  });
+
+  it("returns the base line when the variant entry is empty", () => {
+    expect(variantLineForIndex(["", "second"], 0, "base")).toBe("base");
+  });
+});
+
+describe("ringCadenceMode", () => {
+  it("urgent with one-shot support and 2+ files alternates", () => {
+    expect(ringCadenceMode("urgent", 2, true)).toBe("alternate");
+    expect(ringCadenceMode("urgent", 4, true)).toBe("alternate");
+  });
+
+  it("urgent without one-shot support loops", () => {
+    expect(ringCadenceMode("urgent", 4, false)).toBe("loop");
+  });
+
+  it("urgent with a single file loops", () => {
+    expect(ringCadenceMode("urgent", 1, true)).toBe("loop");
+  });
+
+  it("routine with one-shot support speaks twice", () => {
+    expect(ringCadenceMode("routine", 1, true)).toBe("speak_twice");
+  });
+
+  it("routine without one-shot support loops", () => {
+    expect(ringCadenceMode("routine", 1, false)).toBe("loop");
+  });
+
+  it("routine with no playable files loops", () => {
+    expect(ringCadenceMode("routine", 0, true)).toBe("loop");
+  });
+
+  it("notice always loops", () => {
+    expect(ringCadenceMode("notice", 4, true)).toBe("loop");
+  });
+
+  it("legacy/unknown urgency loops", () => {
+    expect(ringCadenceMode(undefined, 4, true)).toBe("loop");
+  });
+});
+
+describe("nextAlternateIndex", () => {
+  it("advances through the playlist", () => {
+    expect(nextAlternateIndex(0, 3)).toBe(1);
+    expect(nextAlternateIndex(1, 3)).toBe(2);
+  });
+
+  it("wraps around at the end", () => {
+    expect(nextAlternateIndex(2, 3)).toBe(0);
+  });
+
+  it("returns 0 for an empty playlist", () => {
+    expect(nextAlternateIndex(5, 0)).toBe(0);
   });
 });

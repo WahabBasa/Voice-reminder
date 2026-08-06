@@ -1,11 +1,13 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import * as Linking from "expo-linking";
 import Constants from "expo-constants";
 import { colors, scaleFontSize } from "../lib/theme";
+import { useSettingsStore } from "../lib/settingsStore";
 import AppIcon from "../components/AppIcon";
+import AddressTermSheet from "../components/AddressTermSheet";
 
 type SettingsRowProps = {
   icon: Parameters<typeof AppIcon>[0]["name"];
@@ -40,6 +42,15 @@ function SettingsRow({ icon, label, subtitle, onPress, accent, showChevron = tru
 
 export default function SettingsScreen() {
   const router = useRouter();
+
+  const addressTerm = useSettingsStore((state) => state.settings.addressTerm);
+  const setAddressTerm = useSettingsStore((state) => state.setAddressTerm);
+  const loadSettings = useSettingsStore((state) => state.loadSettings);
+  const [showAddressSheet, setShowAddressSheet] = useState(false);
+
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
 
   const versionLabel = useMemo(() => {
     const version = Constants.expoConfig?.version ?? "1.0.0";
@@ -111,6 +122,13 @@ export default function SettingsScreen() {
           subtitle="Completed and missed reminders"
           onPress={() => router.push("/history")}
         />
+        <View style={styles.separator} />
+        <SettingsRow
+          icon="user"
+          label="How should I address you?"
+          subtitle={addressTerm ? addressTerm : "Not set"}
+          onPress={() => setShowAddressSheet(true)}
+        />
       </View>
 
       {/* About section */}
@@ -126,6 +144,15 @@ export default function SettingsScreen() {
           </View>
         </View>
       </View>
+
+      <AddressTermSheet
+        visible={showAddressSheet}
+        value={addressTerm}
+        onSave={(value) => {
+          void setAddressTerm(value);
+        }}
+        onDismiss={() => setShowAddressSheet(false)}
+      />
     </SafeAreaView>
   );
 }

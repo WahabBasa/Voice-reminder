@@ -439,7 +439,7 @@ export default function AlarmScreen() {
                         activeOpacity={0.8}
                     >
                         <AppIcon name="clock" size={24} color="white" />
-                        <Text style={styles.snoozeText}>Snooze {snoozeDurationMinutes} min</Text>
+                        <Text style={styles.snoozeText}>Later</Text>
                     </TouchableOpacity>
                 ) : null}
 
@@ -448,8 +448,8 @@ export default function AlarmScreen() {
                     onPress={handleDismiss}
                     activeOpacity={0.8}
                 >
-                    <AppIcon name="x" size={24} color="white" />
-                    <Text style={styles.dismissText}>Dismiss</Text>
+                    <AppIcon name="check" size={24} color="white" />
+                    <Text style={styles.dismissText}>Done</Text>
                 </TouchableOpacity>
             </View>
         </View>

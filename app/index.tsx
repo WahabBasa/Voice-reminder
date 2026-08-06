@@ -36,6 +36,7 @@ import { uploadRecordingToConvex } from "../lib/convexUpload";
 import { scheduleReminder } from "../lib/notifications";
 import { hydrateReminderAudio } from "../lib/audioHydration";
 import { useReminderStore, Reminder, ReminderHistory } from "../lib/store";
+import { useSettingsStore } from "../lib/settingsStore";
 import RecordingOverlay from "../components/RecordingOverlay";
 import EditReminderSheet from "../components/EditReminderSheet";
 import { arePermissionsGranted, showPermissionPrompt } from "../components/PermissionPrompt";
@@ -115,6 +116,14 @@ export default function HomeScreen() {
   const activeReminders = useMemo(() => {
     return reminders.filter((r) => isReminderActive(r, history, nowMs));
   }, [reminders, history, nowMs]);
+
+  const dueTsById = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of activeReminders) {
+      map.set(r.id, getReminderNextDueTimestamp(r, history, nowMs));
+    }
+    return map;
+  }, [activeReminders, history, nowMs]);
 
   const [showRecording, setShowRecording] = useState(false);
   const [recordingTraceId, setRecordingTraceId] = useState<string | null>(null);
@@ -345,6 +354,13 @@ export default function HomeScreen() {
       const deviceLocalTime = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
       const deviceTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+      // Address term for the spoken description (empty = address-free urgency)
+      const settingsState = useSettingsStore.getState();
+      if (!settingsState.hasLoadedSettings) {
+        await settingsState.loadSettings();
+      }
+      const addressTerm = useSettingsStore.getState().settings.addressTerm || undefined;
+
       let result: any;
       let usedFastPath = false;
 
@@ -362,6 +378,7 @@ export default function HomeScreen() {
           deviceLocalDate,
           deviceLocalTime,
           deviceTimezone,
+          addressTerm,
         });
         perfLog(traceId, "device.processing", "processVoiceReminderFast_done", {
           ms: Date.now() - tAction,
@@ -386,6 +403,7 @@ export default function HomeScreen() {
           deviceLocalDate,
           deviceLocalTime,
           deviceTimezone,
+          addressTerm,
         });
         perfLog(traceId, "device.processing", "processVoiceReminder_done", {
           ms: Date.now() - tAction,
@@ -424,6 +442,20 @@ export default function HomeScreen() {
       // If using fast path, audio is pending
       const audioStatus = usedFastPath ? "pending" : (result.audioUrl ? "ready" : undefined);
 
+      const resultPreReminderMinutes = Number((result as any).preReminderMinutes);
+      const resultPreAudioUrl = (result as any).preAudioUrl as string | undefined;
+
+      // Assistant replay fields (OLD-53). Fast path returns urgency/persistent/
+      // variants at parse time; variantAudioUrls arrive via hydration.
+      const resultUrgency = (result as any).urgency as 'urgent' | 'notice' | 'routine' | undefined;
+      const resultPersistent = (result as any).persistent === true;
+      const resultVariants = Array.isArray((result as any).variants)
+        ? ((result as any).variants as string[])
+        : undefined;
+      const resultVariantAudioUrls = Array.isArray((result as any).variantAudioUrls)
+        ? ((result as any).variantAudioUrls as string[])
+        : undefined;
+
       const newReminder = await storeAddReminder({
         convexId: result.id,
         title: result.title,
@@ -434,6 +466,15 @@ export default function HomeScreen() {
         days,
         audioUrl: result.audioUrl || "",
         audioStatus,
+        preReminderMinutes:
+          Number.isFinite(resultPreReminderMinutes) && resultPreReminderMinutes > 0
+            ? resultPreReminderMinutes
+            : undefined,
+        preAudioUrl: resultPreAudioUrl || undefined,
+        urgency: resultUrgency,
+        persistent: resultPersistent || undefined,
+        variants: resultVariants?.length ? resultVariants : undefined,
+        variantAudioUrls: resultVariantAudioUrls?.length ? resultVariantAudioUrls : undefined,
 
         intervalMs: Number.isFinite(intervalMs) ? intervalMs : undefined,
         anchorAt: Number.isFinite(anchorAt) ? anchorAt : undefined,
@@ -493,6 +534,12 @@ export default function HomeScreen() {
                 frequency: newReminder.frequency,
                 days: newReminder.days,
                 audioUrl: newReminder.audioUrl,
+                preReminderMinutes: newReminder.preReminderMinutes,
+                preAudioUrl: newReminder.preAudioUrl,
+                urgency: newReminder.urgency,
+                persistent: newReminder.persistent,
+                variants: newReminder.variants,
+                variantAudioUrls: newReminder.variantAudioUrls,
                 snoozeEnabled: newReminder.snoozeEnabled,
                 snoozeDuration: newReminder.snoozeDuration,
                 volume: newReminder.volume,
@@ -727,8 +774,6 @@ export default function HomeScreen() {
     });
   }, [selectedIds, reminders, storeRecordCompletion, removeConvexReminder, toast, exitSelectMode]);
 
-  const filteredReminders = activeReminders;
-
   const remindersById = useMemo(() => {
     return new Map(reminders.map((reminder) => [reminder.id, reminder]));
   }, [reminders]);
@@ -739,26 +784,33 @@ export default function HomeScreen() {
     );
   }, [history]);
 
-  const remindersBySection = useMemo(() => {
-    const sections: Record<"Today" | "Yesterday" | "Earlier", Reminder[]> = {
-      Today: [],
-      Yesterday: [],
-      Earlier: [],
-    };
+  const reminderSections = useMemo(() => {
+    const startOfToday = new Date(nowMs);
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = startOfToday.getTime() + 86_400_000;
 
-    // Pre-compute timestamps once to avoid O(n log n) Date constructions in comparator
-    const withTs = filteredReminders.map((r) => ({
-      reminder: r,
-      ts: new Date(r.createdAt).getTime(),
-    }));
-    withTs.sort((a, b) => b.ts - a.ts);
+    const today: Reminder[] = [];
+    const upcoming: Reminder[] = [];
 
-    for (const { reminder } of withTs) {
-      sections[getDayBucket(reminder.createdAt)].push(reminder);
+    for (const r of activeReminders) {
+      const dueTs = dueTsById.get(r.id) ?? nowMs;
+      if (dueTs < endOfToday) {
+        today.push(r);
+      } else {
+        upcoming.push(r);
+      }
     }
 
+    const byDue = (a: Reminder, b: Reminder) =>
+      (dueTsById.get(a.id) ?? 0) - (dueTsById.get(b.id) ?? 0);
+    today.sort(byDue);
+    upcoming.sort(byDue);
+
+    const sections: Array<{ title: "Today" | "Upcoming"; data: Reminder[] }> = [];
+    if (today.length > 0) sections.push({ title: "Today", data: today });
+    if (upcoming.length > 0) sections.push({ title: "Upcoming", data: upcoming });
     return sections;
-  }, [filteredReminders]);
+  }, [activeReminders, dueTsById, nowMs]);
 
   const completedBySection = useMemo(() => {
     const sections: Record<"Today" | "Yesterday" | "Earlier", ReminderHistory[]> = {
@@ -797,12 +849,6 @@ export default function HomeScreen() {
     [remindersById, toast]
   );
 
-  const reminderSections = useMemo(() => {
-    return (["Today", "Yesterday", "Earlier"] as const)
-      .map((title) => ({ title, data: remindersBySection[title] }))
-      .filter((section) => section.data.length > 0);
-  }, [remindersBySection]);
-
   const completedSections = useMemo(() => {
     return (["Today", "Yesterday", "Earlier"] as const)
       .map((title) => ({ title, data: completedBySection[title] }))
@@ -822,7 +868,7 @@ export default function HomeScreen() {
 
   const renderReminderItem = useCallback(
     ({ item }: { item: Reminder }) => {
-      const dueTimestamp = getReminderNextDueTimestamp(item, history, nowMs);
+      const dueTimestamp = dueTsById.get(item.id) ?? getReminderNextDueTimestamp(item, history, nowMs);
       const dueLabel = item.frequency === "interval"
         ? formatIntervalNextIn(dueTimestamp, nowMs)
         : formatReminderTime(dueTimestamp);
@@ -874,6 +920,13 @@ export default function HomeScreen() {
                       style={styles.repeatIcon}
                     />
                   )}
+                  {(item.preReminderMinutes ?? 0) > 0 && (
+                    <View style={styles.preAlertTag}>
+                      <Text style={styles.preAlertTagText}>
+                        {item.preReminderMinutes} min early
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
             </TouchableOpacity>
@@ -901,7 +954,7 @@ export default function HomeScreen() {
         </SwipeableCard>
       );
     },
-    [exitingIds, handleDelete, handleMarkDone, handleReminderPress, history, isSelectMode, nowMs, selectedIds, toggleSelection]
+    [dueTsById, exitingIds, handleDelete, handleMarkDone, handleReminderPress, isSelectMode, nowMs, selectedIds, toggleSelection]
   );
 
   const renderCompletedItem = useCallback(
@@ -1099,12 +1152,14 @@ export default function HomeScreen() {
                     <AppIcon name="mic" size={22} color={colors.textSecondary} />
                   </View>
                   <Text style={styles.emptyTitle}>
-                    {reminders.length === 0 ? "No reminders yet" : "All done for today!"}
+                    {reminders.length === 0 && history.length === 0
+                      ? "No reminders yet"
+                      : "All caught up!"}
                   </Text>
                   <Text style={styles.emptySubtitle}>
-                    {reminders.length === 0
+                    {reminders.length === 0 && history.length === 0
                       ? "Tap below to create your first reminder."
-                      : "Check the Completed tab to review what you finished."}
+                      : "You have no active reminders right now."}
                   </Text>
                   {activeReminders.length === 0 && (
                     <TouchableOpacity style={styles.emptyCta} onPress={handleOpenRecording} activeOpacity={0.85}>
@@ -1411,6 +1466,18 @@ const styles = StyleSheet.create({
   },
   repeatIcon: {
     marginLeft: 8,
+  },
+  preAlertTag: {
+    marginLeft: 8,
+    backgroundColor: colors.muted,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  preAlertTagText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.textSecondary,
   },
   checkButton: {
     paddingLeft: 10,

@@ -36,7 +36,7 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, normalizeDay, getCurrentTimeHM } from "./helpers";
+import { clamp, normalizeReminderDescription, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeVariants, variantCountForTier } from "./helpers";
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -99,13 +99,13 @@ function coerceFrequency(
 }
 
 // Shared helper: build system prompt for GPT
-function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string }): string {
+function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string; addressTerm?: string }): string {
   return `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
 
 Return exactly this format:
 {
   "title": "short title (2-4 words)",
-  "description": "what to say when reminder fires",
+  "description": "${buildDescriptionInstruction(context.addressTerm)}",
   "time": "HH:MM in 24-hour format",
   "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
   "frequency": "once" | "daily" | "custom" | "interval",
@@ -114,7 +114,12 @@ Return exactly this format:
   "intervalMinutes": number (only if frequency is interval),
   "scheduleType": "once" | "interval" | "rrule",
   "rrule": "RFC5545 RRULE string (for complex patterns)",
-  "until": "ISO date for bounded recurrences"
+  "until": "ISO date for bounded recurrences",
+  "preReminderMinutes": number (heads-up lead time in minutes, see PRE-REMINDER RULES),
+  "preDescription": "short spoken heads-up line (only when preReminderMinutes > 0)",
+  "urgency": "urgent" | "notice" | "routine" (the hook tier the description uses, see ASSISTANT REPLAY RULES),
+  "persistent": boolean (true only for critical tasks, see ASSISTANT REPLAY RULES),
+  "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"]
 }
 
 LANGUAGE RULES:
@@ -180,6 +185,10 @@ INTENT + TONE RULES:
 TIME PARSING (Speech-to-text quirks):
 - "10 4 p.m." = 22:04, "9 30 a.m." = 09:30
 - The first number is hours, the second is minutes
+
+${buildPreReminderInstruction()}
+
+${buildVariantInstruction(context.addressTerm)}
 
 If no time specified, use a reasonable default.
 If no frequency specified, assume "once".`;
@@ -317,6 +326,36 @@ async function synthesizeReminderTts(args: { text: string; title?: string }): Pr
   return await synthesizeWithResemble(args);
 }
 
+/**
+ * TTS each replay variant into its own stored audio. Lines and audios stay in
+ * lockstep: a variant whose synthesis fails is dropped entirely (fewer
+ * variants), and failures never propagate — variant audio must never block
+ * reminder creation.
+ */
+async function synthesizeVariantTts(
+  ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
+  title: string,
+  variantTexts: string[]
+): Promise<{ keptVariants: string[]; variantAudioStorageIds: Id<"_storage">[] }> {
+  const keptVariants: string[] = [];
+  const variantAudioStorageIds: Id<"_storage">[] = [];
+  for (const line of variantTexts) {
+    try {
+      const buffer = await synthesizeReminderTts({
+        text: line,
+        title: `${title} (replay ${keptVariants.length + 1})`,
+      });
+      const blob = new Blob([new Uint8Array(buffer)], { type: "audio/mpeg" });
+      const storageId = await ctx.storage.store(blob);
+      keptVariants.push(line);
+      variantAudioStorageIds.push(storageId);
+    } catch (e) {
+      console.error("[VR] Variant TTS generation failed (variant dropped):", e);
+    }
+  }
+  return { keptVariants, variantAudioStorageIds };
+}
+
 export const processVoiceReminder = action({
   args: {
     audioBase64: v.string(),
@@ -324,6 +363,7 @@ export const processVoiceReminder = action({
     deviceLocalDate: v.optional(v.string()),
     deviceLocalTime: v.optional(v.string()),
     deviceTimezone: v.optional(v.string()),
+    addressTerm: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const openai = new OpenAI({
@@ -363,6 +403,9 @@ export const processVoiceReminder = action({
     const completion = await openrouter.chat.completions.create({
       model: "google/gemini-3.1-flash-lite-preview",
       response_format: { type: "json_object" },
+      // Without an explicit cap OpenRouter reserves credit for the model's full
+      // 65k output allowance and 402s on low balances; the parse JSON is tiny.
+      max_tokens: 2000,
       messages: [
         {
           role: "system",
@@ -371,7 +414,7 @@ export const processVoiceReminder = action({
 Return exactly this format:
 {
   "title": "short title (2-4 words)",
-  "description": "what to say when reminder fires",
+  "description": "${buildDescriptionInstruction(args.addressTerm)}",
   "time": "HH:MM in 24-hour format",
   "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
   "frequency": "once" | "daily" | "custom" | "interval",
@@ -382,7 +425,12 @@ Return exactly this format:
   // NEW: Unified schedule system (optional, for complex patterns)
   "scheduleType": "once" | "interval" | "rrule" (infer from other fields if not provided),
   "rrule": "RFC5545 RRULE string (for complex weekly/monthly/yearly patterns)",
-  "until": "ISO date for bounded recurrences (e.g., 'for 2 weeks')"
+  "until": "ISO date for bounded recurrences (e.g., 'for 2 weeks')",
+  "preReminderMinutes": number (heads-up lead time in minutes, see PRE-REMINDER RULES),
+  "preDescription": "short spoken heads-up line (only when preReminderMinutes > 0)",
+  "urgency": "urgent" | "notice" | "routine" (the hook tier the description uses, see ASSISTANT REPLAY RULES),
+  "persistent": boolean (true only for critical tasks, see ASSISTANT REPLAY RULES),
+  "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"]
 }
 
 LANGUAGE RULES:
@@ -448,6 +496,10 @@ INTENT + TONE RULES:
 TIME PARSING (Speech-to-text quirks):
 - "10 4 p.m." = 22:04, "9 30 a.m." = 09:30
 - The first number is hours, the second is minutes
+
+${buildPreReminderInstruction()}
+
+${buildVariantInstruction(args.addressTerm)}
 
 If no time specified, use a reasonable default.
 If no frequency specified, assume "once".`,
@@ -593,6 +645,25 @@ If no frequency specified, assume "once".`,
       }
     }
 
+    // Pre-reminder (heads-up) fields
+    const { preReminderMinutes, preDescription } = normalizePreReminder(
+      parsed.preReminderMinutes,
+      parsed.preDescription
+    );
+    const preTtsText =
+      preReminderMinutes > 0
+        ? preDescription || `Heads up — ${parsed.title} in ${preReminderMinutes} minutes`
+        : "";
+
+    // Assistant replay fields (urgency tier, persistence, escalating variants)
+    const urgency = normalizeUrgency(parsed.urgency);
+    const persistent = normalizePersistent(parsed.persistent);
+    const variants = normalizeVariants(
+      parsed.variants,
+      variantCountForTier(urgency, persistent),
+      description
+    );
+
     // 3. Generate TTS
     const ttsText = description || String(parsed.description ?? "");
     const ttsBuffer = await synthesizeReminderTts({
@@ -603,6 +674,29 @@ If no frequency specified, assume "once".`,
     // 4. Store TTS in Convex
     const blob = new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" });
     const storageId = await ctx.storage.store(blob);
+
+    // Second short line for the pre-alert; failure never blocks the reminder.
+    let preAudioStorageId: Id<"_storage"> | undefined;
+    if (preTtsText) {
+      try {
+        const preTtsBuffer = await synthesizeReminderTts({
+          text: preTtsText,
+          title: `${parsed.title} (heads-up)`,
+        });
+        const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });
+        preAudioStorageId = await ctx.storage.store(preBlob);
+      } catch (e) {
+        console.error("[VR] Pre-alert TTS generation failed:", e);
+      }
+    }
+
+    // Replay variant lines: kept in lockstep with their audios — a failed
+    // synth drops that variant (fewer variants, never a blocked creation).
+    const { keptVariants, variantAudioStorageIds } = await synthesizeVariantTts(
+      ctx,
+      parsed.title as string,
+      variants
+    );
 
     // 5. Save to database
     const reminderId: Id<"reminders"> = await ctx.runMutation(
@@ -615,10 +709,21 @@ If no frequency specified, assume "once".`,
         frequency,
         days,
         audioStorageId: storageId,
+        preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
+        preAudioStorageId,
+        urgency,
+        persistent: persistent || undefined,
+        variants: keptVariants.length > 0 ? keptVariants : undefined,
+        variantAudioStorageIds:
+          variantAudioStorageIds.length > 0 ? variantAudioStorageIds : undefined,
       }
     );
 
     const audioUrl = await ctx.storage.getUrl(storageId);
+    const preAudioUrl = preAudioStorageId ? await ctx.storage.getUrl(preAudioStorageId) : null;
+    const variantAudioUrls = (
+      await Promise.all(variantAudioStorageIds.map((id) => ctx.storage.getUrl(id)))
+    ).filter((url): url is string => Boolean(url));
 
     const result = {
       id: reminderId as string,
@@ -630,10 +735,16 @@ If no frequency specified, assume "once".`,
       days,
       transcript,
       audioUrl,
+      preReminderMinutes,
+      preAudioUrl,
+      urgency,
+      persistent,
+      variants: keptVariants,
+      variantAudioUrls,
 
       intervalMs,
       anchorAt,
-      
+
       // New unified schedule fields
       scheduleType,
       onceAt,
@@ -759,6 +870,7 @@ export const processVoiceReminderFast = action({
     deviceLocalDate: v.optional(v.string()),
     deviceLocalTime: v.optional(v.string()),
     deviceTimezone: v.optional(v.string()),
+    addressTerm: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const openai = new OpenAI({
@@ -803,10 +915,11 @@ export const processVoiceReminderFast = action({
       const completion = await openrouter.chat.completions.create({
         model: "google/gemini-3.1-flash-lite-preview",
         response_format: { type: "json_object" },
+        max_tokens: 2000,
         messages: [
           {
             role: "system",
-            content: buildSystemPrompt({ currentDate, currentDayOfWeek, currentTime, timezone }),
+            content: buildSystemPrompt({ currentDate, currentDayOfWeek, currentTime, timezone, addressTerm: args.addressTerm }),
           },
           {
             role: "user",
@@ -928,6 +1041,25 @@ export const processVoiceReminderFast = action({
         }
       }
 
+      // Pre-reminder (heads-up) fields
+      const { preReminderMinutes, preDescription } = normalizePreReminder(
+        parsed.preReminderMinutes,
+        parsed.preDescription
+      );
+      const preTtsText =
+        preReminderMinutes > 0
+          ? preDescription || `Heads up — ${parsed.title} in ${preReminderMinutes} minutes`
+          : "";
+
+      // Assistant replay fields (urgency tier, persistence, escalating variants)
+      const urgency = normalizeUrgency(parsed.urgency);
+      const persistent = normalizePersistent(parsed.persistent);
+      const variants = normalizeVariants(
+        parsed.variants,
+        variantCountForTier(urgency, persistent),
+        description
+      );
+
       // 4. Create reminder in DB immediately (audio pending)
       const ttsText = description || String(parsed.description ?? "");
       const reminderId: Id<"reminders"> = await ctx.runMutation(
@@ -940,6 +1072,10 @@ export const processVoiceReminderFast = action({
           frequency,
           days,
           audioStorageId: undefined,
+          preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
+          urgency,
+          persistent: persistent || undefined,
+          variants: variants.length > 0 ? variants : undefined,
           audioStatus: "pending",
           audioUpdatedAt: Date.now(),
         }
@@ -950,6 +1086,8 @@ export const processVoiceReminderFast = action({
         reminderId,
         title: parsed.title as string,
         ttsText,
+        preTtsText: preTtsText || undefined,
+        variantTexts: variants.length > 0 ? variants : undefined,
       });
 
       // 6. Return immediately
@@ -963,6 +1101,10 @@ export const processVoiceReminderFast = action({
         days,
         transcript,
         audioStatus: "pending",
+        preReminderMinutes,
+        urgency,
+        persistent,
+        variants,
         intervalMs,
         anchorAt,
         scheduleType,
@@ -988,6 +1130,8 @@ export const generateReminderTtsForReminder = internalAction({
     reminderId: v.id("reminders"),
     title: v.string(),
     ttsText: v.string(),
+    preTtsText: v.optional(v.string()),
+    variantTexts: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     try {
@@ -1001,10 +1145,39 @@ export const generateReminderTtsForReminder = internalAction({
       const blob = new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" });
       const newAudioStorageId = await ctx.storage.store(blob);
 
+      // 2b. Pre-alert line (optional); failure never blocks the main audio.
+      let preAudioStorageId: Id<"_storage"> | undefined;
+      if (args.preTtsText) {
+        try {
+          const preTtsBuffer = await synthesizeReminderTts({
+            text: args.preTtsText,
+            title: `${args.title} (heads-up)`,
+          });
+          const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });
+          preAudioStorageId = await ctx.storage.store(preBlob);
+        } catch (e) {
+          console.error("[VR] Pre-alert TTS generation failed:", e);
+        }
+      }
+
+      // 2c. Replay variants (optional); each failure just drops that variant.
+      // The setAudio patch re-stores the kept lines so texts and audios stay
+      // in lockstep even when some synths fail.
+      let keptVariants: string[] | undefined;
+      let variantAudioStorageIds: Id<"_storage">[] | undefined;
+      if (args.variantTexts?.length) {
+        const result = await synthesizeVariantTts(ctx, args.title, args.variantTexts);
+        keptVariants = result.keptVariants;
+        variantAudioStorageIds = result.variantAudioStorageIds;
+      }
+
       // 3. Update reminder with new audio
       await ctx.runMutation(internal.reminders.setAudio, {
         id: args.reminderId,
         audioStorageId: newAudioStorageId,
+        preAudioStorageId,
+        variants: keptVariants,
+        variantAudioStorageIds,
         audioStatus: "ready",
         audioUpdatedAt: Date.now(),
       });

@@ -34,6 +34,13 @@ export interface Reminder {
     audioUrl?: string;
     audioStatus?: 'pending' | 'ready' | 'failed';
     audioError?: string;
+    preReminderMinutes?: number; // heads-up lead time in minutes (0/absent = none)
+    preAudioUrl?: string; // spoken heads-up line for the pre-alert
+    // Assistant-style replays (OLD-53)
+    urgency?: 'urgent' | 'notice' | 'routine'; // hook tier the description uses
+    persistent?: boolean; // keep following up until "Done" (default: 2 follow-ups then missed)
+    variants?: string[]; // escalating alternative spoken lines
+    variantAudioUrls?: string[]; // TTS audio per variant (parallel to variants)
     createdAt: string;
     snoozeEnabled?: boolean;
     snoozeDuration?: number; // minutes
@@ -69,7 +76,7 @@ export interface ReminderHistory {
 
     // Occurrence tracking
     scheduledFor?: number;
-    action?: 'dismissed' | 'snoozed' | 'fired' | 'auto_completed' | 'auto_missed';
+    action?: 'dismissed' | 'snoozed' | 'fired' | 'auto_completed' | 'auto_missed' | 'pre_alert_done';
 }
 
 // Store state interface

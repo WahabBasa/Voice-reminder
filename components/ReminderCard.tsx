@@ -16,6 +16,7 @@ interface ReminderCardProps {
   frequency: string;
   days?: string[];
   intervalDays?: number;
+  preReminderMinutes?: number;
   isCompleted?: boolean;
   onPress: () => void;
   onDelete: () => void;
@@ -30,6 +31,7 @@ export default function ReminderCard({
   frequency,
   days = [],
   intervalDays,
+  preReminderMinutes,
   isCompleted = false,
   onPress,
   onDelete,
@@ -123,6 +125,11 @@ export default function ReminderCard({
               <View style={styles.timeRow}>
                 <AppIcon name="clock" size={16} color={colors.textSecondary} />
                 <Text style={styles.nextText}>{nextTriggerStr}</Text>
+                {(preReminderMinutes ?? 0) > 0 && (
+                  <View style={styles.preAlertTag}>
+                    <Text style={styles.preAlertTagText}>{preReminderMinutes} min early</Text>
+                  </View>
+                )}
               </View>
             </View>
 
@@ -220,6 +227,18 @@ const styles = StyleSheet.create({
   nextText: {
     marginLeft: 5,
     fontSize: 14,
+    color: colors.textSecondary,
+  },
+  preAlertTag: {
+    marginLeft: 8,
+    backgroundColor: colors.muted,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  preAlertTagText: {
+    fontSize: 11,
+    fontWeight: "600",
     color: colors.textSecondary,
   },
   doneButton: {

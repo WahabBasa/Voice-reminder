@@ -45,13 +45,28 @@ import {
   getAlarmStartTime,
   shouldHandleTimeout,
   hasActivePendingAlarm,
-  parseSnoozeEnabled,
   parseAutoSnoozeCount,
-  canAutoSnooze as canAutoSnoozeCheck,
   adjustPastDueTrigger,
   shouldRecordAsMissedInstead,
+  isStaleDelivery,
   isKnownAlarmAction as isKnownAlarmActionCheck,
   isCurrentActiveAlarm,
+  isPreAlert,
+  parsePreReminderMinutes,
+  shouldSchedulePreAlert,
+  preAlertTriggerTime,
+  filterPreAlertTriggerIds,
+  buildPreAlertBody,
+  parsePersistentFlag,
+  parseFollowUpCount,
+  parseVariantCount,
+  normalizeUrgencyTier,
+  shouldContinueFollowUps,
+  followUpDelayMinutes,
+  followUpVariantIndex,
+  parseVariantList,
+  variantLineForIndex,
+  MAX_REPLAY_VARIANTS,
 } from "./notificationDecisions";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
 
@@ -80,8 +95,11 @@ const PENDING_ALARM_QUEUE_KEY = "@pending_alarm_queue";
 const ANDROID_ALARM_ACTIVITY = "com.wahabbasa.VoiceReminder.AlarmActivity";
 const DISPLAYED_ALARM_KEY = "@displayed_alarm_id";
 const ALARM_RING_TIMEOUT_MS = 3 * 60_000;
-const AUTO_SNOOZE_DELAY_MINUTES = 5;
-const MAX_AUTO_SNOOZE_COUNT = 1;
+
+// Lockscreen action button titles. Action IDs are stable
+// (dismiss_action/snooze_action) — only the display titles changed (OLD-53).
+const DONE_ACTION_TITLE = "Done";
+const LATER_ACTION_TITLE = "Later";
 
 // Event type name mapping for readable logs
 const EVENT_TYPE_NAMES: Record<number, string> = {
@@ -131,6 +149,24 @@ async function cancelExistingReminderOccurrenceTriggers(reminderId: string, exce
   try {
     const scheduledIds = await notifee.getTriggerNotificationIds();
     const toCancel = filterDuplicateTriggerIds(scheduledIds, reminderId, exceptId);
+    for (const id of toCancel) {
+      try {
+        await notifee.cancelTriggerNotification(id);
+      } catch {
+        // ignore
+      }
+    }
+    return toCancel.length;
+  } catch {
+    return 0;
+  }
+}
+
+async function cancelExistingPreAlertTriggers(reminderId: string, exceptId?: string): Promise<number> {
+  if (!reminderId) return 0;
+  try {
+    const scheduledIds = await notifee.getTriggerNotificationIds();
+    const toCancel = filterPreAlertTriggerIds(scheduledIds, reminderId, exceptId);
     for (const id of toCancel) {
       try {
         await notifee.cancelTriggerNotification(id);
@@ -268,7 +304,23 @@ async function startAlarmAudioFromNotification(notification?: PendingAlarmNotifi
   const data = notification.data || {};
   const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
   if (!reminderId) return;
-  const localAudioPath = getLocalAudioPath(reminderId);
+
+  // Follow-up occurrences carry the variant index of their spoken line; play
+  // that file when it exists locally, else fall back to the base line.
+  let localAudioPath = getLocalAudioPath(reminderId);
+  const variantIndexRaw = Number(data.variantIndex ?? "-1");
+  if (Number.isFinite(variantIndexRaw) && variantIndexRaw >= 0) {
+    const variantPath = getLocalVariantAudioPath(reminderId, variantIndexRaw);
+    try {
+      const variantInfo = await getInfoAsync(variantPath);
+      if (variantInfo.exists && variantInfo.size) {
+        localAudioPath = variantPath;
+      }
+    } catch {
+      // fall back to base
+    }
+  }
+
   try {
     const fileInfo = await getInfoAsync(localAudioPath);
     if (!fileInfo.exists || !fileInfo.size) {
@@ -280,10 +332,16 @@ async function startAlarmAudioFromNotification(notification?: PendingAlarmNotifi
 
   const rawVolume = Number(data.volume ?? "1");
   const targetVolume = Math.max(0, Math.min(1, Number.isFinite(rawVolume) ? rawVolume : 1));
+  // Headless-safe cadence only (this path can run with a limited JS lifetime):
+  // routine tier speaks the line once and goes quiet, everything else loops
+  // continuously as before. The richer cadences (alternating variants,
+  // speak-twice-with-gap) are orchestrated from the alarm UI surfaces, which
+  // stay alive while ringing.
+  const tier = normalizeUrgencyTier(data.urgency);
   const ok = await alarmAudioService.ensurePlaying(localAudioPath, {
     volume: targetVolume,
     streamType: "alarm",
-    loop: true,
+    loop: tier !== "routine",
   });
   if (ok) {
     await markPendingAlarmRinging(notification.id);
@@ -293,7 +351,8 @@ async function startAlarmAudioFromNotification(notification?: PendingAlarmNotifi
 async function scheduleSnoozeOccurrenceFromNotification(
   notification: PendingAlarmNotification,
   snoozeMinutes: number,
-  extraData?: Record<string, string>
+  extraData?: Record<string, string>,
+  bodyOverride?: string
 ): Promise<void> {
   const data = notification.data || {};
   const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
@@ -307,7 +366,7 @@ async function scheduleSnoozeOccurrenceFromNotification(
   };
   const channelId = `reminder_${reminderId}`;
   const title = (data.title as string) || notification.title || "Reminder";
-  const body = (data.description as string) || notification.body || "";
+  const body = bodyOverride || (data.description as string) || notification.body || "";
 
   await notifee.createTriggerNotification(
     {
@@ -322,8 +381,8 @@ async function scheduleSnoozeOccurrenceFromNotification(
         autoCancel: false,
         lightUpScreen: true,
         actions: [
-          { title: "Dismiss", pressAction: { id: "dismiss_action" } },
-          { title: "Snooze 5m", pressAction: { id: "snooze_action" } },
+          { title: DONE_ACTION_TITLE, pressAction: { id: "dismiss_action" } },
+          { title: LATER_ACTION_TITLE, pressAction: { id: "snooze_action" } },
         ],
         fullScreenAction: {
           id: "default",
@@ -393,8 +452,8 @@ async function promoteNextQueuedAlarm(reason: string): Promise<boolean> {
             autoCancel: false,
             lightUpScreen: true,
             actions: [
-              { title: "Dismiss", pressAction: { id: "dismiss_action" } },
-              { title: "Snooze 5m", pressAction: { id: "snooze_action" } },
+              { title: DONE_ACTION_TITLE, pressAction: { id: "dismiss_action" } },
+              { title: LATER_ACTION_TITLE, pressAction: { id: "snooze_action" } },
             ],
             pressAction: {
               id: "default",
@@ -683,16 +742,17 @@ export async function handlePendingAlarmTimeout(
 
     const data = pending.notification.data || {};
     const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
-    const snoozeEnabled = parseSnoozeEnabled(data.snoozeEnabled);
-    const autoSnoozeCount = parseAutoSnoozeCount(data.autoSnoozeCount);
-    const canAutoSnooze = canAutoSnoozeCheck(snoozeEnabled, autoSnoozeCount, MAX_AUTO_SNOOZE_COUNT);
+    const persistent = parsePersistentFlag(data.persistent);
+    const followUpCount = parseFollowUpCount(data.followUpCount);
+    const continueLadder = shouldContinueFollowUps(persistent, followUpCount);
 
     vrLog("pending_alarm", "timeout_fired", {
       notificationId,
       reminderId,
       source,
-      autoSnoozeCount,
-      canAutoSnooze,
+      followUpCount,
+      persistent,
+      continueLadder,
     });
 
     await alarmAudioService.stop().catch(() => {});
@@ -703,11 +763,40 @@ export async function handlePendingAlarmTimeout(
     }
     await cancelDisplayedAlarmNotifications(notificationId);
 
-    if (canAutoSnooze) {
-      await scheduleSnoozeOccurrenceFromNotification(pending.notification, AUTO_SNOOZE_DELAY_MINUTES, {
-        autoSnoozeCount: String(autoSnoozeCount + 1),
-        autoSnoozeReason: "ring_timeout",
+    if (continueLadder) {
+      // Assistant-style replay: come back with the NEXT variant line, firmer
+      // each time. Persistent reminders keep going (interval capped at 10 min
+      // after the 3rd follow-up); default reminders stop after 2 follow-ups.
+      const nextFollowUp = followUpCount + 1;
+      const delayMinutes = followUpDelayMinutes(nextFollowUp);
+      const variantCount = parseVariantCount(data.variantCount);
+      const variantIndex = followUpVariantIndex(nextFollowUp, variantCount);
+      const variants = parseVariantList(data.variants);
+      const baseLine =
+        (typeof data.description === "string" && data.description) ||
+        pending.notification.body ||
+        "";
+      const followUpLine = variantLineForIndex(variants, variantIndex, baseLine);
+
+      vrLog("pending_alarm", "follow_up_scheduled", {
+        notificationId,
+        reminderId,
+        followUpCount: nextFollowUp,
+        delayMinutes,
+        variantIndex,
+        persistent,
       });
+
+      await scheduleSnoozeOccurrenceFromNotification(
+        pending.notification,
+        delayMinutes,
+        {
+          followUpCount: String(nextFollowUp),
+          variantIndex: String(variantIndex),
+          followUpReason: "ring_timeout",
+        },
+        followUpLine
+      );
       await markPendingAlarmResolved(notificationId, "snooze");
       await clearPendingAlarm({ promoteNext: true });
       return true;
@@ -819,6 +908,40 @@ export async function openNotificationSettingsSafe(): Promise<void> {
   }
 }
 
+// Battery optimization lets the OS (especially Samsung/OEM "app sleep") force-stop
+// the app, which silently cancels every scheduled alarm and blocks the boot
+// receiver that would restore them. Exemption is required for reliable delivery.
+export async function isBatteryOptimizationEnabledSafe(): Promise<boolean> {
+  if (Platform.OS !== "android") return false;
+  try {
+    return await notifee.isBatteryOptimizationEnabled();
+  } catch (e) {
+    console.log("[VR] isBatteryOptimizationEnabled failed:", e);
+    return false;
+  }
+}
+
+export async function openBatteryOptimizationSettingsSafe(): Promise<void> {
+  // Direct one-tap "Allow app to run in background?" system dialog
+  // (requires REQUEST_IGNORE_BATTERY_OPTIMIZATIONS in the manifest).
+  try {
+    const IntentLauncher = await import("expo-intent-launcher");
+    await IntentLauncher.startActivityAsync(
+      "android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+      { data: "package:com.wahabbasa.VoiceReminder" }
+    );
+    return;
+  } catch (e) {
+    console.log("[VR] Direct battery exemption dialog failed, falling back:", e);
+  }
+  // Fallback: the global battery optimization settings list
+  try {
+    await notifee.openBatteryOptimizationSettings();
+  } catch (e) {
+    console.log("[VR] Failed to open battery optimization settings:", e);
+  }
+}
+
 async function assertAndroidExactAlarmAccess(): Promise<void> {
   if (Platform.OS !== "android") return;
   // Android 12+ (API 31+) requires "Alarms & reminders" special access for exact alarms.
@@ -844,6 +967,13 @@ export interface ReminderNotification {
   frequency: string;
   days?: string[];
   audioUrl?: string;
+  preReminderMinutes?: number; // heads-up lead time in minutes (0/absent = none)
+  preAudioUrl?: string;
+  // Assistant-style replays (OLD-53)
+  urgency?: string; // "urgent" | "notice" | "routine"
+  persistent?: boolean;
+  variants?: string[];
+  variantAudioUrls?: string[];
   snoozeEnabled?: boolean;
   snoozeDuration?: number; // minutes
   volume?: number; // 0-1
@@ -867,6 +997,14 @@ export interface ReminderNotification {
 
 function getLocalAudioPath(reminderId: string): string {
   return `${documentDirectory}reminder_${reminderId}.mp3`;
+}
+
+function getLocalPreAudioPath(reminderId: string): string {
+  return `${documentDirectory}reminder_${reminderId}_pre.mp3`;
+}
+
+export function getLocalVariantAudioPath(reminderId: string, variantIndex: number): string {
+  return `${documentDirectory}reminder_${reminderId}_v${variantIndex}.mp3`;
 }
 
 export async function downloadReminderAudio(
@@ -894,12 +1032,71 @@ export async function downloadReminderAudio(
   return localPath;
 }
 
+export async function downloadPreReminderAudio(
+  reminderId: string,
+  preAudioUrl: string
+): Promise<string> {
+  const localPath = getLocalPreAudioPath(reminderId);
+
+  const existingFile = await getInfoAsync(localPath);
+  if (existingFile.exists && existingFile.size > 0) {
+    return localPath;
+  }
+
+  console.log(`[VR] Downloading pre-alert audio from ${preAudioUrl}`);
+  await downloadAsync(preAudioUrl, localPath);
+  return localPath;
+}
+
 export async function deleteLocalAudio(reminderId: string): Promise<void> {
   const localPath = getLocalAudioPath(reminderId);
   try {
     await deleteAsync(localPath, { idempotent: true });
   } catch (e) {
     console.log("[VR] Failed to delete local audio:", e);
+  }
+}
+
+export async function deleteLocalPreAudio(reminderId: string): Promise<void> {
+  const localPath = getLocalPreAudioPath(reminderId);
+  try {
+    await deleteAsync(localPath, { idempotent: true });
+  } catch (e) {
+    console.log("[VR] Failed to delete local pre-alert audio:", e);
+  }
+}
+
+/**
+ * Best-effort download of the replay variant audios to their local slots.
+ * A missing/failed variant download never throws — ringing falls back to the
+ * base line when a variant file is absent.
+ */
+export async function downloadVariantAudios(
+  reminderId: string,
+  variantAudioUrls: string[]
+): Promise<void> {
+  const urls = variantAudioUrls.slice(0, MAX_REPLAY_VARIANTS);
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i];
+    if (!url) continue;
+    const localPath = getLocalVariantAudioPath(reminderId, i);
+    try {
+      const existing = await getInfoAsync(localPath);
+      if (existing.exists && existing.size > 0) continue;
+      await downloadAsync(url, localPath);
+    } catch (e) {
+      console.log(`[VR] Failed to download variant audio ${i} for ${reminderId}:`, e);
+    }
+  }
+}
+
+export async function deleteLocalVariantAudios(reminderId: string): Promise<void> {
+  for (let i = 0; i < MAX_REPLAY_VARIANTS; i++) {
+    try {
+      await deleteAsync(getLocalVariantAudioPath(reminderId, i), { idempotent: true });
+    } catch (e) {
+      console.log("[VR] Failed to delete local variant audio:", e);
+    }
   }
 }
 
@@ -940,9 +1137,102 @@ export async function createReminderChannel(
   return channelId;
 }
 
+type PreAlertOccurrenceInput = {
+  reminderId: string;
+  title: string;
+  mainTriggerTimestamp: number;
+  preReminderMinutes: number;
+  preAudioUrl?: string;
+  volume?: number;
+  frequency?: string;
+  scheduleType?: string;
+};
+
+/**
+ * Schedule (or clear) the soft heads-up trigger paired with a main occurrence.
+ * Always call it when the main trigger changes: it removes stale pre-alerts for
+ * the reminder even when no new one is scheduled.
+ *
+ * Pre-alerts are NOT alarms: no fullScreenAction, no pending-alarm state, no
+ * repost, no ring timeout — handleNotificationEvent routes kind "pre_alert"
+ * through its own lightweight branch.
+ */
+async function schedulePreAlertForOccurrence(
+  input: PreAlertOccurrenceInput
+): Promise<string | null> {
+  const { reminderId, mainTriggerTimestamp, preReminderMinutes } = input;
+  if (!reminderId) return null;
+  const preId = `prealert_${reminderId}_${mainTriggerTimestamp}`;
+
+  // One pre-alert per reminder: clear any pre-alert for other occurrences.
+  await cancelExistingPreAlertTriggers(reminderId, preId);
+
+  if (!shouldSchedulePreAlert(mainTriggerTimestamp - Date.now(), preReminderMinutes)) {
+    // Disabled or too little lead — make sure this occurrence's pre-alert is gone too.
+    try {
+      await notifee.cancelTriggerNotification(preId);
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  // Hydrate the spoken heads-up line if we have a URL; the notification alone
+  // is acceptable when audio is unavailable.
+  if (input.preAudioUrl) {
+    try {
+      await downloadPreReminderAudio(reminderId, input.preAudioUrl);
+    } catch (e) {
+      console.log("[VR] Failed to download pre-alert audio (will retry on delivery):", e);
+    }
+  }
+
+  const preTimestamp = preAlertTriggerTime(mainTriggerTimestamp, preReminderMinutes);
+  const trigger: TimestampTrigger = {
+    type: TriggerType.TIMESTAMP,
+    timestamp: preTimestamp,
+    alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
+  };
+
+  await notifee.createTriggerNotification(
+    {
+      id: preId,
+      title: input.title,
+      body: buildPreAlertBody(input.title, preReminderMinutes),
+      android: {
+        channelId: `reminder_${reminderId}`,
+        importance: AndroidImportance.HIGH,
+        category: AndroidCategory.REMINDER,
+        visibility: AndroidVisibility.PUBLIC,
+        autoCancel: true,
+        actions: [{ title: "Done", pressAction: { id: "prealert_done_action" } }],
+        pressAction: { id: "default" },
+      },
+      data: {
+        reminderId,
+        kind: "pre_alert",
+        title: input.title,
+        preReminderMinutes: String(preReminderMinutes),
+        preAudioUrl: input.preAudioUrl ?? "",
+        volume: String(input.volume ?? 1),
+        frequency: input.frequency ?? "",
+        scheduleType: input.scheduleType ?? "",
+        mainScheduledFor: String(mainTriggerTimestamp),
+        scheduledFor: String(preTimestamp),
+      },
+    },
+    trigger
+  );
+
+  console.log(
+    `[VR] Scheduled pre-alert ${preId} for ${new Date(preTimestamp).toLocaleString()} (${preReminderMinutes}m before main)`
+  );
+  return preId;
+}
+
 export async function scheduleReminder(
   reminder: ReminderNotification,
-  _options?: { traceId?: string }
+  _options?: { traceId?: string; occurrenceAfter?: number }
 ): Promise<{ triggerTimestamp: number; notificationId: string }> {
   const hasPermission = await requestNotificationPermission();
   if (!hasPermission) {
@@ -957,6 +1247,11 @@ export async function scheduleReminder(
     localAudioPath = await downloadReminderAudio(reminder.id, reminder.audioUrl);
   }
 
+  // Replay variant audios (best-effort; ringing falls back to the base line).
+  if (reminder.variantAudioUrls?.length) {
+    await downloadVariantAudios(reminder.id, reminder.variantAudioUrls);
+  }
+
   // Create channel (uses default sound if no custom audio)
   const channelId = await createReminderChannel(
     reminder.id,
@@ -964,7 +1259,10 @@ export async function scheduleReminder(
     localAudioPath || ""
   );
 
-  // Calculate next trigger time using unified scheduling engine
+  // Calculate next trigger time using unified scheduling engine.
+  // occurrenceAfter lets callers skip a still-future occurrence that was
+  // handled early (pre-alert "Done") and land on the one after it.
+  const occurrenceRef = Math.max(Date.now(), _options?.occurrenceAfter ?? 0);
   let triggerTimestamp: number;
 
   // Try new unified schedule system first
@@ -1000,7 +1298,7 @@ export async function scheduleReminder(
       until: reminder.until,
     } as Schedule;
 
-    const nextOccurrence = getNextOccurrence(schedule, Date.now());
+    const nextOccurrence = getNextOccurrence(schedule, occurrenceRef);
     if (nextOccurrence) {
       triggerTimestamp = nextOccurrence;
     } else {
@@ -1012,13 +1310,13 @@ export async function scheduleReminder(
     }
   } else if (reminder.frequency === "interval" && reminder.anchorAt && reminder.intervalMs) {
     // Legacy interval support
-    if (reminder.scheduledFor && reminder.scheduledFor > Date.now()) {
+    if (reminder.scheduledFor && reminder.scheduledFor > occurrenceRef) {
       triggerTimestamp = reminder.scheduledFor;
     } else {
       const { scheduledFor } = getNextIntervalOccurrence(
         reminder.anchorAt,
         reminder.intervalMs,
-        Date.now()
+        occurrenceRef
       );
       triggerTimestamp = scheduledFor;
     }
@@ -1032,7 +1330,7 @@ export async function scheduleReminder(
       intervalDays: reminder.intervalDays,
       scheduledFor: reminder.scheduledFor,
     };
-    triggerTimestamp = getNextTriggerTime(schedule);
+    triggerTimestamp = getNextTriggerTime(schedule, occurrenceRef);
   }
 
   // Safety check: Notifee requires timestamp to be in the future
@@ -1073,13 +1371,13 @@ export async function scheduleReminder(
   // Define notification action buttons for lockscreen use
   const actions: AndroidAction[] = [
     {
-      title: 'Dismiss',
+      title: DONE_ACTION_TITLE,
       pressAction: {
         id: 'dismiss_action',
       },
     },
     {
-      title: 'Snooze 5m',
+      title: LATER_ACTION_TITLE,
       pressAction: {
         id: 'snooze_action',
       },
@@ -1120,6 +1418,8 @@ export async function scheduleReminder(
         title: reminder.title,
         description: reminder.description,
         audioUrl: reminder.audioUrl ?? "",
+        preReminderMinutes: String(parsePreReminderMinutes(reminder.preReminderMinutes)),
+        preAudioUrl: reminder.preAudioUrl ?? "",
         snoozeEnabled: String(reminder.snoozeEnabled ?? true),
         snoozeDuration: String(reminder.snoozeDuration ?? 5),
         volume: String(reminder.volume ?? 1),
@@ -1132,6 +1432,20 @@ export async function scheduleReminder(
         kind: "reminder_occurrence",
         autoSnoozeCount: "0",
 
+        // Assistant-style replays (OLD-53): escalation ladder state travels in
+        // the notification data. variantIndex -1 = base spoken line.
+        urgency: reminder.urgency ?? "",
+        persistent: String(reminder.persistent ?? false),
+        variants: JSON.stringify((reminder.variants ?? []).slice(0, MAX_REPLAY_VARIANTS)),
+        variantAudioUrls: JSON.stringify(
+          (reminder.variantAudioUrls ?? []).slice(0, MAX_REPLAY_VARIANTS)
+        ),
+        variantCount: String(
+          Math.min(reminder.variants?.length ?? 0, MAX_REPLAY_VARIANTS)
+        ),
+        followUpCount: "0",
+        variantIndex: "-1",
+
         // New unified schedule fields
         scheduleType: reminder.scheduleType ?? "",
         onceAt: String(reminder.onceAt ?? ""),
@@ -1143,6 +1457,18 @@ export async function scheduleReminder(
     },
     trigger
   );
+
+  // Soft heads-up before the main alarm (also clears stale pre-alerts when off).
+  await schedulePreAlertForOccurrence({
+    reminderId: reminder.id,
+    title: reminder.title,
+    mainTriggerTimestamp: triggerTimestamp,
+    preReminderMinutes: parsePreReminderMinutes(reminder.preReminderMinutes),
+    preAudioUrl: reminder.preAudioUrl,
+    volume: reminder.volume,
+    frequency: reminder.frequency,
+    scheduleType: reminder.scheduleType,
+  });
 
   const logNow = Date.now();
   const deltaMs = triggerTimestamp - logNow;
@@ -1161,14 +1487,30 @@ export async function scheduleReminder(
 export async function cancelReminder(reminderId: string): Promise<void> {
   const channelId = `reminder_${reminderId}`;
 
-  // Cancel all scheduled notifications for this reminder (occurrence + snooze)
+  // Cancel all scheduled notifications for this reminder (occurrence + snooze + pre-alert)
   const scheduledIds = await notifee.getTriggerNotificationIds();
   const toCancel = scheduledIds.filter(
-    (id) => id.startsWith(`reminder_${reminderId}_`) || id.startsWith(`snooze_${reminderId}_`)
+    (id) =>
+      id.startsWith(`reminder_${reminderId}_`) ||
+      id.startsWith(`snooze_${reminderId}_`) ||
+      id.startsWith(`prealert_${reminderId}_`)
   );
 
   for (const id of toCancel) {
     await notifee.cancelNotification(id);
+  }
+
+  // A pre-alert that already fired is displayed, not scheduled — clear it too.
+  try {
+    const displayed = await notifee.getDisplayedNotifications();
+    for (const d of displayed) {
+      const id = d.notification?.id || d.id;
+      if (id && id.startsWith(`prealert_${reminderId}_`)) {
+        await notifee.cancelDisplayedNotification(id);
+      }
+    }
+  } catch {
+    // ignore
   }
 
   // Delete the channel
@@ -1184,34 +1526,81 @@ export async function cancelReminder(reminderId: string): Promise<void> {
 export async function deleteReminderWithAudio(reminderId: string): Promise<void> {
   await cancelReminder(reminderId);
   await deleteLocalAudio(reminderId);
+  await deleteLocalPreAudio(reminderId);
+  await deleteLocalVariantAudios(reminderId);
   console.log(`[VR] Deleted reminder ${reminderId} with audio`);
 }
 
 /**
  * Refresh scheduled notification data after audio becomes available.
- * Updates the notification data to include the audioUrl without changing the trigger time.
+ * Updates the notification data to include the audioUrl (and, when provided,
+ * the pre-alert's preAudioUrl) without changing the trigger times.
  */
 export async function refreshNotificationWithAudio(
   reminderId: string,
-  audioUrl: string
+  audioUrl: string,
+  preAudioUrl?: string,
+  replay?: { variants?: string[]; variantAudioUrls?: string[] }
 ): Promise<void> {
   try {
     // Get all trigger notifications
     const allNotifications = await notifee.getTriggerNotifications();
-    
+
+    // Replay variant payload (texts + audio urls arrive together post-TTS).
+    const variantsJson =
+      replay?.variants !== undefined
+        ? JSON.stringify(replay.variants.slice(0, MAX_REPLAY_VARIANTS))
+        : undefined;
+    const variantAudioUrlsJson =
+      replay?.variantAudioUrls !== undefined
+        ? JSON.stringify(replay.variantAudioUrls.slice(0, MAX_REPLAY_VARIANTS))
+        : undefined;
+    const variantCountStr =
+      replay?.variants !== undefined
+        ? String(Math.min(replay.variants.length, MAX_REPLAY_VARIANTS))
+        : undefined;
+
     for (const notification of allNotifications) {
       const id = notification.notification.id;
-      if (!id || !id.startsWith(`reminder_${reminderId}_`)) continue;
+      if (!id) continue;
+
+      const isMainTrigger = id.startsWith(`reminder_${reminderId}_`);
+      const isPreAlertTrigger = id.startsWith(`prealert_${reminderId}_`);
+      if (!isMainTrigger && !isPreAlertTrigger) continue;
+
+      const data = notification.notification.data || {};
+      let updatedData: Record<string, any> | null = null;
+
+      if (isMainTrigger) {
+        // Already carries this audio — nothing to do. Keeps repeat hydration a no-op.
+        const mainCurrent = data.audioUrl === audioUrl;
+        const preCurrent = preAudioUrl === undefined || data.preAudioUrl === preAudioUrl;
+        const variantsCurrent =
+          (variantsJson === undefined || data.variants === variantsJson) &&
+          (variantAudioUrlsJson === undefined || data.variantAudioUrls === variantAudioUrlsJson);
+        if (!mainCurrent || !preCurrent || !variantsCurrent) {
+          updatedData = {
+            ...data,
+            audioUrl,
+            ...(preAudioUrl !== undefined ? { preAudioUrl } : {}),
+            ...(variantsJson !== undefined ? { variants: variantsJson } : {}),
+            ...(variantAudioUrlsJson !== undefined
+              ? { variantAudioUrls: variantAudioUrlsJson }
+              : {}),
+            ...(variantCountStr !== undefined ? { variantCount: variantCountStr } : {}),
+          };
+        }
+      } else if (preAudioUrl !== undefined && data.preAudioUrl !== preAudioUrl) {
+        updatedData = { ...data, preAudioUrl };
+      }
+
+      if (!updatedData) continue;
 
       try {
-        // Update data with audioUrl
-        const updatedData = {
-          ...notification.notification.data,
-          audioUrl,
-        };
-
-        // Cancel and recreate with updated data but same trigger
-        await notifee.cancelTriggerNotification(id);
+        // Recreate with the SAME id: notifee replaces the trigger atomically.
+        // Never cancel first — if the process dies between cancel and create,
+        // the AlarmManager alarm fires with no notification data and the
+        // reminder is silently lost (observed on-device 2026-08-06 14:59).
         await notifee.createTriggerNotification(
           {
             ...notification.notification,
@@ -1227,6 +1616,191 @@ export async function refreshNotificationWithAudio(
     }
   } catch (e) {
     console.error(`[VR] Failed to refresh notifications for ${reminderId}:`, e);
+  }
+}
+
+// Map a store Reminder to the scheduling input (shared by startup sync and
+// the pre-alert "Done" reschedule path).
+function toReminderNotification(reminder: Reminder): ReminderNotification {
+  return {
+    id: reminder.id,
+    title: reminder.title,
+    description: reminder.description,
+    time: reminder.time,
+    date: reminder.date,
+    frequency: reminder.frequency,
+    days: reminder.days,
+    audioUrl: reminder.audioUrl ?? "",
+    preReminderMinutes: reminder.preReminderMinutes,
+    preAudioUrl: reminder.preAudioUrl,
+    urgency: reminder.urgency,
+    persistent: reminder.persistent,
+    variants: reminder.variants,
+    variantAudioUrls: reminder.variantAudioUrls,
+    snoozeEnabled: reminder.snoozeEnabled,
+    snoozeDuration: reminder.snoozeDuration,
+    volume: reminder.volume,
+    volumeStyle: reminder.volumeStyle,
+    intervalMs: reminder.intervalMs,
+    anchorAt: reminder.anchorAt,
+    intervalDays: reminder.intervalDays,
+    scheduledFor: reminder.scheduledFor,
+    // New unified schedule fields
+    scheduleType: reminder.scheduleType,
+    onceAt: reminder.onceAt,
+    rrule: reminder.rrule,
+    dtstart: reminder.dtstart,
+    tzid: reminder.tzid,
+    until: reminder.until,
+    parseWarnings: reminder.parseWarnings,
+  };
+}
+
+/**
+ * DELIVERED handling for kind "pre_alert": play the spoken heads-up once.
+ * Deliberately none of the alarm lifecycle — no pending-alarm state, no
+ * cancel+repost, no ring timeout, no loop, no reschedule of the main trigger.
+ */
+async function handlePreAlertDelivered(notification: PendingAlarmNotification): Promise<void> {
+  const data = notification.data || {};
+  const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
+  const notificationId = notification.id || "";
+  if (!reminderId) return;
+
+  const mainScheduledFor = Number(data.mainScheduledFor);
+
+  // Delivered at/after the main alarm time (device off, OEM freeze): a
+  // heads-up is meaningless now — drop it silently.
+  if (Number.isFinite(mainScheduledFor) && mainScheduledFor > 0 && Date.now() >= mainScheduledFor) {
+    vrLog("pre_alert", "delivered_stale_dropped", { notificationId, reminderId });
+    try {
+      markInternalDismissIgnore(notificationId);
+      await notifee.cancelDisplayedNotification(notificationId);
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  vrLog("pre_alert", "delivered", { notificationId, reminderId });
+
+  if (Platform.OS !== "android") return;
+
+  // Never steal the audio channel from an actively ringing alarm.
+  const pending = await getPendingAlarm();
+  if (pending?.notification?.id && !pending.resolvedAt) {
+    vrLog("pre_alert", "audio_skipped_active_alarm", { notificationId, reminderId });
+    return;
+  }
+
+  const localPath = getLocalPreAudioPath(reminderId);
+  let hasAudio = false;
+  try {
+    const info = await getInfoAsync(localPath);
+    hasAudio = Boolean(info.exists && info.size);
+  } catch {
+    // ignore stat errors
+  }
+  if (!hasAudio) {
+    const preAudioUrl = typeof data.preAudioUrl === "string" ? data.preAudioUrl : "";
+    if (preAudioUrl) {
+      try {
+        await downloadPreReminderAudio(reminderId, preAudioUrl);
+        hasAudio = true;
+      } catch (e) {
+        console.log("[VR] Pre-alert audio download failed:", e);
+      }
+    }
+  }
+  if (!hasAudio) {
+    // Notification alone is acceptable for a heads-up.
+    return;
+  }
+
+  const rawVolume = Number(data.volume ?? "1");
+  const volume = Math.max(0, Math.min(1, Number.isFinite(rawVolume) ? rawVolume : 1));
+  await alarmAudioService.ensurePlaying(localPath, {
+    volume,
+    streamType: "alarm",
+    loop: false,
+  });
+}
+
+/**
+ * "Done" pressed on a pre-alert: the user handled the event early. Record the
+ * completion, cancel the paired main occurrence, and for recurring reminders
+ * schedule the following occurrence (the cancelled one can no longer
+ * reschedule itself on delivery).
+ */
+async function handlePreAlertDonePress(notification: PendingAlarmNotification): Promise<void> {
+  const data = notification.data || {};
+  const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
+  const notificationId = notification.id || "";
+  const mainScheduledFor = Number(data.mainScheduledFor);
+
+  vrLog("pre_alert", "done_pressed", { notificationId, reminderId });
+
+  // Clear the displayed pre-alert itself.
+  if (notificationId) {
+    try {
+      markInternalDismissIgnore(notificationId);
+      await notifee.cancelNotification(notificationId);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Stop the one-shot heads-up audio if still speaking. Guarded so a ringing
+  // real alarm (which shares alarmAudioService) is never silenced from here.
+  const pending = await getPendingAlarm();
+  if (!pending?.notification?.id || pending.resolvedAt) {
+    await alarmAudioService.stop().catch(() => {});
+  }
+
+  if (!reminderId) return;
+
+  // Cancel the main trigger for this occurrence.
+  if (Number.isFinite(mainScheduledFor) && mainScheduledFor > 0) {
+    try {
+      await notifee.cancelNotification(`reminder_${reminderId}_${mainScheduledFor}`);
+    } catch {
+      // ignore
+    }
+  }
+
+  const store = useReminderStore.getState();
+  const reminder = store.getReminderById(reminderId);
+  if (!reminder) return;
+
+  try {
+    await store.recordCompletion(reminderId, reminder.title, "completed", {
+      scheduledFor: Number.isFinite(mainScheduledFor) && mainScheduledFor > 0 ? mainScheduledFor : undefined,
+      action: "pre_alert_done",
+    });
+  } catch (e) {
+    console.log("[VR] Failed to record pre-alert completion:", e);
+  }
+
+  // One-time reminders: same full-removal flow as dismiss_action.
+  if (reminder.frequency === "once") {
+    const { removeReminderFully } = await import("./reminderRemoval");
+    await removeReminderFully(reminderId);
+    return;
+  }
+
+  // Recurring: schedule the occurrence after the one just completed
+  // (scheduleReminder also schedules its pre-alert).
+  try {
+    const { triggerTimestamp } = await scheduleReminder(toReminderNotification(reminder), {
+      occurrenceAfter:
+        Number.isFinite(mainScheduledFor) && mainScheduledFor > 0 ? mainScheduledFor : Date.now(),
+    });
+    const current = store.getReminderById(reminderId);
+    if (current && current.scheduledFor !== triggerTimestamp) {
+      await store.updateReminder({ ...current, scheduledFor: triggerTimestamp });
+    }
+  } catch (e) {
+    console.log("[VR] Failed to schedule next occurrence after pre-alert done:", e);
   }
 }
 
@@ -1264,6 +1838,14 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
 
   const isRepostNotification = isRepostNotificationCheck(notificationId, repostFlag);
 
+  // Delivered way past its scheduled time (device off / OEM force-stop wiped the
+  // alarm and it only re-registered on app open): record as missed, don't ring.
+  const staleDelivery =
+    type === EventType.DELIVERED &&
+    shouldHandleAsAlarm &&
+    !isRepostNotification &&
+    isStaleDelivery(Number(scheduledFor), Date.now());
+
   vrLog('notifee', 'handleEvent_flags', {
     traceId: trace,
     shouldHandleAsAlarm,
@@ -1275,7 +1857,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   await enforcePendingAlarmTimeout();
 
   let queuedThisDelivery = false;
-  if (type === EventType.DELIVERED && shouldHandleAsAlarm && !isRepostNotification) {
+  if (type === EventType.DELIVERED && shouldHandleAsAlarm && !isRepostNotification && !staleDelivery) {
     const existing = await getPendingAlarm();
     const existingId = existing?.notification?.id || "";
     const hasActive = Boolean(existingId) && !existing?.resolvedAt;
@@ -1414,6 +1996,13 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
   if (type === EventType.ACTION_PRESS) {
     const actionId = detail.pressAction?.id;
     console.log(`[VR] Action pressed: ${actionId}`);
+
+    // Pre-alert "Done": handled entirely outside the alarm lifecycle.
+    if (actionId === "prealert_done_action") {
+      await handlePreAlertDonePress(detail.notification as PendingAlarmNotification);
+      return;
+    }
+
     const isKnownAlarmAction = isKnownAlarmActionCheck(actionId);
 
     // Ignore non-action presses here (e.g. "default" routed via ACTION_PRESS on some devices).
@@ -1504,6 +2093,15 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
 
   if (type === EventType.DELIVERED) {
     console.log(`[VR] DELIVERED processing trace=${trace}`);
+
+    // Pre-alert heads-up: play its audio once and stop. Never falls through to
+    // the repost/reschedule logic below (that would reschedule the main
+    // occurrence off a pre-alert delivery).
+    if (isPreAlert(kind)) {
+      await handlePreAlertDelivered(detail.notification as PendingAlarmNotification);
+      return;
+    }
+
     const data = notificationData;
 
     const isTriggerNotification = isTriggerNotificationId(notificationId);
@@ -1515,9 +2113,51 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       return;
     }
 
+    if (staleDelivery) {
+      vrLog("pending_alarm", "stale_delivery_missed", {
+        traceId: trace,
+        notificationId,
+        reminderId,
+        scheduledFor,
+        lateMs: Date.now() - Number(scheduledFor),
+      });
+      try {
+        markInternalDismissIgnore(notificationId);
+        await notifee.cancelDisplayedNotification(notificationId);
+      } catch {
+        // ignore
+      }
+      if (reminderId) {
+        try {
+          const store = useReminderStore.getState();
+          const reminder = store.getReminderById(reminderId);
+          if (reminder) {
+            const scheduledForNum = Number(scheduledFor);
+            await store.recordCompletion(reminderId, reminder.title, "missed", {
+              scheduledFor: Number.isFinite(scheduledForNum) ? scheduledForNum : undefined,
+              action: "auto_missed",
+            });
+          }
+        } catch (e) {
+          console.log("[VR] Failed to record stale-delivery miss:", e);
+        }
+      }
+      // Fall through: recurring reminders below still reschedule their next occurrence.
+    }
+
+    // The main alarm supersedes its heads-up: clear a still-displayed pre-alert
+    // for this occurrence so the tray doesn't show both.
+    if (shouldHandleAsAlarm && !isRepostNotification && reminderId && scheduledFor) {
+      try {
+        await notifee.cancelDisplayedNotification(`prealert_${reminderId}_${scheduledFor}`);
+      } catch {
+        // ignore
+      }
+    }
+
     // Cancel+repost lifecycle: cancel any previously displayed alarm to ensure
     // full-screen intent can trigger (many devices block full-screen if channel has uncleared notifications)
-    if (shouldHandleAsAlarm && isTriggerNotification && !isRepostNotification && !queuedThisDelivery) {
+    if (shouldHandleAsAlarm && isTriggerNotification && !isRepostNotification && !queuedThisDelivery && !staleDelivery) {
       const previouslyDisplayed = await getDisplayedAlarm();
       if (previouslyDisplayed && previouslyDisplayed !== notificationId) {
         console.log("[VR] Cancelling previous displayed alarm:", previouslyDisplayed);
@@ -1562,8 +2202,8 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
             autoCancel: false,
             lightUpScreen: true,
             actions: [
-              { title: "Dismiss", pressAction: { id: "dismiss_action" } },
-              { title: "Snooze 5m", pressAction: { id: "snooze_action" } },
+              { title: DONE_ACTION_TITLE, pressAction: { id: "dismiss_action" } },
+              { title: LATER_ACTION_TITLE, pressAction: { id: "snooze_action" } },
             ],
             pressAction: {
               id: "default",
@@ -1589,7 +2229,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
     }
 
     // Try to download audio if missing
-    if (shouldHandleAsAlarm && !isRepostNotification && data?.reminderId) {
+    if (shouldHandleAsAlarm && !isRepostNotification && !staleDelivery && data?.reminderId) {
       const localAudioPath = getLocalAudioPath(data.reminderId as string);
       try {
         const fileInfo = await getInfoAsync(localAudioPath);
@@ -1610,7 +2250,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       }
     }
 
-    if (!isRepostNotification && !queuedThisDelivery) {
+    if (!isRepostNotification && !queuedThisDelivery && !staleDelivery) {
       await startAlarmAudioIfPossible();
     }
 
@@ -1754,10 +2394,25 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
             ...detail.notification!.data,
             scheduledFor: String(nextTrigger),
             kind: "reminder_occurrence",
+            // Each fresh occurrence starts its escalation ladder from scratch.
+            followUpCount: "0",
+            variantIndex: "-1",
           },
         },
         trigger
       );
+
+      // Move the pre-alert along with the main trigger (clears stale ones when off).
+      await schedulePreAlertForOccurrence({
+        reminderId: data.reminderId as string,
+        title: (data.title as string) || detail.notification?.title || "Reminder",
+        mainTriggerTimestamp: nextTrigger,
+        preReminderMinutes: parsePreReminderMinutes(data.preReminderMinutes),
+        preAudioUrl: typeof data.preAudioUrl === "string" && data.preAudioUrl ? (data.preAudioUrl as string) : undefined,
+        volume: Number(data.volume ?? "1"),
+        frequency: frequency || undefined,
+        scheduleType: scheduleType || undefined,
+      });
 
       console.log(`[VR] Rescheduled for ${new Date(nextTrigger).toLocaleString()}`);
     }
@@ -1857,42 +2512,42 @@ export async function syncRemindersOnStartup(
 
       // Check if any notification exists for this reminder ID prefix
       // Use prefix match: reminder_{id}_
-      const hasScheduled = scheduledIds.some((id) => id.startsWith(`reminder_${reminder.id}_`));
-      if (hasScheduled) {
+      const mainPrefix = `reminder_${reminder.id}_`;
+      const scheduledMainId = scheduledIds.find((id) => id.startsWith(mainPrefix));
+      if (scheduledMainId) {
+        // Main trigger intact — make sure its pre-alert matches the current setting.
+        try {
+          const mainTs = Number(scheduledMainId.slice(mainPrefix.length));
+          const preMinutes = parsePreReminderMinutes(reminder.preReminderMinutes);
+          if (Number.isFinite(mainTs) && mainTs > 0 && preMinutes > 0) {
+            const preId = `prealert_${reminder.id}_${mainTs}`;
+            if (scheduledIds.includes(preId)) {
+              // Keep the paired pre-alert; drop strays from older occurrences.
+              await cancelExistingPreAlertTriggers(reminder.id, preId);
+            } else {
+              await schedulePreAlertForOccurrence({
+                reminderId: reminder.id,
+                title: reminder.title,
+                mainTriggerTimestamp: mainTs,
+                preReminderMinutes: preMinutes,
+                preAudioUrl: reminder.preAudioUrl,
+                volume: reminder.volume,
+                frequency: reminder.frequency,
+                scheduleType: reminder.scheduleType,
+              });
+            }
+          } else {
+            await cancelExistingPreAlertTriggers(reminder.id);
+          }
+        } catch (preErr) {
+          console.log(`[VR] Pre-alert sync failed for ${reminder.id}:`, preErr);
+        }
         skipped++;
         continue;
       }
 
       try {
-        // Map store Reminder to ReminderNotification interface
-        const notificationInput: ReminderNotification = {
-          id: reminder.id,
-          title: reminder.title,
-          description: reminder.description,
-          time: reminder.time,
-          date: reminder.date,
-          frequency: reminder.frequency,
-          days: reminder.days,
-          audioUrl: reminder.audioUrl ?? "",
-          snoozeEnabled: reminder.snoozeEnabled,
-          snoozeDuration: reminder.snoozeDuration,
-          volume: reminder.volume,
-          volumeStyle: reminder.volumeStyle,
-          intervalMs: reminder.intervalMs,
-          anchorAt: reminder.anchorAt,
-          intervalDays: reminder.intervalDays,
-          scheduledFor: reminder.scheduledFor,
-          // New unified schedule fields
-          scheduleType: reminder.scheduleType,
-          onceAt: reminder.onceAt,
-          rrule: reminder.rrule,
-          dtstart: reminder.dtstart,
-          tzid: reminder.tzid,
-          until: reminder.until,
-          parseWarnings: reminder.parseWarnings,
-        };
-
-        const { triggerTimestamp } = await scheduleReminder(notificationInput);
+        const { triggerTimestamp } = await scheduleReminder(toReminderNotification(reminder));
         // Persist the scheduled occurrence timestamp so one-time reminders can't loop on restart.
         try {
           const store = useReminderStore.getState();

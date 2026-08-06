@@ -35,6 +35,20 @@ class AlarmAudioModule(private val reactContext: ReactApplicationContext) : Reac
 
     @ReactMethod
     fun play(filePath: String, volume: Double, promise: Promise) {
+        // Legacy entry point: always loops (kept for compatibility with older JS).
+        startPlayback(filePath, volume, true, promise)
+    }
+
+    /**
+     * OLD-53: loop-controllable playback. loop=false plays the file exactly once;
+     * JS detects completion by polling isPlaying().
+     */
+    @ReactMethod
+    fun playWithOptions(filePath: String, volume: Double, loop: Boolean, promise: Promise) {
+        startPlayback(filePath, volume, loop, promise)
+    }
+
+    private fun startPlayback(filePath: String, volume: Double, loop: Boolean, promise: Promise) {
         try {
             // Stop any existing playback first
             stopPlayer()
@@ -48,28 +62,28 @@ class AlarmAudioModule(private val reactContext: ReactApplicationContext) : Reac
             // Create and configure MediaPlayer
             mediaPlayer = MediaPlayer().apply {
                 setAudioAttributes(audioAttributes)
-                
+
                 // Handle both file:// URIs and regular paths
                 val uri = if (filePath.startsWith("file://")) {
                     Uri.parse(filePath)
                 } else {
                     Uri.parse("file://" + filePath)
                 }
-                
+
                 setDataSource(reactContext, uri)
                 setVolume(volume.toFloat(), volume.toFloat())
-                isLooping = true
-                
+                isLooping = loop
+
                 setOnPreparedListener { mp ->
                     mp.start()
                     promise.resolve(true)
                 }
-                
+
                 setOnErrorListener { _, what, extra ->
                     promise.reject("PLAY_ERROR", "MediaPlayer error: what=" + what + ", extra=" + extra)
                     true
                 }
-                
+
                 prepareAsync()
             }
         } catch (e: Exception) {

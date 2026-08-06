@@ -44,6 +44,14 @@ function buildOverlayProps(pending: PendingAlarm): AlarmOverlayProps | null {
     anchorAt: String(data?.anchorAt ?? ""),
     kind: String(data?.kind ?? ""),
     autoSnoozeCount: String(data?.autoSnoozeCount ?? "0"),
+    // Assistant-style replays (OLD-53)
+    urgency: String(data?.urgency ?? ""),
+    persistent: String(data?.persistent ?? "false"),
+    variants: String(data?.variants ?? ""),
+    variantAudioUrls: String(data?.variantAudioUrls ?? ""),
+    variantCount: String(data?.variantCount ?? "0"),
+    followUpCount: String(data?.followUpCount ?? "0"),
+    variantIndex: String(data?.variantIndex ?? "-1"),
   };
 
   return {
