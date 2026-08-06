@@ -49,3 +49,4 @@ tmp/
 resolve_audio_diagnostic.py
 Screenshot_*.jpg
 nul
+credentials.json
