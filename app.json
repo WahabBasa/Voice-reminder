@@ -24,7 +24,12 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.wahabbasa.VoiceReminder"
+      "package": "com.wahabbasa.VoiceReminder",
+      "permissions": [
+        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -42,6 +47,13 @@
       "./plugins/withFullScreenAlarm",
       "./plugins/withArmOnlyBuild",
       "./plugins/withAlarmAudioModule"
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "7d6a3c27-6a3e-4d99-9d5d-85f39d90aa01"
+      }
+    },
+    "owner": "wahabbasa"
   }
 }

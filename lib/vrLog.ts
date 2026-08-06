@@ -11,7 +11,7 @@
 
 // Build identifier - update this on each release
 // Format: YYYYMMDD-HHMM-commit
-const BUILD_ID = '20250208-1730-unified-schedule-v4';
+const BUILD_ID = '20260806-1040-stale-guard-battery-exemption';
 const APP_VERSION = '1.0.0';
 
 /**

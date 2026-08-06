@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
+  AppState,
   Modal,
   Platform,
   StyleSheet,
@@ -12,7 +13,9 @@ import AppIcon from "./AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
 import {
   getNotificationSettingsSafe,
+  isBatteryOptimizationEnabledSafe,
   openAlarmPermissionSettingsSafe,
+  openBatteryOptimizationSettingsSafe,
   requestNotificationPermission,
 } from "../lib/notifications";
 
@@ -21,6 +24,7 @@ const DEFERRED_KEY = "@permission_prompt_deferred";
 type PermissionState = {
   notifications: boolean;
   alarms: boolean;
+  battery: boolean;
 };
 
 // Module-level callback so any code can trigger the prompt
@@ -68,6 +72,7 @@ export default function PermissionPrompt() {
   const [permissions, setPermissions] = useState<PermissionState>({
     notifications: true,
     alarms: true,
+    battery: true,
   });
 
   const refreshPermissions = useCallback(async () => {
@@ -88,8 +93,15 @@ export default function PermissionPrompt() {
       }
     }
 
-    setPermissions({ notifications: notifGranted, alarms: alarmGranted });
-    return { notifGranted, alarmGranted };
+    // Battery optimization on = OS can force-stop the app and wipe its alarms.
+    const batteryGranted = !(await isBatteryOptimizationEnabledSafe());
+
+    setPermissions({
+      notifications: notifGranted,
+      alarms: alarmGranted,
+      battery: batteryGranted,
+    });
+    return { notifGranted, alarmGranted, batteryGranted };
   }, []);
 
   // Register the global show function
@@ -97,7 +109,7 @@ export default function PermissionPrompt() {
     _showPrompt = async () => {
       const result = await refreshPermissions();
       // Only show if something is actually missing
-      if (result && (!result.notifGranted || !result.alarmGranted)) {
+      if (result && (!result.notifGranted || !result.alarmGranted || !result.batteryGranted)) {
         setVisible(true);
       }
     };
@@ -105,6 +117,22 @@ export default function PermissionPrompt() {
       _showPrompt = null;
     };
   }, [refreshPermissions]);
+
+  // Re-check when returning from system settings/dialogs (app regains focus)
+  useEffect(() => {
+    if (!visible) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void (async () => {
+          const result = await refreshPermissions();
+          if (result && result.notifGranted && result.alarmGranted && result.batteryGranted) {
+            setVisible(false);
+          }
+        })();
+      }
+    });
+    return () => sub.remove();
+  }, [visible, refreshPermissions]);
 
   // Auto-show on first launch (respects deferred flag)
   useEffect(() => {
@@ -114,7 +142,7 @@ export default function PermissionPrompt() {
         if (deferred) return;
 
         const result = await refreshPermissions();
-        if (result && (!result.notifGranted || !result.alarmGranted)) {
+        if (result && (!result.notifGranted || !result.alarmGranted || !result.batteryGranted)) {
           setVisible(true);
         }
       } catch (e) {
@@ -129,7 +157,7 @@ export default function PermissionPrompt() {
   const handleEnableNotifications = async () => {
     const granted = await requestNotificationPermission();
     setPermissions((p) => {
-      if (granted && p.alarms) setVisible(false);
+      if (granted && p.alarms && p.battery) setVisible(false);
       return { ...p, notifications: granted };
     });
   };
@@ -142,8 +170,20 @@ export default function PermissionPrompt() {
       const alarmVal = settings?.android?.alarm;
       const granted = alarmVal === 1 || alarmVal === true;
       setPermissions((p) => {
-        if (p.notifications && granted) setVisible(false);
+        if (p.notifications && granted && p.battery) setVisible(false);
         return { ...p, alarms: granted };
+      });
+    }, 1000);
+  };
+
+  const handleEnableBattery = async () => {
+    await openBatteryOptimizationSettingsSafe();
+    // Re-check after returning from the system dialog/settings
+    setTimeout(async () => {
+      const granted = !(await isBatteryOptimizationEnabledSafe());
+      setPermissions((p) => {
+        if (p.notifications && p.alarms && granted) setVisible(false);
+        return { ...p, battery: granted };
       });
     }, 1000);
   };
@@ -154,7 +194,7 @@ export default function PermissionPrompt() {
     setVisible(false);
   };
 
-  const allGranted = permissions.notifications && permissions.alarms;
+  const allGranted = permissions.notifications && permissions.alarms && permissions.battery;
 
   if (!visible) return null;
 
@@ -198,7 +238,7 @@ export default function PermissionPrompt() {
                   color={permissions.notifications ? "#fff" : colors.textSecondary}
                 />
               </View>
-              <View>
+              <View style={styles.permTextWrap}>
                 <Text style={styles.permTitle}>Notifications</Text>
                 <Text style={styles.permDesc}>Show and play reminders</Text>
               </View>
@@ -237,7 +277,7 @@ export default function PermissionPrompt() {
                       color={permissions.alarms ? "#fff" : colors.textSecondary}
                     />
                   </View>
-                  <View>
+                  <View style={styles.permTextWrap}>
                     <Text style={styles.permTitle}>Alarms & Reminders</Text>
                     <Text style={styles.permDesc}>Ring at exact times</Text>
                   </View>
@@ -251,6 +291,45 @@ export default function PermissionPrompt() {
                 )}
               </TouchableOpacity>
             )}
+
+          {/* Battery optimization exemption (Android only) — without it the OS
+              can force-stop the app and silently cancel every scheduled alarm */}
+          {Platform.OS === "android" && (
+            <TouchableOpacity
+              style={[
+                styles.permRow,
+                permissions.battery && styles.permRowGranted,
+              ]}
+              onPress={permissions.battery ? undefined : handleEnableBattery}
+              activeOpacity={permissions.battery ? 1 : 0.7}
+            >
+              <View style={styles.permLeft}>
+                <View
+                  style={[
+                    styles.permIcon,
+                    permissions.battery && styles.permIconGranted,
+                  ]}
+                >
+                  <AppIcon
+                    name={permissions.battery ? "check" : "zap"}
+                    size={18}
+                    color={permissions.battery ? "#fff" : colors.textSecondary}
+                  />
+                </View>
+                <View style={styles.permTextWrap}>
+                  <Text style={styles.permTitle}>Run in Background</Text>
+                  <Text style={styles.permDesc}>Keep alarms alive when unused</Text>
+                </View>
+              </View>
+              {permissions.battery ? (
+                <Text style={styles.grantedText}>Enabled</Text>
+              ) : (
+                <View style={styles.enableBtn}>
+                  <Text style={styles.enableBtnText}>Enable</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
 
           {allGranted ? (
             <TouchableOpacity
@@ -341,6 +420,9 @@ const styles = StyleSheet.create({
   },
   permIconGranted: {
     backgroundColor: colors.success,
+  },
+  permTextWrap: {
+    flex: 1,
   },
   permTitle: {
     fontSize: scaleFontSize(15),

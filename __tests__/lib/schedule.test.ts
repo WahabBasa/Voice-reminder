@@ -288,16 +288,19 @@ describe("migrateLegacySchedule", () => {
   });
 
   it("converts bare once to today at time", () => {
-    const frozenNow = utc(2026, 4, 6, 12, 0);
-    jest.spyOn(Date, "now").mockReturnValue(frozenNow);
-
-    const result = migrateLegacySchedule({
-      frequency: "once",
-      time: "11:00",
-    });
-    expect(result.type).toBe("once");
-    // today at 11:00 UTC
-    expect((result as OnceSchedule).onceAt).toBe(utc(2026, 4, 6, 11, 0));
+    // Fake timers (not a Date.now spy) so `new Date()` inside the migration is frozen too
+    jest.useFakeTimers({ now: utc(2026, 4, 6, 12, 0) });
+    try {
+      const result = migrateLegacySchedule({
+        frequency: "once",
+        time: "11:00",
+      });
+      expect(result.type).toBe("once");
+      // today at 11:00 UTC
+      expect((result as OnceSchedule).onceAt).toBe(utc(2026, 4, 6, 11, 0));
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("converts daily to rrule", () => {
