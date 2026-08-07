@@ -7,23 +7,62 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "SENTRY_ALLOW_FAILURE": "true",
+        "SENTRY_URL": "https://de.sentry.io/",
+        "SENTRY_ORG": "oldowan"
+      },
       "android": {
         "buildType": "apk",
-        "credentialsSource": "local"
+        "credentialsSource": "local",
+        "env": {
+          "SENTRY_PROJECT": "voicereminder-android"
+        }
+      },
+      "ios": {
+        "env": {
+          "SENTRY_PROJECT": "voicereminder-ios"
+        }
       }
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "SENTRY_ALLOW_FAILURE": "true",
+        "SENTRY_URL": "https://de.sentry.io/",
+        "SENTRY_ORG": "oldowan"
+      },
       "android": {
         "buildType": "apk",
-        "credentialsSource": "local"
+        "credentialsSource": "local",
+        "env": {
+          "SENTRY_PROJECT": "voicereminder-android"
+        }
+      },
+      "ios": {
+        "env": {
+          "SENTRY_PROJECT": "voicereminder-ios"
+        }
       }
     },
     "production": {
       "autoIncrement": true,
+      "env": {
+        "SENTRY_ALLOW_FAILURE": "true",
+        "SENTRY_URL": "https://de.sentry.io/",
+        "SENTRY_ORG": "oldowan"
+      },
       "android": {
         "buildType": "app-bundle",
-        "credentialsSource": "local"
+        "credentialsSource": "local",
+        "env": {
+          "SENTRY_PROJECT": "voicereminder-android"
+        }
+      },
+      "ios": {
+        "env": {
+          "SENTRY_PROJECT": "voicereminder-ios"
+        }
       }
     }
   },

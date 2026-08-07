@@ -1,5 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import * as Sentry from "@sentry/react-native";
 import { colors, scaleFontSize } from "../lib/theme";
 
 interface Props {
@@ -21,6 +22,8 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[VR] ErrorBoundary caught:", error, info.componentStack);
+    // No-op when Sentry isn't initialized (empty DSN).
+    Sentry.captureException(error, { extra: { componentStack: info.componentStack } });
   }
 
   handleRetry = () => {

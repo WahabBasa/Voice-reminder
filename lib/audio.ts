@@ -66,6 +66,9 @@ export async function stopRecording(): Promise<string | null> {
   await recording.stopAndUnloadAsync();
   await Audio.setAudioModeAsync({
     allowsRecordingIOS: false,
+    // Omitting this lets it default to false, flipping the whole app's audio
+    // session back to mute-switch-obeying mode — alarms then play silently.
+    playsInSilentModeIOS: true,
   });
 
   const uri = recording.getURI();

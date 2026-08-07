@@ -175,6 +175,23 @@ export class AudioService {
 
             // Use react-native-sound if available (better for alarms)
             if (Sound) {
+                // iOS: any expo-av setAudioModeAsync since app start may have put the
+                // session in a mute-switch-obeying category. Re-assert Playback (and
+                // the expo-av mode) so the alarm voice is audible on a silenced phone.
+                if (Platform.OS === "ios") {
+                    try {
+                        await Audio.setAudioModeAsync({
+                            allowsRecordingIOS: false,
+                            playsInSilentModeIOS: true,
+                            staysActiveInBackground: true,
+                        });
+                    } catch (e) {
+                        console.log("[AudioService] Failed to set iOS audio mode:", e);
+                    }
+                    if (typeof Sound.setCategory === "function") {
+                        Sound.setCategory("Playback");
+                    }
+                }
                 console.log(`[AudioService] Loading sound from: ${uri}`);
                 return new Promise((resolve) => {
                     const sound = new Sound(uri, "", (error: any) => {

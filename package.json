@@ -22,6 +22,7 @@
     "@react-native-community/netinfo": "^11.4.1",
     "@react-native-community/slider": "^5.0.1",
     "@react-native-picker/picker": "2.11.1",
+    "@sentry/react-native": "~7.2.0",
     "convex": "^1.30.0",
     "expo": "~54.0.33",
     "expo-av": "~16.0.8",
