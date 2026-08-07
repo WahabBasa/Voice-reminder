@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { InteractionManager, LogBox } from "react-native";
+import { AppState, InteractionManager, LogBox, Platform } from "react-native";
+import * as Sentry from "@sentry/react-native";
+import { initSentry } from "../lib/sentry";
 import { Stack, useRouter } from "expo-router";
 import { ConvexProvider, useMutation } from "convex/react";
 import { StatusBar } from "expo-status-bar";
@@ -10,7 +12,7 @@ import ToastProvider, { useToast } from "../components/ToastProvider";
 import { initializePurchases } from "../lib/purchases";
 import { useReminderStore } from "../lib/store";
 import { useSettingsStore } from "../lib/settingsStore";
-import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, enforcePendingAlarmTimeout } from "../lib/notifications";
+import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, enforcePendingAlarmTimeout, reconcileAlarmKitEvents } from "../lib/notifications";
 import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
@@ -30,6 +32,9 @@ LogBox.ignoreLogs([
   /PurchasesError/,
   /react-native-purchases/,
 ]);
+
+// Init before first render so startup crashes are captured too.
+initSentry();
 
 function StartupTasks() {
   const router = useRouter();
@@ -77,6 +82,25 @@ function StartupTasks() {
       task.cancel();
     };
   }, [loadReminders, loadHistory]);
+
+  // iOS 26 AlarmKit: Done/Later run inside App Intents with the app closed, so
+  // their effects only reach the store when we drain the native event log —
+  // on cold start and on every foreground. Never mounted on Android.
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+
+    const drain = () => {
+      void reconcileAlarmKitEvents().catch((e) => {
+        console.log("[VR] AlarmKit reconciliation failed:", e);
+      });
+    };
+
+    drain();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") drain();
+    });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     // Only run sync once data is loaded and we haven't synced this session
@@ -261,7 +285,7 @@ function AlarmOverlayFallback() {
   return <AlarmOverlay {...activeAlarm} />;
 }
 
-export default function RootLayout() {
+function RootLayout() {
   useEffect(() => {
     // Log build info first to detect stale bundles
     logBuildInfo();
@@ -341,3 +365,7 @@ export default function RootLayout() {
     </ErrorBoundary>
   );
 }
+
+// Sentry.wrap adds touch-event breadcrumbs and catches render errors above
+// our own ErrorBoundary.
+export default Sentry.wrap(RootLayout);

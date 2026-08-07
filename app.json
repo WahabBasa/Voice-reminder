@@ -14,7 +14,12 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.wahabbasa.VoiceReminder",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "versionCode": 9,
@@ -46,7 +51,15 @@
       "./plugins/withAndroidSigning",
       "./plugins/withFullScreenAlarm",
       "./plugins/withArmOnlyBuild",
-      "./plugins/withAlarmAudioModule"
+      "./plugins/withAlarmAudioModule",
+      "./plugins/withAlarmKit",
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://de.sentry.io/",
+          "organization": "oldowan"
+        }
+      ]
     ],
     "extra": {
       "router": {},

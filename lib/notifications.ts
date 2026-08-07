@@ -68,7 +68,34 @@ import {
   variantLineForIndex,
   MAX_REPLAY_VARIANTS,
 } from "./notificationDecisions";
+import {
+  alarmAppKey,
+  parseAlarmAppKey,
+  reconcileAlarmEvents,
+  cancelAlarm as cancelNativeAlarm,
+  getAndClearEventLog as drainNativeAlarmEvents,
+  getScheduledAlarms as getScheduledNativeAlarms,
+  requestAuthorization as requestAlarmKitAuthorization,
+  scheduleAlarm as scheduleNativeAlarm,
+  // Aliased on import: the contract name trips react-hooks/rules-of-hooks
+  // wherever it is called from a plain async function.
+  useAlarmKit as alarmKitEnabled,
+} from "./alarmKit";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
+
+// AK-3 owns lib/alarmSounds.ts and may land after this file. Guarded exactly
+// like AudioService.ts guards react-native-sound: without it, native alarms
+// fall back to the system default alarm sound.
+let alarmSounds: {
+  ensureAlarmSound?: (reminderId: string, wavUrl?: string | null) => Promise<string | null>;
+  removeAlarmSound?: (reminderId: string) => Promise<void>;
+} | null = null;
+
+try {
+  alarmSounds = require("./alarmSounds");
+} catch {
+  alarmSounds = null;
+}
 
 export class ExactAlarmPermissionError extends Error {
   public readonly notificationSettings: any;
@@ -373,6 +400,15 @@ async function scheduleSnoozeOccurrenceFromNotification(
       id: `snooze_${reminderId}_${Date.now()}`,
       title,
       body,
+      ios: {
+        sound: "default",
+        foregroundPresentationOptions: {
+          banner: true,
+          list: true,
+          badge: true,
+          sound: true,
+        },
+      },
       android: {
         channelId,
         importance: AndroidImportance.HIGH,
@@ -967,6 +1003,9 @@ export interface ReminderNotification {
   frequency: string;
   days?: string[];
   audioUrl?: string;
+  // Alarm-compatible copy of the spoken line (AK-3). Only iOS AlarmKit reads
+  // it; absent means the native alarm rings with the system default sound.
+  wavUrl?: string;
   preReminderMinutes?: number; // heads-up lead time in minutes (0/absent = none)
   preAudioUrl?: string;
   // Assistant-style replays (OLD-53)
@@ -1102,7 +1141,17 @@ export async function deleteLocalVariantAudios(reminderId: string): Promise<void
 
 export async function requestNotificationPermission(): Promise<boolean> {
   const settings = await notifee.requestPermission();
-  return settings.authorizationStatus >= 1;
+  const granted = settings.authorizationStatus >= 1;
+
+  // iOS 26 AlarmKit rides the notification step — this function is what
+  // PermissionPrompt's "Notifications" row calls, and it is the only prompt
+  // surface we have. No-op on Android and on iOS without the native bridge.
+  if (granted && Platform.OS === "ios") {
+    const status = await requestAlarmKitAuthorization();
+    vrLog("alarmkit", "authorization", { status });
+  }
+
+  return granted;
 }
 
 export async function createReminderChannel(
@@ -1199,6 +1248,15 @@ async function schedulePreAlertForOccurrence(
       id: preId,
       title: input.title,
       body: buildPreAlertBody(input.title, preReminderMinutes),
+      ios: {
+        sound: "default",
+        foregroundPresentationOptions: {
+          banner: true,
+          list: true,
+          badge: true,
+          sound: true,
+        },
+      },
       android: {
         channelId: `reminder_${reminderId}`,
         importance: AndroidImportance.HIGH,
@@ -1230,6 +1288,311 @@ async function schedulePreAlertForOccurrence(
   return preId;
 }
 
+// ─── AlarmKit (iOS 26+) ─────────────────────────────────────────────────────
+//
+// On iOS 26 with authorization granted, a reminder occurrence is registered
+// with the system alarm framework instead of notifee, so it rings through the
+// mute switch, Focus and the lockscreen. Every branch below is behind
+// alarmKitEnabled(), which is false on Android, on iOS < 26, and in Jest.
+
+// Per-reminder guard state the native side cannot hold for us: the snooze
+// window (PRD guard 3) and the escalation-ladder counter, which travels in
+// notification data on the notifee path and has nowhere to live here.
+const ALARMKIT_STATE_KEY = "@alarmkit_state";
+
+type AlarmKitReminderState = { snoozeUntil?: number; followUpCount?: number };
+
+async function getAlarmKitState(): Promise<Record<string, AlarmKitReminderState>> {
+  try {
+    const raw = await AsyncStorage.getItem(ALARMKIT_STATE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function patchAlarmKitState(
+  reminderId: string,
+  patch: AlarmKitReminderState
+): Promise<void> {
+  try {
+    const state = await getAlarmKitState();
+    state[reminderId] = { ...(state[reminderId] || {}), ...patch };
+    await AsyncStorage.setItem(ALARMKIT_STATE_KEY, JSON.stringify(state));
+  } catch (e) {
+    vrLog("alarmkit", "state_write_failed", { reminderId, error: String(e) });
+  }
+}
+
+async function clearAlarmKitState(reminderId: string): Promise<void> {
+  try {
+    const state = await getAlarmKitState();
+    if (!(reminderId in state)) return;
+    delete state[reminderId];
+    await AsyncStorage.setItem(ALARMKIT_STATE_KEY, JSON.stringify(state));
+  } catch (e) {
+    vrLog("alarmkit", "state_clear_failed", { reminderId, error: String(e) });
+  }
+}
+
+/** AK-3's hydration, absent-safe. Returns the bare Library/Sounds filename. */
+async function ensureAlarmSoundSafe(
+  reminderId: string,
+  wavUrl?: string | null
+): Promise<string | null> {
+  if (!alarmSounds?.ensureAlarmSound) return null;
+  try {
+    return (await alarmSounds.ensureAlarmSound(reminderId, wavUrl ?? null)) ?? null;
+  } catch (e) {
+    vrLog("alarmkit", "sound_hydration_failed", { reminderId, error: String(e) });
+    return null;
+  }
+}
+
+async function removeAlarmSoundSafe(reminderId: string): Promise<void> {
+  if (!alarmSounds?.removeAlarmSound) return;
+  try {
+    await alarmSounds.removeAlarmSound(reminderId);
+  } catch (e) {
+    vrLog("alarmkit", "sound_removal_failed", { reminderId, error: String(e) });
+  }
+}
+
+/**
+ * Register one occurrence as a native alarm.
+ *
+ * PRD guard 5: there is no cancelAll() — every other alarm for this reminder
+ * is cancelled first, because a changed occurrence time changes the app key
+ * and the native UUID registry would otherwise keep the stale alarm alive.
+ */
+async function scheduleAlarmKitOccurrence(
+  reminder: ReminderNotification,
+  triggerTimestamp: number,
+  appKey: string,
+  variantIndex = -1
+): Promise<void> {
+  const scheduled = await getScheduledNativeAlarms();
+  for (const alarm of scheduled) {
+    if (alarm.id.startsWith(`reminder_${reminder.id}_`) && alarm.id !== appKey) {
+      await cancelNativeAlarm(alarm.id);
+    }
+  }
+
+  const soundName = await ensureAlarmSoundSafe(reminder.id, reminder.wavUrl);
+  const uuid = await scheduleNativeAlarm({
+    id: appKey,
+    fireDate: triggerTimestamp,
+    title: reminder.title,
+    soundName,
+    snoozeMinutes: reminder.snoozeDuration ?? 5,
+    metadata: {
+      reminderId: reminder.id,
+      scheduledFor: String(triggerTimestamp),
+      tier: normalizeUrgencyTier(reminder.urgency),
+      variantIndex: String(variantIndex),
+    },
+  });
+
+  vrLog("alarmkit", "scheduled", {
+    appKey,
+    reminderId: reminder.id,
+    fireDate: triggerTimestamp,
+    soundName: soundName ?? "system_default",
+    uuid: uuid ?? "none",
+  });
+}
+
+/**
+ * Re-register the reminder's live alarms once its wav exists. The sound is
+ * baked into the alarm at schedule time (a filename, not notification data),
+ * so hydration has to rewrite the alarm rather than patch a payload.
+ */
+async function refreshAlarmKitSound(reminderId: string): Promise<void> {
+  const reminder = useReminderStore.getState().getReminderById(reminderId);
+  const wavUrl = (reminder as (Reminder & { wavUrl?: string }) | undefined)?.wavUrl;
+  if (!reminder || !wavUrl) return;
+
+  const soundName = await ensureAlarmSoundSafe(reminderId, wavUrl);
+  if (!soundName) return;
+
+  const scheduled = await getScheduledNativeAlarms();
+  for (const alarm of scheduled) {
+    if (!alarm.id.startsWith(`reminder_${reminderId}_`)) continue;
+    await scheduleNativeAlarm({
+      id: alarm.id,
+      fireDate: alarm.fireDate,
+      title: reminder.title,
+      soundName,
+      snoozeMinutes: reminder.snoozeDuration ?? 5,
+      metadata: {
+        reminderId,
+        scheduledFor: String(alarm.fireDate),
+        tier: normalizeUrgencyTier(reminder.urgency),
+        variantIndex: "-1",
+      },
+    });
+    vrLog("alarmkit", "sound_refreshed", { appKey: alarm.id, reminderId, soundName });
+  }
+}
+
+/** Cancel every native alarm belonging to a reminder (occurrences + follow-ups). */
+async function cancelAlarmKitForReminder(reminderId: string): Promise<number> {
+  const scheduled = await getScheduledNativeAlarms();
+  let cancelled = 0;
+  for (const alarm of scheduled) {
+    if (
+      !alarm.id.startsWith(`reminder_${reminderId}_`) &&
+      !alarm.id.startsWith(`snooze_${reminderId}_`)
+    ) {
+      continue;
+    }
+    await cancelNativeAlarm(alarm.id);
+    cancelled++;
+    vrLog("alarmkit", "cancelled", { appKey: alarm.id, reminderId });
+  }
+  return cancelled;
+}
+
+/** Roll a recurring reminder forward after its occurrence resolved natively. */
+async function rescheduleAlarmKitNextOccurrence(
+  reminder: Reminder,
+  afterScheduledFor: number
+): Promise<void> {
+  try {
+    await scheduleReminder(toReminderNotification(reminder), {
+      occurrenceAfter: afterScheduledFor,
+    });
+  } catch (e: any) {
+    if (e?.name === "NoFutureOccurrenceError") return;
+    vrLog("alarmkit", "reschedule_failed", {
+      reminderId: reminder.id,
+      error: String(e?.message || e),
+    });
+  }
+}
+
+/**
+ * Drain the native event log and fold it into app state.
+ *
+ * Called on cold start and on every foreground: Done/Later run in App Intents
+ * outside our JS runtime, so this is the only place their effects land in the
+ * store. Safe to call anywhere — it exits immediately unless the gate is on.
+ */
+export async function reconcileAlarmKitEvents(): Promise<{
+  stopped: number;
+  snoozed: number;
+  missed: number;
+  pending: number;
+}> {
+  const summary = { stopped: 0, snoozed: 0, missed: 0, pending: 0 };
+  if (!(await alarmKitEnabled())) return summary;
+
+  const events = await drainNativeAlarmEvents();
+  if (events.length === 0) return summary;
+
+  const now = Date.now();
+  const outcomes = reconcileAlarmEvents(events, now, ALARM_RING_TIMEOUT_MS);
+
+  for (const outcome of outcomes) {
+    const parsed = parseAlarmAppKey(outcome.id);
+    if (!parsed) continue;
+    const { reminderId, scheduledFor } = parsed;
+
+    if (outcome.outcome === "snoozed") {
+      // The native SnoozeIntent already registered the follow-up alarm — this
+      // side records the guard only and never recalculates (PRD guard 3).
+      summary.snoozed++;
+      await patchAlarmKitState(reminderId, { snoozeUntil: outcome.snoozeUntil ?? 0 });
+      vrLog("alarmkit", "reconciled_snoozed", {
+        appKey: outcome.id,
+        reminderId,
+        snoozeUntil: outcome.snoozeUntil ?? 0,
+      });
+      continue;
+    }
+
+    if (outcome.outcome === "pending") {
+      // Still inside the ring window — leave it for the next foreground.
+      summary.pending++;
+      continue;
+    }
+
+    const store = useReminderStore.getState();
+    const reminder = store.getReminderById(reminderId);
+    if (!reminder) {
+      vrLog("alarmkit", "reconcile_orphan", { appKey: outcome.id, reminderId });
+      continue;
+    }
+    const isOneTime = isOneTimeReminder(reminder.scheduleType || null, reminder.frequency);
+
+    if (outcome.outcome === "completed") {
+      summary.stopped++;
+      await store.recordCompletion(reminderId, reminder.title, "completed", {
+        scheduledFor,
+        action: "dismissed",
+      });
+      await patchAlarmKitState(reminderId, { snoozeUntil: 0, followUpCount: 0 });
+      vrLog("alarmkit", "reconciled_stopped", { appKey: outcome.id, reminderId, scheduledFor });
+
+      if (isOneTime) {
+        const { removeReminderFully } = await import("./reminderRemoval");
+        await removeReminderFully(reminderId);
+      } else if (outcome.allowReschedule) {
+        await rescheduleAlarmKitNextOccurrence(reminder, scheduledFor);
+      }
+      continue;
+    }
+
+    // "missed": the alarm rang out unanswered. Same escalation ladder the
+    // notifee path runs from handlePendingAlarmTimeout, driven by the shared
+    // decision helpers — v1 replays the occurrence line, not the variant
+    // cadence (PRD non-goal).
+    const state = await getAlarmKitState();
+    const followUpCount = parseFollowUpCount(state[reminderId]?.followUpCount);
+    const persistent = parsePersistentFlag(reminder.persistent);
+
+    if (shouldContinueFollowUps(persistent, followUpCount)) {
+      const nextFollowUp = followUpCount + 1;
+      const fireDate = now + followUpDelayMinutes(nextFollowUp) * 60_000;
+      const variantIndex = followUpVariantIndex(
+        nextFollowUp,
+        parseVariantCount(reminder.variants?.length ?? 0)
+      );
+      await scheduleAlarmKitOccurrence(
+        toReminderNotification(reminder),
+        fireDate,
+        alarmAppKey(reminderId, fireDate),
+        variantIndex
+      );
+      await patchAlarmKitState(reminderId, { followUpCount: nextFollowUp });
+      vrLog("alarmkit", "reconciled_follow_up", {
+        appKey: outcome.id,
+        reminderId,
+        followUpCount: nextFollowUp,
+        variantIndex,
+        persistent,
+      });
+      continue;
+    }
+
+    summary.missed++;
+    await store.recordCompletion(reminderId, reminder.title, "missed", {
+      scheduledFor,
+      action: "auto_missed",
+    });
+    await patchAlarmKitState(reminderId, { followUpCount: 0 });
+    vrLog("alarmkit", "reconciled_missed", { appKey: outcome.id, reminderId, scheduledFor });
+
+    if (!isOneTime && outcome.allowReschedule) {
+      await rescheduleAlarmKitNextOccurrence(reminder, scheduledFor);
+    }
+  }
+
+  return summary;
+}
+
 export async function scheduleReminder(
   reminder: ReminderNotification,
   _options?: { traceId?: string; occurrenceAfter?: number }
@@ -1240,6 +1603,10 @@ export async function scheduleReminder(
   }
 
   await assertAndroidExactAlarmAccess();
+
+  // iOS 26 only: this occurrence becomes a system alarm instead of a notifee
+  // trigger further down. False everywhere else, so the path below is untouched.
+  const alarmKitActive = await alarmKitEnabled();
 
   // Download audio to device (skip if no audioUrl - will use default sound)
   let localAudioPath: string | null = null;
@@ -1368,6 +1735,25 @@ export async function scheduleReminder(
   // Snoozes use the "snooze_*" prefix and are intentionally not canceled here.
   await cancelExistingReminderOccurrenceTriggers(reminder.id, notificationId);
 
+  // AlarmKit owns this occurrence: register the system alarm and skip the
+  // notifee trigger entirely. The pre-alert heads-up stays a plain
+  // notification (it is not an alarm surface) so it keeps today's behavior.
+  if (alarmKitActive) {
+    await scheduleAlarmKitOccurrence(reminder, triggerTimestamp, notificationId);
+    await patchAlarmKitState(reminder.id, { snoozeUntil: 0, followUpCount: 0 });
+    await schedulePreAlertForOccurrence({
+      reminderId: reminder.id,
+      title: reminder.title,
+      mainTriggerTimestamp: triggerTimestamp,
+      preReminderMinutes: parsePreReminderMinutes(reminder.preReminderMinutes),
+      preAudioUrl: reminder.preAudioUrl,
+      volume: reminder.volume,
+      frequency: reminder.frequency,
+      scheduleType: reminder.scheduleType,
+    });
+    return { triggerTimestamp, notificationId };
+  }
+
   // Define notification action buttons for lockscreen use
   const actions: AndroidAction[] = [
     {
@@ -1389,6 +1775,15 @@ export async function scheduleReminder(
       id: notificationId,
       title: reminder.title,
       body: reminder.description,
+      ios: {
+        sound: "default",
+        foregroundPresentationOptions: {
+          banner: true,
+          list: true,
+          badge: true,
+          sound: true,
+        },
+      },
       android: {
         channelId,
         importance: AndroidImportance.HIGH,
@@ -1513,6 +1908,12 @@ export async function cancelReminder(reminderId: string): Promise<void> {
     // ignore
   }
 
+  // AlarmKit mirror: those occurrences have no notifee trigger to cancel.
+  if (await alarmKitEnabled()) {
+    await cancelAlarmKitForReminder(reminderId);
+    await clearAlarmKitState(reminderId);
+  }
+
   // Delete the channel
   await notifee.deleteChannel(channelId);
 
@@ -1528,6 +1929,9 @@ export async function deleteReminderWithAudio(reminderId: string): Promise<void>
   await deleteLocalAudio(reminderId);
   await deleteLocalPreAudio(reminderId);
   await deleteLocalVariantAudios(reminderId);
+  if (Platform.OS === "ios") {
+    await removeAlarmSoundSafe(reminderId);
+  }
   console.log(`[VR] Deleted reminder ${reminderId} with audio`);
 }
 
@@ -1543,6 +1947,12 @@ export async function refreshNotificationWithAudio(
   replay?: { variants?: string[]; variantAudioUrls?: string[] }
 ): Promise<void> {
   try {
+    // AlarmKit occurrences carry their sound as a Library/Sounds filename, not
+    // as notification data, so hydration has to re-register them instead.
+    if (await alarmKitEnabled()) {
+      await refreshAlarmKitSound(reminderId);
+    }
+
     // Get all trigger notifications
     const allNotifications = await notifee.getTriggerNotifications();
 
@@ -1631,6 +2041,7 @@ function toReminderNotification(reminder: Reminder): ReminderNotification {
     frequency: reminder.frequency,
     days: reminder.days,
     audioUrl: reminder.audioUrl ?? "",
+    wavUrl: (reminder as Reminder & { wavUrl?: string }).wavUrl,
     preReminderMinutes: reminder.preReminderMinutes,
     preAudioUrl: reminder.preAudioUrl,
     urgency: reminder.urgency,
@@ -1936,7 +2347,8 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
 
   async function startAlarmAudioIfPossible(): Promise<void> {
     if (!shouldHandleAsAlarm) return;
-    if (Platform.OS !== "android") return;
+    // iOS reaches here only while JS is alive (app foregrounded); playback goes
+    // through the AVAudioSession Playback category, which bypasses the mute switch.
     await startAlarmAudioFromNotification(detail.notification as PendingAlarmNotification);
   }
 
@@ -2168,63 +2580,70 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
         }
       }
 
-      // Repost as a fresh displayed notification with full-screen action
-      // This ensures the alarm UI can show over lockscreen
-      try {
-        // Cancel the delivered trigger notification first
-        if (notificationId) {
-          try {
-            markInternalDismissIgnore(notificationId);
-            await notifee.cancelDisplayedNotification(notificationId);
-          } catch {
-            // ignore
+      if (Platform.OS === "android") {
+        // Repost as a fresh displayed notification with full-screen action
+        // This ensures the alarm UI can show over lockscreen
+        try {
+          // Cancel the delivered trigger notification first
+          if (notificationId) {
+            try {
+              markInternalDismissIgnore(notificationId);
+              await notifee.cancelDisplayedNotification(notificationId);
+            } catch {
+              // ignore
+            }
           }
+
+          // Use a different ID for the reposted notification to avoid confusion.
+          // Make it unique per occurrence so Android treats it as a fresh notification.
+          const scheduledForKey =
+            typeof (data as any)?.scheduledFor === "string" && (data as any).scheduledFor
+              ? String((data as any).scheduledFor)
+              : String(Date.now());
+          const repostId = `alarm_display_${reminderId}_${scheduledForKey}`;
+          console.log(`[VR] repost_create from=${notificationId} to=${repostId} scheduledFor=${scheduledForKey}`);
+
+          await notifee.displayNotification({
+            id: repostId,
+            title: detail.notification?.title || "Reminder",
+            body: detail.notification?.body || "",
+            android: {
+              channelId: `reminder_${reminderId}`,
+              importance: AndroidImportance.HIGH,
+              category: AndroidCategory.ALARM,
+              visibility: AndroidVisibility.PUBLIC,
+              autoCancel: false,
+              lightUpScreen: true,
+              actions: [
+                { title: DONE_ACTION_TITLE, pressAction: { id: "dismiss_action" } },
+                { title: LATER_ACTION_TITLE, pressAction: { id: "snooze_action" } },
+              ],
+              pressAction: {
+                id: "default",
+                launchActivity: ANDROID_ALARM_ACTIVITY,
+                launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+              },
+              fullScreenAction: {
+                id: "default",
+                launchActivity: ANDROID_ALARM_ACTIVITY,
+                launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+              },
+            },
+            data: {
+              ...notificationData,
+              __reposted: "1", // Flag to prevent infinite loop
+            },
+          });
+          await setDisplayedAlarm(repostId);
+          console.log(`[VR] repost_done from=${notificationId} to=${repostId}`);
+        } catch (e) {
+          console.log("[VR] Failed to repost alarm notification:", e);
         }
-
-        // Use a different ID for the reposted notification to avoid confusion.
-        // Make it unique per occurrence so Android treats it as a fresh notification.
-        const scheduledForKey =
-          typeof (data as any)?.scheduledFor === "string" && (data as any).scheduledFor
-            ? String((data as any).scheduledFor)
-            : String(Date.now());
-        const repostId = `alarm_display_${reminderId}_${scheduledForKey}`;
-        console.log(`[VR] repost_create from=${notificationId} to=${repostId} scheduledFor=${scheduledForKey}`);
-
-        await notifee.displayNotification({
-          id: repostId,
-          title: detail.notification?.title || "Reminder",
-          body: detail.notification?.body || "",
-          android: {
-            channelId: `reminder_${reminderId}`,
-            importance: AndroidImportance.HIGH,
-            category: AndroidCategory.ALARM,
-            visibility: AndroidVisibility.PUBLIC,
-            autoCancel: false,
-            lightUpScreen: true,
-            actions: [
-              { title: DONE_ACTION_TITLE, pressAction: { id: "dismiss_action" } },
-              { title: LATER_ACTION_TITLE, pressAction: { id: "snooze_action" } },
-            ],
-            pressAction: {
-              id: "default",
-              launchActivity: ANDROID_ALARM_ACTIVITY,
-              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
-            },
-            fullScreenAction: {
-              id: "default",
-              launchActivity: ANDROID_ALARM_ACTIVITY,
-              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
-            },
-          },
-          data: {
-            ...notificationData,
-            __reposted: "1", // Flag to prevent infinite loop
-          },
-        });
-        await setDisplayedAlarm(repostId);
-        console.log(`[VR] repost_done from=${notificationId} to=${repostId}`);
-      } catch (e) {
-        console.log("[VR] Failed to repost alarm notification:", e);
+      } else {
+        // iOS: no full-screen intent lifecycle. Cancelling+reposting here just
+        // eats the banner, so keep the delivered notification as the displayed
+        // alarm; the in-app overlay + spoken audio cover the foreground case.
+        await setDisplayedAlarm(notificationId);
       }
     }
 
@@ -2436,6 +2855,14 @@ export async function syncRemindersOnStartup(
     const scheduledIds = await notifee.getTriggerNotificationIds();
     const now = Date.now();
 
+    // On the AlarmKit path the gap check reads the native alarm registry
+    // instead of notifee's trigger IDs — no notifee trigger exists to find.
+    const alarmKitActive = await alarmKitEnabled();
+    const alarmKitIds = alarmKitActive
+      ? (await getScheduledNativeAlarms()).map((a) => a.id)
+      : [];
+    const alarmKitState = alarmKitActive ? await getAlarmKitState() : {};
+
     const pending = await getPendingAlarm();
     const pendingReminderId =
       typeof pending?.notification?.data?.reminderId === "string"
@@ -2513,7 +2940,20 @@ export async function syncRemindersOnStartup(
       // Check if any notification exists for this reminder ID prefix
       // Use prefix match: reminder_{id}_
       const mainPrefix = `reminder_${reminder.id}_`;
-      const scheduledMainId = scheduledIds.find((id) => id.startsWith(mainPrefix));
+
+      // PRD guard 3: a live native snooze owns this reminder's next ring.
+      if (alarmKitActive && Number(alarmKitState[reminder.id]?.snoozeUntil ?? 0) > now) {
+        vrLog("alarmkit", "sync_snooze_guard", {
+          reminderId: reminder.id,
+          snoozeUntil: Number(alarmKitState[reminder.id]?.snoozeUntil ?? 0),
+        });
+        skipped++;
+        continue;
+      }
+
+      const scheduledMainId = alarmKitActive
+        ? alarmKitIds.find((id) => id.startsWith(mainPrefix))
+        : scheduledIds.find((id) => id.startsWith(mainPrefix));
       if (scheduledMainId) {
         // Main trigger intact — make sure its pre-alert matches the current setting.
         try {
@@ -2544,6 +2984,10 @@ export async function syncRemindersOnStartup(
         }
         skipped++;
         continue;
+      }
+
+      if (alarmKitActive) {
+        vrLog("alarmkit", "gap_resync", { reminderId: reminder.id });
       }
 
       try {
