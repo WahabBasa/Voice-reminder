@@ -36,7 +36,7 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeVariants, variantCountForTier } from "./helpers";
+import { clamp, normalizeReminderDescription, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeVariants, variantCountForTier, pcmToWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT } from "./helpers";
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -279,11 +279,11 @@ async function synthesizeWithResemble(args: {
   return Buffer.from(json.audio_content, "base64");
 }
 
-async function synthesizeWithElevenLabs(args: { text: string }): Promise<Buffer> {
+async function synthesizeWithElevenLabs(args: { text: string; outputFormat?: string }): Promise<Buffer> {
   const apiKey = requireEnv("ELEVENLABS_API_KEY");
   const voiceId = requireEnv("ELEVENLABS_VOICE_ID");
   const modelId = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
-  const outputFormat = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
+  const outputFormat = args.outputFormat || process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
 
   const url = new URL(
     `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`
@@ -295,7 +295,8 @@ async function synthesizeWithElevenLabs(args: { text: string }): Promise<Buffer>
     headers: {
       "xi-api-key": apiKey,
       "Content-Type": "application/json",
-      Accept: "audio/mpeg",
+      // PCM responses are audio/pcm; a hard audio/mpeg Accept would refuse them.
+      ...(outputFormat.startsWith("pcm_") ? {} : { Accept: "audio/mpeg" }),
     },
     body: JSON.stringify({
       text: args.text,
@@ -324,6 +325,42 @@ async function synthesizeReminderTts(args: { text: string; title?: string }): Pr
     return await synthesizeWithElevenLabs({ text: args.text });
   }
   return await synthesizeWithResemble(args);
+}
+
+/**
+ * Alarm-ready WAV of the base spoken line (iOS AlarmKit custom sound).
+ * ElevenLabs only: PCM out, wrapped with a 44-byte WAV header in-process.
+ * Failure returns null — the alarm degrades to the system default sound and
+ * never blocks reminder creation.
+ */
+async function synthesizeAlarmWav(text: string): Promise<Uint8Array | null> {
+  if (getTtsProvider() !== "elevenlabs") return null;
+  const rate = parsePcmSampleRate(ALARM_PCM_OUTPUT_FORMAT);
+  if (rate === null) return null;
+  const pcm = await synthesizeWithElevenLabs({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT });
+  return pcmToWav(new Uint8Array(pcm), rate);
+}
+
+/** Base-line TTS bundle: mp3 (playback, all platforms) + wav (iOS alarm sound). */
+async function synthesizeAndStoreBaseTts(
+  ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
+  args: { text: string; title?: string }
+): Promise<{ audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> }> {
+  const [ttsBuffer, wavBytes] = await Promise.all([
+    synthesizeReminderTts(args),
+    synthesizeAlarmWav(args.text).catch((e) => {
+      console.error("[VR] Alarm WAV synthesis failed (system default alarm sound will be used):", e);
+      return null;
+    }),
+  ]);
+  const audioStorageId = await ctx.storage.store(
+    new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" })
+  );
+  let wavStorageId: Id<"_storage"> | undefined;
+  if (wavBytes) {
+    wavStorageId = await ctx.storage.store(new Blob([new Uint8Array(wavBytes)], { type: "audio/wav" }));
+  }
+  return { audioStorageId, wavStorageId };
 }
 
 /**
@@ -666,14 +703,11 @@ If no frequency specified, assume "once".`,
 
     // 3. Generate TTS
     const ttsText = description || String(parsed.description ?? "");
-    const ttsBuffer = await synthesizeReminderTts({
+    // 4. Generate + store TTS (mp3 for playback + alarm-ready wav when available)
+    const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreBaseTts(ctx, {
       text: ttsText,
       title: parsed.title as string,
     });
-
-    // 4. Store TTS in Convex
-    const blob = new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" });
-    const storageId = await ctx.storage.store(blob);
 
     // Second short line for the pre-alert; failure never blocks the reminder.
     let preAudioStorageId: Id<"_storage"> | undefined;
@@ -709,6 +743,7 @@ If no frequency specified, assume "once".`,
         frequency,
         days,
         audioStorageId: storageId,
+        wavStorageId,
         preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
         preAudioStorageId,
         urgency,
@@ -776,12 +811,10 @@ export const processTextReminder = action({
 
     const normalizedDescription = normalizeReminderDescription(args.description);
     const ttsText = normalizedDescription || args.description;
-    const ttsBuffer = await synthesizeReminderTts({
+    const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreBaseTts(ctx, {
       text: ttsText,
       title: args.title,
     });
-    const blob = new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" });
-    const storageId = await ctx.storage.store(blob);
 
     const reminderId: Id<"reminders"> = await ctx.runMutation(
       internal.reminders.create,
@@ -792,6 +825,7 @@ export const processTextReminder = action({
         frequency,
         days,
         audioStorageId: storageId,
+        wavStorageId,
       }
     );
 
@@ -824,15 +858,12 @@ export const regenerateReminderAudio = action({
       throw new Error("Reminder not found");
     }
 
-    // 2. Generate new TTS audio
-    const ttsBuffer = await synthesizeReminderTts({
-      text: args.soundText,
-      title: reminder.title,
-    });
-
-    // 3. Store new audio in Convex storage
-    const blob = new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" });
-    const newStorageId = await ctx.storage.store(blob);
+    // 2. Generate + store new TTS audio (mp3 + alarm-ready wav when available)
+    const { audioStorageId: newStorageId, wavStorageId: newWavStorageId } =
+      await synthesizeAndStoreBaseTts(ctx, {
+        text: args.soundText,
+        title: reminder.title,
+      });
 
     // 4. Delete old audio and update reminder
     if (reminder.audioStorageId) {
@@ -840,12 +871,15 @@ export const regenerateReminderAudio = action({
         id: args.reminderId,
         oldStorageId: reminder.audioStorageId,
         newStorageId,
+        oldWavStorageId: reminder.wavStorageId,
+        newWavStorageId,
       });
     } else {
       // No existing audio, just update with new storage ID
       await ctx.runMutation(internal.reminders.setAudio, {
         id: args.reminderId,
         audioStorageId: newStorageId,
+        wavStorageId: newWavStorageId,
         audioStatus: "ready",
         audioUpdatedAt: Date.now(),
       });
@@ -1135,15 +1169,12 @@ export const generateReminderTtsForReminder = internalAction({
   },
   handler: async (ctx, args) => {
     try {
-      // 1. Generate TTS
-      const ttsBuffer = await synthesizeReminderTts({
-        text: args.ttsText,
-        title: args.title,
-      });
-
-      // 2. Store in Convex storage
-      const blob = new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" });
-      const newAudioStorageId = await ctx.storage.store(blob);
+      // 1. Generate + store TTS (mp3 + alarm-ready wav when available)
+      const { audioStorageId: newAudioStorageId, wavStorageId: newWavStorageId } =
+        await synthesizeAndStoreBaseTts(ctx, {
+          text: args.ttsText,
+          title: args.title,
+        });
 
       // 2b. Pre-alert line (optional); failure never blocks the main audio.
       let preAudioStorageId: Id<"_storage"> | undefined;
@@ -1175,6 +1206,7 @@ export const generateReminderTtsForReminder = internalAction({
       await ctx.runMutation(internal.reminders.setAudio, {
         id: args.reminderId,
         audioStorageId: newAudioStorageId,
+        wavStorageId: newWavStorageId,
         preAudioStorageId,
         variants: keptVariants,
         variantAudioStorageIds,

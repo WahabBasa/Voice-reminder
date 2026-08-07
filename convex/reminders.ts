@@ -20,6 +20,7 @@ export const list = query({
       reminders.map(async (reminder) => ({
         ...reminder,
         audioUrl: reminder.audioStorageId ? await ctx.storage.getUrl(reminder.audioStorageId) : "",
+        wavUrl: reminder.wavStorageId ? await ctx.storage.getUrl(reminder.wavStorageId) : "",
         preAudioUrl: reminder.preAudioStorageId ? await ctx.storage.getUrl(reminder.preAudioStorageId) : "",
         variantAudioUrls: await resolveVariantAudioUrls(ctx, reminder.variantAudioStorageIds),
       }))
@@ -35,6 +36,7 @@ export const get = query({
     return {
       ...reminder,
       audioUrl: reminder.audioStorageId ? await ctx.storage.getUrl(reminder.audioStorageId) : "",
+      wavUrl: reminder.wavStorageId ? await ctx.storage.getUrl(reminder.wavStorageId) : "",
       preAudioUrl: reminder.preAudioStorageId ? await ctx.storage.getUrl(reminder.preAudioStorageId) : "",
       variantAudioUrls: await resolveVariantAudioUrls(ctx, reminder.variantAudioStorageIds),
     };
@@ -57,6 +59,7 @@ export const create = internalMutation({
     frequency: v.string(),
     days: v.optional(v.array(v.string())),
     audioStorageId: v.optional(v.id("_storage")),
+    wavStorageId: v.optional(v.id("_storage")),
     preReminderMinutes: v.optional(v.number()),
     preAudioStorageId: v.optional(v.id("_storage")),
     urgency: v.optional(
@@ -117,12 +120,20 @@ export const updateAudio = internalMutation({
     id: v.id("reminders"),
     oldStorageId: v.id("_storage"),
     newStorageId: v.id("_storage"),
+    oldWavStorageId: v.optional(v.id("_storage")),
+    newWavStorageId: v.optional(v.id("_storage")),
   },
   handler: async (ctx, args) => {
-    // Delete old audio file
+    // Delete old audio files
     await ctx.storage.delete(args.oldStorageId);
-    // Update reminder with new audio storage ID
-    await ctx.db.patch(args.id, { audioStorageId: args.newStorageId });
+    if (args.oldWavStorageId) {
+      await ctx.storage.delete(args.oldWavStorageId);
+    }
+    // An absent new wav clears the field so a stale alarm sound is never referenced.
+    await ctx.db.patch(args.id, {
+      audioStorageId: args.newStorageId,
+      wavStorageId: args.newWavStorageId,
+    });
   },
 });
 
@@ -138,6 +149,7 @@ export const setAudio = internalMutation({
   args: {
     id: v.id("reminders"),
     audioStorageId: v.optional(v.id("_storage")),
+    wavStorageId: v.optional(v.id("_storage")),
     preAudioStorageId: v.optional(v.id("_storage")),
     // Replay variants kept in lockstep: only lines whose TTS succeeded are
     // stored, so variants[i] always pairs with variantAudioStorageIds[i].

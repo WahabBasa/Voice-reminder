@@ -153,3 +153,112 @@ export function normalizePreReminder(
     preReminderMinutes > 0 ? normalizeReminderDescription(descriptionRaw) : "";
   return { preReminderMinutes, preDescription };
 }
+
+// ─── Alarm WAV pipeline (AK-3) ──────────────────────────────────────────────
+//
+// iOS AlarmKit plays a *named audio resource* from Library/Sounds and follows
+// UNNotificationSound rules: wav/aiff/caf only, <= 30s. Our TTS lines ship as
+// mp3, which AlarmKit cannot use. ElevenLabs can return raw PCM instead of
+// mp3 (`output_format=pcm_<rate>`: signed 16-bit little-endian, mono, headerless),
+// so the alarm-ready wav is just that same response with a 44-byte RIFF header
+// in front — no transcoding, no second synthesis call.
+//
+// Tier note: pcm_16000 / pcm_22050 / pcm_24000 are available on the paid tiers
+// we use; pcm_44100 needs Pro. Convex has no ffmpeg-class dependency available,
+// so PCM-in / header-out is the only viable server-side route.
+
+/** UNNotificationSound / AlarmKit hard limit for a named alarm sound. */
+export const MAX_ALARM_SOUND_SECONDS = 30;
+
+/** ElevenLabs PCM is always mono signed 16-bit little-endian. */
+export const ALARM_WAV_CHANNELS = 1;
+export const ALARM_WAV_BITS_PER_SAMPLE = 16;
+
+/** 22.05 kHz mono 16-bit ≈ 44 KB/s — a 3-8s line lands at 130-350 KB. */
+export const DEFAULT_ALARM_WAV_SAMPLE_RATE = 22050;
+
+/** `output_format` to request from ElevenLabs for the alarm-ready line. */
+export const ALARM_PCM_OUTPUT_FORMAT = `pcm_${DEFAULT_ALARM_WAV_SAMPLE_RATE}`;
+
+/**
+ * Sample rate encoded in an ElevenLabs `output_format` value, or null when the
+ * format is not PCM (mp3/opus/ulaw responses cannot be wrapped as WAV).
+ */
+export function parsePcmSampleRate(outputFormat: unknown): number | null {
+  const match = String(outputFormat ?? "").trim().toLowerCase().match(/^pcm_(\d+)$/);
+  if (!match) return null;
+  const rate = Number(match[1]);
+  return rate > 0 ? rate : null;
+}
+
+/** Playback length of a headerless PCM buffer, in seconds. */
+export function pcmDurationSeconds(
+  byteLength: number,
+  sampleRate: number = DEFAULT_ALARM_WAV_SAMPLE_RATE
+): number {
+  const bytesPerSecond =
+    sampleRate * ALARM_WAV_CHANNELS * (ALARM_WAV_BITS_PER_SAMPLE / 8);
+  if (!(bytesPerSecond > 0) || !(byteLength > 0)) return 0;
+  return byteLength / bytesPerSecond;
+}
+
+/**
+ * Standard 44-byte canonical WAV/RIFF header for a PCM payload.
+ * Little-endian throughout; sizes are the ones AVFoundation validates.
+ */
+export function buildWavHeader(
+  dataLength: number,
+  sampleRate: number = DEFAULT_ALARM_WAV_SAMPLE_RATE
+): Uint8Array {
+  const header = new Uint8Array(44);
+  const view = new DataView(header.buffer);
+  const blockAlign = ALARM_WAV_CHANNELS * (ALARM_WAV_BITS_PER_SAMPLE / 8);
+  const writeAscii = (offset: number, text: string) => {
+    for (let i = 0; i < text.length; i++) {
+      header[offset + i] = text.charCodeAt(i);
+    }
+  };
+
+  writeAscii(0, "RIFF");
+  view.setUint32(4, 36 + dataLength, true); // file size minus the 8-byte RIFF preamble
+  writeAscii(8, "WAVE");
+  writeAscii(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM fmt chunk length
+  view.setUint16(20, 1, true); // audioFormat 1 = uncompressed PCM
+  view.setUint16(22, ALARM_WAV_CHANNELS, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true); // byte rate
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, ALARM_WAV_BITS_PER_SAMPLE, true);
+  writeAscii(36, "data");
+  view.setUint32(40, dataLength, true);
+
+  return header;
+}
+
+/**
+ * Wrap an ElevenLabs PCM response as a playable WAV. Throws rather than storing
+ * an alarm sound iOS would silently reject (bad rate, empty body, over 30s).
+ */
+export function pcmToWav(
+  pcm: Uint8Array,
+  sampleRate: number = DEFAULT_ALARM_WAV_SAMPLE_RATE
+): Uint8Array {
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    throw new Error(`Invalid PCM sample rate: ${sampleRate}`);
+  }
+  if (pcm.length === 0) {
+    throw new Error("Cannot build alarm WAV from an empty PCM buffer");
+  }
+  const seconds = pcmDurationSeconds(pcm.length, sampleRate);
+  if (seconds > MAX_ALARM_SOUND_SECONDS) {
+    throw new Error(
+      `Alarm WAV is ${seconds.toFixed(1)}s, over the ${MAX_ALARM_SOUND_SECONDS}s limit`
+    );
+  }
+
+  const wav = new Uint8Array(44 + pcm.length);
+  wav.set(buildWavHeader(pcm.length, sampleRate), 0);
+  wav.set(pcm, 44);
+  return wav;
+}

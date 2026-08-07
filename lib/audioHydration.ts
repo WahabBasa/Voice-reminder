@@ -13,7 +13,7 @@ export async function hydrateReminderAudio(params: {
   convexClient: ConvexReactClient;
   convexId: string;
   localReminderId: string;
-  updateLocal: (patch: { audioUrl?: string; preAudioUrl?: string; variants?: string[]; variantAudioUrls?: string[]; audioStatus: 'ready' | 'failed'; audioError?: string }) => Promise<void>;
+  updateLocal: (patch: { audioUrl?: string; wavUrl?: string; preAudioUrl?: string; variants?: string[]; variantAudioUrls?: string[]; audioStatus: 'ready' | 'failed'; audioError?: string }) => Promise<void>;
   onSuccess?: (audioUrl: string) => Promise<void>;
 }): Promise<void> {
   const { convexClient, convexId, localReminderId, updateLocal, onSuccess } = params;
@@ -63,6 +63,7 @@ export async function hydrateReminderAudio(params: {
               // Update local reminder
               await updateLocal({
                 audioUrl: result.audioUrl,
+                ...((result as any).wavUrl ? { wavUrl: (result as any).wavUrl as string } : {}),
                 ...(preAudioUrl ? { preAudioUrl } : {}),
                 ...(variants ? { variants } : {}),
                 ...(variantAudioUrls ? { variantAudioUrls } : {}),

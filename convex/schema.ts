@@ -10,6 +10,8 @@ export default defineSchema({
     frequency: v.string(),
     days: v.optional(v.array(v.string())),
     audioStorageId: v.optional(v.id("_storage")),
+    // Alarm-ready WAV of the base spoken line (iOS AlarmKit custom sound)
+    wavStorageId: v.optional(v.id("_storage")),
     // Smart pre-reminder (heads-up before the event); 0/absent = none
     preReminderMinutes: v.optional(v.number()),
     preAudioStorageId: v.optional(v.id("_storage")),

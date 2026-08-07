@@ -32,6 +32,7 @@ export interface Reminder {
     frequency: string;
     days: string[];
     audioUrl?: string;
+    wavUrl?: string; // alarm-ready wav of the base spoken line (iOS AlarmKit sound)
     audioStatus?: 'pending' | 'ready' | 'failed';
     audioError?: string;
     preReminderMinutes?: number; // heads-up lead time in minutes (0/absent = none)

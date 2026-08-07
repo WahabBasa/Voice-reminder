@@ -13,6 +13,15 @@ import {
   variantCountForTier,
   normalizeVariants,
   buildVariantInstruction,
+  ALARM_PCM_OUTPUT_FORMAT,
+  ALARM_WAV_BITS_PER_SAMPLE,
+  ALARM_WAV_CHANNELS,
+  DEFAULT_ALARM_WAV_SAMPLE_RATE,
+  MAX_ALARM_SOUND_SECONDS,
+  buildWavHeader,
+  parsePcmSampleRate,
+  pcmDurationSeconds,
+  pcmToWav,
 } from "../../convex/helpers";
 
 // ─── normalizeDay ───────────────────────────────────────────────────────────
@@ -431,5 +440,127 @@ describe("buildVariantInstruction", () => {
       expect(result).toContain('"variants"');
       expect(result).toContain(`${MAX_REPLAY_VARIANTS} variants`);
     }
+  });
+});
+
+// ─── Alarm WAV pipeline ─────────────────────────────────────────────────────
+
+const ascii = (bytes: Uint8Array, offset: number, length: number) =>
+  String.fromCharCode(...bytes.slice(offset, offset + length));
+
+const u16 = (bytes: Uint8Array, offset: number) =>
+  new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(offset, true);
+
+const u32 = (bytes: Uint8Array, offset: number) =>
+  new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, true);
+
+describe("parsePcmSampleRate", () => {
+  it("reads the rate out of the default alarm output format", () => {
+    expect(parsePcmSampleRate(ALARM_PCM_OUTPUT_FORMAT)).toBe(
+      DEFAULT_ALARM_WAV_SAMPLE_RATE
+    );
+  });
+
+  it("supports the other PCM rates ElevenLabs offers", () => {
+    expect(parsePcmSampleRate("pcm_16000")).toBe(16000);
+    expect(parsePcmSampleRate("pcm_24000")).toBe(24000);
+    expect(parsePcmSampleRate("PCM_44100")).toBe(44100);
+    expect(parsePcmSampleRate("  pcm_8000  ")).toBe(8000);
+  });
+
+  it("returns null for non-PCM formats", () => {
+    expect(parsePcmSampleRate("mp3_44100_128")).toBeNull();
+    expect(parsePcmSampleRate("opus_48000_64")).toBeNull();
+    expect(parsePcmSampleRate("ulaw_8000")).toBeNull();
+  });
+
+  it("returns null for junk input", () => {
+    expect(parsePcmSampleRate("")).toBeNull();
+    expect(parsePcmSampleRate(undefined)).toBeNull();
+    expect(parsePcmSampleRate(null)).toBeNull();
+    expect(parsePcmSampleRate("pcm_")).toBeNull();
+    expect(parsePcmSampleRate("pcm_0")).toBeNull();
+  });
+});
+
+describe("pcmDurationSeconds", () => {
+  it("computes one second of 22.05kHz mono 16-bit audio", () => {
+    expect(pcmDurationSeconds(22050 * 2)).toBe(1);
+  });
+
+  it("honours an explicit sample rate", () => {
+    expect(pcmDurationSeconds(24000 * 2 * 3, 24000)).toBe(3);
+  });
+
+  it("returns 0 for an empty buffer or a nonsense rate", () => {
+    expect(pcmDurationSeconds(0)).toBe(0);
+    expect(pcmDurationSeconds(1000, 0)).toBe(0);
+  });
+});
+
+describe("buildWavHeader", () => {
+  it("writes the canonical 44-byte RIFF/WAVE header", () => {
+    const header = buildWavHeader(1000);
+    expect(header.length).toBe(44);
+    expect(ascii(header, 0, 4)).toBe("RIFF");
+    expect(ascii(header, 8, 4)).toBe("WAVE");
+    expect(ascii(header, 12, 4)).toBe("fmt ");
+    expect(ascii(header, 36, 4)).toBe("data");
+  });
+
+  it("sizes the RIFF and data chunks from the payload length", () => {
+    const header = buildWavHeader(1000);
+    expect(u32(header, 4)).toBe(1036); // 36 + dataLength
+    expect(u32(header, 40)).toBe(1000);
+  });
+
+  it("declares uncompressed mono 16-bit PCM at the default rate", () => {
+    const header = buildWavHeader(1000);
+    expect(u32(header, 16)).toBe(16); // fmt chunk length
+    expect(u16(header, 20)).toBe(1); // audioFormat: PCM
+    expect(u16(header, 22)).toBe(ALARM_WAV_CHANNELS);
+    expect(u32(header, 24)).toBe(DEFAULT_ALARM_WAV_SAMPLE_RATE);
+    expect(u32(header, 28)).toBe(DEFAULT_ALARM_WAV_SAMPLE_RATE * 2); // byte rate
+    expect(u16(header, 32)).toBe(2); // block align
+    expect(u16(header, 34)).toBe(ALARM_WAV_BITS_PER_SAMPLE);
+  });
+
+  it("carries a non-default sample rate into rate and byte rate", () => {
+    const header = buildWavHeader(8, 24000);
+    expect(u32(header, 24)).toBe(24000);
+    expect(u32(header, 28)).toBe(48000);
+  });
+});
+
+describe("pcmToWav", () => {
+  it("prefixes the PCM payload with the 44-byte header, unmodified", () => {
+    const pcm = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const wav = pcmToWav(pcm);
+    expect(wav.length).toBe(44 + pcm.length);
+    expect(ascii(wav, 0, 4)).toBe("RIFF");
+    expect(u32(wav, 40)).toBe(pcm.length);
+    expect(Array.from(wav.slice(44))).toEqual(Array.from(pcm));
+  });
+
+  it("accepts a full-length line right at the 30s limit", () => {
+    const pcm = new Uint8Array(DEFAULT_ALARM_WAV_SAMPLE_RATE * 2 * MAX_ALARM_SOUND_SECONDS);
+    expect(() => pcmToWav(pcm)).not.toThrow();
+  });
+
+  it("rejects a line longer than the alarm sound limit", () => {
+    const pcm = new Uint8Array(
+      DEFAULT_ALARM_WAV_SAMPLE_RATE * 2 * (MAX_ALARM_SOUND_SECONDS + 1)
+    );
+    expect(() => pcmToWav(pcm)).toThrow(/over the 30s limit/);
+  });
+
+  it("rejects an empty PCM body", () => {
+    expect(() => pcmToWav(new Uint8Array(0))).toThrow(/empty PCM buffer/);
+  });
+
+  it("rejects an unusable sample rate", () => {
+    const pcm = new Uint8Array([1, 2]);
+    expect(() => pcmToWav(pcm, 0)).toThrow(/Invalid PCM sample rate/);
+    expect(() => pcmToWav(pcm, Number.NaN)).toThrow(/Invalid PCM sample rate/);
   });
 });
