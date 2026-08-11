@@ -94,6 +94,23 @@ export function normalizePersistent(value: unknown): boolean {
   return token === "true" || token === "1";
 }
 
+// One fitting emoji for the reminder card chip. Keeps only the first emoji
+// cluster the model returned (ZWJ sequences / skin tones stay intact) and
+// rejects plain text so a chatty model can't put words in the chip.
+export function normalizeEmoji(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  // No ASCII letters/digits/punctuation — chips hold pictographs only.
+  if (/[\x20-\x7E]/.test(trimmed)) return undefined;
+  // First grapheme cluster only (a full emoji, incl. ZWJ joins + modifiers).
+  // ️ = variation selector, ‍ = zero-width joiner.
+  const match = trimmed.match(
+    /^\p{Extended_Pictographic}(?:️|\p{Emoji_Modifier}|‍\p{Extended_Pictographic}(?:️|\p{Emoji_Modifier})?)*/u
+  );
+  return match ? match[0] : undefined;
+}
+
 // Economize policy: urgent-tier and persistent reminders get the full ladder,
 // notice gets a middle amount, routine gets a single extra variant.
 export function variantCountForTier(urgency: Urgency, persistent: boolean): number {

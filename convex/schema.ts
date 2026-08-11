@@ -9,6 +9,8 @@ export default defineSchema({
     date: v.optional(v.string()), // YYYY-MM-DD for one-time reminders on specific days
     frequency: v.string(),
     days: v.optional(v.array(v.string())),
+    // Card chip emoji picked by the parse (absent → neutral bell chip)
+    emoji: v.optional(v.string()),
     audioStorageId: v.optional(v.id("_storage")),
     // Alarm-ready WAV of the base spoken line (iOS AlarmKit custom sound)
     wavStorageId: v.optional(v.id("_storage")),

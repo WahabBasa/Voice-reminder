@@ -72,6 +72,8 @@ export const create = internalMutation({
     date: v.optional(v.string()),
     frequency: v.string(),
     days: v.optional(v.array(v.string())),
+    // Card chip emoji picked by the parse (absent → neutral bell chip)
+    emoji: v.optional(v.string()),
     audioStorageId: v.optional(v.id("_storage")),
     wavStorageId: v.optional(v.id("_storage")),
     preReminderMinutes: v.optional(v.number()),

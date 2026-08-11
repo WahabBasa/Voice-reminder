@@ -36,7 +36,7 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeVariants, variantCountForTier, buildAlarmWav, alignVariantWavIds, useDenseAlarmWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT } from "./helpers";
+import { clamp, normalizeReminderDescription, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeVariants, variantCountForTier, buildAlarmWav, alignVariantWavIds, useDenseAlarmWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT } from "./helpers";
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -119,8 +119,14 @@ Return exactly this format:
   "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
   "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ASSISTANT REPLAY RULES),
   "persistent": boolean (true only for critical tasks, see ASSISTANT REPLAY RULES),
-  "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"]
+  "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"],
+  "emoji": "ONE emoji that best fits the reminder (see EMOJI RULES)"
 }
+
+EMOJI RULES:
+- Pick exactly ONE emoji that captures the reminder's subject (e.g. 💊 medicine, 🏋️ gym, 📞 call, 💧 drink water, 🍳 cooking)
+- Prefer concrete object/activity emojis over abstract ones; use ⏰ only when nothing fits
+- The "emoji" value must contain the emoji character only — no words, no punctuation
 
 LANGUAGE RULES:
 - If the input is in Arabic, return "title" and "description" in Arabic
@@ -479,8 +485,14 @@ Return exactly this format:
   "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
   "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ASSISTANT REPLAY RULES),
   "persistent": boolean (true only for critical tasks, see ASSISTANT REPLAY RULES),
-  "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"]
+  "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"],
+  "emoji": "ONE emoji that best fits the reminder (see EMOJI RULES)"
 }
+
+EMOJI RULES:
+- Pick exactly ONE emoji that captures the reminder's subject (e.g. 💊 medicine, 🏋️ gym, 📞 call, 💧 drink water, 🍳 cooking)
+- Prefer concrete object/activity emojis over abstract ones; use ⏰ only when nothing fits
+- The "emoji" value must contain the emoji character only — no words, no punctuation
 
 LANGUAGE RULES:
 - If the input is in Arabic, return "title" and "description" in Arabic
@@ -714,6 +726,9 @@ If no frequency specified, assume "once".`,
       description
     );
 
+    // Card chip emoji (absent when the model returned junk → neutral bell chip)
+    const emoji = normalizeEmoji(parsed.emoji);
+
     // 3. Generate TTS
     const ttsText = description || String(parsed.description ?? "");
     // Persistent reminders nag inside one ringing alarm; every other tier says
@@ -756,6 +771,7 @@ If no frequency specified, assume "once".`,
         date,
         frequency,
         days,
+        emoji,
         audioStorageId: storageId,
         wavStorageId,
         preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
@@ -788,6 +804,7 @@ If no frequency specified, assume "once".`,
       date,
       frequency,
       days,
+      emoji,
       transcript,
       audioUrl,
       preReminderMinutes,
@@ -1120,6 +1137,9 @@ export const processVoiceReminderFast = action({
         description
       );
 
+      // Card chip emoji (absent when the model returned junk → neutral bell chip)
+      const emoji = normalizeEmoji(parsed.emoji);
+
       // 4. Create reminder in DB immediately (audio pending)
       const ttsText = description || String(parsed.description ?? "");
       const reminderId: Id<"reminders"> = await ctx.runMutation(
@@ -1131,6 +1151,7 @@ export const processVoiceReminderFast = action({
           date,
           frequency,
           days,
+          emoji,
           audioStorageId: undefined,
           preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
           urgency,
@@ -1160,6 +1181,7 @@ export const processVoiceReminderFast = action({
         date,
         frequency,
         days,
+        emoji,
         transcript,
         audioStatus: "pending",
         preReminderMinutes,

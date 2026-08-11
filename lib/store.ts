@@ -31,6 +31,7 @@ export interface Reminder {
     date?: string; // YYYY-MM-DD for one-time reminders on specific days
     frequency: string;
     days: string[];
+    emoji?: string; // single card-chip emoji from the parse (absent = neutral bell chip)
     audioUrl?: string;
     wavUrl?: string; // alarm-ready wav of the base spoken line (iOS AlarmKit sound)
     audioStatus?: 'pending' | 'ready' | 'failed';
