@@ -67,6 +67,12 @@
         "projectId": "7d6a3c27-6a3e-4d99-9d5d-85f39d90aa01"
       }
     },
-    "owner": "wahabbasa"
+    "owner": "wahabbasa",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/7d6a3c27-6a3e-4d99-9d5d-85f39d90aa01"
+    }
   }
 }

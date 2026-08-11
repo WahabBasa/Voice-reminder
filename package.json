@@ -34,6 +34,7 @@
     "expo-linking": "~8.0.11",
     "expo-router": "~6.0.23",
     "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.19",
     "lucide-react-native": "^0.562.0",
     "openai": "^6.9.1",
     "react": "19.1.0",

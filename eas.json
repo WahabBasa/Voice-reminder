@@ -23,7 +23,8 @@
         "env": {
           "SENTRY_PROJECT": "voicereminder-ios"
         }
-      }
+      },
+      "channel": "development"
     },
     "preview": {
       "distribution": "internal",
@@ -43,7 +44,8 @@
         "env": {
           "SENTRY_PROJECT": "voicereminder-ios"
         }
-      }
+      },
+      "channel": "preview"
     },
     "production": {
       "autoIncrement": true,
@@ -63,7 +65,8 @@
         "env": {
           "SENTRY_PROJECT": "voicereminder-ios"
         }
-      }
+      },
+      "channel": "production"
     }
   },
   "submit": {
