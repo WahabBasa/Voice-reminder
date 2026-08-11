@@ -1,37 +1,116 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import notifee from "@notifee/react-native";
 import * as Linking from "expo-linking";
-import AppIcon from "../components/AppIcon";
-import { colors, scaleFontSize } from "../lib/theme";
+import AppIcon, { type AppIconName } from "../components/AppIcon";
+import { borderRadius, colors, scaleFontSize, shadows } from "../lib/theme";
+import { FONT_DISPLAY } from "../lib/fonts";
 import { openAlarmPermissionSettingsSafe, openNotificationSettingsSafe } from "../lib/notifications";
+import { getScheduledAlarms, parseAlarmAppKey, useAlarmKit, type ScheduledAlarm } from "../lib/alarmKit";
+import { useReminderStore } from "../lib/store";
 
-function formatMaybeJson(value: any): string {
-  if (value === null || value === undefined) return "(not available)";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
+type PermissionTone = "ok" | "bad" | "muted";
+
+function permissionStatus(status: number | undefined): { label: string; tone: PermissionTone } {
+  if (status === 1) return { label: "Allowed", tone: "ok" };
+  if (status === 2) return { label: "Provisional", tone: "ok" };
+  if (status === 0) return { label: "Denied", tone: "bad" };
+  if (status === -1) return { label: "Not requested", tone: "muted" };
+  return { label: "Unknown", tone: "muted" };
+}
+
+function formatFireDate(timestamp: number): string {
+  const date = new Date(timestamp);
+  const day = date.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `${day} · ${time}`;
+}
+
+type AlarmRow = { key: string; title: string; when: string; isFollowUp: boolean };
+
+function toAlarmRows(alarms: ScheduledAlarm[]): AlarmRow[] {
+  const sorted = [...alarms].sort((a, b) => a.fireDate - b.fireDate);
+  const seenReminder = new Set<string>();
+  const getReminderById = useReminderStore.getState().getReminderById;
+
+  return sorted.map((alarm) => {
+    const parsed = parseAlarmAppKey(alarm.id);
+    const reminderId = parsed?.reminderId;
+    const title = (reminderId && getReminderById(reminderId)?.title) || "Reminder";
+    const isFollowUp = reminderId ? seenReminder.has(reminderId) : false;
+    if (reminderId) seenReminder.add(reminderId);
+    return {
+      key: alarm.id,
+      title,
+      when: formatFireDate(alarm.fireDate),
+      isFollowUp,
+    };
+  });
+}
+
+function Row({
+  icon,
+  label,
+  right,
+  onPress,
+  isLast,
+}: {
+  icon: AppIconName;
+  label: string;
+  right?: ReactNode;
+  onPress?: () => void;
+  isLast?: boolean;
+}) {
+  return (
+    <>
+      <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.6} disabled={!onPress}>
+        <View style={styles.rowIcon}>
+          <AppIcon name={icon} size={20} color={colors.textSecondary} />
+        </View>
+        <Text style={styles.rowTitle}>{label}</Text>
+        {right ?? (onPress ? (
+          <AppIcon name="chevron-right" size={18} color={colors.textTertiary} />
+        ) : null)}
+      </TouchableOpacity>
+      {!isLast ? <View style={styles.separator} /> : null}
+    </>
+  );
 }
 
 export default function DiagnosticsScreen() {
   const router = useRouter();
-  const [settings, setSettings] = useState<any>(null);
-  const [triggerIds, setTriggerIds] = useState<string[]>([]);
+  const [authStatus, setAuthStatus] = useState<number | undefined>(undefined);
+  const [androidAlarmStatus, setAndroidAlarmStatus] = useState<number | undefined>(undefined);
+  const [alarmRows, setAlarmRows] = useState<AlarmRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
-      const s = await notifee.getNotificationSettings();
-      const ids = await notifee.getTriggerNotificationIds();
-      setSettings(s);
-      setTriggerIds(ids);
+      const settings = await notifee.getNotificationSettings();
+      setAuthStatus(settings?.authorizationStatus);
+      setAndroidAlarmStatus(settings?.android?.alarm);
+
+      if (Platform.OS === "ios" && (await useAlarmKit())) {
+        setAlarmRows(toAlarmRows(await getScheduledAlarms()));
+      } else {
+        const ids = await notifee.getTriggerNotificationIds();
+        const rows: AlarmRow[] = ids.map((id) => {
+          const parsed = parseAlarmAppKey(id);
+          const title =
+            (parsed && useReminderStore.getState().getReminderById(parsed.reminderId)?.title) ||
+            "Reminder";
+          return {
+            key: id,
+            title,
+            when: parsed ? formatFireDate(parsed.scheduledFor) : "",
+            isFollowUp: false,
+          };
+        });
+        setAlarmRows(rows);
+      }
     } catch (e) {
       console.log("[VR] Diagnostics refresh failed:", e);
       Alert.alert("Error", "Failed to load notification diagnostics.");
@@ -44,72 +123,69 @@ export default function DiagnosticsScreen() {
     refresh();
   }, [refresh]);
 
-  const apiLevel = useMemo(() => {
-    const raw = Platform.Version;
-    return typeof raw === "number" ? raw : Number(raw);
-  }, []);
-
-  const authorizationStatus = settings?.authorizationStatus;
-  const androidAlarm = settings?.android?.alarm;
+  const notifPermission = permissionStatus(authStatus);
+  const androidApi = typeof Platform.Version === "number" ? Platform.Version : Number(Platform.Version);
+  const showAndroidAlarmRow = Platform.OS === "android" && Number.isFinite(androidApi) && androidApi >= 31;
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
-          activeOpacity={0.85}
-        >
-          <AppIcon name="chevron-left" size={26} color={colors.textPrimary} />
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerButton} activeOpacity={0.85}>
+          <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Alarm Diagnostics</Text>
-        <TouchableOpacity onPress={refresh} style={styles.refreshButton} activeOpacity={0.85}>
-          <Text style={[styles.refreshText, isLoading && { opacity: 0.6 }]}>Refresh</Text>
+        <Text style={styles.headerTitle}>Alarms</Text>
+        <TouchableOpacity onPress={refresh} style={styles.headerButton} activeOpacity={0.85}>
+          <AppIcon
+            name="refresh-cw"
+            size={18}
+            color={colors.textPrimary}
+            style={isLoading ? { opacity: 0.4 } : undefined}
+          />
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <Text style={styles.sectionLabel}>Permissions</Text>
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Device</Text>
-          <Text style={styles.kv}>Platform: {Platform.OS}</Text>
-          <Text style={styles.kv}>Android API: {Number.isFinite(apiLevel) ? apiLevel : String(Platform.Version)}</Text>
+          <Row
+            icon="bell"
+            label="Notifications"
+            right={
+              <Text
+                style={[
+                  styles.statusText,
+                  notifPermission.tone === "ok" && styles.statusOk,
+                  notifPermission.tone === "bad" && styles.statusBad,
+                ]}
+              >
+                {notifPermission.label}
+              </Text>
+            }
+            isLast={!showAndroidAlarmRow}
+          />
+          {showAndroidAlarmRow ? (
+            <Row
+              icon="clock"
+              label="Alarms & reminders"
+              right={
+                <Text style={[styles.statusText, androidAlarmStatus === 1 ? styles.statusOk : styles.statusBad]}>
+                  {androidAlarmStatus === 1 ? "Allowed" : "Check settings"}
+                </Text>
+              }
+              isLast
+            />
+          ) : null}
         </View>
 
+        <Text style={styles.sectionLabel}>Open system settings</Text>
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Notification Settings</Text>
-          <Text style={styles.kv}>authorizationStatus: {formatMaybeJson(authorizationStatus)}</Text>
-          {Platform.OS === "android" ? (
-            <Text style={styles.kv}>android.alarm: {formatMaybeJson(androidAlarm)}</Text>
+          <Row icon="bell" label="Notification settings" onPress={() => void openNotificationSettingsSafe()} />
+          {showAndroidAlarmRow ? (
+            <Row icon="clock" label="Alarms & reminders" onPress={() => void openAlarmPermissionSettingsSafe()} />
           ) : null}
-
-          <View style={styles.actionsRow}>
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={async () => {
-                await openNotificationSettingsSafe();
-              }}
-              activeOpacity={0.85}
-            >
-              <AppIcon name="bell" size={18} color={colors.textPrimary} />
-              <Text style={styles.actionText}>Notification settings</Text>
-            </TouchableOpacity>
-
-            {Platform.OS === "android" && Number.isFinite(apiLevel) && apiLevel >= 31 ? (
-              <TouchableOpacity
-                style={styles.actionButton}
-                onPress={async () => {
-                  await openAlarmPermissionSettingsSafe();
-                }}
-                activeOpacity={0.85}
-              >
-                <AppIcon name="clock" size={18} color={colors.textPrimary} />
-                <Text style={styles.actionText}>Alarms & reminders</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          <TouchableOpacity
-            style={[styles.actionButton, { marginTop: 10 }]}
+          <Row
+            icon="settings"
+            label="App settings"
             onPress={async () => {
               try {
                 await Linking.openSettings();
@@ -117,21 +193,36 @@ export default function DiagnosticsScreen() {
                 Alert.alert("Unable to open settings", "Please open your system settings manually.");
               }
             }}
-            activeOpacity={0.85}
-          >
-            <AppIcon name="settings" size={18} color={colors.textPrimary} />
-            <Text style={styles.actionText}>App settings</Text>
-          </TouchableOpacity>
+            isLast
+          />
         </View>
 
+        <Text style={styles.sectionLabel}>
+          {`Scheduled${alarmRows.length ? ` (${alarmRows.length})` : ""}`}
+        </Text>
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Scheduled Triggers</Text>
-          <Text style={styles.kv}>count: {triggerIds.length}</Text>
-          <View style={styles.monoBox}>
-            <Text style={styles.monoText}>
-              {triggerIds.length ? triggerIds.join("\n") : "(none)"}
-            </Text>
-          </View>
+          {alarmRows.length === 0 ? (
+            <Text style={styles.emptyText}>No alarms scheduled right now.</Text>
+          ) : (
+            alarmRows.map((row, index) => (
+              <View key={row.key}>
+                <View style={styles.row}>
+                  <View style={styles.rowIcon}>
+                    <AppIcon name={row.isFollowUp ? "refresh-cw" : "bell"} size={18} color={colors.textSecondary} />
+                  </View>
+                  <View style={styles.rowTextWrap}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>
+                      {row.title}
+                    </Text>
+                    <Text style={styles.rowSubtitle}>
+                      {row.isFollowUp ? `Follow-up · ${row.when}` : row.when}
+                    </Text>
+                  </View>
+                </View>
+                {index !== alarmRows.length - 1 ? <View style={styles.separator} /> : null}
+              </View>
+            ))
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -145,89 +236,92 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   header: {
-    paddingTop: Platform.OS === "ios" ? 20 : 8,
-    paddingBottom: 14,
+    paddingTop: 8,
+    paddingBottom: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  backButton: {
+  headerButton: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.surface,
   },
   headerTitle: {
-    fontSize: scaleFontSize(18),
-    fontWeight: "700",
-    color: colors.textPrimary,
-  },
-  refreshButton: {
-    width: 90,
-    height: 40,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surface,
-  },
-  refreshText: {
-    fontSize: scaleFontSize(14),
-    fontWeight: "700",
-    color: colors.textPrimary,
+    fontFamily: FONT_DISPLAY,
+    fontSize: scaleFontSize(24),
+    color: colors.textHeading,
   },
   content: {
-    paddingBottom: 28,
+    paddingBottom: 40,
+  },
+  sectionLabel: {
+    fontSize: scaleFontSize(13),
+    fontWeight: "600",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: colors.textTertiary,
+    marginBottom: 8,
+    marginLeft: 4,
   },
   card: {
-    backgroundColor: colors.surface,
-    borderRadius: 18,
-    padding: 14,
-    marginBottom: 12,
+    backgroundColor: colors.card,
+    borderRadius: borderRadius.card,
+    overflow: "hidden",
+    marginBottom: 24,
+    ...shadows.card,
   },
-  cardTitle: {
-    fontSize: scaleFontSize(14),
-    fontWeight: "800",
-    color: colors.textPrimary,
-    marginBottom: 10,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginLeft: 64,
   },
-  kv: {
-    fontSize: scaleFontSize(14),
-    color: colors.textSecondary,
-    marginBottom: 6,
-  },
-  actionsRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 10,
-  },
-  actionButton: {
-    flex: 1,
+  row: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 10,
-    borderRadius: 14,
-    backgroundColor: colors.muted,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
   },
-  actionText: {
-    fontSize: scaleFontSize(13),
-    fontWeight: "700",
+  rowIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  rowTextWrap: {
+    flex: 1,
+  },
+  rowTitle: {
+    flex: 1,
+    fontSize: scaleFontSize(16),
+    fontWeight: "600",
     color: colors.textPrimary,
   },
-  monoBox: {
-    marginTop: 10,
-    borderRadius: 14,
-    backgroundColor: colors.muted,
-    padding: 12,
+  rowSubtitle: {
+    fontSize: scaleFontSize(13),
+    color: colors.textSecondary,
+    marginTop: 1,
   },
-  monoText: {
-    fontSize: 12,
-    lineHeight: 16,
+  statusText: {
+    fontSize: scaleFontSize(14),
+    fontWeight: "600",
+    color: colors.textSecondary,
+  },
+  statusOk: {
+    color: colors.success,
+  },
+  statusBad: {
+    color: colors.destructive,
+  },
+  emptyText: {
+    padding: 16,
+    fontSize: scaleFontSize(14),
     color: colors.textSecondary,
   },
 });

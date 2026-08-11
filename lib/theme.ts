@@ -85,8 +85,21 @@ export const borderRadius = {
   sm: 8,
   md: 12,
   lg: 16,
+  card: 20,
+  sheet: 28,
+  bar: 32,
   full: 9999,
 };
+
+// pastel chip palette (deterministic per reminder id)
+export const chipColors = [
+  "#DFE9DA", // sage
+  "#E6E0F4", // lavender
+  "#F9E4D9", // peach
+  "#F7EED2", // butter
+  "#DDEAF6", // sky
+  "#F3DFE5", // rose
+];
 
 export function scaleFontSize(fontSize: number): number {
   // Basic responsive scaling across different device widths (keeps RN fontScale behavior intact).

@@ -1,24 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import * as Linking from "expo-linking";
 import Constants from "expo-constants";
-import { colors, scaleFontSize } from "../lib/theme";
+import { borderRadius, colors, scaleFontSize, shadows } from "../lib/theme";
+import { FONT_DISPLAY } from "../lib/fonts";
 import { useSettingsStore } from "../lib/settingsStore";
 import AppIcon from "../components/AppIcon";
 import AddressTermSheet from "../components/AddressTermSheet";
+
+// Apple's standard EULA — the terms that govern App Store subscriptions.
+const TERMS_OF_USE_URL = "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/";
 
 type SettingsRowProps = {
   icon: Parameters<typeof AppIcon>[0]["name"];
   label: string;
   subtitle?: string;
   onPress?: () => void;
-  accent?: boolean;
-  showChevron?: boolean;
 };
 
-function SettingsRow({ icon, label, subtitle, onPress, accent, showChevron = true }: SettingsRowProps) {
+function SettingsRow({ icon, label, subtitle, onPress }: SettingsRowProps) {
   return (
     <TouchableOpacity
       style={styles.row}
@@ -26,21 +28,26 @@ function SettingsRow({ icon, label, subtitle, onPress, accent, showChevron = tru
       activeOpacity={0.6}
       disabled={!onPress}
     >
-      <View style={[styles.rowIcon, accent && styles.rowIconAccent]}>
-        <AppIcon name={icon} size={20} color={accent ? "#fff" : colors.textSecondary} />
+      <View style={styles.rowIcon}>
+        <AppIcon name={icon} size={20} color={colors.textSecondary} />
       </View>
       <View style={styles.rowTextWrap}>
-        <Text style={[styles.rowTitle, accent && styles.rowTitleAccent]}>{label}</Text>
+        <Text style={styles.rowTitle}>{label}</Text>
         {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
       </View>
-      {showChevron && onPress ? (
+      {onPress ? (
         <AppIcon name="chevron-right" size={18} color={colors.textTertiary} />
       ) : null}
     </TouchableOpacity>
   );
 }
 
-export default function SettingsScreen() {
+type SettingsContentProps = {
+  /** When true, renders for the pager page: no back button, extra bottom padding for the bar. */
+  embedded?: boolean;
+};
+
+export function SettingsContent({ embedded = false }: SettingsContentProps) {
   const router = useRouter();
 
   const addressTerm = useSettingsStore((state) => state.settings.addressTerm);
@@ -59,26 +66,31 @@ export default function SettingsScreen() {
     return `v${version} (${build})`;
   }, []);
 
-  const handleOpenAppSettings = async () => {
+  const handleOpenTerms = async () => {
     try {
-      await Linking.openSettings();
+      await Linking.openURL(TERMS_OF_USE_URL);
     } catch (e) {
-      Alert.alert("Unable to open settings", "Please open your system settings manually.");
+      Alert.alert("Unable to open link", "Please try again later.");
     }
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={[styles.scrollContent, embedded && styles.scrollContentEmbedded]}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
-          activeOpacity={0.7}
-        >
-          <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
-        </TouchableOpacity>
+        {!embedded ? (
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backButton}
+            activeOpacity={0.7}
+          >
+            <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
+          </TouchableOpacity>
+        ) : null}
         <Text style={styles.headerTitle}>Settings</Text>
-        <View style={styles.headerSpacer} />
       </View>
 
       {/* Pro upgrade card */}
@@ -99,51 +111,37 @@ export default function SettingsScreen() {
         <AppIcon name="chevron-right" size={18} color={colors.accent} />
       </TouchableOpacity>
 
-      {/* General section */}
+      {/* General: personalization + the ONE notifications entry point */}
       <Text style={styles.sectionLabel}>General</Text>
       <View style={styles.card}>
-        <SettingsRow
-          icon="bell"
-          label="Notifications"
-          subtitle="Manage notification settings"
-          onPress={handleOpenAppSettings}
-        />
-        <View style={styles.separator} />
-        <SettingsRow
-          icon="zap"
-          label="Alarm diagnostics"
-          subtitle="Permissions & scheduled alarms"
-          onPress={() => router.push("/diagnostics")}
-        />
-        <View style={styles.separator} />
-        <SettingsRow
-          icon="clock"
-          label="History"
-          subtitle="Completed and missed reminders"
-          onPress={() => router.push("/history")}
-        />
-        <View style={styles.separator} />
         <SettingsRow
           icon="user"
           label="How should I address you?"
           subtitle={addressTerm ? addressTerm : "Not set"}
           onPress={() => setShowAddressSheet(true)}
         />
+        <View style={styles.separator} />
+        <SettingsRow
+          icon="bell"
+          label="Notifications & alarms"
+          subtitle="Permissions, scheduled alarms & system settings"
+          onPress={() => router.push("/diagnostics")}
+        />
       </View>
 
-      {/* About section */}
+      {/* About */}
       <Text style={styles.sectionLabel}>About</Text>
       <View style={styles.card}>
-        <View style={styles.aboutRow}>
-          <View style={styles.rowIcon}>
-            <AppIcon name="info" size={20} color={colors.textSecondary} />
-          </View>
-          <View>
-            <Text style={styles.rowTitle}>Voice Reminder</Text>
-            <Text style={styles.rowSubtitle}>{versionLabel}</Text>
-          </View>
-        </View>
+        <SettingsRow
+          icon="file-text"
+          label="Terms of Use"
+          subtitle="App Store subscription terms"
+          onPress={handleOpenTerms}
+        />
       </View>
+
+      {/* Version footer */}
+      <Text style={styles.versionFooter}>Voice Reminder {versionLabel}</Text>
 
       <AddressTermSheet
         visible={showAddressSheet}
@@ -153,6 +151,14 @@ export default function SettingsScreen() {
         }}
         onDismiss={() => setShowAddressSheet(false)}
       />
+    </ScrollView>
+  );
+}
+
+export default function SettingsScreen() {
+  return (
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+      <SettingsContent />
     </SafeAreaView>
   );
 }
@@ -161,14 +167,24 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  scroll: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  scrollContent: {
     paddingHorizontal: 20,
+    paddingBottom: 40,
+  },
+  scrollContentEmbedded: {
+    paddingBottom: 120,
   },
   header: {
-    paddingTop: Platform.OS === "ios" ? 20 : 8,
+    paddingTop: Platform.OS === "ios" ? 20 : 16,
     paddingBottom: 20,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 12,
   },
   backButton: {
     width: 40,
@@ -179,12 +195,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   headerTitle: {
-    fontSize: scaleFontSize(20),
-    fontWeight: "700",
-    color: colors.textPrimary,
-  },
-  headerSpacer: {
-    width: 40,
+    fontFamily: FONT_DISPLAY,
+    fontSize: scaleFontSize(30),
+    color: colors.textHeading,
   },
 
   // Pro card
@@ -195,7 +208,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent + "12",
     borderWidth: 1.5,
     borderColor: colors.accent + "30",
-    borderRadius: 16,
+    borderRadius: borderRadius.card,
     padding: 16,
     marginBottom: 24,
   },
@@ -224,21 +237,22 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
-  // Section
+  // Card
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: borderRadius.card,
+    overflow: "hidden",
+    marginBottom: 24,
+    ...shadows.card,
+  },
   sectionLabel: {
     fontSize: scaleFontSize(13),
     fontWeight: "600",
-    color: colors.textTertiary,
+    letterSpacing: 0.6,
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    color: colors.textTertiary,
     marginBottom: 8,
     marginLeft: 4,
-  },
-  card: {
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    marginBottom: 24,
-    overflow: "hidden",
   },
   separator: {
     height: StyleSheet.hairlineWidth,
@@ -250,7 +264,7 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 14,
+    paddingVertical: 16,
     paddingHorizontal: 16,
   },
   rowIcon: {
@@ -262,9 +276,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 12,
   },
-  rowIconAccent: {
-    backgroundColor: colors.accent,
-  },
   rowTextWrap: {
     flex: 1,
   },
@@ -273,20 +284,17 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: colors.textPrimary,
   },
-  rowTitleAccent: {
-    color: colors.accent,
-  },
   rowSubtitle: {
     fontSize: scaleFontSize(13),
     color: colors.textSecondary,
     marginTop: 1,
   },
 
-  // About
-  aboutRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+  // Footer
+  versionFooter: {
+    marginTop: 24,
+    textAlign: "center",
+    fontSize: scaleFontSize(13),
+    color: colors.textTertiary,
   },
 });

@@ -24,6 +24,7 @@ import { convex } from "../lib/convexClient";
 import { hydrateReminderAudio } from "../lib/audioHydration";
 import ErrorBoundary from "../components/ErrorBoundary";
 import PermissionPrompt from "../components/PermissionPrompt";
+import { useAppFonts } from "../lib/fonts";
 
 // Suppress RevenueCat network errors from Expo's LogBox/error overlay.
 // These fire when the device has no internet (e.g. USB-only dev) and are non-critical.
@@ -286,6 +287,10 @@ function AlarmOverlayFallback() {
 }
 
 function RootLayout() {
+  // Fraunces display font (JS-bundled asset, OTA-safe). Gate first render so
+  // serif page titles never flash the system font.
+  const fontsLoaded = useAppFonts();
+
   useEffect(() => {
     // Log build info first to detect stale bundles
     logBuildInfo();
@@ -300,6 +305,10 @@ function RootLayout() {
     });
     return () => task.cancel();
   }, []);
+
+  if (!fontsLoaded) {
+    return null;
+  }
 
   return (
     <ErrorBoundary>
@@ -327,7 +336,6 @@ function RootLayout() {
                 }
               >
                 <Stack.Screen name="index" options={{ contentStyle: { backgroundColor: "white" } }} />
-                <Stack.Screen name="history" options={{ contentStyle: { backgroundColor: "white" } }} />
                 <Stack.Screen
                   name="settings"
                   options={

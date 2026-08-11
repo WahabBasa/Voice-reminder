@@ -824,3 +824,27 @@ adb shell dumpsys alarm | grep -A 5 "your.package.name"
 - No user authentication (by design for local-first)
 - Single device only (local-first architecture, no cross-device sync)
 - No timezone handling (uses device timezone)
+
+---
+
+## Settings Design (revised 2026-08-11)
+
+The settings screen previously grew ad hoc and ended up with two entry points for
+notifications ("Notifications" → system settings AND "Alarm diagnostics" → permissions +
+scheduled alarms). Rule going forward: **one entry point per concern**.
+
+Current structure (PlanJoy-style grouped cards, embedded as the third dock page):
+
+- **Pro card** → paywall (hidden concern: monetization surface, stays on top)
+- **General**
+  - *How should I address you?* — address term used in spoken reminder lines
+  - *Notifications & alarms* — the ONLY notifications entry; opens the diagnostics page,
+    which owns permission status, scheduled alarms, and the "open system settings" action
+- **About**
+  - *Terms of Use* — Apple standard EULA (App Store subscription terms)
+- **Version footer**
+
+Candidate future rows (add only when actually wired to behavior):
+- Default snooze duration / default heads-up lead time (needs plumbing into parse + create)
+- Privacy Policy (needs a hosted document before the row can exist)
+- Manage subscription (RevenueCat customer-center deep link)

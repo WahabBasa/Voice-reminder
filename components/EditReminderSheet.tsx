@@ -2,36 +2,38 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
     Alert,
     InteractionManager,
+    Modal,
+    Pressable,
     StyleSheet,
+    Switch,
     Text,
     TextInput,
     View,
 } from "react-native";
-import ActionSheet, { ActionSheetAction } from "./ActionSheet";
+import ActionSheet from "./ActionSheet";
 import * as FileSystem from "expo-file-system/legacy";
-import { useAction, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { useToast } from "./ToastProvider";
 import { LinearGradient } from "expo-linear-gradient";
 import { TimerPickerModal } from "react-native-timer-picker";
-import Slider from "@react-native-community/slider";
 import { previewAudioService } from "../lib/AudioService";
 import BottomSheet, {
     BottomSheetScrollView,
     BottomSheetBackdrop,
     TouchableOpacity,
-    BottomSheetView,
 } from "@gorhom/bottom-sheet";
 import { api } from "../convex/_generated/api";
 import AppIcon from "./AppIcon";
 import DaySelector from "./DaySelector";
 import RepeatTaskModal from "./RepeatTaskModal";
 import DatePickerModal from "./DatePickerModal";
-import { cancelReminder, deleteLocalAudio, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
+import { cancelReminder, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
 import { migrateLegacySchedule } from "../lib/schedule";
 import { createTraceId, perfLog } from "../lib/perf";
-import { DEFAULT_ALARM_SETTINGS, VolumeStyle } from "../lib/storage";
+import { DEFAULT_ALARM_SETTINGS } from "../lib/storage";
 import { INTERVAL_MAX_MS, INTERVAL_MIN_MS, useReminderStore, Reminder } from "../lib/store";
-import { colors, scaleFontSize } from "../lib/theme";
+import { borderRadius, chipColors, colors, scaleFontSize, shadows } from "../lib/theme";
+import { FONT_DISPLAY } from "../lib/fonts";
 import { formatIntervalDuration } from "../lib/time";
 
 const FREQUENCIES = [
@@ -43,42 +45,53 @@ const FREQUENCIES = [
     { value: "yearly", label: "Yearly" },
 ];
 
-const PRE_REMINDER_OPTIONS = [
-    { value: 0, label: "None" },
-    { value: 5, label: "5 min" },
-    { value: 10, label: "10 min" },
-    { value: 15, label: "15 min" },
-    { value: 30, label: "30 min" },
+// Tap-to-cycle options
+const PRE_REMINDER_VALUES = [0, 5, 10, 15, 30];
+const SNOOZE_VALUES = [0, 5, 10, 15, 30]; // 0 = snooze off
+
+const EMOJI_CHOICES = [
+    "💊", "🩺", "💉", "🦷", "❤️", "🧠",
+    "🏃", "🏋️", "🧘", "🚶", "💧", "🍎",
+    "🥗", "🍳", "☕", "🍽️", "😴", "🛏️",
+    "🌅", "🌙", "📞", "💬", "📧", "📅",
+    "📝", "💼", "💻", "📚", "🎓", "🧾",
+    "💰", "🛒", "🎁", "🧺", "🧹", "🚗",
+    "⛽", "🐕", "🐈", "🌱", "🎂", "✈️",
+    "⏰", "🔔", "🎵", "🎨", "⚽", "🙏",
 ];
 
-type SettingsRowProps = {
+/** Deterministic pastel chip color per reminder id — stable forever. */
+function chipColorFor(id: string): string {
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) {
+        hash = (hash * 31 + id.charCodeAt(i)) | 0;
+    }
+    return chipColors[Math.abs(hash) % chipColors.length];
+}
+
+type SheetRowProps = {
     icon: Parameters<typeof AppIcon>[0]["name"];
     label: string;
     value?: string;
-    isAction?: boolean;
     onPress?: () => void;
 };
 
-const SettingsRow = React.memo(function SettingsRow({ icon, label, value, isAction, onPress }: SettingsRowProps) {
-    const isPressable = Boolean(onPress);
+const SheetRow = React.memo(function SheetRow({ icon, label, value, onPress }: SheetRowProps) {
     return (
         <TouchableOpacity
             style={styles.row}
             onPress={onPress}
-            disabled={!isPressable}
+            disabled={!onPress}
             activeOpacity={0.7}
         >
             <View style={styles.rowLeft}>
-                <AppIcon name={icon} size={22} color={stylesVars.iconColor} />
+                <AppIcon name={icon} size={20} color={colors.textSecondary} />
                 <Text style={styles.rowLabel}>{label}</Text>
             </View>
-
             {value ? (
                 <View style={styles.valuePill}>
                     <Text style={styles.valueText}>{value}</Text>
                 </View>
-            ) : isAction ? (
-                <Text style={styles.actionText}>ADD</Text>
             ) : null}
         </TouchableOpacity>
     );
@@ -112,9 +125,10 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const snapPoints = useMemo(() => ["60%", "95%"], []);
 
     // Initialize state directly from prop - no async loading needed!
-    const [reminder, setReminder] = useState<Reminder>(initialReminder);
+    const [reminder] = useState<Reminder>(initialReminder);
     const [title, setTitle] = useState(initialReminder.title || "");
-    const [description, setDescription] = useState(initialReminder.description || "");
+    const [emoji, setEmoji] = useState<string | undefined>(initialReminder.emoji);
+    const description = initialReminder.description || "";
 
     const [time, setTime] = useState(() => {
         if (initialReminder.time) {
@@ -147,16 +161,18 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const [persistent, setPersistent] = useState<boolean>(initialReminder.persistent ?? false);
     const [snoozeEnabled, setSnoozeEnabled] = useState(initialReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled);
     const [snoozeDuration, setSnoozeDuration] = useState(initialReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration);
-    const [volume, setVolume] = useState(initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume);
-    const [sliderVolume, setSliderVolume] = useState(initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume); // Local state for smooth dragging
-    const [volumeStyle, setVolumeStyle] = useState<VolumeStyle>(initialReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle);
+
+    // Volume control was cut from the sheet — values pass through unchanged.
+    const volume = initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume;
+    const volumeStyle = initialReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle;
 
     const [showTimePicker, setShowTimePicker] = useState(false);
     const [showDaysPicker, setShowDaysPicker] = useState(false);
     const [showRepeatTaskModal, setShowRepeatTaskModal] = useState(false);
-    const [showOptionsSheet, setShowOptionsSheet] = useState(false);
+    const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+    const chipColor = useMemo(() => chipColorFor(initialReminder.id), [initialReminder.id]);
 
     // Date formatting helpers
     const formatDateLabel = useCallback((date: Date | null) => {
@@ -175,14 +191,10 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
     const dateLabel = useMemo(() => formatDateLabel(selectedDate), [formatDateLabel, selectedDate]);
     const [isPlaying, setIsPlaying] = useState(false);
-    const [soundText, setSoundText] = useState(initialReminder.description || "");
-    const [isRegenerating, setIsRegenerating] = useState(false);
-    const regenerateAudio = useAction(api.actions.regenerateReminderAudio);
     const toast = useToast();
 
     // Log mount/unmount and cleanup audio on unmount
     useEffect(() => {
-        console.log("[VR] EditReminderSheet mounted (floating date modal build)");
         perfLog(traceId, "overlay.edit", "sheet_mount", { t: Date.now(), reminderId: initialReminder.id });
 
         return () => {
@@ -195,38 +207,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const handleDayToggle = (day: string) => {
         setDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]));
     };
-
-    const hasChanges = useCallback(() => {
-        const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time
-            .getMinutes()
-            .toString()
-            .padStart(2, "0")}`;
-        const currentDays = [...days].sort().join(",");
-        const originalDays = [...(initialReminder.days || [])].sort().join(",");
-
-        // Format current date to compare with original
-        const currentDateStr = selectedDate
-            ? `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`
-            : undefined;
-
-        return (
-            title !== initialReminder.title ||
-            description !== initialReminder.description ||
-            timeStr !== initialReminder.time ||
-            frequency !== initialReminder.frequency ||
-            currentDays !== originalDays ||
-            currentDateStr !== initialReminder.date ||
-            (initialReminder.preReminderMinutes ?? 0) !== preReminderMinutes ||
-            (initialReminder.persistent ?? false) !== persistent ||
-            (initialReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled) !== snoozeEnabled ||
-            (initialReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration) !== snoozeDuration ||
-            (initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume) !== volume ||
-            (initialReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle) !== volumeStyle ||
-            (initialReminder.intervalMs ?? undefined) !== (intervalMs ?? undefined) ||
-            (initialReminder.anchorAt ?? undefined) !== (anchorAt ?? undefined) ||
-            (initialReminder.intervalDays ?? undefined) !== (intervalDays ?? undefined)
-        );
-    }, [days, frequency, initialReminder, time, title, description, selectedDate, preReminderMinutes, persistent, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt]);
 
     const frequencyLabel = useMemo(() => {
         if (frequency === "interval" && intervalMs) {
@@ -247,20 +227,40 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         return picked.map((d) => d.charAt(0).toUpperCase() + d.slice(1, 3)).join(", ");
     }, [days, frequency]);
 
-    const handlePlayPreview = async () => {
-        console.log("[VR] ========== PREVIEW PLAYBACK ==========");
-        console.log("[VR] audioUrl:", reminder?.audioUrl);
-        console.log("[VR] sliderVolume (target):", sliderVolume);
-        console.log("[VR] isPlaying:", isPlaying);
+    const preReminderLabel = useMemo(
+        () => (preReminderMinutes > 0 ? `${preReminderMinutes} min before` : "None"),
+        [preReminderMinutes]
+    );
 
-        if (!reminder?.audioUrl) {
-            console.log("[VR] No audio URL, returning");
-            return;
+    const snoozeLabel = useMemo(
+        () => (snoozeEnabled ? `${snoozeDuration} min` : "Off"),
+        [snoozeEnabled, snoozeDuration]
+    );
+
+    const cyclePreReminder = useCallback(() => {
+        setPreReminderMinutes((current) => {
+            const idx = PRE_REMINDER_VALUES.indexOf(current);
+            return PRE_REMINDER_VALUES[(idx + 1) % PRE_REMINDER_VALUES.length] ?? 0;
+        });
+    }, []);
+
+    const cycleSnooze = useCallback(() => {
+        const current = snoozeEnabled ? snoozeDuration : 0;
+        const idx = SNOOZE_VALUES.indexOf(current);
+        const next = SNOOZE_VALUES[(idx + 1) % SNOOZE_VALUES.length] ?? 0;
+        if (next === 0) {
+            setSnoozeEnabled(false);
+        } else {
+            setSnoozeEnabled(true);
+            setSnoozeDuration(next);
         }
+    }, [snoozeEnabled, snoozeDuration]);
+
+    const handlePlayPreview = async () => {
+        if (!reminder?.audioUrl) return;
 
         // If currently playing, stop
         if (isPlaying) {
-            console.log("[VR] Stopping playback");
             await previewAudioService.stop();
             setIsPlaying(false);
             return;
@@ -273,7 +273,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             const localInfo = await FileSystem.getInfoAsync(localPath);
             if (localInfo.exists) {
                 audioPath = localPath;
-                console.log("[VR] Using local file for preview:", localPath);
             }
         } catch (e) {
             console.log("[VR] Could not check local file, using remote URL");
@@ -283,7 +282,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         const success = await previewAudioService.play(
             audioPath,
             {
-                volume: sliderVolume,
+                volume,
                 streamType: "music", // Preview uses MUSIC stream
                 loop: false,
             },
@@ -294,98 +293,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         );
 
         setIsPlaying(success);
-        if (success) {
-            console.log("[VR] ✅ Preview playback started via AudioService");
-        } else {
-            console.log("[VR] ❌ Failed to start preview");
-        }
-    };
-
-    const handleRegenerate = async () => {
-        if (!reminder?.convexId || !soundText.trim()) {
-            Alert.alert("Error", "Please enter text for the voice reminder");
-            return;
-        }
-
-        setIsRegenerating(true);
-        try {
-            const result = await regenerateAudio({
-                reminderId: reminder.convexId as any,
-                soundText: soundText.trim(),
-            });
-
-            if (result.audioUrl) {
-                // Stop any playing audio and clear stale state
-                await previewAudioService.stop();
-                setIsPlaying(false);
-
-                const updatedReminder = { ...reminder, audioUrl: result.audioUrl, description: soundText.trim() };
-                setReminder(updatedReminder);
-                setDescription(soundText.trim());
-
-                await storeUpdateReminder(updatedReminder);
-
-                const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time
-                    .getMinutes()
-                    .toString()
-                    .padStart(2, "0")}`;
-
-                const dateStr = selectedDate
-                    ? `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`
-                    : undefined;
-
-                await cancelReminder(reminder.id);
-                // Delete stale local audio so downloadReminderAudio fetches the new file
-                await deleteLocalAudio(reminder.id);
-                const { triggerTimestamp } = await scheduleReminder({
-                    id: reminder.id,
-                    title: reminder.title,
-                    description: soundText.trim(),
-                    time: timeStr,
-                    date: dateStr,
-                    frequency,
-                    days: frequency === "custom" ? days : [],
-                    audioUrl: result.audioUrl,
-                    preReminderMinutes,
-                    preAudioUrl: reminder.preAudioUrl,
-                    urgency: reminder.urgency,
-                    persistent,
-                    variants: reminder.variants,
-                    variantAudioUrls: reminder.variantAudioUrls,
-                    snoozeEnabled,
-                    snoozeDuration,
-                    volume,
-                    volumeStyle,
-
-                    intervalMs: frequency === "interval" ? intervalMs : undefined,
-                    anchorAt: frequency === "interval" ? anchorAt : undefined,
-                    intervalDays: frequency === "daily" ? intervalDays : undefined,
-                });
-
-                await storeUpdateReminder({
-                    ...updatedReminder,
-                    scheduledFor: triggerTimestamp,
-                });
-
-                toast.show({ title: "Sound regenerated", message: "New voice reminder ready", type: "success" });
-            }
-        } catch (error) {
-            console.error("[VR] Regeneration error:", error);
-            if ((error as any)?.name === "ExactAlarmPermissionError") {
-                Alert.alert(
-                    "Enable Alarms & reminders",
-                    "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
-                    [
-                        { text: "Open permission", onPress: () => openAlarmPermissionSettingsSafe() },
-                        { text: "OK" },
-                    ]
-                );
-            } else {
-                Alert.alert("Error", "Failed to regenerate voice. Please try again.");
-            }
-        } finally {
-            setIsRegenerating(false);
-        }
     };
 
     const openFrequencyPicker = () => {
@@ -461,6 +368,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         const updatedReminder: Reminder = {
             ...reminder,
             title: title.trim(),
+            emoji,
             description,
             time: timeStr,
             date: dateStr,
@@ -566,11 +474,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             console.error("[VR] Save error:", error);
             Alert.alert("Error", "Failed to save reminder");
         }
-    }, [reminder, title, time, description, frequency, days, selectedDate, storeUpdateReminder, updateConvexReminder, preReminderMinutes, persistent, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt, onSave, onClose]);
-
-    const handleDelete = () => {
-        setShowDeleteConfirm(true);
-    };
+    }, [reminder, title, emoji, time, description, frequency, days, selectedDate, storeUpdateReminder, updateConvexReminder, preReminderMinutes, persistent, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt, intervalDays, onSave, onClose]);
 
     const executeDelete = async () => {
         const reminderId = reminder.id;
@@ -600,47 +504,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             }
         });
     };
-
-    const openOptionsMenu = () => {
-        setShowOptionsSheet(true);
-    };
-
-    const optionsActions = useMemo((): ActionSheetAction[] => {
-        const actions: ActionSheetAction[] = [];
-
-        if (hasChanges()) {
-            actions.push({
-                key: "save",
-                label: "Save Changes",
-                icon: "check",
-                onPress: () => {
-                    setShowOptionsSheet(false);
-                    handleSave();
-                },
-            });
-        }
-
-        actions.push({
-            key: "delete",
-            label: "Delete Reminder",
-            icon: "trash-2",
-            variant: "destructive",
-            onPress: () => {
-                setShowOptionsSheet(false);
-                setShowDeleteConfirm(true);
-            },
-        });
-
-        actions.push({
-            key: "cancel",
-            label: "Cancel",
-            variant: "cancel",
-            onPress: () => setShowOptionsSheet(false),
-        });
-
-        return actions;
-    }, [hasChanges, handleSave]);
-
 
     const renderBackdrop = useCallback(
         (props: any) => (
@@ -691,83 +554,62 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                 }}
                 handleIndicatorStyle={styles.handleIndicator}
                 backgroundStyle={styles.sheetBackground}
-                // Less restrictive offset to allow slider while still enabling scroll
                 activeOffsetY={[-15, 15]}
             >
                 <BottomSheetScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
-                    <TextInput
-                        style={styles.titleInput}
-                        value={title}
-                        onChangeText={setTitle}
-                        onFocus={expandSheet}
-                        placeholder="Reminder"
-                        placeholderTextColor={stylesVars.mutedText}
-                        maxLength={100}
-                    />
-
-
-
-                    <View style={styles.soundSection}>
-                        <TouchableOpacity
-                            style={styles.soundSectionHeader}
-                            onPress={reminder.audioUrl ? handlePlayPreview : undefined}
-                            activeOpacity={reminder.audioUrl ? 0.7 : 1}
-                            disabled={!reminder.audioUrl}
-                        >
-                            <AppIcon name={isPlaying ? "square" : "play"} size={20} color={reminder.audioUrl ? colors.accent : stylesVars.iconColor} />
-                            <Text style={[styles.soundSectionTitle, reminder.audioUrl && { color: colors.accent }]}>
-                                {isPlaying ? "Stop reminder" : "Play reminder"}
-                            </Text>
-                        </TouchableOpacity>
+                    {/* Title card: input + emoji chip */}
+                    <View style={styles.titleCard}>
                         <TextInput
-                            style={styles.soundTextInput}
-                            value={soundText}
-                            onChangeText={setSoundText}
+                            style={styles.titleInput}
+                            value={title}
+                            onChangeText={setTitle}
                             onFocus={expandSheet}
-                            placeholder="What the reminder will say..."
-                            placeholderTextColor={stylesVars.mutedText}
-                            multiline
-                            numberOfLines={2}
-                            textAlignVertical="top"
-                            maxLength={250}
+                            placeholder="Reminder"
+                            placeholderTextColor={colors.textTertiary}
+                            maxLength={100}
                         />
                         <TouchableOpacity
-                            style={[styles.regenerateButton, isRegenerating && styles.regenerateButtonDisabled]}
-                            onPress={handleRegenerate}
-                            disabled={isRegenerating}
+                            style={[styles.emojiChip, { backgroundColor: chipColor }]}
+                            onPress={() => setShowEmojiPicker(true)}
                             activeOpacity={0.7}
                         >
-                            <AppIcon name="refresh-cw" size={14} color={colors.accent} />
-                            <Text style={styles.regenerateButtonText}>
-                                {isRegenerating ? "Regenerating..." : "Regenerate"}
-                            </Text>
+                            {emoji ? (
+                                <Text style={styles.emojiChipText}>{emoji}</Text>
+                            ) : (
+                                <AppIcon name="bell" size={20} color={colors.textSecondary} />
+                            )}
                         </TouchableOpacity>
                     </View>
 
-                    <View style={styles.rowList}>
-                        <SettingsRow
+                    {/* Grouped rows card */}
+                    <View style={styles.rowCard}>
+                        <SheetRow
                             icon="clock"
                             label="Time"
                             value={formatTime(time).toLowerCase()}
                             onPress={() => setShowTimePicker(true)}
                         />
 
-                        <SettingsRow
-                            icon="calendar"
-                            label="Date"
-                            value={dateLabel}
-                            onPress={() => {
-                                console.log("[VR] Opening floating DatePickerModal");
-                                setShowDatePicker(true);
-                            }}
-                        />
+                        {frequency === "once" ? (
+                            <>
+                                <View style={styles.separator} />
+                                <SheetRow
+                                    icon="calendar"
+                                    label="Date"
+                                    value={dateLabel}
+                                    onPress={() => setShowDatePicker(true)}
+                                />
+                            </>
+                        ) : null}
 
-                        <SettingsRow icon="refresh-cw" label="Repeat" value={frequencyLabel} onPress={openFrequencyPicker} />
+                        <View style={styles.separator} />
+                        <SheetRow icon="refresh-cw" label="Repeat" value={frequencyLabel} onPress={openFrequencyPicker} />
 
                         {frequency === "custom" ? (
                             <>
-                                <SettingsRow icon="calendar" label="Days" value={daysLabel} onPress={() => setShowDaysPicker((v) => !v)} />
+                                <View style={styles.separator} />
+                                <SheetRow icon="calendar" label="Days" value={daysLabel} onPress={() => setShowDaysPicker((v) => !v)} />
                                 {showDaysPicker ? (
                                     <View style={styles.daysPicker}>
                                         <DaySelector selectedDays={days} onToggle={handleDayToggle} />
@@ -776,96 +618,50 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             </>
                         ) : null}
 
-                        <View style={styles.preAlertRow}>
-                            <View style={styles.rowLeft}>
-                                <AppIcon name="bell" size={22} color={stylesVars.iconColor} />
-                                <Text style={styles.rowLabel}>Heads up before</Text>
-                            </View>
-                        </View>
-                        <View style={styles.preAlertOptionsRow}>
-                            {PRE_REMINDER_OPTIONS.map((option) => {
-                                const selected = preReminderMinutes === option.value;
-                                return (
-                                    <TouchableOpacity
-                                        key={option.value}
-                                        style={[styles.preAlertOption, selected && styles.preAlertOptionSelected]}
-                                        onPress={() => setPreReminderMinutes(option.value)}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Text style={[styles.preAlertOptionText, selected && styles.preAlertOptionTextSelected]}>
-                                            {option.label}
-                                        </Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </View>
-
-                        <SettingsRow
-                            icon="zap"
-                            label="Keep reminding until done"
-                            value={persistent ? "On" : "Off"}
-                            onPress={() => setPersistent((v) => !v)}
-                        />
-
-                        <SettingsRow
-                            icon="clock"
-                            label="Snooze"
-                            value={snoozeEnabled ? "On" : "Off"}
-                            onPress={() => setSnoozeEnabled((v) => !v)}
-                        />
-
-                        <View style={styles.stepperRow}>
-                            <View style={styles.rowLeft}>
-                                <AppIcon name="clock" size={22} color={stylesVars.iconColor} />
-                                <Text style={styles.rowLabel}>Snooze minutes</Text>
-                            </View>
-                            <View style={styles.stepperRight}>
-                                <TouchableOpacity
-                                    style={styles.stepperButton}
-                                    onPress={() => setSnoozeDuration((v) => Math.max(1, v - 1))}
-                                    disabled={!snoozeEnabled}
-                                    activeOpacity={0.7}
-                                >
-                                    <Text style={[styles.stepperButtonText, !snoozeEnabled && styles.stepperDisabled]}>-</Text>
-                                </TouchableOpacity>
-                                <View style={[styles.valuePill, !snoozeEnabled && styles.stepperPillDisabled]}>
-                                    <Text style={styles.valueText}>{snoozeDuration} min</Text>
+                        <View style={styles.separator} />
+                        <View style={styles.row}>
+                            <View style={styles.rowLeftText}>
+                                <View style={styles.rowLeft}>
+                                    <AppIcon name="zap" size={20} color={colors.textSecondary} />
+                                    <Text style={styles.rowLabel}>Alarm</Text>
                                 </View>
-                                <TouchableOpacity
-                                    style={styles.stepperButton}
-                                    onPress={() => setSnoozeDuration((v) => Math.min(60, v + 1))}
-                                    disabled={!snoozeEnabled}
-                                    activeOpacity={0.7}
-                                >
-                                    <Text style={[styles.stepperButtonText, !snoozeEnabled && styles.stepperDisabled]}>+</Text>
-                                </TouchableOpacity>
+                                <Text style={styles.rowSubLabel}>Keeps ringing until you respond</Text>
                             </View>
+                            <Switch
+                                value={persistent}
+                                onValueChange={setPersistent}
+                                trackColor={{ false: colors.muted, true: colors.accent }}
+                                thumbColor="#ffffff"
+                            />
                         </View>
 
-                        <View style={styles.sliderSection}>
-                            <View style={styles.sliderLabelRow}>
-                                <AppIcon name="volume-1" size={22} color={stylesVars.iconColor} />
-                                <Text style={styles.rowLabel}>Volume</Text>
-                            </View>
-                            <View style={styles.sliderTrackRow} pointerEvents="box-none">
-                                <Slider
-                                    style={styles.slider}
-                                    value={sliderVolume}
-                                    minimumValue={0}
-                                    maximumValue={1}
-                                    step={0.05}
-                                    onValueChange={setSliderVolume}
-                                    onSlidingComplete={(val) => {
-                                        setSliderVolume(val);
-                                        setVolume(val);
-                                    }}
-                                    minimumTrackTintColor={colors.accent}
-                                    maximumTrackTintColor={stylesVars.chipBg}
-                                    thumbTintColor={colors.accent}
-                                />
-                            </View>
-                        </View>
+                        <View style={styles.separator} />
+                        <SheetRow icon="bell" label="Heads-up" value={preReminderLabel} onPress={cyclePreReminder} />
+
+                        <View style={styles.separator} />
+                        <SheetRow icon="clock" label="Snooze" value={snoozeLabel} onPress={cycleSnooze} />
                     </View>
+
+                    {/* Voice note card */}
+                    {reminder.audioUrl ? (
+                        <View style={styles.rowCard}>
+                            <TouchableOpacity
+                                style={styles.row}
+                                onPress={handlePlayPreview}
+                                activeOpacity={0.7}
+                            >
+                                <View style={styles.rowLeft}>
+                                    <View style={styles.playCircle}>
+                                        <AppIcon name={isPlaying ? "square" : "play"} size={16} color="#ffffff" />
+                                    </View>
+                                    <Text style={styles.rowLabel}>Voice note</Text>
+                                </View>
+                                <View style={styles.valuePill}>
+                                    <Text style={styles.valueText}>{isPlaying ? "Playing…" : "Play"}</Text>
+                                </View>
+                            </TouchableOpacity>
+                        </View>
+                    ) : null}
 
                     {showTimePicker ? (
                         <TimerPickerModal
@@ -904,7 +700,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             dateOnly
                             onCancel={() => setShowDatePicker(false)}
                             onConfirm={({ date }) => {
-                                console.log("[VR] DatePickerModal confirmed date:", date?.toISOString?.() ?? "none");
                                 setSelectedDate(date);
                                 setShowDatePicker(false);
                             }}
@@ -937,24 +732,23 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         />
                     )}
 
-                    {/* Save / Delete buttons */}
+                    {/* Trash / Done */}
                     <View style={styles.bottomActions}>
                         <TouchableOpacity
-                            style={styles.saveButton}
-                            onPress={handleSave}
+                            style={styles.deleteCircle}
+                            onPress={() => setShowDeleteConfirm(true)}
                             activeOpacity={0.7}
                         >
-                            <AppIcon name="check" size={18} color="white" />
-                            <Text style={styles.saveButtonText}>Save Changes</Text>
+                            <AppIcon name="trash-2" size={20} color={colors.destructive} />
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                            style={styles.deleteButton}
-                            onPress={handleDelete}
+                            style={styles.doneButton}
+                            onPress={handleSave}
                             activeOpacity={0.7}
                         >
-                            <AppIcon name="trash-2" size={16} color={colors.destructive} />
-                            <Text style={styles.deleteButtonText}>Delete</Text>
+                            <Text style={styles.doneButtonText}>Done</Text>
+                            <AppIcon name="check" size={18} color="white" />
                         </TouchableOpacity>
                     </View>
 
@@ -962,13 +756,49 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                 </BottomSheetScrollView>
             </BottomSheet>
 
-            {/* Options Menu ActionSheet */}
-            <ActionSheet
-                visible={showOptionsSheet}
-                title="Options"
-                actions={optionsActions}
-                onDismiss={() => setShowOptionsSheet(false)}
-            />
+            {/* Emoji picker */}
+            <Modal
+                visible={showEmojiPicker}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowEmojiPicker(false)}
+            >
+                <Pressable style={styles.emojiOverlay} onPress={() => setShowEmojiPicker(false)}>
+                    <Pressable style={styles.emojiSheet} onPress={() => {}}>
+                        <Text style={styles.emojiSheetTitle}>Pick an emoji</Text>
+                        <View style={styles.emojiGrid}>
+                            {EMOJI_CHOICES.map((choice) => {
+                                const selected = choice === emoji;
+                                return (
+                                    <TouchableOpacity
+                                        key={choice}
+                                        style={[styles.emojiCell, selected && { backgroundColor: chipColor }]}
+                                        onPress={() => {
+                                            setEmoji(choice);
+                                            setShowEmojiPicker(false);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Text style={styles.emojiCellText}>{choice}</Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+                        {emoji ? (
+                            <TouchableOpacity
+                                style={styles.emojiRemoveButton}
+                                onPress={() => {
+                                    setEmoji(undefined);
+                                    setShowEmojiPicker(false);
+                                }}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={styles.emojiRemoveText}>Remove emoji</Text>
+                            </TouchableOpacity>
+                        ) : null}
+                    </Pressable>
+                </Pressable>
+            </Modal>
 
             {/* Delete Confirmation ActionSheet */}
             <ActionSheet
@@ -999,285 +829,194 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     );
 }
 
-const stylesVars = {
-    bg: "#ffffff",
-    iconColor: "#9e9e9e",
-    headerText: "#212121",
-    mutedText: "#9e9e9e",
-    labelText: "#424242",
-    chipBg: "#f5f5f5",
-    chipText: "#616161",
-    actionText: "#9e9e9e",
-};
-
 const styles = StyleSheet.create({
     sheetContainer: {
         ...StyleSheet.absoluteFillObject,
         backgroundColor: "transparent",
     },
     sheetBackground: {
-        backgroundColor: stylesVars.bg,
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
+        backgroundColor: colors.background,
+        borderTopLeftRadius: borderRadius.sheet,
+        borderTopRightRadius: borderRadius.sheet,
     },
     handleIndicator: {
         backgroundColor: "#e0e0e0",
         width: 36,
     },
-    sheetHeader: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: 8,
-    },
-    moreButton: {
-        width: 44,
-        height: 44,
-        justifyContent: "center",
-        alignItems: "center",
-    },
     content: {
         paddingHorizontal: 20,
         paddingBottom: 22,
     },
-    topChip: {
-        alignSelf: "flex-start",
+
+    // Title card
+    titleCard: {
         flexDirection: "row",
         alignItems: "center",
-        backgroundColor: stylesVars.chipBg,
-        borderRadius: 16,
-        paddingHorizontal: 12,
+        backgroundColor: colors.card,
+        borderRadius: borderRadius.lg,
+        paddingHorizontal: 16,
         paddingVertical: 6,
-        gap: 4,
-        marginTop: 8,
-    },
-    topChipText: {
-        fontSize: scaleFontSize(13),
-        fontWeight: "500",
-        color: stylesVars.chipText,
+        marginTop: 14,
+        gap: 12,
+        ...shadows.card,
     },
     titleInput: {
-        fontSize: scaleFontSize(22),
-        fontWeight: "700",
-        color: stylesVars.headerText,
-        marginTop: 14,
-        paddingVertical: 4,
+        flex: 1,
+        fontFamily: FONT_DISPLAY,
+        fontSize: scaleFontSize(20),
+        color: colors.textHeading,
+        paddingVertical: 12,
     },
-    playButton: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 4,
-        marginLeft: "auto",
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        backgroundColor: colors.accent + "15",
-        borderRadius: 16,
-    },
-    playButtonText: {
-        fontSize: scaleFontSize(13),
-        fontWeight: "600",
-        color: colors.accent,
-    },
-    rowList: {
-        marginTop: 20,
-    },
-    row: {
-        paddingVertical: 14,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-    stepperRow: {
-        paddingVertical: 14,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-    stepperRight: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-    },
-    stepperButton: {
-        width: 34,
-        height: 34,
-        borderRadius: 12,
-        backgroundColor: stylesVars.chipBg,
+    emojiChip: {
+        width: 44,
+        height: 44,
+        borderRadius: borderRadius.full,
         alignItems: "center",
         justifyContent: "center",
     },
-    stepperButtonText: {
-        fontSize: scaleFontSize(18),
-        fontWeight: "700",
-        color: stylesVars.headerText,
+    emojiChipText: {
+        fontSize: scaleFontSize(22),
     },
-    stepperDisabled: {
-        color: stylesVars.mutedText,
+
+    // Grouped rows card
+    rowCard: {
+        backgroundColor: colors.card,
+        borderRadius: borderRadius.lg,
+        marginTop: 16,
+        paddingHorizontal: 16,
+        ...shadows.card,
     },
-    stepperPillDisabled: {
-        opacity: 0.6,
+    separator: {
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: colors.border,
+        marginLeft: 36,
     },
-    sliderSection: {
-        paddingVertical: 14,
-    },
-    sliderLabelRow: {
+    row: {
+        paddingVertical: 16,
         flexDirection: "row",
         alignItems: "center",
-        gap: 16,
-    },
-    sliderTrackRow: {
-        marginTop: 10,
-        flexDirection: "row",
-        alignItems: "center",
-    },
-    volumeValue: {
-        marginLeft: "auto",
-        fontSize: scaleFontSize(14),
-        fontWeight: "500",
-        color: stylesVars.chipText,
-    },
-    slider: {
-        flex: 1,
-        height: 40,
+        justifyContent: "space-between",
     },
     rowLeft: {
         flexDirection: "row",
         alignItems: "center",
         gap: 16,
     },
+    rowLeftText: {
+        flex: 1,
+        gap: 2,
+    },
     rowLabel: {
         fontSize: scaleFontSize(15),
-        fontWeight: "400",
-        color: stylesVars.labelText,
+        fontWeight: "500",
+        color: colors.textPrimary,
+    },
+    rowSubLabel: {
+        fontSize: scaleFontSize(12),
+        color: colors.textSecondary,
+        marginLeft: 36,
     },
     valuePill: {
-        backgroundColor: stylesVars.chipBg,
-        borderRadius: 16,
+        backgroundColor: colors.surfaceAlt,
+        borderRadius: borderRadius.full,
         paddingHorizontal: 12,
         paddingVertical: 6,
     },
     valueText: {
         fontSize: scaleFontSize(13),
-        fontWeight: "400",
-        color: stylesVars.chipText,
-    },
-    actionText: {
-        fontSize: scaleFontSize(13),
         fontWeight: "500",
-        color: stylesVars.actionText,
+        color: colors.textSecondary,
     },
     daysPicker: {
-        paddingLeft: 38,
+        paddingLeft: 36,
         paddingBottom: 12,
         paddingTop: 4,
     },
-    preAlertRow: {
-        paddingTop: 14,
-        paddingBottom: 10,
+
+    // Voice note
+    playCircle: {
+        width: 32,
+        height: 32,
+        borderRadius: borderRadius.full,
+        backgroundColor: colors.accent,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+
+    // Bottom actions
+    bottomActions: {
+        marginTop: 28,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
+        gap: 12,
     },
-    preAlertOptionsRow: {
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 8,
-        paddingLeft: 38,
-        paddingBottom: 14,
-    },
-    preAlertOption: {
-        backgroundColor: stylesVars.chipBg,
-        borderRadius: 16,
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-    },
-    preAlertOptionSelected: {
-        backgroundColor: colors.accent,
-    },
-    preAlertOptionText: {
-        fontSize: scaleFontSize(13),
-        fontWeight: "400",
-        color: stylesVars.chipText,
-    },
-    preAlertOptionTextSelected: {
-        color: "white",
-        fontWeight: "600",
-    },
-    soundSection: {
-        marginTop: 24,
-        paddingTop: 20,
-        borderTopWidth: 1,
-        borderTopColor: stylesVars.chipBg,
-    },
-    soundSectionHeader: {
-        flexDirection: "row",
+    deleteCircle: {
+        width: 52,
+        height: 52,
+        borderRadius: borderRadius.full,
+        backgroundColor: colors.card,
         alignItems: "center",
-        gap: 10,
-        marginBottom: 12,
+        justifyContent: "center",
+        ...shadows.card,
     },
-    soundSectionTitle: {
-        fontSize: scaleFontSize(15),
-        fontWeight: "600",
-        color: stylesVars.labelText,
-    },
-    soundTextInput: {
-        backgroundColor: stylesVars.chipBg,
-        borderRadius: 12,
-        padding: 14,
-        fontSize: scaleFontSize(14),
-        color: stylesVars.headerText,
-        minHeight: 80,
-    },
-    regenerateButton: {
-        marginTop: 12,
-        flexDirection: "row",
-        alignItems: "center",
-        alignSelf: "flex-start",
-        gap: 6,
-        backgroundColor: colors.accent + "12",
-        borderRadius: 10,
-        paddingVertical: 8,
-        paddingHorizontal: 14,
-        borderWidth: 1,
-        borderColor: colors.accent + "30",
-    },
-    regenerateButtonDisabled: {
-        opacity: 0.5,
-    },
-    regenerateButtonText: {
-        fontSize: scaleFontSize(13),
-        fontWeight: "600",
-        color: colors.accent,
-    },
-    bottomActions: {
-        marginTop: 28,
-        gap: 10,
-    },
-    saveButton: {
+    doneButton: {
+        flex: 1,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
         gap: 8,
         backgroundColor: colors.accent,
-        borderRadius: 14,
-        paddingVertical: 14,
+        borderRadius: borderRadius.full,
+        paddingVertical: 15,
     },
-    saveButtonDisabled: {
-        opacity: 0.4,
-    },
-    saveButtonText: {
+    doneButtonText: {
         fontSize: scaleFontSize(16),
         fontWeight: "700",
         color: "white",
     },
-    deleteButton: {
+
+    // Emoji picker
+    emojiOverlay: {
+        flex: 1,
+        backgroundColor: colors.overlay,
+        justifyContent: "center",
+        paddingHorizontal: 24,
+    },
+    emojiSheet: {
+        backgroundColor: colors.card,
+        borderRadius: borderRadius.card,
+        padding: 20,
+    },
+    emojiSheetTitle: {
+        fontSize: scaleFontSize(16),
+        fontWeight: "700",
+        color: colors.textPrimary,
+        marginBottom: 14,
+    },
+    emojiGrid: {
         flexDirection: "row",
+        flexWrap: "wrap",
+        gap: 6,
+        justifyContent: "center",
+    },
+    emojiCell: {
+        width: 44,
+        height: 44,
+        borderRadius: borderRadius.md,
         alignItems: "center",
         justifyContent: "center",
-        gap: 6,
-        paddingVertical: 12,
     },
-    deleteButtonText: {
+    emojiCellText: {
+        fontSize: scaleFontSize(22),
+    },
+    emojiRemoveButton: {
+        marginTop: 14,
+        alignSelf: "center",
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+    },
+    emojiRemoveText: {
         fontSize: scaleFontSize(14),
         fontWeight: "600",
         color: colors.destructive,
