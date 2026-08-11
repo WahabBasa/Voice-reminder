@@ -10,6 +10,7 @@
  * scheduling branch and the reconciliation bookkeeping.
  */
 import { NativeModules, Platform } from "react-native";
+import { ladderRungTimes, ladderVariantIndex } from "./notificationDecisions";
 import { vrLog } from "./vrLog";
 
 export type AlarmAuthorizationStatus = "authorized" | "denied" | "notDetermined";
@@ -31,7 +32,12 @@ export interface ScheduledAlarm {
   fireDate: number;
 }
 
-export type AlarmEventType = "stopped" | "snoozed" | "fired";
+/**
+ * "cancelled" is a rung killed natively by a sibling's Done/Later (CL-2). It is
+ * not an outcome the user produced on THAT key, so reconciliation must record
+ * nothing for it and must not resurrect it.
+ */
+export type AlarmEventType = "stopped" | "snoozed" | "fired" | "cancelled";
 
 export interface AlarmEvent {
   type: AlarmEventType;
@@ -85,6 +91,91 @@ export function parseAlarmAppKey(
   const scheduledFor = Number(match[2]);
   if (!Number.isFinite(scheduledFor)) return null;
   return { reminderId: match[1], scheduledFor };
+}
+
+// ─── Cadence ladder expansion ───────────────────────────────────────────────
+
+export interface AlarmLadderRung {
+  /** 0-based position in the ladder. */
+  rung: number;
+  /** Total rungs of this occurrence (1–3). */
+  rungCount: number;
+  fireDate: number;
+  /** `reminder_<id>_<rungFireTime>` — the appKey scheme is unchanged. */
+  appKey: string;
+  /** The OTHER rungs' appKeys. Never contains snooze follow-up keys. */
+  siblings: string[];
+  /** Index into `variants`; -1 = the base line (rung 0). */
+  variantIndex: number;
+}
+
+/**
+ * Expand one occurrence into its ladder of sibling alarms.
+ *
+ * Each rung is a real AlarmKit alarm with its own fire timestamp, so each gets
+ * its own appKey from the unchanged scheme — `parseAlarmAppKey` keeps working.
+ */
+export function buildAlarmLadder(
+  reminderId: string,
+  baseTimestamp: number,
+  urgency: unknown,
+  persistent: unknown
+): AlarmLadderRung[] {
+  const times = ladderRungTimes(baseTimestamp, urgency, persistent);
+  const keys = times.map((fireDate) => alarmAppKey(reminderId, fireDate));
+  return times.map((fireDate, rung) => ({
+    rung,
+    rungCount: times.length,
+    fireDate,
+    appKey: keys[rung],
+    siblings: keys.filter((_, index) => index !== rung),
+    variantIndex: ladderVariantIndex(rung),
+  }));
+}
+
+/** The rung metadata CL-2's intents read back — string values only. */
+export function ladderMetadata(rung: {
+  rung: number;
+  rungCount: number;
+  siblings: string[];
+}): { rung: string; rungCount: string; siblings: string } {
+  return {
+    rung: String(rung.rung),
+    rungCount: String(rung.rungCount),
+    siblings: rung.siblings.join(","),
+  };
+}
+
+// ─── In-flight de-dup ───────────────────────────────────────────────────────
+
+// The 2026-08-07 devlog race: startup gap_resync and a fresh create land on the
+// same occurrence ~20ms apart and both register it. One occurrence is now up to
+// three alarms, so the duplicate registration triples with it.
+const inFlightByAppKey = new Map<string, Promise<unknown>>();
+
+/**
+ * Run `work` at most once per appKey while it is in flight — a concurrent call
+ * for the same key joins the running one instead of registering a second alarm.
+ * Callers must not nest this on the same key (the inner call would await itself).
+ */
+export function dedupeByAppKey<T>(appKey: string, work: () => Promise<T>): Promise<T> {
+  const existing = inFlightByAppKey.get(appKey);
+  if (existing) {
+    vrLog("alarmkit", "schedule_deduped", { appKey });
+    return existing as Promise<T>;
+  }
+  const task = (async () => work())().finally(() => {
+    if (inFlightByAppKey.get(appKey) === task) {
+      inFlightByAppKey.delete(appKey);
+    }
+  });
+  inFlightByAppKey.set(appKey, task);
+  return task;
+}
+
+/** Test seam — drops any in-flight registrations. */
+export function resetAppKeyDedupe(): void {
+  inFlightByAppKey.clear();
 }
 
 // ─── Contract methods ───────────────────────────────────────────────────────
@@ -152,18 +243,46 @@ export async function getAndClearEventLog(): Promise<AlarmEvent[]> {
   if (!isAlarmKitLinked()) return [];
   try {
     const events = await bridge!.getAndClearEventLog();
-    return Array.isArray(events) ? events.filter(isAlarmEvent) : [];
+    if (!Array.isArray(events)) return [];
+    return events
+      .map(toAlarmEvent)
+      .filter((event): event is AlarmEvent => event !== null);
   } catch (e) {
     vrLog("alarmkit", "event_log_failed", { error: String(e) });
     return [];
   }
 }
 
-function isAlarmEvent(value: unknown): value is AlarmEvent {
-  if (!value || typeof value !== "object") return false;
-  const event = value as AlarmEvent;
-  if (typeof event.id !== "string" || typeof event.at !== "number") return false;
-  return event.type === "stopped" || event.type === "snoozed" || event.type === "fired";
+// The sibling-cancel entries CL-2 appends are the same event channel with a
+// different type token. Spelling is normalized here so an unexpected variant
+// lands as a known, inert event instead of being dropped as garbage.
+const CANCELLED_EVENT_TYPES = new Set([
+  "cancelled",
+  "canceled",
+  "sibling_cancelled",
+  "sibling_canceled",
+]);
+
+function normalizeAlarmEventType(value: unknown): AlarmEventType | null {
+  const token = String(value ?? "").toLowerCase().trim();
+  if (token === "stopped" || token === "snoozed" || token === "fired") return token;
+  if (CANCELLED_EVENT_TYPES.has(token)) return "cancelled";
+  return null;
+}
+
+/** Normalize one raw native log entry, or null when it is not an alarm event. */
+function toAlarmEvent(value: unknown): AlarmEvent | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as { type?: unknown; id?: unknown; at?: unknown; snoozeUntil?: unknown };
+  const type = normalizeAlarmEventType(raw.type);
+  if (!type) return null;
+  if (typeof raw.id !== "string" || typeof raw.at !== "number") return null;
+  return {
+    type,
+    id: raw.id,
+    at: raw.at,
+    ...(typeof raw.snoozeUntil === "number" ? { snoozeUntil: raw.snoozeUntil } : {}),
+  };
 }
 
 // ─── Gate decision ──────────────────────────────────────────────────────────
@@ -196,7 +315,13 @@ export function resetAlarmKitDecision(): void {
 
 // ─── Event-log reconciliation (pure) ────────────────────────────────────────
 
-export type AlarmOutcomeKind = "completed" | "snoozed" | "missed" | "pending";
+export type AlarmOutcomeKind =
+  | "completed"
+  | "snoozed"
+  | "missed"
+  | "pending"
+  /** A ladder rung the native intents killed because a sibling was answered. */
+  | "cancelled";
 
 export interface AlarmReconcileOutcome {
   id: string;
@@ -215,6 +340,10 @@ export interface AlarmReconcileOutcome {
  *    stop landing inside the snooze window is discarded.
  *  - guard 3: a snooze whose window is still open blocks rescheduling; the
  *    native side already registered the follow-up.
+ *
+ * A rung cancelled by a sibling's Done/Later collapses to "cancelled": the
+ * answered sibling already recorded the outcome and drove the reschedule, so
+ * this key must produce neither a history entry nor a new occurrence.
  */
 export function reconcileAlarmEvents(
   events: unknown[],
@@ -224,8 +353,9 @@ export function reconcileAlarmEvents(
   const order: string[] = [];
   const byId = new Map<string, AlarmEvent[]>();
 
-  for (const raw of events) {
-    if (!isAlarmEvent(raw)) continue;
+  for (const value of events) {
+    const raw = toAlarmEvent(value);
+    if (!raw) continue;
     if (!byId.has(raw.id)) {
       byId.set(raw.id, []);
       order.push(raw.id);
@@ -250,19 +380,27 @@ export function reconcileAlarmEvents(
     const lastFired = [...list].reverse().find((e) => e.type === "fired");
     const firedAfterSnooze = lastFired && (!snooze || lastFired.at >= snooze.at);
 
+    // A cancel that landed after the last ring wins over "it rang unanswered":
+    // the rung was killed on purpose, not ignored.
+    const lastCancelled = [...list].reverse().find((e) => e.type === "cancelled");
+    const cancelledLast = lastCancelled && (!lastFired || lastCancelled.at >= lastFired.at);
+
     let outcome: AlarmOutcomeKind;
     if (realStop) {
       outcome = "completed";
+    } else if (cancelledLast) {
+      outcome = "cancelled";
     } else if (firedAfterSnooze) {
       outcome = now - lastFired!.at >= ringTimeoutMs ? "missed" : "pending";
     } else {
       outcome = "snoozed";
     }
 
+    const inert = outcome === "pending" || outcome === "cancelled";
     return {
       id,
       outcome,
-      allowReschedule: outcome === "pending" ? false : !snoozeActive,
+      allowReschedule: inert ? false : !snoozeActive,
       ...(snoozeUntil !== undefined ? { snoozeUntil } : {}),
     };
   });

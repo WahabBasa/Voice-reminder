@@ -62,6 +62,23 @@ describe("getAlarmSoundFileName", () => {
   });
 });
 
+describe("getVariantAlarmSoundFileName", () => {
+  it("names rung k after the rung, not the variant it carries", () => {
+    expect(alarmSounds.getVariantAlarmSoundFileName("abc123", 1)).toBe(
+      "reminder_abc123_v1.wav"
+    );
+    expect(alarmSounds.getVariantAlarmSoundFileName("abc123", 2)).toBe(
+      "reminder_abc123_v2.wav"
+    );
+  });
+
+  it("sanitizes the id the same way the base filename does", () => {
+    expect(alarmSounds.getVariantAlarmSoundFileName("a/b c.d", 1)).toBe(
+      "reminder_a_b_c_d_v1.wav"
+    );
+  });
+});
+
 describe("getAlarmSoundStagingPath", () => {
   it("stages inside the Documents directory expo-file-system may write to", () => {
     expect(alarmSounds.getAlarmSoundStagingPath("abc123")).toBe(
@@ -167,6 +184,72 @@ describe("ensureAlarmSound", () => {
   });
 });
 
+// ─── ensureVariantAlarmSound (ladder rungs) ─────────────────────────────────
+
+describe("ensureVariantAlarmSound", () => {
+  it("stages a rung's wav under its own name and staging path", async () => {
+    const result = await alarmSounds.ensureVariantAlarmSound(
+      "abc123",
+      1,
+      "https://cdn/v0.wav"
+    );
+
+    expect(result).toBe("reminder_abc123_v1.wav");
+    expect(fs.downloadAsync).toHaveBeenCalledWith(
+      "https://cdn/v0.wav",
+      `${STAGING_PREFIX}abc123_v1.wav`
+    );
+    expect(bridge.placeAlarmSound).toHaveBeenCalledWith(
+      `${STAGING_PREFIX}abc123_v1.wav`,
+      "reminder_abc123_v1.wav"
+    );
+  });
+
+  it("keeps each rung's staging file separate from the base's", async () => {
+    await alarmSounds.ensureAlarmSound("abc123", "https://cdn/base.wav");
+    await alarmSounds.ensureVariantAlarmSound("abc123", 1, "https://cdn/v0.wav");
+    await alarmSounds.ensureVariantAlarmSound("abc123", 2, "https://cdn/v1.wav");
+
+    expect(bridge.placeAlarmSound.mock.calls.map((c: string[]) => c[1])).toEqual([
+      "reminder_abc123.wav",
+      "reminder_abc123_v1.wav",
+      "reminder_abc123_v2.wav",
+    ]);
+  });
+
+  it("returns null without a wav url so the caller falls back to the base wav", async () => {
+    expect(await alarmSounds.ensureVariantAlarmSound("abc123", 1, null)).toBeNull();
+    expect(fs.downloadAsync).not.toHaveBeenCalled();
+  });
+
+  it("refuses a rung outside the ladder", async () => {
+    expect(
+      await alarmSounds.ensureVariantAlarmSound("abc123", 0, "https://cdn/v0.wav")
+    ).toBeNull();
+    expect(
+      await alarmSounds.ensureVariantAlarmSound("abc123", 4, "https://cdn/v3.wav")
+    ).toBeNull();
+    expect(fs.downloadAsync).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op off iOS", async () => {
+    loadModule({ platform: "android" });
+
+    expect(
+      await alarmSounds.ensureVariantAlarmSound("abc123", 1, "https://cdn/v0.wav")
+    ).toBeNull();
+    expect(fs.downloadAsync).not.toHaveBeenCalled();
+  });
+
+  it("returns null instead of throwing when the native copy fails", async () => {
+    bridge.placeAlarmSound.mockRejectedValueOnce(new Error("sandbox denied"));
+
+    expect(
+      await alarmSounds.ensureVariantAlarmSound("abc123", 1, "https://cdn/v0.wav")
+    ).toBeNull();
+  });
+});
+
 // ─── removeAlarmSound ───────────────────────────────────────────────────────
 
 describe("removeAlarmSound", () => {
@@ -174,6 +257,27 @@ describe("removeAlarmSound", () => {
     await alarmSounds.removeAlarmSound("abc123");
 
     expect(bridge.removeAlarmSound).toHaveBeenCalledWith("reminder_abc123.wav");
+  });
+
+  it("deletes every ladder rung's wav alongside the base", async () => {
+    await alarmSounds.removeAlarmSound("abc123");
+
+    expect(bridge.removeAlarmSound.mock.calls.map((c: string[]) => c[0])).toEqual([
+      "reminder_abc123.wav",
+      "reminder_abc123_v1.wav",
+      "reminder_abc123_v2.wav",
+      "reminder_abc123_v3.wav",
+    ]);
+  });
+
+  it("clears the rung cache so a re-recorded reminder re-places its variants", async () => {
+    await alarmSounds.ensureVariantAlarmSound("abc123", 1, "https://cdn/v0.wav");
+    await alarmSounds.removeAlarmSound("abc123");
+    bridge.placeAlarmSound.mockClear();
+
+    await alarmSounds.ensureVariantAlarmSound("abc123", 1, "https://cdn/v0-new.wav");
+
+    expect(bridge.placeAlarmSound).toHaveBeenCalledTimes(1);
   });
 
   it("clears the session cache so a re-created reminder re-places its sound", async () => {

@@ -1,6 +1,7 @@
 // usageGate.ts uses dynamic import("./purchases") which Babel transforms to require().
 // We mock the resolved module path so the dynamic import gets our mock.
-const mockCheckProStatus = jest.fn<() => Promise<boolean>>();
+// jest 29's jest.fn takes <ReturnType, ArgsArray>, not a single function type.
+const mockCheckProStatus = jest.fn<Promise<boolean>, unknown[]>();
 
 jest.mock("../../lib/purchases", () => ({
   __esModule: true,

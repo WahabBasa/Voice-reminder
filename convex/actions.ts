@@ -36,7 +36,7 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeVariants, variantCountForTier, pcmToWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT } from "./helpers";
+import { clamp, normalizeReminderDescription, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeVariants, variantCountForTier, buildAlarmWav, alignVariantWavIds, useDenseAlarmWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT } from "./helpers";
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -116,8 +116,8 @@ Return exactly this format:
   "rrule": "RFC5545 RRULE string (for complex patterns)",
   "until": "ISO date for bounded recurrences",
   "preReminderMinutes": number (heads-up lead time in minutes, see PRE-REMINDER RULES),
-  "preDescription": "short spoken heads-up line (only when preReminderMinutes > 0)",
-  "urgency": "urgent" | "notice" | "routine" (the hook tier the description uses, see ASSISTANT REPLAY RULES),
+  "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
+  "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ASSISTANT REPLAY RULES),
   "persistent": boolean (true only for critical tasks, see ASSISTANT REPLAY RULES),
   "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"]
 }
@@ -328,27 +328,28 @@ async function synthesizeReminderTts(args: { text: string; title?: string }): Pr
 }
 
 /**
- * Alarm-ready WAV of the base spoken line (iOS AlarmKit custom sound).
- * ElevenLabs only: PCM out, wrapped with a 44-byte WAV header in-process.
+ * Alarm-ready WAV of one spoken line (iOS AlarmKit custom sound).
+ * ElevenLabs only: PCM out, shaped for the tier and wrapped with a 44-byte WAV
+ * header in-process. `dense` picks the persistent-tier in-file shape.
  * Failure returns null — the alarm degrades to the system default sound and
  * never blocks reminder creation.
  */
-async function synthesizeAlarmWav(text: string): Promise<Uint8Array | null> {
+async function synthesizeAlarmWav(text: string, dense: boolean): Promise<Uint8Array | null> {
   if (getTtsProvider() !== "elevenlabs") return null;
   const rate = parsePcmSampleRate(ALARM_PCM_OUTPUT_FORMAT);
   if (rate === null) return null;
   const pcm = await synthesizeWithElevenLabs({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT });
-  return pcmToWav(new Uint8Array(pcm), rate);
+  return buildAlarmWav(new Uint8Array(pcm), rate, { dense });
 }
 
-/** Base-line TTS bundle: mp3 (playback, all platforms) + wav (iOS alarm sound). */
-async function synthesizeAndStoreBaseTts(
+/** One line's TTS bundle: mp3 (playback, all platforms) + wav (iOS alarm sound). */
+async function synthesizeAndStoreLineTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
-  args: { text: string; title?: string }
+  args: { text: string; title?: string; dense: boolean }
 ): Promise<{ audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> }> {
   const [ttsBuffer, wavBytes] = await Promise.all([
     synthesizeReminderTts(args),
-    synthesizeAlarmWav(args.text).catch((e) => {
+    synthesizeAlarmWav(args.text, args.dense).catch((e) => {
       console.error("[VR] Alarm WAV synthesis failed (system default alarm sound will be used):", e);
       return null;
     }),
@@ -364,33 +365,44 @@ async function synthesizeAndStoreBaseTts(
 }
 
 /**
- * TTS each replay variant into its own stored audio. Lines and audios stay in
- * lockstep: a variant whose synthesis fails is dropped entirely (fewer
- * variants), and failures never propagate — variant audio must never block
- * reminder creation.
+ * TTS each replay variant into its own stored mp3 plus its ladder-rung wav.
+ * Lines and audios stay in lockstep: a variant whose synthesis fails is dropped
+ * entirely (fewer variants), and failures never propagate — variant audio must
+ * never block reminder creation. The wav list is a prefix of the kept variants
+ * (see alignVariantWavIds); rungs past it fall back to the base wav.
  */
 async function synthesizeVariantTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
   title: string,
-  variantTexts: string[]
-): Promise<{ keptVariants: string[]; variantAudioStorageIds: Id<"_storage">[] }> {
+  variantTexts: string[],
+  dense: boolean
+): Promise<{
+  keptVariants: string[];
+  variantAudioStorageIds: Id<"_storage">[];
+  variantWavStorageIds: Id<"_storage">[];
+}> {
   const keptVariants: string[] = [];
   const variantAudioStorageIds: Id<"_storage">[] = [];
+  const wavStorageIds: (Id<"_storage"> | undefined)[] = [];
   for (const line of variantTexts) {
     try {
-      const buffer = await synthesizeReminderTts({
+      const { audioStorageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
         text: line,
         title: `${title} (replay ${keptVariants.length + 1})`,
+        dense,
       });
-      const blob = new Blob([new Uint8Array(buffer)], { type: "audio/mpeg" });
-      const storageId = await ctx.storage.store(blob);
       keptVariants.push(line);
-      variantAudioStorageIds.push(storageId);
+      variantAudioStorageIds.push(audioStorageId);
+      wavStorageIds.push(wavStorageId);
     } catch (e) {
       console.error("[VR] Variant TTS generation failed (variant dropped):", e);
     }
   }
-  return { keptVariants, variantAudioStorageIds };
+  return {
+    keptVariants,
+    variantAudioStorageIds,
+    variantWavStorageIds: alignVariantWavIds(wavStorageIds),
+  };
 }
 
 export const processVoiceReminder = action({
@@ -464,8 +476,8 @@ Return exactly this format:
   "rrule": "RFC5545 RRULE string (for complex weekly/monthly/yearly patterns)",
   "until": "ISO date for bounded recurrences (e.g., 'for 2 weeks')",
   "preReminderMinutes": number (heads-up lead time in minutes, see PRE-REMINDER RULES),
-  "preDescription": "short spoken heads-up line (only when preReminderMinutes > 0)",
-  "urgency": "urgent" | "notice" | "routine" (the hook tier the description uses, see ASSISTANT REPLAY RULES),
+  "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
+  "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ASSISTANT REPLAY RULES),
   "persistent": boolean (true only for critical tasks, see ASSISTANT REPLAY RULES),
   "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"]
 }
@@ -689,7 +701,8 @@ If no frequency specified, assume "once".`,
     );
     const preTtsText =
       preReminderMinutes > 0
-        ? preDescription || `Heads up — ${parsed.title} in ${preReminderMinutes} minutes`
+        // Fallback stays factual and opener-free, like the model's own line.
+        ? preDescription || `${parsed.title} in ${preReminderMinutes} minutes`
         : "";
 
     // Assistant replay fields (urgency tier, persistence, escalating variants)
@@ -703,10 +716,14 @@ If no frequency specified, assume "once".`,
 
     // 3. Generate TTS
     const ttsText = description || String(parsed.description ?? "");
+    // Persistent reminders nag inside one ringing alarm; every other tier says
+    // its line once and comes back as a later ladder rung.
+    const dense = useDenseAlarmWav(persistent);
     // 4. Generate + store TTS (mp3 for playback + alarm-ready wav when available)
-    const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreBaseTts(ctx, {
+    const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
       text: ttsText,
       title: parsed.title as string,
+      dense,
     });
 
     // Second short line for the pre-alert; failure never blocks the reminder.
@@ -726,11 +743,8 @@ If no frequency specified, assume "once".`,
 
     // Replay variant lines: kept in lockstep with their audios — a failed
     // synth drops that variant (fewer variants, never a blocked creation).
-    const { keptVariants, variantAudioStorageIds } = await synthesizeVariantTts(
-      ctx,
-      parsed.title as string,
-      variants
-    );
+    const { keptVariants, variantAudioStorageIds, variantWavStorageIds } =
+      await synthesizeVariantTts(ctx, parsed.title as string, variants, dense);
 
     // 5. Save to database
     const reminderId: Id<"reminders"> = await ctx.runMutation(
@@ -751,6 +765,8 @@ If no frequency specified, assume "once".`,
         variants: keptVariants.length > 0 ? keptVariants : undefined,
         variantAudioStorageIds:
           variantAudioStorageIds.length > 0 ? variantAudioStorageIds : undefined,
+        variantWavStorageIds:
+          variantWavStorageIds.length > 0 ? variantWavStorageIds : undefined,
       }
     );
 
@@ -759,6 +775,10 @@ If no frequency specified, assume "once".`,
     const variantAudioUrls = (
       await Promise.all(variantAudioStorageIds.map((id) => ctx.storage.getUrl(id)))
     ).filter((url): url is string => Boolean(url));
+    // Kept index-aligned with the rungs, so nulls stay in place.
+    const variantWavUrls = await Promise.all(
+      variantWavStorageIds.map((id) => ctx.storage.getUrl(id))
+    );
 
     const result = {
       id: reminderId as string,
@@ -776,6 +796,7 @@ If no frequency specified, assume "once".`,
       persistent,
       variants: keptVariants,
       variantAudioUrls,
+      variantWavUrls,
 
       intervalMs,
       anchorAt,
@@ -811,9 +832,11 @@ export const processTextReminder = action({
 
     const normalizedDescription = normalizeReminderDescription(args.description);
     const ttsText = normalizedDescription || args.description;
-    const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreBaseTts(ctx, {
+    // Typed reminders carry no tier yet, so they get the plain one-utterance shape.
+    const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
       text: ttsText,
       title: args.title,
+      dense: false,
     });
 
     const reminderId: Id<"reminders"> = await ctx.runMutation(
@@ -858,11 +881,13 @@ export const regenerateReminderAudio = action({
       throw new Error("Reminder not found");
     }
 
-    // 2. Generate + store new TTS audio (mp3 + alarm-ready wav when available)
+    // 2. Generate + store new TTS audio (mp3 + alarm-ready wav when available),
+    // reusing the reminder's own tier so the in-file shape does not change.
     const { audioStorageId: newStorageId, wavStorageId: newWavStorageId } =
-      await synthesizeAndStoreBaseTts(ctx, {
+      await synthesizeAndStoreLineTts(ctx, {
         text: args.soundText,
         title: reminder.title,
+        dense: useDenseAlarmWav(normalizePersistent(reminder.persistent)),
       });
 
     // 4. Delete old audio and update reminder
@@ -1082,7 +1107,8 @@ export const processVoiceReminderFast = action({
       );
       const preTtsText =
         preReminderMinutes > 0
-          ? preDescription || `Heads up — ${parsed.title} in ${preReminderMinutes} minutes`
+          // Fallback stays factual and opener-free, like the model's own line.
+          ? preDescription || `${parsed.title} in ${preReminderMinutes} minutes`
           : "";
 
       // Assistant replay fields (urgency tier, persistence, escalating variants)
@@ -1115,13 +1141,14 @@ export const processVoiceReminderFast = action({
         }
       );
 
-      // 5. Enqueue background TTS generation
+      // 5. Enqueue background TTS generation (persistent picks the dense wav shape)
       await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
         reminderId,
         title: parsed.title as string,
         ttsText,
         preTtsText: preTtsText || undefined,
         variantTexts: variants.length > 0 ? variants : undefined,
+        persistent: persistent || undefined,
       });
 
       // 6. Return immediately
@@ -1166,14 +1193,20 @@ export const generateReminderTtsForReminder = internalAction({
     ttsText: v.string(),
     preTtsText: v.optional(v.string()),
     variantTexts: v.optional(v.array(v.string())),
+    // Optional so jobs enqueued by an older deploy still run (they get the
+    // plain one-utterance shape).
+    persistent: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     try {
+      const dense = useDenseAlarmWav(normalizePersistent(args.persistent));
+
       // 1. Generate + store TTS (mp3 + alarm-ready wav when available)
       const { audioStorageId: newAudioStorageId, wavStorageId: newWavStorageId } =
-        await synthesizeAndStoreBaseTts(ctx, {
+        await synthesizeAndStoreLineTts(ctx, {
           text: args.ttsText,
           title: args.title,
+          dense,
         });
 
       // 2b. Pre-alert line (optional); failure never blocks the main audio.
@@ -1196,10 +1229,12 @@ export const generateReminderTtsForReminder = internalAction({
       // in lockstep even when some synths fail.
       let keptVariants: string[] | undefined;
       let variantAudioStorageIds: Id<"_storage">[] | undefined;
+      let variantWavStorageIds: Id<"_storage">[] | undefined;
       if (args.variantTexts?.length) {
-        const result = await synthesizeVariantTts(ctx, args.title, args.variantTexts);
+        const result = await synthesizeVariantTts(ctx, args.title, args.variantTexts, dense);
         keptVariants = result.keptVariants;
         variantAudioStorageIds = result.variantAudioStorageIds;
+        variantWavStorageIds = result.variantWavStorageIds;
       }
 
       // 3. Update reminder with new audio
@@ -1210,6 +1245,7 @@ export const generateReminderTtsForReminder = internalAction({
         preAudioStorageId,
         variants: keptVariants,
         variantAudioStorageIds,
+        variantWavStorageIds,
         audioStatus: "ready",
         audioUpdatedAt: Date.now(),
       });

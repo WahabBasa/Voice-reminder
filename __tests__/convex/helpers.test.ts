@@ -13,11 +13,17 @@ import {
   variantCountForTier,
   normalizeVariants,
   buildVariantInstruction,
+  useDenseAlarmWav,
   ALARM_PCM_OUTPUT_FORMAT,
   ALARM_WAV_BITS_PER_SAMPLE,
   ALARM_WAV_CHANNELS,
+  ALARM_WAV_DENSE_GAP_SECONDS,
+  ALARM_WAV_MAX_SECONDS,
+  ALARM_WAV_TARGET_SECONDS,
   DEFAULT_ALARM_WAV_SAMPLE_RATE,
   MAX_ALARM_SOUND_SECONDS,
+  alignVariantWavIds,
+  buildAlarmWav,
   buildWavHeader,
   parsePcmSampleRate,
   pcmDurationSeconds,
@@ -154,29 +160,28 @@ describe("getCurrentTimeHM", () => {
 // ─── buildDescriptionInstruction ────────────────────────────────────────────
 
 describe("buildDescriptionInstruction", () => {
-  it("uses the address term verbatim in the urgent hook", () => {
+  it("weaves the address term in verbatim, including in the example", () => {
     const result = buildDescriptionInstruction("Wahab");
-    expect(result).toContain("'Wahab —'");
-    expect(result).toContain("'Wahab — you need to get to your meeting.'");
+    expect(result).toContain("address term 'Wahab' verbatim");
+    expect(result).toContain("'Wahab, your meeting with Ahmed is starting.'");
     expect(result).not.toContain("Sir");
   });
 
   it("passes an Arabic address term through as written", () => {
     const result = buildDescriptionInstruction("وهاب");
-    expect(result).toContain("'وهاب —'");
+    expect(result).toContain("address term 'وهاب' verbatim");
   });
 
   it("trims whitespace around the address term", () => {
     const result = buildDescriptionInstruction("  Ma'am  ");
-    expect(result).toContain("'Ma'am —'");
+    expect(result).toContain("address term 'Ma'am' verbatim");
   });
 
-  it("uses address-free urgency when no term is provided", () => {
+  it("forbids any name or title when no term is provided", () => {
     const result = buildDescriptionInstruction(undefined);
-    expect(result).toContain("'It's time —'");
+    expect(result).toContain("Never address the user by any name or title");
     expect(result).toContain("no 'Sir'");
-    expect(result).toContain("never address the user");
-    expect(result).not.toContain("'Sir —'");
+    expect(result).not.toContain("'Sir,'");
   });
 
   it("treats an empty or whitespace-only term as unset", () => {
@@ -188,14 +193,33 @@ describe("buildDescriptionInstruction", () => {
     );
   });
 
-  it("keeps the non-urgent tiers in both variants", () => {
+  it("asks for one natural spoken sentence in the input's language", () => {
     for (const result of [
       buildDescriptionInstruction("Wahab"),
       buildDescriptionInstruction(undefined),
     ]) {
-      expect(result).toContain("'Heads up —'");
-      expect(result).toContain("'Quick reminder —'");
+      expect(result).toContain("the way a human assistant would say it out loud");
+      expect(result).toContain("in the input's language");
+      expect(result).toContain("One natural sentence, roughly 5-14 words");
+      expect(result).toContain("no set opening formula");
     }
+  });
+
+  it("keeps the line true when it is heard late", () => {
+    expect(buildDescriptionInstruction(undefined)).toContain(
+      "still be true if it is heard a few minutes late"
+    );
+  });
+
+  it("keeps an Arabic example so Arabic input gets an Arabic line", () => {
+    expect(buildDescriptionInstruction(undefined)).toContain(
+      "'حان وقت أخذ دوائك المسائي.'"
+    );
+  });
+
+  it("never embeds a double quote (it is inlined in a JSON string field)", () => {
+    expect(buildDescriptionInstruction("Wahab")).not.toContain('"');
+    expect(buildDescriptionInstruction(undefined)).not.toContain('"');
   });
 });
 
@@ -210,11 +234,49 @@ describe("buildPreReminderInstruction", () => {
     expect(result).toContain("0 for ambient/routine tasks");
   });
 
-  it("describes the preDescription heads-up line", () => {
+  it("describes the preDescription advance-notice line", () => {
     const result = buildPreReminderInstruction();
     expect(result).toContain("preDescription");
-    expect(result).toContain("Heads up — <event> in <N> minutes");
+    expect(result).toContain("name the event and how far off it is");
     expect(result).toContain("ONLY when preReminderMinutes > 0");
+  });
+
+  it("keeps the advance notice factual but opener-free, with an Arabic example", () => {
+    const result = buildPreReminderInstruction();
+    expect(result).toContain("no set opening formula");
+    expect(result).toContain("'Your flight leaves in 40 minutes.'");
+    expect(result).toContain("'اجتماعك يبدأ بعد ربع ساعة.'");
+  });
+});
+
+// ─── No canned openers anywhere (cadence-ladder PRD product decision) ───────
+
+describe("instruction phrasing", () => {
+  // The parse prompt used to hand the model a menu of fixed hooks, so every
+  // spoken line came out stamped from the same template. They are gone; this
+  // fails the moment one is reintroduced.
+  const CANNED_OPENERS = ["it's time", "heads up", "quick reminder", "hook"];
+
+  const instructions = () => [
+    buildDescriptionInstruction(undefined),
+    buildDescriptionInstruction("Wahab"),
+    buildPreReminderInstruction(),
+    buildVariantInstruction(undefined),
+    buildVariantInstruction("Wahab"),
+  ];
+
+  for (const opener of CANNED_OPENERS) {
+    it(`never offers "${opener}" as an opener`, () => {
+      for (const instruction of instructions()) {
+        expect(instruction.toLowerCase()).not.toContain(opener);
+      }
+    });
+  }
+
+  it("tells every builder to skip the opening formula", () => {
+    for (const instruction of instructions()) {
+      expect(instruction).toContain("no set opening formula");
+    }
   });
 });
 
@@ -441,6 +503,31 @@ describe("buildVariantInstruction", () => {
       expect(result).toContain(`${MAX_REPLAY_VARIANTS} variants`);
     }
   });
+
+  it("describes urgency by how hard the reminder pushes, not by opener", () => {
+    const result = buildVariantInstruction(undefined);
+    expect(result).toContain("how hard the reminder has to push");
+    expect(result).toContain('"urgent" when the user must act right now');
+  });
+
+  it("keeps the escalation and the late-delivery rule", () => {
+    const result = buildVariantInstruction(undefined);
+    expect(result).toContain("escalate in firmness");
+    expect(result).toContain("never repeat the description or another variant verbatim");
+    expect(result).toContain("still true when heard minutes late (no countdowns)");
+  });
+});
+
+// ─── useDenseAlarmWav ───────────────────────────────────────────────────────
+
+describe("useDenseAlarmWav", () => {
+  it("gives persistent reminders the dense in-file shape", () => {
+    expect(useDenseAlarmWav(true)).toBe(true);
+  });
+
+  it("leaves every other tier with one utterance and a silence tail", () => {
+    expect(useDenseAlarmWav(false)).toBe(false);
+  });
 });
 
 // ─── Alarm WAV pipeline ─────────────────────────────────────────────────────
@@ -562,5 +649,131 @@ describe("pcmToWav", () => {
     const pcm = new Uint8Array([1, 2]);
     expect(() => pcmToWav(pcm, 0)).toThrow(/Invalid PCM sample rate/);
     expect(() => pcmToWav(pcm, Number.NaN)).toThrow(/Invalid PCM sample rate/);
+  });
+});
+
+describe("buildAlarmWav", () => {
+  const RATE = DEFAULT_ALARM_WAV_SAMPLE_RATE;
+  const BYTES_PER_SECOND = RATE * 2; // mono, 16-bit
+
+  /** A recognisable "spoken line": every byte non-zero, so silence is visible. */
+  const line = (seconds: number) =>
+    new Uint8Array(seconds * BYTES_PER_SECOND).fill(7);
+
+  const body = (wav: Uint8Array) => wav.slice(44);
+  const seconds = (wav: Uint8Array) => pcmDurationSeconds(wav.length - 44, RATE);
+  const isSilent = (bytes: Uint8Array) => bytes.every((byte) => byte === 0);
+  // Byte-scan rather than toEqual: these buffers run to hundreds of thousands
+  // of samples and jest's deep equality on them is glacial.
+  const matches = (actual: Uint8Array, expected: Uint8Array) =>
+    actual.length === expected.length && actual.every((byte, i) => byte === expected[i]);
+
+  it("pads a normal line with silence out to the target length", () => {
+    const pcm = line(4);
+    const wav = buildAlarmWav(pcm, RATE, { dense: false });
+
+    expect(seconds(wav)).toBe(ALARM_WAV_TARGET_SECONDS);
+    expect(matches(body(wav).slice(0, pcm.length), pcm)).toBe(true);
+    expect(isSilent(body(wav).slice(pcm.length))).toBe(true);
+  });
+
+  it("keeps the wav playable: header sizes match the padded body", () => {
+    const wav = buildAlarmWav(line(4), RATE, { dense: false });
+    expect(ascii(wav, 0, 4)).toBe("RIFF");
+    expect(u32(wav, 40)).toBe(wav.length - 44);
+    expect(u32(wav, 24)).toBe(RATE);
+  });
+
+  it("honours a non-default sample rate", () => {
+    const wav = buildAlarmWav(new Uint8Array(24000 * 2 * 4).fill(7), 24000, {
+      dense: false,
+    });
+    expect(pcmDurationSeconds(wav.length - 44, 24000)).toBe(ALARM_WAV_TARGET_SECONDS);
+    expect(u32(wav, 24)).toBe(24000);
+  });
+
+  it("repeats the line with a 2s gap in the dense shape", () => {
+    const pcm = line(4);
+    const passBytes = pcm.length + ALARM_WAV_DENSE_GAP_SECONDS * BYTES_PER_SECOND;
+    const wav = buildAlarmWav(pcm, RATE, { dense: true });
+
+    // 4s line + 2s gap = 6s per pass; four whole passes fit inside 28s.
+    const passes = 4;
+    expect(seconds(wav)).toBe(passes * (4 + ALARM_WAV_DENSE_GAP_SECONDS));
+    for (let pass = 0; pass < passes; pass++) {
+      const offset = pass * passBytes;
+      expect(matches(body(wav).slice(offset, offset + pcm.length), pcm)).toBe(true);
+      expect(isSilent(body(wav).slice(offset + pcm.length, offset + passBytes))).toBe(
+        true
+      );
+    }
+  });
+
+  it("stops before the dense pass that would overrun the target", () => {
+    // 10s line + 2s gap = 12s per pass: two fit, a third would be 36s.
+    const wav = buildAlarmWav(line(10), RATE, { dense: true });
+    expect(seconds(wav)).toBe(24);
+  });
+
+  it("ships a line that already fills the budget unpadded, in either shape", () => {
+    const pcm = new Uint8Array(BYTES_PER_SECOND * 28.5).fill(7);
+    for (const dense of [false, true]) {
+      const wav = buildAlarmWav(pcm, RATE, { dense });
+      expect(wav.length).toBe(44 + pcm.length);
+      expect(seconds(wav)).toBeCloseTo(28.5, 5);
+    }
+  });
+
+  it("drops the dense gap rather than exceed the target with one pass", () => {
+    // 27s line + 2s gap = 29s, so not even one whole pass fits: line only.
+    const pcm = line(27);
+    const wav = buildAlarmWav(pcm, RATE, { dense: true });
+    expect(wav.length).toBe(44 + pcm.length);
+  });
+
+  it("never emits a file at or past the 29s ceiling", () => {
+    for (const lineSeconds of [1, 3, 4.5, 9, 13, 27]) {
+      for (const dense of [false, true]) {
+        const pcm = new Uint8Array(Math.round(lineSeconds * BYTES_PER_SECOND)).fill(7);
+        const wav = buildAlarmWav(pcm, RATE, { dense });
+        expect(seconds(wav)).toBeLessThanOrEqual(ALARM_WAV_MAX_SECONDS);
+        expect(ALARM_WAV_MAX_SECONDS).toBeLessThan(MAX_ALARM_SOUND_SECONDS);
+      }
+    }
+  });
+
+  it("still rejects an utterance longer than iOS allows", () => {
+    const pcm = new Uint8Array(BYTES_PER_SECOND * (MAX_ALARM_SOUND_SECONDS + 1));
+    expect(() => buildAlarmWav(pcm, RATE, { dense: false })).toThrow(
+      /over the 30s limit/
+    );
+  });
+
+  it("rejects an empty body and an unusable rate the same way pcmToWav does", () => {
+    expect(() => buildAlarmWav(new Uint8Array(0), RATE, { dense: false })).toThrow(
+      /empty PCM buffer/
+    );
+    expect(() => buildAlarmWav(line(1), 0, { dense: false })).toThrow(
+      /Invalid PCM sample rate/
+    );
+    expect(() => buildAlarmWav(line(1), Number.NaN, { dense: true })).toThrow(
+      /Invalid PCM sample rate/
+    );
+  });
+});
+
+describe("alignVariantWavIds", () => {
+  it("keeps a fully synthesized list intact", () => {
+    expect(alignVariantWavIds(["a", "b", "c"])).toEqual(["a", "b", "c"]);
+  });
+
+  it("truncates at the first missing wav so indexes stay honest", () => {
+    expect(alignVariantWavIds(["a", undefined, "c"])).toEqual(["a"]);
+    expect(alignVariantWavIds(["a", null, "c"])).toEqual(["a"]);
+  });
+
+  it("returns nothing when the first variant has no wav", () => {
+    expect(alignVariantWavIds([undefined, "b"])).toEqual([]);
+    expect(alignVariantWavIds([])).toEqual([]);
   });
 });

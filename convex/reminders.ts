@@ -12,6 +12,18 @@ async function resolveVariantAudioUrls(
   return urls.filter((url): url is string => Boolean(url));
 }
 
+// Ladder rungs address variant wavs by index, so this list keeps its holes:
+// a null means "no wav for that variant" and the rung falls back to wavUrl.
+async function resolveVariantWavUrls(
+  ctx: { storage: { getUrl: (id: any) => Promise<string | null> } },
+  variantWavStorageIds: any[] | undefined
+): Promise<(string | null)[]> {
+  if (!variantWavStorageIds?.length) return [];
+  return await Promise.all(
+    variantWavStorageIds.map((id) => ctx.storage.getUrl(id))
+  );
+}
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -23,6 +35,7 @@ export const list = query({
         wavUrl: reminder.wavStorageId ? await ctx.storage.getUrl(reminder.wavStorageId) : "",
         preAudioUrl: reminder.preAudioStorageId ? await ctx.storage.getUrl(reminder.preAudioStorageId) : "",
         variantAudioUrls: await resolveVariantAudioUrls(ctx, reminder.variantAudioStorageIds),
+        variantWavUrls: await resolveVariantWavUrls(ctx, reminder.variantWavStorageIds),
       }))
     );
   },
@@ -39,6 +52,7 @@ export const get = query({
       wavUrl: reminder.wavStorageId ? await ctx.storage.getUrl(reminder.wavStorageId) : "",
       preAudioUrl: reminder.preAudioStorageId ? await ctx.storage.getUrl(reminder.preAudioStorageId) : "",
       variantAudioUrls: await resolveVariantAudioUrls(ctx, reminder.variantAudioStorageIds),
+      variantWavUrls: await resolveVariantWavUrls(ctx, reminder.variantWavStorageIds),
     };
   },
 });
@@ -68,6 +82,7 @@ export const create = internalMutation({
     persistent: v.optional(v.boolean()),
     variants: v.optional(v.array(v.string())),
     variantAudioStorageIds: v.optional(v.array(v.id("_storage"))),
+    variantWavStorageIds: v.optional(v.array(v.id("_storage"))),
     audioStatus: v.optional(v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))),
     audioUpdatedAt: v.optional(v.number()),
   },
@@ -90,8 +105,14 @@ export const remove = mutation({
     if (reminder.preAudioStorageId) {
       await ctx.storage.delete(reminder.preAudioStorageId);
     }
+    if (reminder.wavStorageId) {
+      await ctx.storage.delete(reminder.wavStorageId);
+    }
     for (const variantId of reminder.variantAudioStorageIds ?? []) {
       await ctx.storage.delete(variantId);
+    }
+    for (const variantWavId of reminder.variantWavStorageIds ?? []) {
+      await ctx.storage.delete(variantWavId);
     }
     await ctx.db.delete(args.id);
   },
@@ -155,6 +176,8 @@ export const setAudio = internalMutation({
     // stored, so variants[i] always pairs with variantAudioStorageIds[i].
     variants: v.optional(v.array(v.string())),
     variantAudioStorageIds: v.optional(v.array(v.id("_storage"))),
+    // Prefix of variantAudioStorageIds whose alarm wav also synthesized.
+    variantWavStorageIds: v.optional(v.array(v.id("_storage"))),
     audioStatus: v.optional(v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))),
     audioError: v.optional(v.string()),
     audioUpdatedAt: v.optional(v.number()),

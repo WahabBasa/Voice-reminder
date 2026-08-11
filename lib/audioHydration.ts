@@ -13,7 +13,7 @@ export async function hydrateReminderAudio(params: {
   convexClient: ConvexReactClient;
   convexId: string;
   localReminderId: string;
-  updateLocal: (patch: { audioUrl?: string; wavUrl?: string; preAudioUrl?: string; variants?: string[]; variantAudioUrls?: string[]; audioStatus: 'ready' | 'failed'; audioError?: string }) => Promise<void>;
+  updateLocal: (patch: { audioUrl?: string; wavUrl?: string; preAudioUrl?: string; variants?: string[]; variantAudioUrls?: string[]; variantWavUrls?: (string | null)[]; audioStatus: 'ready' | 'failed'; audioError?: string }) => Promise<void>;
   onSuccess?: (audioUrl: string) => Promise<void>;
 }): Promise<void> {
   const { convexClient, convexId, localReminderId, updateLocal, onSuccess } = params;
@@ -60,6 +60,11 @@ export async function hydrateReminderAudio(params: {
                 await downloadVariantAudios(localReminderId, variantAudioUrls);
               }
 
+              // Alarm-ready wavs for the ladder rungs (iOS only, index-aligned
+              // with variants). Entries may be null when a variant's wav is
+              // missing — the rung then falls back to the base wav.
+              const variantWavUrls = (result as any).variantWavUrls as (string | null)[] | undefined;
+
               // Update local reminder
               await updateLocal({
                 audioUrl: result.audioUrl,
@@ -67,6 +72,7 @@ export async function hydrateReminderAudio(params: {
                 ...(preAudioUrl ? { preAudioUrl } : {}),
                 ...(variants ? { variants } : {}),
                 ...(variantAudioUrls ? { variantAudioUrls } : {}),
+                ...(variantWavUrls ? { variantWavUrls } : {}),
                 audioStatus: 'ready',
               });
               console.log(`[VR] Hydration: complete for ${convexId}`);
@@ -75,6 +81,7 @@ export async function hydrateReminderAudio(params: {
               await refreshNotificationWithAudio(localReminderId, result.audioUrl, preAudioUrl || undefined, {
                 variants,
                 variantAudioUrls,
+                variantWavUrls,
               });
 
               // Call optional success callback

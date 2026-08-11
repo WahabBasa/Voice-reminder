@@ -374,3 +374,58 @@ export function nextAlternateIndex(currentIndex: number, playlistLength: number)
   if (playlistLength <= 0) return 0;
   return (currentIndex + 1) % playlistLength;
 }
+
+// ─── Group 8: Cadence ladder (iOS AlarmKit sibling alarms) ──────────────────
+//
+// AlarmKit cannot ring once, and cannot pause between rings inside a single
+// alarm. So one occurrence becomes 1–3 real alarms staggered minutes apart,
+// each speaking a differently-worded line — perceived as one assistant coming
+// back rather than one alarm looping forever.
+//
+// Rung count mirrors `variantCountForTier` in convex/helpers.ts (client copy —
+// lib code must not import convex modules). The offsets below are the single
+// source of truth for rung timing; they get re-tuned after the device test
+// that measures how long iOS rings an unattended alarm. No magic numbers
+// anywhere else.
+
+export const MAX_LADDER_RUNGS = MAX_REPLAY_VARIANTS;
+
+/** Rung offsets from the occurrence's fire time T — routine/notice/urgent. */
+export const LADDER_OFFSETS_MS = [0, 3 * 60_000, 7 * 60_000];
+
+/** Persistent reminders come back sooner and keep the same rung count. */
+export const LADDER_OFFSETS_PERSISTENT_MS = [0, 2 * 60_000, 5 * 60_000];
+
+/** Alarms per occurrence for this tier (mirrors variantCountForTier exactly). */
+export function ladderRungCount(urgency: unknown, persistent: unknown): number {
+  if (parsePersistentFlag(persistent)) return MAX_LADDER_RUNGS;
+  const tier = normalizeUrgencyTier(urgency);
+  if (tier === "urgent") return MAX_LADDER_RUNGS;
+  if (tier === "routine") return 1;
+  return 2;
+}
+
+/** Offsets from T for this tier's rungs, in rung order. */
+export function ladderOffsetsMs(urgency: unknown, persistent: unknown): number[] {
+  const table = parsePersistentFlag(persistent)
+    ? LADDER_OFFSETS_PERSISTENT_MS
+    : LADDER_OFFSETS_MS;
+  return table.slice(0, ladderRungCount(urgency, persistent));
+}
+
+/** Absolute fire times of every rung of the occurrence firing at `baseTimestamp`. */
+export function ladderRungTimes(
+  baseTimestamp: number,
+  urgency: unknown,
+  persistent: unknown
+): number[] {
+  return ladderOffsetsMs(urgency, persistent).map((offset) => baseTimestamp + offset);
+}
+
+/**
+ * Variant index (into `variants`) spoken by rung k. -1 means the base line.
+ * PRD: rung 0 speaks the base description, rung k >= 1 speaks variant k-1.
+ */
+export function ladderVariantIndex(rung: number): number {
+  return rung <= 0 ? -1 : rung - 1;
+}

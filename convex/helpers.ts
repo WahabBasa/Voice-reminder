@@ -48,25 +48,30 @@ export function getCurrentTimeHM(currentTime: string): string {
 }
 
 // Instruction text for the parse prompt's "description" field.
-// When addressTerm is set, the urgent hook uses it verbatim (may be Arabic);
-// when unset, urgent lines stay address-free (no 'Sir', no invented names).
+// No opener templates: the line has to read like something a person would say
+// out loud, not a notification. When addressTerm is set the model weaves it in
+// verbatim (it may be Arabic); when unset the line stays address-free (no
+// 'Sir', no invented names). Single-quoted throughout — this string is embedded
+// inside a double-quoted JSON field in the prompt.
 export function buildDescriptionInstruction(addressTerm?: string): string {
   const term = String(addressTerm ?? "").trim();
-  const urgentHook = term
-    ? `'${term} —' when the user needs to act right now (meeting starting, time to leave) — use the address term '${term}' verbatim, exactly as the user wrote it (it may be Arabic), and you may also weave it into firmer phrasings`
-    : `an address-free urgent hook like 'It's time —' when the user needs to act right now (meeting starting, time to leave) — never address the user by any name or title (no 'Sir', no invented names)`;
-  const urgentExample = term
-    ? `'${term} — you need to get to your meeting.'`
-    : `'It's time — you need to leave for your meeting now.'`;
-  return `the sentence spoken aloud when the reminder fires. Structure: attention hook, then the task with whatever time/place context the user gave. Hooks (pick by urgency, in the input's language): ${urgentHook}; 'Heads up —' for advance notice of something coming; 'Quick reminder —' for routine tasks. One sentence, roughly 5-12 words after the hook, phrased so it is true at the moment the reminder fires. Examples: ${urgentExample} / 'Heads up — the kids' football game starts in 20 minutes.' / 'Quick reminder — time to take your medicine.'`;
+  const addressRule = term
+    ? `Weave in the address term '${term}' verbatim, exactly as the user wrote it (it may be Arabic)`
+    : `Never address the user by any name or title (no 'Sir', no invented names)`;
+  const example = term
+    ? `'${term}, your meeting with Ahmed is starting.'`
+    : `'Your meeting with Ahmed is starting.'`;
+  return `the sentence spoken aloud when the reminder fires, in the input's language. Say it the way a human assistant would say it out loud: the task plus whatever time or place context the user gave. One natural sentence, roughly 5-14 words, with no set opening formula and no greeting — start with the substance. ${addressRule}. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: ${example} / 'Time to take your evening medicine.' / 'حان وقت أخذ دوائك المسائي.'`;
 }
 
 // Instruction block for the parse prompt's pre-reminder (heads-up) fields.
+// The advance-notice line keeps its factual content (event + how far off) but,
+// like the description, gets no template opener.
 export function buildPreReminderInstruction(): string {
   return `PRE-REMINDER RULES (automatic heads-up before the event):
 - "preReminderMinutes": 10-15 for hard-start events the user must be somewhere for or start on time (meetings, appointments, flights, games, classes, calls). 0 for ambient/routine tasks (drink water, take medicine, generic todos).
 - If the user explicitly asks for a heads-up ("give me a 20 minute warning"), use that many minutes.
-- "preDescription": ONLY when preReminderMinutes > 0. A short spoken line, under 12 words, phrased "Heads up — <event> in <N> minutes" in the input's language (Arabic input gets an Arabic line). Omit the field entirely when preReminderMinutes is 0.`;
+- "preDescription": ONLY when preReminderMinutes > 0. The spoken advance-notice line, in the input's language (Arabic input gets an Arabic line), under 12 words: name the event and how far off it is, phrased naturally with no set opening formula — 'Your flight leaves in 40 minutes.', 'اجتماعك يبدأ بعد ربع ساعة.'. Omit the field entirely when preReminderMinutes is 0.`;
 }
 
 // ─── Assistant-style replays (OLD-53) ───────────────────────────────────────
@@ -98,6 +103,16 @@ export function variantCountForTier(urgency: Urgency, persistent: boolean): numb
 }
 
 /**
+ * In-file audio shape for a tier (cadence-ladder PRD table). Only persistent
+ * reminders get the dense utterance+gap wav that keeps nagging while a single
+ * alarm rings; every other tier says its line once and goes quiet, and comes
+ * back as a later rung instead.
+ */
+export function useDenseAlarmWav(persistent: boolean): boolean {
+  return persistent;
+}
+
+/**
  * Sanitize the model's replay variants: normalize each line, drop empties,
  * drop verbatim repeats of the base description or of earlier variants
  * (no spoken line may repeat back-to-back), cap at maxCount.
@@ -124,16 +139,18 @@ export function normalizeVariants(
 }
 
 // Instruction block for the parse prompt's replay fields (urgency, persistent,
-// variants). When addressTerm is set, firmer variants may weave it in verbatim.
+// variants). Variants are spoken minutes after the description was ignored, so
+// they must stay true when heard late. When addressTerm is set, firmer variants
+// may weave it in verbatim.
 export function buildVariantInstruction(addressTerm?: string): string {
   const term = String(addressTerm ?? "").trim();
   const firmNote = term
-    ? `firmer variants may open with or weave in the address term '${term}' verbatim, exactly as the user wrote it (it may be Arabic)`
+    ? `firmer variants may weave in the address term '${term}' verbatim, exactly as the user wrote it (it may be Arabic)`
     : `never address the user by any name or title in any variant (no 'Sir', no invented names)`;
-  return `ASSISTANT REPLAY RULES (escalating follow-up lines for ignored reminders):
-- "urgency": the hook tier the description uses — "urgent" for the urgent hook, "notice" for 'Heads up —', "routine" for 'Quick reminder —'.
+  return `ASSISTANT REPLAY RULES (the follow-up lines an assistant would use when the first one is ignored):
+- "urgency": how hard the reminder has to push — "urgent" when the user must act right now (meeting starting, time to leave), "notice" for advance warning of something coming up, "routine" for ordinary everyday tasks.
 - "persistent": true ONLY when missing the task would be harmful (medicine regimens, flights, picking up children). Otherwise false or omit.
-- "variants": alternative spoken lines used when the reminder is ignored, in the input's language. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from gentle nudge to insistent; ${firmNote}. One sentence each, roughly 5-14 words. Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
+- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from gentle nudge to insistent; ${firmNote}. One natural sentence each, roughly 5-14 words, with no set opening formula, and still true when heard minutes late (no countdowns). Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
 }
 
 // Upper bound keeps a mis-parsed lead time from scheduling a heads-up hours early.
@@ -261,4 +278,86 @@ export function pcmToWav(
   wav.set(buildWavHeader(pcm.length, sampleRate), 0);
   wav.set(pcm, 44);
   return wav;
+}
+
+// ─── Alarm WAV shaping (cadence ladder) ─────────────────────────────────────
+//
+// AlarmKit has no "ring once" and no "pause between rings": it loops the sound
+// file for as long as the alarm rings. So what a single ringing alarm sounds
+// like is decided entirely by what is inside the file. A bare 4s line loops
+// back-to-back forever; the same line padded out to ~28s of silence is heard as
+// one utterance followed by quiet, which is what a real assistant does.
+
+/** Shaped length of an alarm wav: the line, then silence out to here. */
+export const ALARM_WAV_TARGET_SECONDS = 28;
+
+/**
+ * Ceiling the shaping math stays under. iOS rejects anything from 30s up, and
+ * a padded file never needs to run that close to the edge. A line that is
+ * already longer than the target ships bare instead — `pcmToWav`'s existing
+ * 30s guard is what catches a genuinely oversized utterance.
+ */
+export const ALARM_WAV_MAX_SECONDS = 29;
+
+/** Breath between utterances inside a dense (persistent-tier) alarm wav. */
+export const ALARM_WAV_DENSE_GAP_SECONDS = 2;
+
+/** Byte length of `seconds` of PCM, truncated to a whole 16-bit sample. */
+function pcmByteLength(seconds: number, sampleRate: number): number {
+  const bytesPerSample = ALARM_WAV_CHANNELS * (ALARM_WAV_BITS_PER_SAMPLE / 8);
+  const bytes = Math.floor(seconds * sampleRate * bytesPerSample);
+  return bytes - (bytes % bytesPerSample);
+}
+
+/**
+ * Shape a spoken line into the alarm wav for its tier and wrap it as WAV.
+ *
+ * - normal: `[line][silence]` padded to ALARM_WAV_TARGET_SECONDS — one
+ *   utterance per ring, then quiet.
+ * - dense: `[line][2s gap]` repeated as many whole passes as fit in the target
+ *   — insistent nagging for persistent reminders.
+ *
+ * Silence is zero bytes: that is the midpoint of signed 16-bit PCM, so a
+ * zero-filled buffer is literal silence, not a click. A line that already
+ * fills the target ships unpadded rather than being trimmed.
+ */
+export function buildAlarmWav(
+  pcm: Uint8Array,
+  sampleRate: number,
+  opts: { dense: boolean }
+): Uint8Array {
+  // Unusable input takes the plain path so callers see pcmToWav's own errors.
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0 || pcm.length === 0) {
+    return pcmToWav(pcm, sampleRate);
+  }
+
+  const targetBytes = pcmByteLength(ALARM_WAV_TARGET_SECONDS, sampleRate);
+  const passBytes = pcm.length + pcmByteLength(ALARM_WAV_DENSE_GAP_SECONDS, sampleRate);
+  // Dense stops before the pass that would overrun the target; normal is one
+  // pass by definition. Zero passes means the line alone fills the budget.
+  const passes = opts.dense ? Math.floor(targetBytes / passBytes) : 1;
+  if (pcm.length >= targetBytes || passes < 1) {
+    return pcmToWav(pcm, sampleRate);
+  }
+
+  const body = new Uint8Array(opts.dense ? passes * passBytes : targetBytes);
+  for (let pass = 0; pass < passes; pass++) {
+    body.set(pcm, pass * passBytes);
+  }
+  return pcmToWav(body, sampleRate);
+}
+
+/**
+ * Variant wav storage ids ride index-aligned with `variants`, and a Convex
+ * `v.array(v.id("_storage"))` cannot hold holes. So the first variant whose wav
+ * failed to synthesize ends the array: every later rung falls back to the base
+ * wav rather than to some other variant's line.
+ */
+export function alignVariantWavIds<T>(wavIds: (T | null | undefined)[]): T[] {
+  const aligned: T[] = [];
+  for (const id of wavIds) {
+    if (id === null || id === undefined) break;
+    aligned.push(id);
+  }
+  return aligned;
 }

@@ -497,6 +497,10 @@ enum VRAlarmScheduler {
     return alarmID
   }
 
+  /// Also the CL-2 seam (VRAlarmFollowUpScheduling.cancel): the intents cancel a
+  /// ladder's remaining rungs through here so rotation stays in exactly one place.
+  /// Must stay a silent no-op for an unknown key — a rung that already rotated
+  /// away is the normal case, not an error.
   static func cancel(appKey: String) {
     guard let uuid = VRAlarmStore.uuid(forAppKey: appKey) else { return }
     try? AlarmManager.shared.cancel(id: uuid)
@@ -519,6 +523,15 @@ enum VRAlarmScheduler {
 // real file must keep these identical, and the placeholder below mirrors them:
 //   VRStopIntent(alarmID: UUID, appKey: String)
 //   VRSnoozeIntent(alarmID: UUID, appKey: String, alarmTitle: String?, soundName: String?, snoozeMinutes: Int)
+//
+// Static members the real file conforms VRAlarmScheduler to (CL-2's cadence
+// ladder — renaming either breaks the intents, not this plugin):
+//   VRAlarmScheduler.scheduleAlarm(appKey:fireDate:title:soundName:snoozeMinutes:metadata:)
+//   VRAlarmScheduler.cancel(appKey:)
+//
+// The ladder's `siblings` / `rung` / `rungCount` keys need no handling here: the
+// scheduler persists the whole metadata dict per app key (VRAlarmStore.setMeta),
+// and the intents read it back through that same record.
 // ---------------------------------------------------------------------------
 const INTENTS_SOURCE_PLACEHOLDER = `import AppIntents
 import Foundation

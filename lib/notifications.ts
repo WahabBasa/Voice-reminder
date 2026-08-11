@@ -67,11 +67,16 @@ import {
   parseVariantList,
   variantLineForIndex,
   MAX_REPLAY_VARIANTS,
+  ladderOffsetsMs,
+  ladderRungTimes,
 } from "./notificationDecisions";
 import {
   alarmAppKey,
   parseAlarmAppKey,
   reconcileAlarmEvents,
+  buildAlarmLadder,
+  ladderMetadata,
+  dedupeByAppKey,
   cancelAlarm as cancelNativeAlarm,
   getAndClearEventLog as drainNativeAlarmEvents,
   getScheduledAlarms as getScheduledNativeAlarms,
@@ -88,6 +93,11 @@ import {
 // fall back to the system default alarm sound.
 let alarmSounds: {
   ensureAlarmSound?: (reminderId: string, wavUrl?: string | null) => Promise<string | null>;
+  ensureVariantAlarmSound?: (
+    reminderId: string,
+    rung: number,
+    wavUrl?: string | null
+  ) => Promise<string | null>;
   removeAlarmSound?: (reminderId: string) => Promise<void>;
 } | null = null;
 
@@ -756,6 +766,14 @@ export async function cancelDisplayedAlarmNotifications(
     }
   }
 
+  // AlarmKit mirror: acknowledging one rung in-app has to silence the rest of
+  // the occurrence's ladder, exactly as the native Done intent does. Pre-alert
+  // ids do not parse as alarm app keys, so they never reach the registry.
+  const parsed = [...ids].map(parseAlarmAppKey).find((p) => p !== null);
+  if (parsed && (await alarmKitEnabled())) {
+    await cancelStaleAlarmKitAlarms(parsed.reminderId, new Set());
+  }
+
   await clearDisplayedAlarm();
 }
 
@@ -1013,6 +1031,9 @@ export interface ReminderNotification {
   persistent?: boolean;
   variants?: string[];
   variantAudioUrls?: string[];
+  // Alarm-ready wavs for the ladder rungs, index-aligned with `variants`.
+  // iOS AlarmKit only; a null/absent entry falls back to the base wav.
+  variantWavUrls?: (string | null)[];
   snoozeEnabled?: boolean;
   snoozeDuration?: number; // minutes
   volume?: number; // 0-1
@@ -1300,7 +1321,14 @@ async function schedulePreAlertForOccurrence(
 // notification data on the notifee path and has nowhere to live here.
 const ALARMKIT_STATE_KEY = "@alarmkit_state";
 
-type AlarmKitReminderState = { snoozeUntil?: number; followUpCount?: number };
+type AlarmKitReminderState = {
+  snoozeUntil?: number;
+  followUpCount?: number;
+  // Ladder rung wavs arrive with hydration but the reminder store has no field
+  // for them, so the urls live here — a rung re-staged in a later session
+  // re-downloads its own wav instead of silently dropping to the base line.
+  variantWavUrls?: (string | null)[];
+};
 
 async function getAlarmKitState(): Promise<Record<string, AlarmKitReminderState>> {
   try {
@@ -1351,6 +1379,23 @@ async function ensureAlarmSoundSafe(
   }
 }
 
+/** AK-3's variant hydration for ladder rung `rung` (>= 1), absent-safe. */
+async function ensureVariantAlarmSoundSafe(
+  reminderId: string,
+  rung: number,
+  wavUrl?: string | null
+): Promise<string | null> {
+  if (!alarmSounds?.ensureVariantAlarmSound) return null;
+  try {
+    return (
+      (await alarmSounds.ensureVariantAlarmSound(reminderId, rung, wavUrl ?? null)) ?? null
+    );
+  } catch (e) {
+    vrLog("alarmkit", "variant_sound_hydration_failed", { reminderId, rung, error: String(e) });
+    return null;
+  }
+}
+
 async function removeAlarmSoundSafe(reminderId: string): Promise<void> {
   if (!alarmSounds?.removeAlarmSound) return;
   try {
@@ -1361,65 +1406,207 @@ async function removeAlarmSoundSafe(reminderId: string): Promise<void> {
 }
 
 /**
- * Register one occurrence as a native alarm.
+ * The ladder's variant wav urls, remembered across sessions.
  *
- * PRD guard 5: there is no cancelAll() — every other alarm for this reminder
- * is cancelled first, because a changed occurrence time changes the app key
- * and the native UUID registry would otherwise keep the stale alarm alive.
+ * They arrive with hydration and the reminder store has no column for them, so
+ * a fresh set is written through to the AlarmKit state and a later session
+ * (startup resync, reschedule) reads them back from there.
  */
-async function scheduleAlarmKitOccurrence(
-  reminder: ReminderNotification,
-  triggerTimestamp: number,
-  appKey: string,
-  variantIndex = -1
+async function resolveVariantWavUrls(
+  reminder: ReminderNotification
+): Promise<(string | null)[]> {
+  const fresh = reminder.variantWavUrls;
+  if (fresh?.length) {
+    await patchAlarmKitState(reminder.id, { variantWavUrls: fresh });
+    return fresh;
+  }
+  const state = await getAlarmKitState();
+  return state[reminder.id]?.variantWavUrls ?? [];
+}
+
+/**
+ * PRD guard 5: there is no cancelAll() — every alarm of this reminder that is
+ * not part of the set we are about to register is cancelled first, because a
+ * changed occurrence time changes the app key and the native UUID registry
+ * would otherwise keep the stale alarm ringing.
+ */
+async function cancelStaleAlarmKitAlarms(
+  reminderId: string,
+  keep: Set<string>
 ): Promise<void> {
   const scheduled = await getScheduledNativeAlarms();
   for (const alarm of scheduled) {
-    if (alarm.id.startsWith(`reminder_${reminder.id}_`) && alarm.id !== appKey) {
-      await cancelNativeAlarm(alarm.id);
-    }
+    if (!alarm.id.startsWith(`reminder_${reminderId}_`)) continue;
+    if (keep.has(alarm.id)) continue;
+    await cancelNativeAlarm(alarm.id);
+    vrLog("alarmkit", "cancelled_stale", { appKey: alarm.id, reminderId });
   }
+}
 
-  const soundName = await ensureAlarmSoundSafe(reminder.id, reminder.wavUrl);
-  const uuid = await scheduleNativeAlarm({
-    id: appKey,
-    fireDate: triggerTimestamp,
-    title: reminder.title,
-    soundName,
-    snoozeMinutes: reminder.snoozeDuration ?? 5,
-    metadata: {
-      reminderId: reminder.id,
-      scheduledFor: String(triggerTimestamp),
-      tier: normalizeUrgencyTier(reminder.urgency),
-      variantIndex: String(variantIndex),
-    },
-  });
+/** The Library/Sounds filename rung `rung` should ring, base wav as fallback. */
+async function rungSoundName(
+  reminderId: string,
+  rung: number,
+  variantIndex: number,
+  variantWavUrls: (string | null)[],
+  baseSound: string | null
+): Promise<string | null> {
+  if (rung <= 0) return baseSound;
+  const variantSound = await ensureVariantAlarmSoundSafe(
+    reminderId,
+    rung,
+    variantWavUrls[variantIndex]
+  );
+  // A missing variant wav falls back to the base wav, never to the system
+  // default — the assistant repeating itself beats it going silent.
+  return variantSound ?? baseSound;
+}
 
-  vrLog("alarmkit", "scheduled", {
-    appKey,
-    reminderId: reminder.id,
-    fireDate: triggerTimestamp,
-    soundName: soundName ?? "system_default",
-    uuid: uuid ?? "none",
+/**
+ * Register one occurrence as its full ladder of sibling alarms.
+ *
+ * De-duped on the occurrence's appKey: startup gap_resync and a fresh create
+ * race on the same occurrence, and with up to three alarms per occurrence a
+ * double registration triples (2026-08-07 devlog).
+ */
+async function scheduleAlarmKitOccurrence(
+  reminder: ReminderNotification,
+  triggerTimestamp: number
+): Promise<void> {
+  const rungs = buildAlarmLadder(
+    reminder.id,
+    triggerTimestamp,
+    reminder.urgency,
+    reminder.persistent
+  );
+
+  return dedupeByAppKey(rungs[0].appKey, async () => {
+    await cancelStaleAlarmKitAlarms(reminder.id, new Set(rungs.map((r) => r.appKey)));
+
+    const baseSound = await ensureAlarmSoundSafe(reminder.id, reminder.wavUrl);
+    const variantWavUrls = await resolveVariantWavUrls(reminder);
+
+    for (const rung of rungs) {
+      const soundName = await rungSoundName(
+        reminder.id,
+        rung.rung,
+        rung.variantIndex,
+        variantWavUrls,
+        baseSound
+      );
+      const uuid = await scheduleNativeAlarm({
+        id: rung.appKey,
+        fireDate: rung.fireDate,
+        title: reminder.title,
+        soundName,
+        snoozeMinutes: reminder.snoozeDuration ?? 5,
+        metadata: {
+          reminderId: reminder.id,
+          scheduledFor: String(rung.fireDate),
+          tier: normalizeUrgencyTier(reminder.urgency),
+          variantIndex: String(rung.variantIndex),
+          ...ladderMetadata(rung),
+        },
+      });
+
+      vrLog("alarmkit", "scheduled", {
+        appKey: rung.appKey,
+        reminderId: reminder.id,
+        fireDate: rung.fireDate,
+        rung: rung.rung,
+        rungCount: rung.rungCount,
+        soundName: soundName ?? "system_default",
+        uuid: uuid ?? "none",
+      });
+    }
   });
 }
 
 /**
- * Re-register the reminder's live alarms once its wav exists. The sound is
+ * Register a single alarm outside the ladder — the ignored-occurrence follow-up.
+ * PRD: follow-ups stay one alarm, so it carries rung 0 of 1 and no siblings.
+ */
+async function scheduleAlarmKitFollowUp(
+  reminder: ReminderNotification,
+  fireDate: number,
+  appKey: string,
+  variantIndex: number
+): Promise<void> {
+  return dedupeByAppKey(appKey, async () => {
+    await cancelStaleAlarmKitAlarms(reminder.id, new Set([appKey]));
+
+    const baseSound = await ensureAlarmSoundSafe(reminder.id, reminder.wavUrl);
+    const uuid = await scheduleNativeAlarm({
+      id: appKey,
+      fireDate,
+      title: reminder.title,
+      soundName: baseSound,
+      snoozeMinutes: reminder.snoozeDuration ?? 5,
+      metadata: {
+        reminderId: reminder.id,
+        scheduledFor: String(fireDate),
+        tier: normalizeUrgencyTier(reminder.urgency),
+        variantIndex: String(variantIndex),
+        rung: "0",
+        rungCount: "1",
+        siblings: "",
+      },
+    });
+
+    vrLog("alarmkit", "scheduled_follow_up", {
+      appKey,
+      reminderId: reminder.id,
+      fireDate,
+      soundName: baseSound ?? "system_default",
+      uuid: uuid ?? "none",
+    });
+  });
+}
+
+/**
+ * Re-register the reminder's live alarms once its wavs exist. The sound is
  * baked into the alarm at schedule time (a filename, not notification data),
  * so hydration has to rewrite the alarm rather than patch a payload.
+ *
+ * Rung identity is recovered by matching each live alarm against the ladder
+ * that starts at the reminder's earliest pending alarm — the native registry
+ * only reports id/uuid/fireDate. Anything outside that ladder (a follow-up)
+ * keeps today's shape: base wav, rung 0 of 1, no siblings.
  */
 async function refreshAlarmKitSound(reminderId: string): Promise<void> {
-  const reminder = useReminderStore.getState().getReminderById(reminderId);
-  const wavUrl = (reminder as (Reminder & { wavUrl?: string }) | undefined)?.wavUrl;
-  if (!reminder || !wavUrl) return;
+  const stored = useReminderStore.getState().getReminderById(reminderId);
+  if (!stored) return;
+  const reminder = toReminderNotification(stored);
+  if (!reminder.wavUrl) return;
 
-  const soundName = await ensureAlarmSoundSafe(reminderId, wavUrl);
-  if (!soundName) return;
+  const scheduled = (await getScheduledNativeAlarms()).filter((alarm) =>
+    alarm.id.startsWith(`reminder_${reminderId}_`)
+  );
+  if (scheduled.length === 0) return;
 
-  const scheduled = await getScheduledNativeAlarms();
+  const baseSound = await ensureAlarmSoundSafe(reminderId, reminder.wavUrl);
+  if (!baseSound) return;
+  const variantWavUrls = await resolveVariantWavUrls(reminder);
+
+  const occurrenceStart = Math.min(...scheduled.map((alarm) => alarm.fireDate));
+  const ladder = buildAlarmLadder(
+    reminderId,
+    occurrenceStart,
+    reminder.urgency,
+    reminder.persistent
+  );
+  const byAppKey = new Map(ladder.map((rung) => [rung.appKey, rung]));
+
   for (const alarm of scheduled) {
-    if (!alarm.id.startsWith(`reminder_${reminderId}_`)) continue;
+    const rung = byAppKey.get(alarm.id);
+    const variantIndex = rung?.variantIndex ?? -1;
+    const soundName = await rungSoundName(
+      reminderId,
+      rung?.rung ?? 0,
+      variantIndex,
+      variantWavUrls,
+      baseSound
+    );
     await scheduleNativeAlarm({
       id: alarm.id,
       fireDate: alarm.fireDate,
@@ -1430,14 +1617,27 @@ async function refreshAlarmKitSound(reminderId: string): Promise<void> {
         reminderId,
         scheduledFor: String(alarm.fireDate),
         tier: normalizeUrgencyTier(reminder.urgency),
-        variantIndex: "-1",
+        variantIndex: String(variantIndex),
+        rung: String(rung?.rung ?? 0),
+        rungCount: String(rung?.rungCount ?? 1),
+        siblings: rung ? rung.siblings.join(",") : "",
       },
     });
-    vrLog("alarmkit", "sound_refreshed", { appKey: alarm.id, reminderId, soundName });
+    vrLog("alarmkit", "sound_refreshed", {
+      appKey: alarm.id,
+      reminderId,
+      rung: rung?.rung ?? 0,
+      soundName: soundName ?? "system_default",
+    });
   }
 }
 
-/** Cancel every native alarm belonging to a reminder (occurrences + follow-ups). */
+/**
+ * Cancel every native alarm belonging to a reminder — every ladder rung of
+ * every occurrence, plus follow-ups. This is the fan-out behind in-app Done,
+ * reminder deletion and rescheduling: all rungs share the `reminder_<id>_`
+ * prefix, so acknowledging one occurrence never leaves a sibling to ring.
+ */
 async function cancelAlarmKitForReminder(reminderId: string): Promise<number> {
   const scheduled = await getScheduledNativeAlarms();
   let cancelled = 0;
@@ -1485,8 +1685,9 @@ export async function reconcileAlarmKitEvents(): Promise<{
   snoozed: number;
   missed: number;
   pending: number;
+  cancelled: number;
 }> {
-  const summary = { stopped: 0, snoozed: 0, missed: 0, pending: 0 };
+  const summary = { stopped: 0, snoozed: 0, missed: 0, pending: 0, cancelled: 0 };
   if (!(await alarmKitEnabled())) return summary;
 
   const events = await drainNativeAlarmEvents();
@@ -1516,6 +1717,19 @@ export async function reconcileAlarmKitEvents(): Promise<{
     if (outcome.outcome === "pending") {
       // Still inside the ring window — leave it for the next foreground.
       summary.pending++;
+      continue;
+    }
+
+    if (outcome.outcome === "cancelled") {
+      // A ladder rung CL-2's intents killed because a sibling was answered.
+      // The answered sibling records the completion and drives the reschedule;
+      // this key must add no history and resurrect nothing.
+      summary.cancelled++;
+      vrLog("alarmkit", "reconciled_sibling_cancelled", {
+        appKey: outcome.id,
+        reminderId,
+        scheduledFor,
+      });
       continue;
     }
 
@@ -1560,7 +1774,7 @@ export async function reconcileAlarmKitEvents(): Promise<{
         nextFollowUp,
         parseVariantCount(reminder.variants?.length ?? 0)
       );
-      await scheduleAlarmKitOccurrence(
+      await scheduleAlarmKitFollowUp(
         toReminderNotification(reminder),
         fireDate,
         alarmAppKey(reminderId, fireDate),
@@ -1735,11 +1949,11 @@ export async function scheduleReminder(
   // Snoozes use the "snooze_*" prefix and are intentionally not canceled here.
   await cancelExistingReminderOccurrenceTriggers(reminder.id, notificationId);
 
-  // AlarmKit owns this occurrence: register the system alarm and skip the
-  // notifee trigger entirely. The pre-alert heads-up stays a plain
+  // AlarmKit owns this occurrence: register its ladder of sibling alarms and
+  // skip the notifee trigger entirely. The pre-alert heads-up stays a plain
   // notification (it is not an alarm surface) so it keeps today's behavior.
   if (alarmKitActive) {
-    await scheduleAlarmKitOccurrence(reminder, triggerTimestamp, notificationId);
+    await scheduleAlarmKitOccurrence(reminder, triggerTimestamp);
     await patchAlarmKitState(reminder.id, { snoozeUntil: 0, followUpCount: 0 });
     await schedulePreAlertForOccurrence({
       reminderId: reminder.id,
@@ -1944,12 +2158,22 @@ export async function refreshNotificationWithAudio(
   reminderId: string,
   audioUrl: string,
   preAudioUrl?: string,
-  replay?: { variants?: string[]; variantAudioUrls?: string[] }
+  replay?: {
+    variants?: string[];
+    variantAudioUrls?: string[];
+    // iOS-only ladder rung wavs; they never enter the notifee payload.
+    variantWavUrls?: (string | null)[];
+  }
 ): Promise<void> {
   try {
     // AlarmKit occurrences carry their sound as a Library/Sounds filename, not
-    // as notification data, so hydration has to re-register them instead.
+    // as notification data, so hydration has to re-register them instead. The
+    // rung wavs are remembered first: refreshAlarmKitSound reads them back
+    // through the AlarmKit state, which the store has no field for.
     if (await alarmKitEnabled()) {
+      if (replay?.variantWavUrls?.length) {
+        await patchAlarmKitState(reminderId, { variantWavUrls: replay.variantWavUrls });
+      }
       await refreshAlarmKitSound(reminderId);
     }
 
@@ -2048,6 +2272,8 @@ function toReminderNotification(reminder: Reminder): ReminderNotification {
     persistent: reminder.persistent,
     variants: reminder.variants,
     variantAudioUrls: reminder.variantAudioUrls,
+    variantWavUrls: (reminder as Reminder & { variantWavUrls?: (string | null)[] })
+      .variantWavUrls,
     snoozeEnabled: reminder.snoozeEnabled,
     snoozeDuration: reminder.snoozeDuration,
     volume: reminder.volume,
@@ -2951,9 +3177,71 @@ export async function syncRemindersOnStartup(
         continue;
       }
 
-      const scheduledMainId = alarmKitActive
-        ? alarmKitIds.find((id) => id.startsWith(mainPrefix))
-        : scheduledIds.find((id) => id.startsWith(mainPrefix));
+      // The AlarmKit path expects the whole expected-set of rungs, not just
+      // one alarm: a ladder that lost rungs (OS eviction, a half-finished
+      // schedule) is repaired in place before the reminder counts as intact.
+      let scheduledMainId: string | undefined;
+      if (alarmKitActive) {
+        const mine = alarmKitIds.filter((id) => id.startsWith(mainPrefix));
+        const fireTimes = mine
+          .map((id) => Number(id.slice(mainPrefix.length)))
+          .filter((ts) => Number.isFinite(ts) && ts > 0);
+
+        if (fireTimes.length > 0) {
+          // The occurrence starts at T, which is NOT always the earliest
+          // surviving rung: if rung 0 was evicted, the survivors are a suffix
+          // of the ladder. Rebasing on the earliest survivor would shift the
+          // whole cadence forward and cancel the real later rungs as strays,
+          // so recover T by testing each rung offset as the survivor's index.
+          // Offset 0 is tried first, so an intact or prefix-complete ladder
+          // resolves to the earliest rung exactly as before.
+          const earliest = Math.min(...fireTimes);
+          const occurrenceStart =
+            ladderOffsetsMs(reminder.urgency, reminder.persistent)
+              .map((offset) => earliest - offset)
+              .find((candidate) => {
+                const ladder = new Set(
+                  ladderRungTimes(candidate, reminder.urgency, reminder.persistent).map(
+                    (ts) => `${mainPrefix}${ts}`
+                  )
+                );
+                return mine.every((id) => ladder.has(id));
+              }) ?? earliest;
+          scheduledMainId = `${mainPrefix}${occurrenceStart}`;
+
+          // A live follow-up is deliberately a single alarm (PRD) — never
+          // grow it into a ladder.
+          const followUpLive =
+            parseFollowUpCount(alarmKitState[reminder.id]?.followUpCount) > 0;
+          const expected = ladderRungTimes(
+            occurrenceStart,
+            reminder.urgency,
+            reminder.persistent
+          ).map((ts) => `${mainPrefix}${ts}`);
+          const present = new Set(mine);
+          const missing = expected.filter((id) => !present.has(id));
+          const stray = mine.filter((id) => !expected.includes(id));
+
+          if (!followUpLive && occurrenceStart > now && (missing.length || stray.length)) {
+            vrLog("alarmkit", "ladder_repair", {
+              reminderId: reminder.id,
+              occurrenceStart,
+              missing: missing.length,
+              stray: stray.length,
+            });
+            try {
+              await scheduleAlarmKitOccurrence(
+                toReminderNotification(reminder),
+                occurrenceStart
+              );
+            } catch (repairErr) {
+              console.log(`[VR] Ladder repair failed for ${reminder.id}:`, repairErr);
+            }
+          }
+        }
+      } else {
+        scheduledMainId = scheduledIds.find((id) => id.startsWith(mainPrefix));
+      }
       if (scheduledMainId) {
         // Main trigger intact — make sure its pre-alert matches the current setting.
         try {

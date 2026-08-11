@@ -24,6 +24,10 @@ export default defineSchema({
     persistent: v.optional(v.boolean()),
     variants: v.optional(v.array(v.string())),
     variantAudioStorageIds: v.optional(v.array(v.id("_storage"))),
+    // Alarm-ready WAVs of the variant lines, index-aligned with `variants`
+    // (ladder rung k>=1 rings variant k-1; a missing entry falls back to
+    // wavStorageId). Optional and possibly shorter than `variants`.
+    variantWavStorageIds: v.optional(v.array(v.id("_storage"))),
     createdAt: v.number(),
     // Audio status for background TTS generation
     audioStatus: v.optional(v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))),

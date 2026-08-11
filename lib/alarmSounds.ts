@@ -5,6 +5,7 @@ import {
   downloadAsync,
   getInfoAsync,
 } from "expo-file-system/legacy";
+import { MAX_LADDER_RUNGS } from "./notificationDecisions";
 
 /**
  * iOS AlarmKit sound placement (AK-3).
@@ -15,6 +16,10 @@ import {
  * Caches) — device-verified: makeDirectoryAsync on Library/Sounds is refused.
  * So the wav is staged into Documents and the AlarmKitBridge native method
  * copies it into Library/Sounds via FileManager.
+ *
+ * The cadence ladder adds one wav per rung above the base: rung k >= 1 rings
+ * `reminder_<id>_v<k>.wav`, which holds variant k-1 (PRD contract — the file
+ * suffix is the RUNG number, not the variant index).
  *
  * Everything here is a no-op off iOS — Android keeps its mp3 + notifee path
  * untouched — and nothing throws: a missing alarm sound must degrade to the
@@ -32,11 +37,26 @@ export function getAlarmSoundFileName(reminderId: string): string {
   return `reminder_${sanitizeId(reminderId)}.wav`;
 }
 
+/** Bare filename for ladder rung `rung` (>= 1), holding variant `rung - 1`. */
+export function getVariantAlarmSoundFileName(reminderId: string, rung: number): string {
+  return `reminder_${sanitizeId(reminderId)}_v${rung}.wav`;
+}
+
 /** Documents-scoped staging path — the only place expo-file-system may write. */
 export function getAlarmSoundStagingPath(reminderId: string): string | null {
   if (Platform.OS !== "ios") return null;
   if (!documentDirectory) return null;
   return `${documentDirectory}alarm_staging_${sanitizeId(reminderId)}.wav`;
+}
+
+/** Staging path for a rung's variant wav (kept distinct from the base's). */
+export function getVariantAlarmSoundStagingPath(
+  reminderId: string,
+  rung: number
+): string | null {
+  if (Platform.OS !== "ios") return null;
+  if (!documentDirectory) return null;
+  return `${documentDirectory}alarm_staging_${sanitizeId(reminderId)}_v${rung}.wav`;
 }
 
 // Files already copied into Library/Sounds this session — skips repeat
@@ -49,32 +69,28 @@ function alarmKitBridge(): { placeAlarmSound?: Function; removeAlarmSound?: Func
 }
 
 /**
- * Place the reminder's spoken line in Library/Sounds as an alarm-ready wav and
- * return the bare filename for `AlarmKitBridge.scheduleAlarm({ soundName })`.
- * Returns null on Android, without a wav url, without the native bridge, or on
- * any failure — the caller then schedules with the system default alarm sound.
+ * Download `wavUrl` and hand it to the native bridge under `fileName`.
+ * Returns the bare filename, or null when anything at all went wrong.
  */
-export async function ensureAlarmSound(
-  reminderId: string,
-  wavUrl: string | null | undefined
+async function placeAlarmSoundFile(
+  fileName: string,
+  stagingPath: string | null,
+  wavUrl: string | null | undefined,
+  label: string
 ): Promise<string | null> {
   if (Platform.OS !== "ios") return null;
   if (!wavUrl) return null;
-
-  const fileName = getAlarmSoundFileName(reminderId);
   if (placedThisSession.has(fileName)) return fileName;
 
   const bridge = alarmKitBridge();
   if (!bridge || typeof bridge.placeAlarmSound !== "function") return null;
-
-  const stagingPath = getAlarmSoundStagingPath(reminderId);
   if (!stagingPath) return null;
 
   try {
     await downloadAsync(wavUrl, stagingPath);
     const staged = await getInfoAsync(stagingPath);
     if (!staged.exists || !staged.size) {
-      console.log(`[VR] Alarm sound download produced no file for ${reminderId}`);
+      console.log(`[VR] Alarm sound download produced no file for ${label}`);
       return null;
     }
 
@@ -83,7 +99,7 @@ export async function ensureAlarmSound(
     console.log(`[VR] Alarm sound placed: ${fileName} (${staged.size} bytes)`);
     return fileName;
   } catch (e) {
-    console.log(`[VR] Failed to place alarm sound for ${reminderId}:`, e);
+    console.log(`[VR] Failed to place alarm sound for ${label}:`, e);
     return null;
   } finally {
     try {
@@ -94,18 +110,64 @@ export async function ensureAlarmSound(
   }
 }
 
-/** Drop a reminder's alarm sound (deletion / re-record flows). No-op off iOS. */
+/**
+ * Place the reminder's spoken line in Library/Sounds as an alarm-ready wav and
+ * return the bare filename for `AlarmKitBridge.scheduleAlarm({ soundName })`.
+ * Returns null on Android, without a wav url, without the native bridge, or on
+ * any failure — the caller then schedules with the system default alarm sound.
+ */
+export async function ensureAlarmSound(
+  reminderId: string,
+  wavUrl: string | null | undefined
+): Promise<string | null> {
+  return placeAlarmSoundFile(
+    getAlarmSoundFileName(reminderId),
+    getAlarmSoundStagingPath(reminderId),
+    wavUrl,
+    reminderId
+  );
+}
+
+/**
+ * Same, for ladder rung `rung` (>= 1). Returns null when the variant wav is
+ * missing — the caller falls back to the base wav, never to the system default.
+ */
+export async function ensureVariantAlarmSound(
+  reminderId: string,
+  rung: number,
+  wavUrl: string | null | undefined
+): Promise<string | null> {
+  if (rung < 1 || rung > MAX_LADDER_RUNGS) return null;
+  return placeAlarmSoundFile(
+    getVariantAlarmSoundFileName(reminderId, rung),
+    getVariantAlarmSoundStagingPath(reminderId, rung),
+    wavUrl,
+    `${reminderId} rung ${rung}`
+  );
+}
+
+/**
+ * Drop a reminder's alarm sounds — the base wav and every ladder rung's variant
+ * wav (deletion / re-record flows). No-op off iOS.
+ */
 export async function removeAlarmSound(reminderId: string): Promise<void> {
   if (Platform.OS !== "ios") return;
 
-  const fileName = getAlarmSoundFileName(reminderId);
-  placedThisSession.delete(fileName);
+  const fileNames = [getAlarmSoundFileName(reminderId)];
+  for (let rung = 1; rung <= MAX_LADDER_RUNGS; rung++) {
+    fileNames.push(getVariantAlarmSoundFileName(reminderId, rung));
+  }
+  for (const fileName of fileNames) {
+    placedThisSession.delete(fileName);
+  }
 
   const bridge = alarmKitBridge();
   if (!bridge || typeof bridge.removeAlarmSound !== "function") return;
-  try {
-    await bridge.removeAlarmSound(fileName);
-  } catch (e) {
-    console.log(`[VR] Failed to delete alarm sound for ${reminderId}:`, e);
+  for (const fileName of fileNames) {
+    try {
+      await bridge.removeAlarmSound(fileName);
+    } catch (e) {
+      console.log(`[VR] Failed to delete alarm sound ${fileName}:`, e);
+    }
   }
 }
