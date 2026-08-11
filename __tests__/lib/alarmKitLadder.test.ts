@@ -103,6 +103,7 @@ import {
   cancelDisplayedAlarmNotifications,
   cancelReminder,
   reconcileAlarmKitEvents,
+  refreshNotificationWithAudio,
   scheduleReminder,
   syncRemindersOnStartup,
   type ReminderNotification,
@@ -540,5 +541,203 @@ describe("Android is untouched by the ladder", () => {
 
     expect(mockAlarmKit.getScheduledAlarms).not.toHaveBeenCalled();
     expect(mockAlarmKit.scheduleAlarm).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Hydration vs registration: per-rung sounds must survive the race ───────
+//
+// Alarm sounds are baked in at registration (a Library/Sounds filename), and
+// the creation/edit flows schedule with reminder objects built before TTS
+// hydration delivered wavUrl/variantWavUrls. These tests pin the two repair
+// mechanisms: the store read-through at registration, and the sound refresh
+// hydration triggers on an already-registered ladder.
+//
+// This block runs LAST in the file: it swaps the sound mocks for url-faithful
+// implementations (no wav url -> no Library/Sounds file, like the device).
+
+describe("hydration racing the ladder — per-rung sound repair", () => {
+  const mockAlarmSounds = jest.requireMock("../../lib/alarmSounds");
+
+  /** Live native registry: same-key schedule replaces, like the bridge. */
+  let registry: { id: string; uuid: string; fireDate: number }[] = [];
+
+  const hydratedStoreReminder = (onceAt: number, overrides: Record<string, unknown> = {}) => ({
+    id: ID,
+    title: "Take your evening meds",
+    description: "Take your evening meds",
+    time: "20:00",
+    frequency: "once",
+    days: [],
+    createdAt: "2026-08-08T00:00:00.000Z",
+    scheduleType: "once" as const,
+    onceAt,
+    urgency: "urgent" as const,
+    audioUrl: "https://cdn/base.mp3",
+    wavUrl: "https://cdn/base.wav",
+    variants: ["v-one", "v-two"],
+    variantWavUrls: ["https://cdn/v0.wav", "https://cdn/v1.wav"],
+    ...overrides,
+  });
+
+  /** Last registered sound per appKey — what the alarm would actually ring. */
+  function finalSounds(): Map<string, string | null> {
+    const sounds = new Map<string, string | null>();
+    for (const opts of scheduledCalls()) sounds.set(opts.id, opts.soundName);
+    return sounds;
+  }
+
+  function registerIntoRegistry(opts: AlarmKitScheduleOptions): string {
+    registry = registry.filter((a) => a.id !== opts.id);
+    registry.push({ id: opts.id, uuid: `U_${opts.id}`, fireDate: opts.fireDate });
+    return `U_${opts.id}`;
+  }
+
+  beforeEach(() => {
+    registry = [];
+    mockAlarmKit.scheduleAlarm.mockImplementation(async (opts: AlarmKitScheduleOptions) =>
+      registerIntoRegistry(opts)
+    );
+    mockAlarmKit.cancelAlarm.mockImplementation(async (id: string) => {
+      registry = registry.filter((a) => a.id !== id);
+    });
+    mockAlarmKit.getScheduledAlarms.mockImplementation(async () => [...registry]);
+    // Device-faithful placement: without a wav url there is no sound file.
+    mockAlarmSounds.ensureAlarmSound.mockImplementation(
+      async (reminderId: string, wavUrl?: string | null) =>
+        wavUrl ? `reminder_${reminderId}.wav` : null
+    );
+  });
+
+  it("re-registers future rungs with variant sounds when hydration completes after scheduling", async () => {
+    const onceAt = futureAt();
+    // Fast path: store row exists but TTS hasn't delivered any wav yet.
+    mockStoreState.getReminderById.mockReturnValue(
+      hydratedStoreReminder(onceAt, { wavUrl: undefined, variantWavUrls: undefined }) as any
+    );
+
+    await scheduleReminder(reminder({ onceAt, wavUrl: undefined, variantWavUrls: undefined }));
+
+    // Registration could only bake in the fallback — nothing had hydrated.
+    expect(scheduledCalls().map((o) => o.soundName)).toEqual([null, null, null]);
+
+    // Hydration lands: store carries the wavs, then the refresh runs
+    // (lib/audioHydration.ts calls updateLocal before refreshNotificationWithAudio).
+    mockStoreState.getReminderById.mockReturnValue(hydratedStoreReminder(onceAt) as any);
+    await refreshNotificationWithAudio(ID, "https://cdn/base.mp3", undefined, {
+      variants: ["v-one", "v-two"],
+      variantAudioUrls: ["https://cdn/a0.mp3", "https://cdn/a1.mp3"],
+      variantWavUrls: ["https://cdn/v0.wav", "https://cdn/v1.wav"],
+    });
+
+    const sounds = finalSounds();
+    expect(sounds.get(`reminder_${ID}_${onceAt}`)).toBe(`reminder_${ID}.wav`);
+    expect(sounds.get(`reminder_${ID}_${onceAt + 3 * MIN}`)).toBe(`reminder_${ID}_v1.wav`);
+    expect(sounds.get(`reminder_${ID}_${onceAt + 7 * MIN}`)).toBe(`reminder_${ID}_v2.wav`);
+    // Fire times are untouched — only the sounds were rewritten.
+    expect(registry.map((a) => a.fireDate).sort()).toEqual([
+      onceAt,
+      onceAt + 3 * MIN,
+      onceAt + 7 * MIN,
+    ]);
+  });
+
+  it("recovers hydrated wavs from the store when the scheduling caller omits them", async () => {
+    // Edit-sheet save: cancelReminder wiped the AlarmKit state and the sheet's
+    // reminder object never carried wav fields — only the store copy knows them.
+    const onceAt = futureAt();
+    mockStoreState.getReminderById.mockReturnValue(hydratedStoreReminder(onceAt) as any);
+
+    await scheduleReminder(reminder({ onceAt, wavUrl: undefined, variantWavUrls: undefined }));
+
+    expect(scheduledCalls().map((o) => o.soundName)).toEqual([
+      `reminder_${ID}.wav`,
+      `reminder_${ID}_v1.wav`,
+      `reminder_${ID}_v2.wav`,
+    ]);
+  });
+
+  it("leaves a rung at or past its fire time alone when refreshing sounds", async () => {
+    const onceAt = Date.now() - 1 * MIN; // rung 0 is ringing (or just rang)
+    registry = [
+      { id: `reminder_${ID}_${onceAt}`, uuid: "A", fireDate: onceAt },
+      { id: `reminder_${ID}_${onceAt + 3 * MIN}`, uuid: "B", fireDate: onceAt + 3 * MIN },
+      { id: `reminder_${ID}_${onceAt + 7 * MIN}`, uuid: "C", fireDate: onceAt + 7 * MIN },
+    ];
+    mockStoreState.getReminderById.mockReturnValue(hydratedStoreReminder(onceAt) as any);
+
+    await refreshNotificationWithAudio(ID, "https://cdn/base.mp3", undefined, {
+      variantWavUrls: ["https://cdn/v0.wav", "https://cdn/v1.wav"],
+    });
+
+    // The ringing rung was never re-registered (a native re-register is
+    // cancel-then-schedule and would silence it); future rungs got repaired.
+    expect(scheduledCalls().map((o) => o.id)).not.toContain(`reminder_${ID}_${onceAt}`);
+    const sounds = finalSounds();
+    expect(sounds.get(`reminder_${ID}_${onceAt + 3 * MIN}`)).toBe(`reminder_${ID}_v1.wav`);
+    expect(sounds.get(`reminder_${ID}_${onceAt + 7 * MIN}`)).toBe(`reminder_${ID}_v2.wav`);
+  });
+
+  it("defers the refresh until an in-flight ladder registration settles", async () => {
+    const onceAt = futureAt();
+    mockStoreState.getReminderById.mockReturnValue(
+      hydratedStoreReminder(onceAt, { wavUrl: undefined, variantWavUrls: undefined }) as any
+    );
+
+    // The third rung's native call hangs — the ladder is mid-registration.
+    let releaseThird!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseThird = resolve));
+    let scheduleCallCount = 0;
+    mockAlarmKit.scheduleAlarm.mockImplementation(async (opts: AlarmKitScheduleOptions) => {
+      scheduleCallCount += 1;
+      if (scheduleCallCount === 3) await gate;
+      return registerIntoRegistry(opts);
+    });
+
+    const registering = scheduleReminder(
+      reminder({ onceAt, wavUrl: undefined, variantWavUrls: undefined })
+    );
+    for (let i = 0; i < 100 && scheduleCallCount < 3; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(scheduleCallCount).toBe(3);
+
+    // Hydration lands mid-registration and triggers the refresh.
+    mockStoreState.getReminderById.mockReturnValue(hydratedStoreReminder(onceAt) as any);
+    const refreshing = refreshNotificationWithAudio(ID, "https://cdn/base.mp3", undefined, {
+      variantWavUrls: ["https://cdn/v0.wav", "https://cdn/v1.wav"],
+    });
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    // The refresh must not rewrite a half-registered ladder.
+    expect(scheduledCalls()).toHaveLength(3);
+
+    releaseThird();
+    await Promise.all([registering, refreshing]);
+
+    const sounds = finalSounds();
+    expect(sounds.get(`reminder_${ID}_${onceAt}`)).toBe(`reminder_${ID}.wav`);
+    expect(sounds.get(`reminder_${ID}_${onceAt + 3 * MIN}`)).toBe(`reminder_${ID}_v1.wav`);
+    expect(sounds.get(`reminder_${ID}_${onceAt + 7 * MIN}`)).toBe(`reminder_${ID}_v2.wav`);
+  });
+
+  it("keeps schedule-time wavs authoritative when the caller provides them", async () => {
+    // A store copy with DIFFERENT urls must not override explicit input.
+    const onceAt = futureAt();
+    mockStoreState.getReminderById.mockReturnValue(
+      hydratedStoreReminder(onceAt, {
+        wavUrl: "https://cdn/stale-base.wav",
+        variantWavUrls: ["https://cdn/stale0.wav", "https://cdn/stale1.wav"],
+      }) as any
+    );
+
+    await scheduleReminder(reminder({ onceAt }));
+
+    expect(scheduledCalls().map((o) => o.soundName)).toEqual([
+      `reminder_${ID}.wav`,
+      `reminder_${ID}_v1.wav`,
+      `reminder_${ID}_v2.wav`,
+    ]);
+    expect(mockAlarmSounds.ensureAlarmSound).toHaveBeenCalledWith(ID, "https://cdn/base.wav");
   });
 });

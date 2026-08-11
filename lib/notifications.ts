@@ -82,6 +82,7 @@ import {
   getScheduledAlarms as getScheduledNativeAlarms,
   requestAuthorization as requestAlarmKitAuthorization,
   scheduleAlarm as scheduleNativeAlarm,
+  settleInFlightAppKeys,
   // Aliased on import: the contract name trips react-hooks/rules-of-hooks
   // wherever it is called from a plain async function.
   useAlarmKit as alarmKitEnabled,
@@ -1463,6 +1464,31 @@ async function rungSoundName(
 }
 
 /**
+ * Fill wav fields the caller's reminder object is missing from the store copy.
+ *
+ * The creation flow (app/index.tsx) and the edit sheet both schedule with
+ * objects built before audio hydration landed, so `wavUrl`/`variantWavUrls`
+ * only exist on the store reminder by then. Without this read-through a ladder
+ * registered by those callers bakes the fallback sound into every rung — the
+ * base wav (or the system default) on rung 1 and 2 instead of their variants —
+ * and AlarmKit sounds cannot be patched after registration. Fields the caller
+ * does provide always win, so schedule-time wavs behave exactly as before.
+ */
+function withStoredWavUrls(reminder: ReminderNotification): ReminderNotification {
+  if (reminder.wavUrl && reminder.variantWavUrls?.length) return reminder;
+  const stored = useReminderStore.getState().getReminderById(reminder.id);
+  if (!stored) return reminder;
+  const fromStore = toReminderNotification(stored);
+  return {
+    ...reminder,
+    wavUrl: reminder.wavUrl || fromStore.wavUrl,
+    variantWavUrls: reminder.variantWavUrls?.length
+      ? reminder.variantWavUrls
+      : fromStore.variantWavUrls,
+  };
+}
+
+/**
  * Register one occurrence as its full ladder of sibling alarms.
  *
  * De-duped on the occurrence's appKey: startup gap_resync and a fresh create
@@ -1481,10 +1507,13 @@ async function scheduleAlarmKitOccurrence(
   );
 
   return dedupeByAppKey(rungs[0].appKey, async () => {
+    // Read the store at execution time: hydration may have landed the wavs
+    // between the caller building its reminder object and this work running.
+    const hydrated = withStoredWavUrls(reminder);
     await cancelStaleAlarmKitAlarms(reminder.id, new Set(rungs.map((r) => r.appKey)));
 
-    const baseSound = await ensureAlarmSoundSafe(reminder.id, reminder.wavUrl);
-    const variantWavUrls = await resolveVariantWavUrls(reminder);
+    const baseSound = await ensureAlarmSoundSafe(reminder.id, hydrated.wavUrl);
+    const variantWavUrls = await resolveVariantWavUrls(hydrated);
 
     for (const rung of rungs) {
       const soundName = await rungSoundName(
@@ -1535,7 +1564,7 @@ async function scheduleAlarmKitFollowUp(
   return dedupeByAppKey(appKey, async () => {
     await cancelStaleAlarmKitAlarms(reminder.id, new Set([appKey]));
 
-    const baseSound = await ensureAlarmSoundSafe(reminder.id, reminder.wavUrl);
+    const baseSound = await ensureAlarmSoundSafe(reminder.id, withStoredWavUrls(reminder).wavUrl);
     const uuid = await scheduleNativeAlarm({
       id: appKey,
       fireDate,
@@ -1579,6 +1608,11 @@ async function refreshAlarmKitSound(reminderId: string): Promise<void> {
   const reminder = toReminderNotification(stored);
   if (!reminder.wavUrl) return;
 
+  // A ladder still registering (startup sync racing hydration) must land
+  // before the registry is read, or this refresh would rewrite the rungs
+  // that already exist while the rest register with stale sounds.
+  await settleInFlightAppKeys(`reminder_${reminderId}_`);
+
   const scheduled = (await getScheduledNativeAlarms()).filter((alarm) =>
     alarm.id.startsWith(`reminder_${reminderId}_`)
   );
@@ -1597,7 +1631,11 @@ async function refreshAlarmKitSound(reminderId: string): Promise<void> {
   );
   const byAppKey = new Map(ladder.map((rung) => [rung.appKey, rung]));
 
+  const now = Date.now();
   for (const alarm of scheduled) {
+    // Never touch a rung at or past its fire time: a native re-register is
+    // cancel-then-schedule, which would silence an alarm ringing right now.
+    if (alarm.fireDate <= now) continue;
     const rung = byAppKey.get(alarm.id);
     const variantIndex = rung?.variantIndex ?? -1;
     const soundName = await rungSoundName(

@@ -173,6 +173,19 @@ export function dedupeByAppKey<T>(appKey: string, work: () => Promise<T>): Promi
   return task;
 }
 
+/**
+ * Resolve once every in-flight registration whose appKey starts with `prefix`
+ * has settled. Hydration's sound refresh (lib/notifications.ts) serializes
+ * behind a ladder that is still registering instead of reading the native
+ * registry mid-flight and rewriting only the rungs that already landed.
+ */
+export async function settleInFlightAppKeys(prefix: string): Promise<void> {
+  const pending = [...inFlightByAppKey.entries()]
+    .filter(([appKey]) => appKey.startsWith(prefix))
+    .map(([, task]) => task.then(() => undefined, () => undefined));
+  if (pending.length > 0) await Promise.all(pending);
+}
+
 /** Test seam — drops any in-flight registrations. */
 export function resetAppKeyDedupe(): void {
   inFlightByAppKey.clear();
