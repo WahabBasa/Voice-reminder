@@ -50,3 +50,8 @@ resolve_audio_diagnostic.py
 Screenshot_*.jpg
 nul
 credentials.json
+coverage/
+tmp-export/
+tmp-screenshots/
+dev-client-qr*.png
+dev-build-install-qr.png
