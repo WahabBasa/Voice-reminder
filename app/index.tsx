@@ -22,6 +22,7 @@ import Animated, {
   FadeOut,
   SlideOutLeft,
   Layout,
+  interpolateColor,
 } from "react-native-reanimated";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -41,6 +42,7 @@ import RecordingOverlay from "../components/RecordingOverlay";
 import EditReminderSheet from "../components/EditReminderSheet";
 import { arePermissionsGranted, showPermissionPrompt } from "../components/PermissionPrompt";
 import SwipeableCard from "../components/SwipeableCard";
+import SwipePager from "../components/SwipePager";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
 import { createTraceId, perfLog, recordTap, startStallMonitor } from "../lib/perf";
@@ -50,6 +52,10 @@ import { removeReminderFully } from "../lib/reminderRemoval";
 import NetInfo from "@react-native-community/netinfo";
 
 type HomeView = "all" | "completed";
+
+const HOME_VIEW_PAGES: HomeView[] = ["all", "completed"];
+
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
 function formatCardTimestamp(isoString: string) {
   const date = new Date(isoString);
@@ -993,8 +999,44 @@ export default function HomeScreen() {
     [handleCompletedPress, remindersById]
   );
 
+  // pagerProgress mirrors the fractional page position (0=all, 1=completed) so
+  // the filter pills tint continuously while the finger drags the pager.
+  const pagerProgress = useSharedValue(0);
+
+  const handlePageChange = useCallback((index: number) => {
+    setSelectedView(HOME_VIEW_PAGES[index] ?? "all");
+  }, []);
+
+  const allPillStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, pagerProgress.value));
+    return {
+      backgroundColor: interpolateColor(p, [0, 1], [colors.accent, colors.surface]),
+    };
+  });
+  const allPillTextStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, pagerProgress.value));
+    return {
+      color: interpolateColor(p, [0, 1], ["#FFFFFF", colors.textPrimary]),
+    };
+  });
+  const completedPillStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, pagerProgress.value));
+    return {
+      backgroundColor: interpolateColor(p, [0, 1], [colors.surface, colors.accent]),
+    };
+  });
+  const completedPillTextStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, pagerProgress.value));
+    return {
+      color: interpolateColor(p, [0, 1], [colors.textPrimary, "#FFFFFF"]),
+    };
+  });
+
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    // Full-bleed to the screen's bottom edge: the lists pad their own content
+    // past the home indicator, so a bottom safe-area edge would just cut a
+    // dead strip under the pager.
+    <SafeAreaView style={styles.container} edges={[]}>
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <Text style={styles.headerTitle}>Voice Reminder</Text>
@@ -1060,41 +1102,25 @@ export default function HomeScreen() {
 
         <View style={styles.filtersRow}>
           <View style={styles.filtersLeft}>
-            <TouchableOpacity
-              style={[
-                styles.filterPill,
-                selectedView === "all" && styles.filterPillActive,
-              ]}
+            <AnimatedTouchable
+              style={[styles.filterPill, allPillStyle]}
               onPress={() => setSelectedView("all")}
               activeOpacity={0.85}
             >
-              <Text
-                style={[
-                  styles.filterPillText,
-                  selectedView === "all" && styles.filterPillTextActive,
-                ]}
-              >
+              <Animated.Text style={[styles.filterPillText, allPillTextStyle]}>
                 All
-              </Text>
-            </TouchableOpacity>
+              </Animated.Text>
+            </AnimatedTouchable>
 
-            <TouchableOpacity
-              style={[
-                styles.filterPill,
-                selectedView === "completed" && styles.filterPillActive,
-              ]}
+            <AnimatedTouchable
+              style={[styles.filterPill, completedPillStyle]}
               onPress={() => setSelectedView("completed")}
               activeOpacity={0.85}
             >
-              <Text
-                style={[
-                  styles.filterPillText,
-                  selectedView === "completed" && styles.filterPillTextActive,
-                ]}
-              >
+              <Animated.Text style={[styles.filterPillText, completedPillTextStyle]}>
                 Completed
-              </Text>
-            </TouchableOpacity>
+              </Animated.Text>
+            </AnimatedTouchable>
           </View>
 
           {/* Cancel button when in select mode */}
@@ -1119,7 +1145,12 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {selectedView === "all" ? (
+      <SwipePager
+        page={selectedView === "all" ? 0 : 1}
+        onPageChange={handlePageChange}
+        swipeEnabled={!isSelectMode}
+        progress={pagerProgress}
+      >
         <SectionList
           style={styles.content}
           contentContainerStyle={[
@@ -1171,7 +1202,7 @@ export default function HomeScreen() {
             </View>
           }
         />
-      ) : (
+
         <SectionList
           style={styles.content}
           contentContainerStyle={[
@@ -1225,7 +1256,7 @@ export default function HomeScreen() {
             </View>
           }
         />
-      )}
+      </SwipePager>
 
       {selectedView === "all" && !showRecording && !editingReminder && (
         <>
@@ -1368,16 +1399,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     marginRight: 10,
   },
-  filterPillActive: {
-    backgroundColor: colors.accent,
-  },
   filterPillText: {
     fontWeight: "700",
     fontSize: scaleFontSize(14),
     color: colors.textPrimary,
-  },
-  filterPillTextActive: {
-    color: "white",
   },
   content: {
     flex: 1,

@@ -5,6 +5,17 @@ export type PermissionStatus = "granted" | "denied" | "undetermined";
 let recording: Audio.Recording | null = null;
 let isRecordingPreparing = false;
 
+type MeteringListener = (db: number) => void;
+let meteringListener: MeteringListener | null = null;
+
+/**
+ * Subscribe to live mic input levels (dBFS, ~-160..0) while recording.
+ * One listener at a time; pass null to unsubscribe. Drives the VoiceMeter UI.
+ */
+export function setMeteringListener(listener: MeteringListener | null): void {
+  meteringListener = listener;
+}
+
 export async function requestMicrophonePermission(): Promise<PermissionStatus> {
   const { status } = await Audio.requestPermissionsAsync();
   return status as PermissionStatus;
@@ -42,7 +53,13 @@ export async function startRecording(): Promise<void> {
     });
 
     const { recording: newRecording } = await Audio.Recording.createAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY
+      { ...Audio.RecordingOptionsPresets.HIGH_QUALITY, isMeteringEnabled: true },
+      (status) => {
+        if (status.isRecording && typeof status.metering === "number") {
+          meteringListener?.(status.metering);
+        }
+      },
+      80
     );
     recording = newRecording;
   } finally {

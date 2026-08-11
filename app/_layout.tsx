@@ -312,47 +312,70 @@ function RootLayout() {
               <PermissionPrompt />
               <StatusBar style="light" />
               <Stack
-                screenOptions={{
-                  headerShown: false,
-                  animation: "fade",
-                  animationDuration: 50,
-                  freezeOnBlur: true,
-                }}
+                // iOS rides the native stack defaults: real UINavigationController
+                // push/pop with the swipe-back gesture, native sheet modals. The
+                // fade overrides exist only to keep Android exactly as it was.
+                screenOptions={
+                  Platform.OS === "ios"
+                    ? { headerShown: false, freezeOnBlur: true }
+                    : {
+                        headerShown: false,
+                        animation: "fade",
+                        animationDuration: 50,
+                        freezeOnBlur: true,
+                      }
+                }
               >
                 <Stack.Screen name="index" options={{ contentStyle: { backgroundColor: "white" } }} />
                 <Stack.Screen name="history" options={{ contentStyle: { backgroundColor: "white" } }} />
                 <Stack.Screen
                   name="settings"
-                  options={{
-                    contentStyle: { backgroundColor: "white" },
-                    animation: "slide_from_right",
-                    animationDuration: 100,
-                  }}
+                  options={
+                    Platform.OS === "ios"
+                      ? { contentStyle: { backgroundColor: "white" } }
+                      : {
+                          contentStyle: { backgroundColor: "white" },
+                          animation: "slide_from_right",
+                          animationDuration: 100,
+                        }
+                  }
                 />
                 <Stack.Screen
                   name="diagnostics"
-                  options={{
-                    contentStyle: { backgroundColor: "white" },
-                    animation: "slide_from_right",
-                    animationDuration: 100,
-                  }}
+                  options={
+                    Platform.OS === "ios"
+                      ? { contentStyle: { backgroundColor: "white" } }
+                      : {
+                          contentStyle: { backgroundColor: "white" },
+                          animation: "slide_from_right",
+                          animationDuration: 100,
+                        }
+                  }
                 />
                 <Stack.Screen
                   name="reminder/new"
-                  options={{
-                    animation: "fade",
-                    animationDuration: 50,
-                    presentation: "modal",
-                  }}
+                  options={
+                    Platform.OS === "ios"
+                      ? { presentation: "modal" }
+                      : {
+                          animation: "fade",
+                          animationDuration: 50,
+                          presentation: "modal",
+                        }
+                  }
                 />
                 <Stack.Screen
                   name="paywall"
-                  options={{
-                    animation: "fade",
-                    animationDuration: 50,
-                    presentation: "modal",
-                    contentStyle: { backgroundColor: "white" },
-                  }}
+                  options={
+                    Platform.OS === "ios"
+                      ? { presentation: "modal", contentStyle: { backgroundColor: "white" } }
+                      : {
+                          animation: "fade",
+                          animationDuration: 50,
+                          presentation: "modal",
+                          contentStyle: { backgroundColor: "white" },
+                        }
+                  }
                 />
               </Stack>
               {/* Fallback alarm overlay for foreground app (pastebin Step 4.1) */}
