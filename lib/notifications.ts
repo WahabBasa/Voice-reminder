@@ -12,6 +12,7 @@ import notifee, {
 } from "@notifee/react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import * as Linking from "expo-linking";
 import { alarmAudioService } from "./AudioService";
 import {
   documentDirectory,
@@ -950,16 +951,30 @@ export async function openAlarmPermissionSettingsSafe(): Promise<void> {
   }
 }
 
-export async function openNotificationSettingsSafe(): Promise<void> {
-  try {
-    const fn = (notifee as any).openNotificationSettings;
-    if (typeof fn === "function") {
-      await fn();
-      return;
+// Returns false when the system settings could not be opened, so the caller can
+// tell the user instead of the tap doing nothing.
+export async function openNotificationSettingsSafe(): Promise<boolean> {
+  // notifee.openNotificationSettings is Android-only. On iOS (and if notifee
+  // ever fails on Android) fall back to the app's own page in Settings, which
+  // has Notifications one tap away.
+  if (Platform.OS === "android") {
+    try {
+      const fn = (notifee as any).openNotificationSettings;
+      if (typeof fn === "function") {
+        await fn();
+        return true;
+      }
+      console.log("[VR] notifee.openNotificationSettings is not available");
+    } catch (e) {
+      console.log("[VR] Failed to open notification settings:", e);
     }
-    console.log("[VR] notifee.openNotificationSettings is not available");
+  }
+  try {
+    await Linking.openSettings();
+    return true;
   } catch (e) {
-    console.log("[VR] Failed to open notification settings:", e);
+    console.log("[VR] Failed to open system settings:", e);
+    return false;
   }
 }
 

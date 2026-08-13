@@ -47,6 +47,15 @@ export function getCurrentTimeHM(currentTime: string): string {
   return `${match[1].padStart(2, "0")}:${match[2]}`;
 }
 
+// Banned openers (OLD-61). Taking the canned hooks out of the prompt was not
+// enough: with nothing offered, the model converged on announcing the clock —
+// almost every generated line came back as 'It is time to ...'. So the ban has
+// to be said out loud, and it has to come with somewhere else to start, or the
+// model just swaps in the next formula it can find. Shared verbatim by every
+// builder that describes a spoken line. Single-quoted throughout — it is
+// embedded inside a double-quoted JSON field in the prompt.
+export const SPOKEN_OPENER_RULE = `Never announce the clock at the start of a spoken line: 'It is time', 'It's time', a bare 'Time to ...', and the Arabic 'حان وقت' / 'حان الوقت' are forbidden wordings, not merely discouraged. Open on something concrete instead — the task, the object, the person waiting, the place to be, or what slips if this is ignored — so the first two or three words already tell the user what this is about. There is no approved replacement opener: vary it with the reminder rather than reusing one phrasing.`;
+
 // Instruction text for the parse prompt's "description" field.
 // No opener templates: the line has to read like something a person would say
 // out loud, not a notification. When addressTerm is set the model weaves it in
@@ -61,7 +70,7 @@ export function buildDescriptionInstruction(addressTerm?: string): string {
   const example = term
     ? `'${term}, your meeting with Ahmed is starting.'`
     : `'Your meeting with Ahmed is starting.'`;
-  return `the sentence spoken aloud when the reminder fires, in the input's language. Say it the way a human assistant would say it out loud: the task plus whatever time or place context the user gave. One natural sentence, roughly 5-14 words, with no set opening formula and no greeting — start with the substance. ${addressRule}. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: ${example} / 'Time to take your evening medicine.' / 'حان وقت أخذ دوائك المسائي.'`;
+  return `the sentence spoken aloud when the reminder fires, in the input's language. Say it the way a human assistant would say it out loud: the task plus whatever time or place context the user gave. One natural sentence, roughly 5-14 words, with no set opening formula and no greeting — start with the substance, specific enough that it catches the ear across a room. ${SPOKEN_OPENER_RULE} ${addressRule}. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: ${example} / 'Your evening medicine is still sitting there.' / 'دواؤك المسائي بانتظارك.'`;
 }
 
 // Instruction block for the parse prompt's pre-reminder (heads-up) fields.
@@ -71,7 +80,7 @@ export function buildPreReminderInstruction(): string {
   return `PRE-REMINDER RULES (automatic heads-up before the event):
 - "preReminderMinutes": 10-15 for hard-start events the user must be somewhere for or start on time (meetings, appointments, flights, games, classes, calls). 0 for ambient/routine tasks (drink water, take medicine, generic todos).
 - If the user explicitly asks for a heads-up ("give me a 20 minute warning"), use that many minutes.
-- "preDescription": ONLY when preReminderMinutes > 0. The spoken advance-notice line, in the input's language (Arabic input gets an Arabic line), under 12 words: name the event and how far off it is, phrased naturally with no set opening formula — 'Your flight leaves in 40 minutes.', 'اجتماعك يبدأ بعد ربع ساعة.'. Omit the field entirely when preReminderMinutes is 0.`;
+- "preDescription": ONLY when preReminderMinutes > 0. The spoken advance-notice line, in the input's language (Arabic input gets an Arabic line), under 12 words: name the event and how far off it is, phrased naturally with no set opening formula — 'Your flight leaves in 40 minutes.', 'اجتماعك يبدأ بعد ربع ساعة.'. ${SPOKEN_OPENER_RULE} Omit the field entirely when preReminderMinutes is 0.`;
 }
 
 // ─── Assistant-style replays (OLD-53) ───────────────────────────────────────
@@ -158,16 +167,18 @@ export function normalizeVariants(
 // Instruction block for the parse prompt's replay fields (urgency, persistent,
 // variants). Variants are spoken minutes after the description was ignored, so
 // they must stay true when heard late. When addressTerm is set, firmer variants
-// may weave it in verbatim.
+// may weave it in verbatim. Each variant is its own ladder rung, so each one
+// opens differently — a rung that starts like the rung before it stops being
+// heard as a new attempt.
 export function buildVariantInstruction(addressTerm?: string): string {
   const term = String(addressTerm ?? "").trim();
   const firmNote = term
     ? `firmer variants may weave in the address term '${term}' verbatim, exactly as the user wrote it (it may be Arabic)`
     : `never address the user by any name or title in any variant (no 'Sir', no invented names)`;
   return `ASSISTANT REPLAY RULES (the follow-up lines an assistant would use when the first one is ignored):
-- "urgency": how hard the reminder has to push — "urgent" when the user must act right now (meeting starting, time to leave), "notice" for advance warning of something coming up, "routine" for ordinary everyday tasks.
+- "urgency": how hard the reminder has to push — "urgent" when the user must act right now (meeting starting, leaving the house), "notice" for advance warning of something coming up, "routine" for ordinary everyday tasks.
 - "persistent": true ONLY when missing the task would be harmful (medicine regimens, flights, picking up children). Otherwise false or omit.
-- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from gentle nudge to insistent; ${firmNote}. One natural sentence each, roughly 5-14 words, with no set opening formula, and still true when heard minutes late (no countdowns). Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
+- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from gentle nudge to insistent; ${firmNote}. One natural sentence each, roughly 5-14 words, with no set opening formula, and still true when heard minutes late (no countdowns). ${SPOKEN_OPENER_RULE} Every variant must also start on a different word from the description and from the other variants, and the later ones lean harder — name the cost of ignoring it rather than raising the volume of the same sentence. Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
 }
 
 // Upper bound keeps a mis-parsed lead time from scheduling a heads-up hours early.

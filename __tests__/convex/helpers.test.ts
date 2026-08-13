@@ -8,6 +8,7 @@ import {
   normalizePreReminder,
   MAX_PRE_REMINDER_MINUTES,
   MAX_REPLAY_VARIANTS,
+  SPOKEN_OPENER_RULE,
   normalizeUrgency,
   normalizePersistent,
   variantCountForTier,
@@ -213,7 +214,7 @@ describe("buildDescriptionInstruction", () => {
 
   it("keeps an Arabic example so Arabic input gets an Arabic line", () => {
     expect(buildDescriptionInstruction(undefined)).toContain(
-      "'حان وقت أخذ دوائك المسائي.'"
+      "'دواؤك المسائي بانتظارك.'"
     );
   });
 
@@ -254,16 +255,32 @@ describe("buildPreReminderInstruction", () => {
 describe("instruction phrasing", () => {
   // The parse prompt used to hand the model a menu of fixed hooks, so every
   // spoken line came out stamped from the same template. They are gone; this
-  // fails the moment one is reintroduced.
-  const CANNED_OPENERS = ["it's time", "heads up", "quick reminder", "hook"];
-
-  const instructions = () => [
-    buildDescriptionInstruction(undefined),
-    buildDescriptionInstruction("Wahab"),
-    buildPreReminderInstruction(),
-    buildVariantInstruction(undefined),
-    buildVariantInstruction("Wahab"),
+  // fails the moment one is reintroduced. "it is time" / "time to" joined the
+  // list in OLD-61: the model kept reinventing them on its own, so they are now
+  // named as forbidden — which means the ban text itself is the one place they
+  // are allowed to appear, and it is stripped before the guard runs.
+  const CANNED_OPENERS = [
+    "it's time",
+    "it is time",
+    "time to",
+    "heads up",
+    "quick reminder",
+    "hook",
+    "حان وقت",
+    "حان الوقت",
   ];
+
+  const withoutOpenerBan = (instruction: string) =>
+    instruction.replace(SPOKEN_OPENER_RULE, "");
+
+  const instructions = () =>
+    [
+      buildDescriptionInstruction(undefined),
+      buildDescriptionInstruction("Wahab"),
+      buildPreReminderInstruction(),
+      buildVariantInstruction(undefined),
+      buildVariantInstruction("Wahab"),
+    ].map(withoutOpenerBan);
 
   for (const opener of CANNED_OPENERS) {
     it(`never offers "${opener}" as an opener`, () => {
@@ -277,6 +294,44 @@ describe("instruction phrasing", () => {
     for (const instruction of instructions()) {
       expect(instruction).toContain("no set opening formula");
     }
+  });
+});
+
+// ─── SPOKEN_OPENER_RULE (OLD-61: the model's own favourite opener) ──────────
+
+describe("SPOKEN_OPENER_RULE", () => {
+  it("forbids the clock-announcing openers by name, in both languages", () => {
+    for (const banned of ["'It is time'", "'It's time'", "'Time to ...'", "'حان وقت'", "'حان الوقت'"]) {
+      expect(SPOKEN_OPENER_RULE).toContain(banned);
+    }
+    expect(SPOKEN_OPENER_RULE).toContain("forbidden wordings, not merely discouraged");
+  });
+
+  it("gives the model somewhere else to start instead of a replacement formula", () => {
+    expect(SPOKEN_OPENER_RULE).toContain("Open on something concrete instead");
+    expect(SPOKEN_OPENER_RULE).toContain("There is no approved replacement opener");
+  });
+
+  it("never embeds a double quote (it is inlined in a JSON string field)", () => {
+    expect(SPOKEN_OPENER_RULE).not.toContain('"');
+  });
+
+  it("ships in every builder that describes a spoken line", () => {
+    for (const instruction of [
+      buildDescriptionInstruction(undefined),
+      buildDescriptionInstruction("Wahab"),
+      buildPreReminderInstruction(),
+      buildVariantInstruction(undefined),
+      buildVariantInstruction("Wahab"),
+    ]) {
+      expect(instruction).toContain(SPOKEN_OPENER_RULE);
+    }
+  });
+
+  it("keeps each ladder rung opening on a different word", () => {
+    expect(buildVariantInstruction(undefined)).toContain(
+      "start on a different word from the description and from the other variants"
+    );
   });
 });
 

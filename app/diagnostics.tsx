@@ -3,13 +3,10 @@ import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View }
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import notifee from "@notifee/react-native";
-import * as Linking from "expo-linking";
 import AppIcon, { type AppIconName } from "../components/AppIcon";
 import { borderRadius, colors, scaleFontSize, shadows } from "../lib/theme";
 import { FONT_DISPLAY } from "../lib/fonts";
 import { openAlarmPermissionSettingsSafe, openNotificationSettingsSafe } from "../lib/notifications";
-import { getScheduledAlarms, parseAlarmAppKey, useAlarmKit, type ScheduledAlarm } from "../lib/alarmKit";
-import { useReminderStore } from "../lib/store";
 
 type PermissionTone = "ok" | "bad" | "muted";
 
@@ -19,35 +16,6 @@ function permissionStatus(status: number | undefined): { label: string; tone: Pe
   if (status === 0) return { label: "Denied", tone: "bad" };
   if (status === -1) return { label: "Not requested", tone: "muted" };
   return { label: "Unknown", tone: "muted" };
-}
-
-function formatFireDate(timestamp: number): string {
-  const date = new Date(timestamp);
-  const day = date.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
-  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `${day} · ${time}`;
-}
-
-type AlarmRow = { key: string; title: string; when: string; isFollowUp: boolean };
-
-function toAlarmRows(alarms: ScheduledAlarm[]): AlarmRow[] {
-  const sorted = [...alarms].sort((a, b) => a.fireDate - b.fireDate);
-  const seenReminder = new Set<string>();
-  const getReminderById = useReminderStore.getState().getReminderById;
-
-  return sorted.map((alarm) => {
-    const parsed = parseAlarmAppKey(alarm.id);
-    const reminderId = parsed?.reminderId;
-    const title = (reminderId && getReminderById(reminderId)?.title) || "Reminder";
-    const isFollowUp = reminderId ? seenReminder.has(reminderId) : false;
-    if (reminderId) seenReminder.add(reminderId);
-    return {
-      key: alarm.id,
-      title,
-      when: formatFireDate(alarm.fireDate),
-      isFollowUp,
-    };
-  });
 }
 
 function Row({
@@ -83,7 +51,6 @@ export default function DiagnosticsScreen() {
   const router = useRouter();
   const [authStatus, setAuthStatus] = useState<number | undefined>(undefined);
   const [androidAlarmStatus, setAndroidAlarmStatus] = useState<number | undefined>(undefined);
-  const [alarmRows, setAlarmRows] = useState<AlarmRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -92,25 +59,6 @@ export default function DiagnosticsScreen() {
       const settings = await notifee.getNotificationSettings();
       setAuthStatus(settings?.authorizationStatus);
       setAndroidAlarmStatus(settings?.android?.alarm);
-
-      if (Platform.OS === "ios" && (await useAlarmKit())) {
-        setAlarmRows(toAlarmRows(await getScheduledAlarms()));
-      } else {
-        const ids = await notifee.getTriggerNotificationIds();
-        const rows: AlarmRow[] = ids.map((id) => {
-          const parsed = parseAlarmAppKey(id);
-          const title =
-            (parsed && useReminderStore.getState().getReminderById(parsed.reminderId)?.title) ||
-            "Reminder";
-          return {
-            key: id,
-            title,
-            when: parsed ? formatFireDate(parsed.scheduledFor) : "",
-            isFollowUp: false,
-          };
-        });
-        setAlarmRows(rows);
-      }
     } catch (e) {
       console.log("[VR] Diagnostics refresh failed:", e);
       Alert.alert("Error", "Failed to load notification diagnostics.");
@@ -179,50 +127,25 @@ export default function DiagnosticsScreen() {
 
         <Text style={styles.sectionLabel}>Open system settings</Text>
         <View style={styles.card}>
-          <Row icon="bell" label="Notification settings" onPress={() => void openNotificationSettingsSafe()} />
-          {showAndroidAlarmRow ? (
-            <Row icon="clock" label="Alarms & reminders" onPress={() => void openAlarmPermissionSettingsSafe()} />
-          ) : null}
           <Row
-            icon="settings"
-            label="App settings"
+            icon="bell"
+            label="Notification settings"
             onPress={async () => {
-              try {
-                await Linking.openSettings();
-              } catch {
+              const opened = await openNotificationSettingsSafe();
+              if (!opened) {
                 Alert.alert("Unable to open settings", "Please open your system settings manually.");
               }
             }}
-            isLast
+            isLast={!showAndroidAlarmRow}
           />
-        </View>
-
-        <Text style={styles.sectionLabel}>
-          {`Scheduled${alarmRows.length ? ` (${alarmRows.length})` : ""}`}
-        </Text>
-        <View style={styles.card}>
-          {alarmRows.length === 0 ? (
-            <Text style={styles.emptyText}>No alarms scheduled right now.</Text>
-          ) : (
-            alarmRows.map((row, index) => (
-              <View key={row.key}>
-                <View style={styles.row}>
-                  <View style={styles.rowIcon}>
-                    <AppIcon name={row.isFollowUp ? "refresh-cw" : "bell"} size={18} color={colors.textSecondary} />
-                  </View>
-                  <View style={styles.rowTextWrap}>
-                    <Text style={styles.rowTitle} numberOfLines={1}>
-                      {row.title}
-                    </Text>
-                    <Text style={styles.rowSubtitle}>
-                      {row.isFollowUp ? `Follow-up · ${row.when}` : row.when}
-                    </Text>
-                  </View>
-                </View>
-                {index !== alarmRows.length - 1 ? <View style={styles.separator} /> : null}
-              </View>
-            ))
-          )}
+          {showAndroidAlarmRow ? (
+            <Row
+              icon="clock"
+              label="Alarms & reminders"
+              onPress={() => void openAlarmPermissionSettingsSafe()}
+              isLast
+            />
+          ) : null}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -294,19 +217,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 12,
   },
-  rowTextWrap: {
-    flex: 1,
-  },
   rowTitle: {
     flex: 1,
     fontSize: scaleFontSize(16),
     fontWeight: "600",
     color: colors.textPrimary,
-  },
-  rowSubtitle: {
-    fontSize: scaleFontSize(13),
-    color: colors.textSecondary,
-    marginTop: 1,
   },
   statusText: {
     fontSize: scaleFontSize(14),
@@ -318,10 +233,5 @@ const styles = StyleSheet.create({
   },
   statusBad: {
     color: colors.destructive,
-  },
-  emptyText: {
-    padding: 16,
-    fontSize: scaleFontSize(14),
-    color: colors.textSecondary,
   },
 });
