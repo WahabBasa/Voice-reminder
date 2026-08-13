@@ -45,6 +45,7 @@
 **Known gotchas:**
 - PowerShell blocks `npm` / `npx` `.ps1` shims. Use `npm.cmd` / `npx.cmd`
 - Windows file locking can cause `kill EPERM` errors during builds - just retry
+- `eas update` needs `--platform ios` (no react-native-web installed) and often `--clear-cache` — Metro dies with "Failed to get the SHA-1 for ... require.js" on a warm cache. Run from `C:\Dev\VR` (uppercase drive letter)
 
 ## 📝 Devlog Writing Guidelines
 
