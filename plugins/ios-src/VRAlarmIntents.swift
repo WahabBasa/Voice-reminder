@@ -350,6 +350,10 @@ enum VRAlarmLadder {
 #if canImport(AlarmKit)
 @available(iOS 26.0, *)
 enum VRAlarmButtons {
+    /// Only reachable on iOS 26.0. From 26.1 the alert takes a system-provided stop
+    /// control and this appearance is ignored, so VRAlarmScheduler.makeAlert passes it
+    /// on the deprecated init's branch alone. The stop *action* is unaffected — that
+    /// is stopIntent, not this.
     static var done: AlarmButton {
         AlarmButton(text: "Done", textColor: .white, systemImageName: "checkmark.circle.fill")
     }

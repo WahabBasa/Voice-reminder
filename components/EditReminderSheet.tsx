@@ -29,6 +29,7 @@ import RepeatTaskModal from "./RepeatTaskModal";
 import DatePickerModal from "./DatePickerModal";
 import { cancelReminder, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
 import { migrateLegacySchedule } from "../lib/schedule";
+import { getDeviceId } from "../lib/deviceId";
 import { createTraceId, perfLog } from "../lib/perf";
 import { DEFAULT_ALARM_SETTINGS } from "../lib/storage";
 import { INTERVAL_MAX_MS, INTERVAL_MIN_MS, useReminderStore, Reminder } from "../lib/store";
@@ -459,6 +460,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             if (convexId) {
                 updateConvexReminder({
                     id: convexId as any,
+                    deviceId: await getDeviceId(),
                     title: updatedReminder.title,
                     description,
                     time: timeStr,
@@ -498,9 +500,11 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             });
 
             if (convexId) {
-                removeConvexReminder({ id: convexId as any }).catch((e) => {
-                    console.log("[VR] Failed to delete Convex reminder:", e);
-                });
+                void getDeviceId()
+                    .then((deviceId) => removeConvexReminder({ id: convexId as any, deviceId }))
+                    .catch((e) => {
+                        console.log("[VR] Failed to delete Convex reminder:", e);
+                    });
             }
         });
     };

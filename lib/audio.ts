@@ -1,4 +1,5 @@
 import { Audio } from "expo-av";
+import { perfLog } from "./perf";
 
 export type PermissionStatus = "granted" | "denied" | "undetermined";
 
@@ -77,16 +78,32 @@ export async function resumeRecording(): Promise<void> {
   await recording.startAsync();
 }
 
-export async function stopRecording(): Promise<string | null> {
+export async function stopRecording(traceId?: string): Promise<string | null> {
   if (!recording) return null;
 
+  // Split timing (OLD-82): both halves of this function landed in the same
+  // commit as Sentry (28bb2e0), so "the slowdown started with Sentry" could
+  // just as easily be the audio-session change below. Measure, don't guess.
+  const tStart = Date.now();
   await recording.stopAndUnloadAsync();
+  const tUnloaded = Date.now();
+
   await Audio.setAudioModeAsync({
     allowsRecordingIOS: false,
     // Omitting this lets it default to false, flipping the whole app's audio
     // session back to mute-switch-obeying mode — alarms then play silently.
     playsInSilentModeIOS: true,
   });
+  const tModeSet = Date.now();
+
+  if (traceId) {
+    perfLog(traceId, "device.recording", "stopRecording_split", {
+      // expo-av teardown + file finalization
+      unloadMs: tUnloaded - tStart,
+      // AVAudioSession category switch back to playback-in-silent-mode
+      audioModeMs: tModeSet - tUnloaded,
+    });
+  }
 
   const uri = recording.getURI();
   recording = null;

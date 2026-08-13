@@ -5,10 +5,14 @@ const SETTINGS_KEY = '@app_settings';
 
 export interface AppSettings {
     addressTerm: string; // How the voice addresses the user ("" = unset, address-free)
+    // When the user agreed to their recording being processed off-device by the
+    // named AI providers (ms epoch). null = never agreed, or consent revoked.
+    aiConsentAcceptedAt: number | null;
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
     addressTerm: '',
+    aiConsentAcceptedAt: null,
 };
 
 interface SettingsState {
@@ -17,6 +21,7 @@ interface SettingsState {
 
     loadSettings: () => Promise<void>;
     setAddressTerm: (addressTerm: string) => Promise<void>;
+    setAiConsent: (accepted: boolean) => Promise<void>;
 }
 
 let loadSettingsInFlight: Promise<void> | null = null;
@@ -46,6 +51,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
                         addressTerm: typeof parsed.addressTerm === 'string'
                             ? parsed.addressTerm
                             : DEFAULT_APP_SETTINGS.addressTerm,
+                        aiConsentAcceptedAt:
+                            typeof parsed.aiConsentAcceptedAt === 'number'
+                                && Number.isFinite(parsed.aiConsentAcceptedAt)
+                                ? parsed.aiConsentAcceptedAt
+                                : DEFAULT_APP_SETTINGS.aiConsentAcceptedAt,
                     },
                     hasLoadedSettings: true,
                 });
@@ -83,7 +93,31 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             throw error;
         }
     },
+
+    // Record or revoke consent for off-device AI processing
+    setAiConsent: async (accepted) => {
+        const currentSettings = get().settings;
+        const updatedSettings: AppSettings = {
+            ...currentSettings,
+            aiConsentAcceptedAt: accepted ? Date.now() : null,
+        };
+
+        // Update state immediately (optimistic)
+        set({ settings: updatedSettings });
+
+        // Persist to storage
+        try {
+            await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(updatedSettings));
+        } catch (error) {
+            // Rollback on error
+            set({ settings: currentSettings });
+            console.error('[VR Store] Error saving settings:', error);
+            throw error;
+        }
+    },
 }));
 
 // Selector hooks for common use cases
 export const useAddressTerm = () => useSettingsStore((state) => state.settings.addressTerm);
+export const useHasAiConsent = () =>
+    useSettingsStore((state) => state.settings.aiConsentAcceptedAt !== null);

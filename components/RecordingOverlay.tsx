@@ -238,7 +238,7 @@ export default function RecordingOverlay({
       perfLog(traceId, "device.recording", "stop_tap");
 
       stopTimers();
-      const uri = await stopRecording().finally(() => {
+      const uri = await stopRecording(traceId).finally(() => {
         perfLog(traceId, "device.recording", "stopRecording_done", {
           ms: Date.now() - tStopTap,
         });

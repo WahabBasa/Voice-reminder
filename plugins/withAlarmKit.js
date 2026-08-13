@@ -398,6 +398,38 @@ enum VRAlarmScheduler {
     return "notDetermined"
   }
 
+  /// Brand accent, literal on purpose. \`Color.accentColor\` is semantic: the attributes
+  /// are encoded and rendered out of process, so it resolves against the system's
+  /// asset catalog rather than ours and lands on system blue. Hex #3D8BFF, kept in
+  /// sync by hand with \`colors.accent\` in lib/theme.ts.
+  private static let brandTint = Color(red: 61.0 / 255.0, green: 139.0 / 255.0, blue: 255.0 / 255.0)
+
+  /// The alert half of the presentation. Forked on 26.1 because that is where the
+  /// non-deprecated init lands — see the availability note on each branch.
+  private static func makeAlert(title: String) -> AlarmPresentation.Alert {
+    let later = AlarmButton(text: "Later", textColor: .white, systemImageName: "clock.badge")
+
+    if #available(iOS 26.1, *) {
+      // System-provided stop control (slide-to-stop). We no longer describe it —
+      // the label was already ignored — but \`stopIntent\` still runs from it.
+      return AlarmPresentation.Alert(
+        title: LocalizedStringResource(stringLiteral: title),
+        secondaryButton: later,
+        // .custom (not .countdown) so VRSnoozeIntent actually runs on tap.
+        secondaryButtonBehavior: .custom
+      )
+    }
+
+    // iOS 26.0 only: the init above does not exist yet, so the deprecated one stays
+    // as the floor. Emits a deprecation warning when compiled; that is expected.
+    return AlarmPresentation.Alert(
+      title: LocalizedStringResource(stringLiteral: title),
+      stopButton: AlarmButton(text: "Done", textColor: .white, systemImageName: "checkmark.circle.fill"),
+      secondaryButton: later,
+      secondaryButtonBehavior: .custom
+    )
+  }
+
   private static func makeConfiguration(alarmID: UUID,
                                         appKey: String,
                                         fireDate: Date,
@@ -405,18 +437,12 @@ enum VRAlarmScheduler {
                                         soundName: String?,
                                         snoozeMinutes: Int,
                                         metadata: [String: String]) -> AlarmManager.AlarmConfiguration<VRAlarmMetadata> {
-    let alert = AlarmPresentation.Alert(
-      title: LocalizedStringResource(stringLiteral: title),
-      stopButton: AlarmButton(text: "Done", textColor: .white, systemImageName: "checkmark.circle.fill"),
-      secondaryButton: AlarmButton(text: "Later", textColor: .white, systemImageName: "clock.badge"),
-      // .custom (not .snooze/.countdown) so VRSnoozeIntent actually runs on tap.
-      secondaryButtonBehavior: .custom
-    )
+    let alert = makeAlert(title: title)
 
     let attributes = AlarmAttributes<VRAlarmMetadata>(
       presentation: AlarmPresentation(alert: alert),
       metadata: VRAlarmMetadata(appKey: appKey, values: metadata),
-      tintColor: Color.accentColor
+      tintColor: brandTint
     )
 
     // Bare filename incl. extension, resolved from Library/Sounds (AK-3 writes it there).

@@ -9,9 +9,10 @@ import { FONT_DISPLAY } from "../lib/fonts";
 import { useSettingsStore } from "../lib/settingsStore";
 import AppIcon from "../components/AppIcon";
 import AddressTermSheet from "../components/AddressTermSheet";
-
-// Apple's standard EULA — the terms that govern App Store subscriptions.
-const TERMS_OF_USE_URL = "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/";
+import AiConsentSheet from "../components/AiConsentSheet";
+// Apple's standard EULA lives with the subscription code so the paywall and this
+// screen can't drift apart.
+import { PRO_PRODUCT_NAME, TERMS_OF_USE_URL, restorePurchases } from "../lib/purchases";
 
 type SettingsRowProps = {
   icon: Parameters<typeof AppIcon>[0]["name"];
@@ -52,8 +53,12 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
 
   const addressTerm = useSettingsStore((state) => state.settings.addressTerm);
   const setAddressTerm = useSettingsStore((state) => state.setAddressTerm);
+  const aiConsentAcceptedAt = useSettingsStore((state) => state.settings.aiConsentAcceptedAt);
+  const setAiConsent = useSettingsStore((state) => state.setAiConsent);
   const loadSettings = useSettingsStore((state) => state.loadSettings);
   const [showAddressSheet, setShowAddressSheet] = useState(false);
+  const [showConsentSheet, setShowConsentSheet] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
 
   useEffect(() => {
     void loadSettings();
@@ -65,6 +70,61 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
     if (!build) return `v${version}`;
     return `v${version} (${build})`;
   }, []);
+
+  const consentSubtitle = useMemo(() => {
+    if (aiConsentAcceptedAt === null) return "Not agreed — asked before your next recording";
+    return `Agreed ${new Date(aiConsentAcceptedAt).toLocaleDateString()} — tap to withdraw`;
+  }, [aiConsentAcceptedAt]);
+
+  const handleConsentRow = () => {
+    // Not agreed yet: show the same disclosure the recorder shows.
+    if (aiConsentAcceptedAt === null) {
+      setShowConsentSheet(true);
+      return;
+    }
+    Alert.alert(
+      "Withdraw AI consent",
+      "Voice Reminder will ask again before your next recording. Reminders you've already made are not affected.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Withdraw",
+          style: "destructive",
+          onPress: () => {
+            void setAiConsent(false).catch(() => {
+              Alert.alert("Couldn't save your choice", "Please try again.");
+            });
+          },
+        },
+      ]
+    );
+  };
+
+  // App Review 3.1.1 wants restore reachable outside the paywall too.
+  const handleRestore = async () => {
+    if (isRestoring) return;
+    setIsRestoring(true);
+    const result = await restorePurchases();
+    setIsRestoring(false);
+
+    if (result.status === "restored") {
+      Alert.alert("Purchases restored", `${PRO_PRODUCT_NAME} is active on this device again.`);
+      return;
+    }
+    if (result.status === "nothing_to_restore") {
+      Alert.alert(
+        "Nothing to restore",
+        "No previous subscription was found for this Apple Account."
+      );
+      return;
+    }
+    Alert.alert(
+      "Restore failed",
+      result.category === "network"
+        ? "No connection to the App Store. Check your internet and try again."
+        : "Couldn't reach the App Store. Please try again shortly."
+    );
+  };
 
   const handleOpenTerms = async () => {
     try {
@@ -105,7 +165,7 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
           </View>
           <View>
             <Text style={styles.proTitle}>Upgrade to Pro</Text>
-            <Text style={styles.proSubtitle}>Unlimited reminders & no ads</Text>
+            <Text style={styles.proSubtitle}>Unlimited active reminders</Text>
           </View>
         </View>
         <AppIcon name="chevron-right" size={18} color={colors.accent} />
@@ -126,6 +186,24 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
           label="Notifications & alarms"
           subtitle="Permissions, scheduled alarms & system settings"
           onPress={() => router.push("/diagnostics")}
+        />
+        <View style={styles.separator} />
+        <SettingsRow
+          icon="refresh-cw"
+          label="Restore purchases"
+          subtitle={isRestoring ? "Restoring…" : "Already subscribed? Get Pro back"}
+          onPress={isRestoring ? undefined : handleRestore}
+        />
+      </View>
+
+      {/* Privacy: the AI disclosure consent, revocable at any time */}
+      <Text style={styles.sectionLabel}>Privacy</Text>
+      <View style={styles.card}>
+        <SettingsRow
+          icon="mic"
+          label="Voice & AI processing"
+          subtitle={consentSubtitle}
+          onPress={handleConsentRow}
         />
       </View>
 
@@ -150,6 +228,17 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
           void setAddressTerm(value);
         }}
         onDismiss={() => setShowAddressSheet(false)}
+      />
+
+      <AiConsentSheet
+        visible={showConsentSheet}
+        onAgree={() => {
+          setShowConsentSheet(false);
+          void setAiConsent(true).catch(() => {
+            Alert.alert("Couldn't save your choice", "Please try again.");
+          });
+        }}
+        onDecline={() => setShowConsentSheet(false)}
       />
     </ScrollView>
   );

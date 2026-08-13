@@ -44,7 +44,7 @@
       [
         "expo-av",
         {
-          "microphonePermission": "Allow VoiceReminder to access your microphone to record voice reminders."
+          "microphonePermission": "VoiceReminder records your voice so you can create reminders by speaking. Your recording leaves your device and is processed by secure AI services to transcribe it and speak your reminders back to you."
         }
       ],
       "./plugins/withNotifeeAndroidMaven",

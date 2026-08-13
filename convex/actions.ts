@@ -186,7 +186,8 @@ INTENT + TONE RULES:
 - Keep the exact intent (do not add meaning or extra context)
 - Do not add greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم")
 - Keep the description short, direct, and reminder-like
-- Arabic example: "حان وقت تناول الدواء" (Time to take your medicine)
+- Never open a spoken line by announcing the clock ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت") — lead with the task, the object, or the person waiting
+- Arabic example: "دواؤك بانتظارك على الطاولة" (Your medicine is waiting on the table)
 
 TIME PARSING (Speech-to-text quirks):
 - "10 4 p.m." = 22:04, "9 30 a.m." = 09:30
@@ -413,6 +414,8 @@ async function synthesizeVariantTts(
 
 export const processVoiceReminder = action({
   args: {
+    // Owning install (OLD-74) — stamped on the reminder so only this device can read it back.
+    deviceId: v.string(),
     audioBase64: v.string(),
     traceId: v.optional(v.string()),
     deviceLocalDate: v.optional(v.string()),
@@ -552,7 +555,8 @@ INTENT + TONE RULES:
 - Keep the exact intent (do not add meaning or extra context)
 - Do not add greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم")
 - Keep the description short, direct, and reminder-like
-- Arabic example: "حان وقت تناول الدواء" (Time to take your medicine)
+- Never open a spoken line by announcing the clock ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت") — lead with the task, the object, or the person waiting
+- Arabic example: "دواؤك بانتظارك على الطاولة" (Your medicine is waiting on the table)
 
 TIME PARSING (Speech-to-text quirks):
 - "10 4 p.m." = 22:04, "9 30 a.m." = 09:30
@@ -765,6 +769,7 @@ If no frequency specified, assume "once".`,
     const reminderId: Id<"reminders"> = await ctx.runMutation(
       internal.reminders.create,
       {
+        deviceId: args.deviceId,
         title: parsed.title as string,
         description,
         time,
@@ -836,6 +841,8 @@ If no frequency specified, assume "once".`,
 
 export const processTextReminder = action({
   args: {
+    // Owning install (OLD-74) — stamped on the reminder so only this device can read it back.
+    deviceId: v.string(),
     title: v.string(),
     description: v.string(),
     time: v.string(),
@@ -859,6 +866,7 @@ export const processTextReminder = action({
     const reminderId: Id<"reminders"> = await ctx.runMutation(
       internal.reminders.create,
       {
+        deviceId: args.deviceId,
         title: args.title,
         description: normalizedDescription || args.description,
         time: args.time,
@@ -886,6 +894,8 @@ export const processTextReminder = action({
 export const regenerateReminderAudio = action({
   args: {
     reminderId: v.id("reminders"),
+    // Owning install (OLD-74) — another device's reminder is not found here.
+    deviceId: v.string(),
     soundText: v.string(),
   },
   handler: async (ctx, args) => {
@@ -894,7 +904,9 @@ export const regenerateReminderAudio = action({
       id: args.reminderId,
     });
 
-    if (!reminder) {
+    // A reminder owned by another device is indistinguishable from a missing
+    // one; a legacy row (no deviceId) is still regenerable by whoever holds it.
+    if (!reminder || (reminder.deviceId !== undefined && reminder.deviceId !== args.deviceId)) {
       throw new Error("Reminder not found");
     }
 
@@ -941,6 +953,8 @@ export const regenerateReminderAudio = action({
 
 export const processVoiceReminderFast = action({
   args: {
+    // Owning install (OLD-74) — stamped on the reminder so only this device can read it back.
+    deviceId: v.string(),
     audioStorageId: v.id("_storage"),
     traceId: v.optional(v.string()),
     deviceLocalDate: v.optional(v.string()),
@@ -964,6 +978,12 @@ export const processVoiceReminderFast = action({
       throw new Error("Audio not found in storage");
     }
 
+    // Server-stage timings (OLD-82). Returned as `perf` — app/index.tsx already
+    // logs `result.perf` when present, so this fills a branch that was until now
+    // always dead and splits the action's wall time into its real components.
+    const tActionStart = Date.now();
+    const perf: Record<string, number> = {};
+
     // Wrap STT+GPT processing in try/finally to ensure uploaded recording is deleted
     try {
       // 2. Whisper STT
@@ -971,11 +991,14 @@ export const processVoiceReminderFast = action({
       const audioFile = new File([arrayBuffer], "recording.m4a", {
         type: "audio/mp4",
       });
+      perf.blobMs = Date.now() - tActionStart;
 
+      const tWhisper = Date.now();
       const transcription = await openai.audio.transcriptions.create({
         file: audioFile,
         model: "whisper-1",
       });
+      perf.whisperMs = Date.now() - tWhisper;
 
       const transcript = transcription.text;
       console.log("[VR] === STEP 1: STT Transcription ===");
@@ -988,6 +1011,7 @@ export const processVoiceReminderFast = action({
       const currentDayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
       const timezone = args.deviceTimezone || 'UTC';
 
+      const tGpt = Date.now();
       const completion = await openrouter.chat.completions.create({
         model: "google/gemini-3.1-flash-lite-preview",
         response_format: { type: "json_object" },
@@ -1003,6 +1027,7 @@ export const processVoiceReminderFast = action({
           },
         ],
       });
+      perf.gptMs = Date.now() - tGpt;
 
       const rawGptResponse = completion.choices[0].message.content || "{}";
       const parsed = JSON.parse(rawGptResponse);
@@ -1142,9 +1167,11 @@ export const processVoiceReminderFast = action({
 
       // 4. Create reminder in DB immediately (audio pending)
       const ttsText = description || String(parsed.description ?? "");
+      const tMutation = Date.now();
       const reminderId: Id<"reminders"> = await ctx.runMutation(
         internal.reminders.create,
         {
+          deviceId: args.deviceId,
           title: parsed.title as string,
           description,
           time,
@@ -1162,7 +1189,10 @@ export const processVoiceReminderFast = action({
         }
       );
 
+      perf.mutationMs = Date.now() - tMutation;
+
       // 5. Enqueue background TTS generation (persistent picks the dense wav shape)
+      const tSchedule = Date.now();
       await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
         reminderId,
         title: parsed.title as string,
@@ -1171,9 +1201,12 @@ export const processVoiceReminderFast = action({
         variantTexts: variants.length > 0 ? variants : undefined,
         persistent: persistent || undefined,
       });
+      perf.scheduleMs = Date.now() - tSchedule;
+      perf.actionMs = Date.now() - tActionStart;
 
       // 6. Return immediately
       return {
+        perf,
         id: reminderId as string,
         title: parsed.title as string,
         description,
@@ -1198,12 +1231,21 @@ export const processVoiceReminderFast = action({
         parseWarnings: parseWarnings.length > 0 ? parseWarnings : undefined,
       };
     } finally {
-      // 7. Delete uploaded recording audio (always cleanup)
+      // 7. Delete uploaded recording audio (always cleanup).
+      //
+      // NOTE (OLD-82): this `finally` runs BEFORE the client receives the return
+      // value, so this round trip sits on the critical path between "reminder
+      // row exists" and "card appears". `perf` is the same object the return
+      // statement referenced, so the timing below still reaches the client.
+      // If storageDeleteMs turns out to be material on device, move this to a
+      // scheduled cleanup step instead of deleting inline.
+      const tDelete = Date.now();
       try {
         await ctx.storage.delete(args.audioStorageId);
       } catch (e) {
         console.error("[VR] Failed to delete uploaded recording:", e);
       }
+      perf.storageDeleteMs = Date.now() - tDelete;
     }
   },
 });

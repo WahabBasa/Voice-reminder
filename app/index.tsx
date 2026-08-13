@@ -22,10 +22,12 @@ import { readFileAsBase64 } from "../lib/convex";
 import { uploadRecordingToConvex } from "../lib/convexUpload";
 import { scheduleReminder } from "../lib/notifications";
 import { hydrateReminderAudio } from "../lib/audioHydration";
+import { getDeviceId } from "../lib/deviceId";
 import { useReminderStore, Reminder } from "../lib/store";
 import { useSettingsStore } from "../lib/settingsStore";
 import RecordingOverlay from "../components/RecordingOverlay";
 import EditReminderSheet from "../components/EditReminderSheet";
+import AiConsentSheet from "../components/AiConsentSheet";
 import { arePermissionsGranted, showPermissionPrompt } from "../components/PermissionPrompt";
 import SwipePager from "../components/SwipePager";
 import AppIcon from "../components/AppIcon";
@@ -83,6 +85,7 @@ export default function HomeScreen() {
   const [canStartRecording, setCanStartRecording] = useState(false);
   const [gateStatusText, setGateStatusText] = useState<string | undefined>(undefined);
   const [showUpgradeCta, setShowUpgradeCta] = useState(false);
+  const [showConsentSheet, setShowConsentSheet] = useState(false);
   const [page, setPage] = useState(PAGE_TODAY);
   const cancelledRef = useRef(false);
   const [isConnected, setIsConnected] = useState(true);
@@ -204,6 +207,18 @@ export default function HomeScreen() {
       return;
     }
 
+    // Nothing is recorded until the user has agreed to their voice being
+    // processed off-device by the named AI providers (App Review 5.1.2(i)).
+    const settingsState = useSettingsStore.getState();
+    if (!settingsState.hasLoadedSettings) {
+      await settingsState.loadSettings();
+    }
+    if (useSettingsStore.getState().settings.aiConsentAcceptedAt === null) {
+      perfLog(traceId, "ui.recording", "open_blocked_consent");
+      setShowConsentSheet(true);
+      return;
+    }
+
     // Check permissions before letting user create a reminder
     const permsOk = await arePermissionsGranted();
     if (!permsOk) {
@@ -298,6 +313,23 @@ export default function HomeScreen() {
     perfLog(traceId, "ui.recording", "gate_allowed");
   }, [showRecording, isConnected, activeReminders.length, hasLoadedReminders, loadReminders, lockRecordingForLimit]);
 
+  // Agreeing continues straight into the recording the user originally tapped for.
+  const handleConsentAgree = useCallback(async () => {
+    setShowConsentSheet(false);
+    try {
+      await useSettingsStore.getState().setAiConsent(true);
+    } catch {
+      Alert.alert("Couldn't save your choice", "Please try again.");
+      return;
+    }
+    void handleOpenRecording();
+  }, [handleOpenRecording]);
+
+  // "Not now", backdrop tap, swipe-down, Android back — no recording starts.
+  const handleConsentDecline = useCallback(() => {
+    setShowConsentSheet(false);
+  }, []);
+
   const handleCancelProcessing = useCallback(() => {
     cancelledRef.current = true;
   }, []);
@@ -321,6 +353,9 @@ export default function HomeScreen() {
       }
       const addressTerm = useSettingsStore.getState().settings.addressTerm || undefined;
 
+      // Owning install for the reminder the backend is about to create (OLD-74).
+      const deviceId = await getDeviceId();
+
       let result: any;
       let usedFastPath = false;
 
@@ -333,6 +368,7 @@ export default function HomeScreen() {
 
         const tAction = Date.now();
         result = await processVoiceReminderFast({
+          deviceId,
           audioStorageId: storageId as any,
           traceId,
           deviceLocalDate,
@@ -358,6 +394,7 @@ export default function HomeScreen() {
 
         const tAction = Date.now();
         result = await processVoiceReminder({
+          deviceId,
           audioBase64: base64,
           traceId,
           deviceLocalDate,
@@ -632,7 +669,7 @@ export default function HomeScreen() {
           if (reminder?.frequency === "once") {
             await removeReminderFully(reminderId, {
               removeConvexById: async (id) => {
-                await removeConvexReminder({ id: id as any });
+                await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
               },
             });
           }
@@ -651,7 +688,7 @@ export default function HomeScreen() {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       await removeReminderFully(reminderId, {
         removeConvexById: async (id) => {
-          await removeConvexReminder({ id: id as any });
+          await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
         },
       });
 
@@ -851,6 +888,13 @@ export default function HomeScreen() {
         onClose={handleCloseRecording}
         onRecordingComplete={handleRecordingComplete}
         onCancelProcessing={handleCancelProcessing}
+      />
+
+      {/* First-run AI disclosure — gates the very first recording */}
+      <AiConsentSheet
+        visible={showConsentSheet}
+        onAgree={handleConsentAgree}
+        onDecline={handleConsentDecline}
       />
 
       {/* Edit overlay - renders on top without navigation */}

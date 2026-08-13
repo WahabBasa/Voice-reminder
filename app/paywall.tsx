@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
     View,
     Text,
@@ -9,18 +9,106 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import * as Linking from "expo-linking";
 import { colors, scaleFontSize, shadows } from "../lib/theme";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
-import Purchases, { PurchasesPackage, PurchasesOfferings } from "react-native-purchases";
+import Purchases, { PurchasesPackage } from "react-native-purchases";
+import {
+    categorizePurchasesError,
+    isPurchasesConfigured,
+    restorePurchases,
+    PRIVACY_POLICY_URL,
+    PRO_PRODUCT_NAME,
+    TERMS_OF_USE_URL,
+    type PurchaseErrorCategory,
+} from "../lib/purchases";
+import { getFreeActiveLimit } from "../lib/usageGate";
 
+// Pro gates exactly one thing today: the active-reminder limit in lib/usageGate.ts.
+// Everything listed here has to be true of the build that ships (App Review 3.1.1/3.1.2).
 const BENEFITS = [
-    "Unlimited voice reminders",
-    "Custom notification sounds",
-    "Advanced AI voice processing",
-    "Priority storage & sync",
-    "Zero ads forever",
+    `Unlimited active reminders (free stops at ${getFreeActiveLimit()})`,
+    "Voice capture that sets the time and repeat for you",
+    "Alarms that speak the reminder out loud",
+    "Supports a solo developer building this",
 ];
+
+const ERROR_COPY: Record<Exclude<PurchaseErrorCategory, "cancelled">, string> = {
+    network: "No connection to the App Store. Check your internet and try again.",
+    not_allowed: "Purchases aren't allowed on this device. Check Screen Time restrictions.",
+    already_owned: "You already own this subscription — tap Restore Purchases.",
+    payment_pending: "Your purchase is awaiting approval. Pro unlocks once it goes through.",
+    store_problem: "The App Store is having trouble right now. Please try again shortly.",
+    unknown: "Something went wrong. Please try again.",
+};
+
+const PERIOD_UNIT_LABELS: Record<string, string> = { D: "day", W: "week", M: "month", Y: "year" };
+const PERIOD_UNIT_MONTHS: Record<string, number> = { D: 1 / 30, W: 1 / 4.345, M: 1, Y: 12 };
+
+const PACKAGE_TYPE_TERMS: Record<string, string> = {
+    WEEKLY: "week",
+    MONTHLY: "month",
+    TWO_MONTH: "2 months",
+    THREE_MONTH: "3 months",
+    SIX_MONTH: "6 months",
+    ANNUAL: "year",
+};
+
+/** Parses an ISO 8601 billing period ("P1M", "P6M") off the store product. */
+function parsePeriod(pkg: PurchasesPackage): { count: number; unit: string } | null {
+    const match = /^P(\d+)([DWMY])$/.exec(pkg.product.subscriptionPeriod ?? "");
+    if (!match) return null;
+    return { count: Number(match[1]), unit: match[2] };
+}
+
+/** Billing term as words: "month", "year", "6 months". Store data first, package type as fallback. */
+function getTermLabel(pkg: PurchasesPackage): string {
+    const parsed = parsePeriod(pkg);
+    const unit = parsed ? PERIOD_UNIT_LABELS[parsed.unit] : undefined;
+    if (parsed && unit) {
+        return parsed.count === 1 ? unit : `${parsed.count} ${unit}s`;
+    }
+    return PACKAGE_TYPE_TERMS[pkg.packageType] ?? "billing period";
+}
+
+/** Price normalised to one month, so plans on different terms can be compared. */
+function getMonthlyRate(pkg: PurchasesPackage): number | null {
+    const parsed = parsePeriod(pkg);
+    const months = parsed ? parsed.count * (PERIOD_UNIT_MONTHS[parsed.unit] ?? 0) : 0;
+    if (!months || !Number.isFinite(pkg.product.price) || pkg.product.price <= 0) return null;
+    return pkg.product.price / months;
+}
+
+/**
+ * Real savings against the priciest plan on offer, rounded down to a whole percent.
+ * Returns null when we can't prove a saving — we don't advertise numbers we can't back up.
+ */
+function getSavingsPercent(pkg: PurchasesPackage, all: PurchasesPackage[]): number | null {
+    const rate = getMonthlyRate(pkg);
+    if (rate === null) return null;
+
+    const rates = all.map(getMonthlyRate).filter((r): r is number => r !== null);
+    const baseline = rates.length > 0 ? Math.max(...rates) : 0;
+    if (baseline <= 0) return null;
+
+    const percent = Math.floor((1 - rate / baseline) * 100);
+    return percent >= 5 ? percent : null;
+}
+
+/**
+ * Auto-renewal disclosure required by Apple's Schedule 2 §3.8(b): product name,
+ * price, term, when the account is charged, and how to cancel.
+ */
+function buildDisclosure(pkg: PurchasesPackage | null): string {
+    if (!pkg) {
+        return `${PRO_PRODUCT_NAME} is an auto-renewing subscription. Payment is charged to your Apple Account at confirmation of purchase and renews automatically until canceled. Manage or cancel anytime in Settings > Apple Account > Subscriptions.`;
+    }
+
+    const term = getTermLabel(pkg);
+    const price = pkg.product.priceString;
+    return `${PRO_PRODUCT_NAME} is ${price} every ${term}. Payment is charged to your Apple Account at confirmation of purchase. It renews automatically for ${price} every ${term}, and your account is charged within 24 hours before each renewal, unless auto-renew is turned off at least 24 hours before the current period ends. Manage or cancel anytime in Settings > Apple Account > Subscriptions.`;
+}
 
 export default function PaywallScreen() {
     const router = useRouter();
@@ -32,12 +120,36 @@ export default function PaywallScreen() {
     const [selectedPackage, setSelectedPackage] = useState<PurchasesPackage | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [isPurchasing, setIsPurchasing] = useState(false);
+    const [isRestoring, setIsRestoring] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    // Footer height drives scroll padding + banner offset, so the disclosure block
+    // can grow without anything ending up underneath it.
+    const [footerHeight, setFooterHeight] = useState(240);
+    const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const showError = useCallback((message: string) => {
+        if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+        setErrorMessage(message);
+        // Auto-dismiss after 5 seconds
+        errorTimerRef.current = setTimeout(() => setErrorMessage(null), 5000);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+        };
+    }, []);
 
     // Fetch offerings on mount
     useEffect(() => {
         const fetchOfferings = async () => {
             try {
+                // No API key for this platform means the SDK was never configured;
+                // calling it just throws. Fall straight through to the empty state.
+                if (!isPurchasesConfigured()) {
+                    return;
+                }
+
                 const res = await Purchases.getOfferings();
                 console.log("[RevenueCat] Offerings response received");
 
@@ -106,7 +218,7 @@ export default function PaywallScreen() {
             if (customerInfo.entitlements.active["pro"]) {
                 toast.show({
                     title: "Pro Activated! 🎉",
-                    message: "Welcome to NoteToSelf Pro!",
+                    message: `Welcome to ${PRO_PRODUCT_NAME}!`,
                     type: "success",
                 });
                 router.back();
@@ -118,26 +230,66 @@ export default function PaywallScreen() {
                 });
                 router.back();
             }
-        } catch (error: any) {
-            // Check if user cancelled
-            if (error.userCancelled) {
+        } catch (error: unknown) {
+            const category = categorizePurchasesError(error);
+            if (category === "cancelled") {
+                // Expected traffic — the user backed out of the sheet. Say nothing.
                 console.log("[RevenueCat] User cancelled purchase");
             } else {
                 // Log silently, show inline error banner (not toast)
-                console.log("[RevenueCat] Purchase error (silent):", error);
-                setErrorMessage("Something went wrong. Please try again.");
-                // Auto-dismiss after 4 seconds
-                setTimeout(() => setErrorMessage(null), 4000);
+                console.log("[RevenueCat] Purchase error (silent):", category, error);
+                showError(ERROR_COPY[category]);
             }
         } finally {
             setIsPurchasing(false);
         }
     };
 
+    // Required by App Review 3.1.1: a subscriber reinstalling must be able to
+    // get their entitlement back without paying again.
+    const handleRestore = async () => {
+        if (isRestoring || isPurchasing) return;
+        setIsRestoring(true);
+
+        const result = await restorePurchases();
+
+        if (result.status === "restored") {
+            toast.show({
+                title: "Purchases Restored",
+                message: `${PRO_PRODUCT_NAME} is active on this device again.`,
+                type: "success",
+            });
+            setIsRestoring(false);
+            router.back();
+            return;
+        }
+
+        if (result.status === "nothing_to_restore") {
+            toast.show({
+                title: "Nothing to Restore",
+                message: "No previous subscription was found for this Apple Account.",
+                type: "info",
+            });
+        } else {
+            showError(ERROR_COPY[result.category === "cancelled" ? "unknown" : result.category]);
+        }
+
+        setIsRestoring(false);
+    };
+
+    const handleOpenLink = async (url: string) => {
+        try {
+            await Linking.openURL(url);
+        } catch (e) {
+            showError("Couldn't open that link. Please try again.");
+        }
+    };
+
     // Helper to get display info from package
     const getPackageDisplayInfo = (pkg: PurchasesPackage) => {
         const product = pkg.product;
-        const isAnnual = pkg.packageType === "ANNUAL";
+        const term = getTermLabel(pkg);
+        const savings = getSavingsPercent(pkg, packages);
 
         // Clean up title - remove app name suffix
         let title = product.title;
@@ -148,9 +300,11 @@ export default function PaywallScreen() {
         return {
             title,
             price: product.priceString,
-            period: isAnnual ? "/year" : "/month",
-            description: isAnnual ? "Best value - save 48%" : "Most flexible plan",
-            tag: isAnnual ? "Best Value" : (pkg.packageType === "MONTHLY" ? "Most Popular" : null),
+            period: `/${term}`,
+            description: savings
+                ? `Billed every ${term} · save ${savings}%`
+                : `Billed every ${term}`,
+            tag: savings ? "Best Value" : (pkg.packageType === "MONTHLY" ? "Most Popular" : null),
             isPopular: pkg.packageType === "MONTHLY",
         };
     };
@@ -172,7 +326,7 @@ export default function PaywallScreen() {
                     showsVerticalScrollIndicator={false}
                     contentContainerStyle={[
                         styles.scrollContent,
-                        { paddingBottom: insets.bottom + 160 },
+                        { paddingBottom: footerHeight + 24 },
                     ]}
                 >
                     <View style={styles.heroSection}>
@@ -181,7 +335,8 @@ export default function PaywallScreen() {
                         </View>
                         <Text style={styles.title}>Unlock Pro Access</Text>
                         <Text style={styles.subtitle}>
-                            Take your productivity to the next level with our premium features.
+                            The free plan keeps {getFreeActiveLimit()} reminders active at a time. Pro lifts the
+                            cap so you can schedule as many as you need.
                         </Text>
                     </View>
 
@@ -269,7 +424,7 @@ export default function PaywallScreen() {
 
             {/* Error banner - appears above footer */}
             {errorMessage && (
-                <View style={[styles.errorBanner, { bottom: 180 + insets.bottom }]}>
+                <View style={[styles.errorBanner, { bottom: footerHeight + 12 }]}>
                     <AppIcon name="info" size={18} color={colors.destructive} />
                     <Text style={styles.errorBannerText}>{errorMessage}</Text>
                     <TouchableOpacity onPress={() => setErrorMessage(null)} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
@@ -278,29 +433,58 @@ export default function PaywallScreen() {
                 </View>
             )}
 
-            <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
-                <Text style={styles.termsText}>
-                    Secure payment via Google Play. Cancel anytime.
-                </Text>
+            <View
+                style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}
+                onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+            >
                 <TouchableOpacity
                     style={[
                         styles.continueButton,
-                        (isPurchasing || !selectedPackage || packages.length === 0) && styles.continueButtonDisabled,
+                        (isPurchasing || isRestoring || !selectedPackage || packages.length === 0) &&
+                            styles.continueButtonDisabled,
                     ]}
                     onPress={handlePurchase}
                     activeOpacity={0.8}
-                    disabled={isPurchasing || !selectedPackage || packages.length === 0}
+                    disabled={isPurchasing || isRestoring || !selectedPackage || packages.length === 0}
                 >
                     {isPurchasing ? (
                         <ActivityIndicator color="white" />
                     ) : (
                         <Text style={styles.continueButtonText}>
                             {selectedPackage
-                                ? `Subscribe for ${selectedPackage.product.priceString}`
+                                ? `Subscribe for ${selectedPackage.product.priceString} / ${getTermLabel(selectedPackage)}`
                                 : "Select a plan"}
                         </Text>
                     )}
                 </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={styles.restoreButton}
+                    onPress={handleRestore}
+                    activeOpacity={0.7}
+                    disabled={isRestoring || isPurchasing}
+                >
+                    {isRestoring ? (
+                        <View style={styles.restoreRow}>
+                            <ActivityIndicator size="small" color={colors.textSecondary} />
+                            <Text style={styles.restoreText}>Restoring…</Text>
+                        </View>
+                    ) : (
+                        <Text style={styles.restoreText}>Restore Purchases</Text>
+                    )}
+                </TouchableOpacity>
+
+                <Text style={styles.disclosureText}>{buildDisclosure(selectedPackage)}</Text>
+
+                <View style={styles.legalLinks}>
+                    <TouchableOpacity onPress={() => handleOpenLink(TERMS_OF_USE_URL)} activeOpacity={0.7}>
+                        <Text style={styles.legalLinkText}>Terms of Use</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.legalSeparator}>·</Text>
+                    <TouchableOpacity onPress={() => handleOpenLink(PRIVACY_POLICY_URL)} activeOpacity={0.7}>
+                        <Text style={styles.legalLinkText}>Privacy Policy</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
         </View>
     );
@@ -478,11 +662,43 @@ const styles = StyleSheet.create({
         borderTopWidth: 1,
         borderTopColor: colors.border,
     },
-    termsText: {
-        fontSize: scaleFontSize(12),
+    restoreButton: {
+        alignItems: "center",
+        justifyContent: "center",
+        paddingVertical: 12,
+    },
+    restoreRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+    },
+    restoreText: {
+        fontSize: scaleFontSize(15),
+        fontWeight: "600",
+        color: colors.textSecondary,
+    },
+    disclosureText: {
+        fontSize: scaleFontSize(11),
+        lineHeight: 15,
         color: colors.textTertiary,
         textAlign: "center",
-        marginBottom: 16,
+    },
+    legalLinks: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        marginTop: 10,
+    },
+    legalLinkText: {
+        fontSize: scaleFontSize(12),
+        fontWeight: "600",
+        color: colors.textSecondary,
+        textDecorationLine: "underline",
+    },
+    legalSeparator: {
+        fontSize: scaleFontSize(12),
+        color: colors.textTertiary,
     },
     continueButton: {
         backgroundColor: colors.accent,

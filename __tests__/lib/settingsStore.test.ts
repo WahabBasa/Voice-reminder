@@ -67,6 +67,100 @@ describe("loadSettings", () => {
       }
     );
   });
+
+  it("defaults aiConsentAcceptedAt to null when nothing is stored", async () => {
+    await withFreshStore(null, async (useSettingsStore) => {
+      await useSettingsStore.getState().loadSettings();
+      expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
+    });
+  });
+
+  it("treats settings written before consent existed as not consented", async () => {
+    await withFreshStore(
+      JSON.stringify({ addressTerm: "Sir" }),
+      async (useSettingsStore) => {
+        await useSettingsStore.getState().loadSettings();
+        expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
+      }
+    );
+  });
+
+  it("loads a stored aiConsentAcceptedAt timestamp", async () => {
+    await withFreshStore(
+      JSON.stringify({ addressTerm: "", aiConsentAcceptedAt: 1700000000000 }),
+      async (useSettingsStore) => {
+        await useSettingsStore.getState().loadSettings();
+        expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBe(
+          1700000000000
+        );
+      }
+    );
+  });
+
+  it("treats a non-numeric stored aiConsentAcceptedAt as not consented", async () => {
+    await withFreshStore(
+      JSON.stringify({ aiConsentAcceptedAt: "yes" }),
+      async (useSettingsStore) => {
+        await useSettingsStore.getState().loadSettings();
+        expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
+      }
+    );
+  });
+});
+
+// ─── setAiConsent ───────────────────────────────────────────────────────────
+
+describe("setAiConsent", () => {
+  it("stamps a timestamp and persists it when accepted", async () => {
+    await withFreshStore(null, async (useSettingsStore, AsyncStorage) => {
+      const before = Date.now();
+      await useSettingsStore.getState().setAiConsent(true);
+      const stamped = useSettingsStore.getState().settings.aiConsentAcceptedAt;
+
+      expect(typeof stamped).toBe("number");
+      expect(stamped).toBeGreaterThanOrEqual(before);
+      expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
+        addressTerm: "",
+        aiConsentAcceptedAt: stamped,
+      });
+    });
+  });
+
+  it("clears the timestamp when revoked", async () => {
+    await withFreshStore(
+      JSON.stringify({ addressTerm: "Sir", aiConsentAcceptedAt: 1700000000000 }),
+      async (useSettingsStore, AsyncStorage) => {
+        await useSettingsStore.getState().loadSettings();
+        await useSettingsStore.getState().setAiConsent(false);
+        expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
+        expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
+          addressTerm: "Sir",
+          aiConsentAcceptedAt: null,
+        });
+      }
+    );
+  });
+
+  it("keeps the address term when consent changes", async () => {
+    await withFreshStore(
+      JSON.stringify({ addressTerm: "Wahab" }),
+      async (useSettingsStore) => {
+        await useSettingsStore.getState().loadSettings();
+        await useSettingsStore.getState().setAiConsent(true);
+        expect(useSettingsStore.getState().settings.addressTerm).toBe("Wahab");
+      }
+    );
+  });
+
+  it("rolls back state when persistence fails", async () => {
+    await withFreshStore(null, async (useSettingsStore, AsyncStorage) => {
+      AsyncStorage.setItem.mockRejectedValueOnce(new Error("disk full"));
+      await expect(
+        useSettingsStore.getState().setAiConsent(true)
+      ).rejects.toThrow("disk full");
+      expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
+    });
+  });
 });
 
 // ─── setAddressTerm ─────────────────────────────────────────────────────────
@@ -78,6 +172,7 @@ describe("setAddressTerm", () => {
       expect(useSettingsStore.getState().settings.addressTerm).toBe("Sir");
       expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
         addressTerm: "Sir",
+        aiConsentAcceptedAt: null,
       });
     });
   });
@@ -98,6 +193,7 @@ describe("setAddressTerm", () => {
         expect(useSettingsStore.getState().settings.addressTerm).toBe("");
         expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
           addressTerm: "",
+          aiConsentAcceptedAt: null,
         });
       }
     );

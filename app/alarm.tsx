@@ -29,6 +29,7 @@ import { alarmAudioService } from "../lib/AudioService";
 import { getNextIntervalOccurrence } from "../lib/time";
 import { useReminderStore } from "../lib/store";
 import { removeReminderFully } from "../lib/reminderRemoval";
+import { getDeviceId } from "../lib/deviceId";
 import { vrLog, logAlarmLifecycle } from "../lib/vrLog";
 import { logAppTaskState } from "../lib/activityControl";
 
@@ -221,7 +222,7 @@ export default function AlarmScreen() {
                         if (reminder.frequency === "once") {
                             await removeReminderFully(reminderId, {
                                 removeConvexById: async (id) => {
-                                    await removeConvexReminder({ id: id as any });
+                                    await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
                                 },
                             });
                         }

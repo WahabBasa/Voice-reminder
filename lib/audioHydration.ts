@@ -1,6 +1,7 @@
 import { api } from "../convex/_generated/api";
 import { ConvexReactClient } from "convex/react";
 import { downloadPreReminderAudio, downloadReminderAudio, downloadVariantAudios, refreshNotificationWithAudio } from "./notifications";
+import { getDeviceId } from "./deviceId";
 
 const MAX_ATTEMPTS = 30;
 const POLL_INTERVAL_MS = 1000;
@@ -23,10 +24,13 @@ export async function hydrateReminderAudio(params: {
 
   const task = (async () => {
     try {
+      // Reminders are device-scoped (OLD-74): the backend only hands back rows
+      // belonging to this install.
+      const deviceId = await getDeviceId();
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         try {
           // Query for reminder via raw fetch since we don't have hook access here
-          const result = await convexClient.query(api.reminders.get, { id: convexId as any });
+          const result = await convexClient.query(api.reminders.get, { id: convexId as any, deviceId });
           
           if (!result) {
             console.log(`[VR] Hydration: reminder ${convexId} not found, stopping`);

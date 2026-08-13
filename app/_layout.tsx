@@ -22,6 +22,7 @@ import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
 import { buildTraceId } from "../lib/vrLog";
 import { convex } from "../lib/convexClient";
 import { hydrateReminderAudio } from "../lib/audioHydration";
+import { getDeviceId } from "../lib/deviceId";
 import ErrorBoundary from "../components/ErrorBoundary";
 import PermissionPrompt from "../components/PermissionPrompt";
 import { useAppFonts } from "../lib/fonts";
@@ -73,7 +74,7 @@ function StartupTasks() {
       for (const r of toCleanup) {
         await removeReminderFully(r.id, {
           removeConvexById: async (id) => {
-            await removeConvexReminder({ id: id as any });
+            await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
           },
         });
       }

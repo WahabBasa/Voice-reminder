@@ -20,6 +20,7 @@ import { TimerPickerModal } from "react-native-timer-picker";
 import { colors, scaleFontSize } from "../../lib/theme";
 import { useReminderStore } from "../../lib/store";
 import { scheduleReminder } from "../../lib/notifications";
+import { getDeviceId } from "../../lib/deviceId";
 import NetInfo from "@react-native-community/netinfo";
 import { checkCanCreateActiveReminder } from "../../lib/usage";
 import DaySelector from "../../components/DaySelector";
@@ -115,6 +116,7 @@ export default function NewReminderScreen() {
 
     try {
       const result = await processTextReminder({
+        deviceId: await getDeviceId(),
         title: title.trim(),
         description: desc,
         time: timeStr,

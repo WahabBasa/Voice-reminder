@@ -3,6 +3,10 @@ import { v } from "convex/values";
 
 export default defineSchema({
   reminders: defineTable({
+    // Owning install (OLD-74). There are no accounts, so a reminder belongs to
+    // the device that created it. Optional because rows written before scoping
+    // existed have none — see convex/reminders.ts for how those are treated.
+    deviceId: v.optional(v.string()),
     title: v.string(),
     description: v.string(),
     time: v.string(),
@@ -38,5 +42,5 @@ export default defineSchema({
     // Alarm settings (optional for backward compatibility)
     soundRepeatCount: v.optional(v.number()),
     soundRepeatMode: v.optional(v.string()),
-  }),
+  }).index("by_device", ["deviceId"]),
 });

@@ -24,10 +24,34 @@ async function resolveVariantWavUrls(
   );
 }
 
+/**
+ * Device scoping (OLD-74). There are no accounts, so a reminder belongs to the
+ * install that created it, named by the `deviceId` the client generates once and
+ * persists (lib/deviceId.ts). Every public entry point takes that id and sees
+ * only its own rows.
+ *
+ * Rows written before scoping existed carry no deviceId. They are never
+ * enumerated by `list` — an unowned row belongs to nobody — but a caller that
+ * already holds the document id may still read, edit or delete one, so installs
+ * that predate this keep working and their stored audio still gets cleaned up.
+ * `update` stamps the calling device onto such a row, which retires it from the
+ * legacy case for good.
+ */
+function ownsReminder(
+  reminder: { deviceId?: string },
+  deviceId: string
+): boolean {
+  return reminder.deviceId === undefined || reminder.deviceId === deviceId;
+}
+
 export const list = query({
-  args: {},
-  handler: async (ctx) => {
-    const reminders = await ctx.db.query("reminders").order("desc").collect();
+  args: { deviceId: v.string() },
+  handler: async (ctx, args) => {
+    const reminders = await ctx.db
+      .query("reminders")
+      .withIndex("by_device", (q) => q.eq("deviceId", args.deviceId))
+      .order("desc")
+      .collect();
     return Promise.all(
       reminders.map(async (reminder) => ({
         ...reminder,
@@ -42,10 +66,10 @@ export const list = query({
 });
 
 export const get = query({
-  args: { id: v.id("reminders") },
+  args: { id: v.id("reminders"), deviceId: v.string() },
   handler: async (ctx, args) => {
     const reminder = await ctx.db.get(args.id);
-    if (!reminder) return null;
+    if (!reminder || !ownsReminder(reminder, args.deviceId)) return null;
     return {
       ...reminder,
       audioUrl: reminder.audioStorageId ? await ctx.storage.getUrl(reminder.audioStorageId) : "",
@@ -66,6 +90,7 @@ export const getInternal = internalQuery({
 
 export const create = internalMutation({
   args: {
+    deviceId: v.string(),
     title: v.string(),
     description: v.string(),
     time: v.string(),
@@ -97,10 +122,10 @@ export const create = internalMutation({
 });
 
 export const remove = mutation({
-  args: { id: v.id("reminders") },
+  args: { id: v.id("reminders"), deviceId: v.string() },
   handler: async (ctx, args) => {
     const reminder = await ctx.db.get(args.id);
-    if (!reminder) return;
+    if (!reminder || !ownsReminder(reminder, args.deviceId)) return;
     if (reminder.audioStorageId) {
       await ctx.storage.delete(reminder.audioStorageId);
     }
@@ -123,6 +148,7 @@ export const remove = mutation({
 export const update = mutation({
   args: {
     id: v.id("reminders"),
+    deviceId: v.string(),
     title: v.string(),
     description: v.string(),
     time: v.string(),
@@ -133,8 +159,11 @@ export const update = mutation({
     persistent: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const { id, ...updates } = args;
-    await ctx.db.patch(id, updates);
+    const { id, deviceId, ...updates } = args;
+    const reminder = await ctx.db.get(id);
+    if (!reminder || !ownsReminder(reminder, deviceId)) return;
+    // Writing deviceId back claims a legacy row for the editing device.
+    await ctx.db.patch(id, { ...updates, deviceId });
   },
 });
 
