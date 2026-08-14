@@ -27,6 +27,63 @@ export function normalizeReminderDescription(input: unknown): string {
   return normalized.trim();
 }
 
+// ─── Multi-reminder takes (OLD-93) ──────────────────────────────────────────
+
+// Instruction that makes the parse model wrap its output in a reminders array.
+// Appended verbatim at the end of the parse prompt — that exact placement is
+// what the live probe measured (__evals__/multi-reminder.probe.ts: 11/12 clean
+// against the shipping model, vs a top-level bare array 6/6 without it).
+// The one miss was a single-reminder take answering with a bare object, so the
+// instruction is a strong hint and never a guarantee: normalizeParsedReminders
+// below is what the pipeline actually relies on.
+export const MULTI_REMINDER_INSTRUCTION = `
+
+MULTIPLE REMINDERS IN ONE REQUEST:
+- The user may ask for SEVERAL distinct reminders in a single request.
+- ALWAYS return: {"reminders": [ <reminder object exactly as specified above>, ... ]}
+- One array entry per distinct reminder the user asked for. A request with a single reminder still returns a one-element array.
+- Never merge distinct tasks into one reminder. Each entry gets its own title, description, time, and frequency.`;
+
+/**
+ * Ceiling on how many reminders one take may create. A take that asks for more
+ * than this is a mis-parse, not a user with a list — and every extra entry
+ * costs TTS calls and a row nobody asked for. Deliberately generous: real
+ * multi-task takes seen in the probe top out at three.
+ */
+export const MAX_REMINDERS_PER_TAKE = 5;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The reminder objects inside a parse response, whatever envelope the model
+ * chose. Three shapes are live in the wild and all three are accepted:
+ *
+ * - `{"reminders": [ ... ]}` — what the prompt asks for;
+ * - a bare top-level array — what the model does unprompted on multi-task takes;
+ * - a bare single object — the pre-OLD-93 shape, still returned occasionally
+ *   for single-reminder takes even with the instruction in the prompt.
+ *
+ * Entries that are not objects are dropped rather than trusted, so one junk
+ * array element costs its own reminder and not the whole take. An envelope with
+ * nothing usable in it throws, which is the same failure the caller already had
+ * for a response it could not parse at all.
+ */
+export function normalizeParsedReminders(parsed: unknown): Record<string, unknown>[] {
+  const candidates: unknown[] = Array.isArray(parsed)
+    ? parsed
+    : isPlainObject(parsed) && Array.isArray(parsed.reminders)
+      ? parsed.reminders
+      : [parsed];
+
+  const items = candidates.filter(isPlainObject).slice(0, MAX_REMINDERS_PER_TAKE);
+  if (items.length === 0) {
+    throw new Error("Parse response contained no reminder object");
+  }
+  return items;
+}
+
 export function normalizeDay(value: unknown): string | null {
   const token = String(value ?? "").toLowerCase().trim();
   const map: Record<string, string> = {

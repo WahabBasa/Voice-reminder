@@ -36,7 +36,7 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeVariants, variantCountForTier, buildAlarmWav, alignVariantWavIds, useDenseAlarmWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT } from "./helpers";
+import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeVariants, normalizeParsedReminders, variantCountForTier, buildAlarmWav, alignVariantWavIds, useDenseAlarmWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, type Urgency } from "./helpers";
 import { catchCandidateOrder, selectCatchIds, withSpeechCatch } from "./speechCatch";
 
 function numberEnv(name: string, fallback: number): number {
@@ -97,6 +97,237 @@ function coerceFrequency(
   }
 
   return { frequency: coercedFrequency, days: coercedDays, warnings };
+}
+
+/**
+ * Everything one parsed reminder object turns into before any audio exists:
+ * guarded spoken line, coerced frequency, interval bounds, schedule/rrule
+ * fields, heads-up, replay tier. One take can carry several of these (OLD-93),
+ * and both processing paths run the same builder over each item — the slow
+ * path then synthesizes and inserts, the fast path inserts and defers the TTS.
+ */
+type ReminderPlan = {
+  title: string;
+  description: string;
+  time: string;
+  date: string | undefined;
+  frequency: string;
+  days: string[] | undefined;
+  emoji: string | undefined;
+  intervalMs: number | undefined;
+  anchorAt: number | undefined;
+  scheduleType: "once" | "interval" | "rrule" | undefined;
+  onceAt: number | undefined;
+  rrule: string | undefined;
+  dtstart: number | undefined;
+  until: number | undefined;
+  preReminderMinutes: number;
+  preTtsText: string;
+  urgency: Urgency;
+  persistent: boolean;
+  variants: string[];
+  parseWarnings: string[];
+};
+
+export function buildReminderPlan(
+  parsed: Record<string, unknown>,
+  context: { transcript: string; currentTime: string }
+): ReminderPlan {
+  // A leaked banned opener costs the model's phrasing, not the reminder: the
+  // title is the stand-in, on the card and aloud. Titles like 'Time to Sleep'
+  // are banned too, and then the model's own line stands — the guard never
+  // trades a line for nothing (helpers.ts).
+  const description = guardSpokenLine(parsed.description, parsed.title);
+
+  const rawFrequency = String(parsed.frequency || "once").toLowerCase();
+  let frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
+
+  let days: string[] | undefined = undefined;
+  const modelDaysRaw = Array.isArray(parsed.days) ? (parsed.days as unknown[]) : [];
+  const modelDaysNormalized = modelDaysRaw
+    .map(normalizeDay)
+    .filter((d): d is string => Boolean(d));
+
+  // Initialize days if the model provided them (even if it chose the wrong frequency)
+  if (modelDaysNormalized.length > 0) {
+    days = modelDaysNormalized;
+  }
+  // Only use date for one-time reminders
+  const date = frequency === "once" && parsed.date ? (parsed.date as string) : undefined;
+
+  // Ensure time is always a valid HH:MM string (Convex schema requires it)
+  const time =
+    typeof parsed.time === "string" && parsed.time
+      ? (parsed.time as string)
+      : getCurrentTimeHM(context.currentTime);
+
+  // Parse warnings for normalization issues
+  let parseWarnings: string[] = [];
+
+  // Coerce frequency based on transcript and days
+  const coercionResult = coerceFrequency(frequency, days, context.transcript, parseWarnings);
+  frequency = coercionResult.frequency;
+  days = coercionResult.days;
+  parseWarnings = coercionResult.warnings;
+
+  // Interval normalization
+  let intervalMs: number | undefined;
+  let anchorAt: number | undefined;
+  if (frequency === "interval") {
+    const hours = Number(parsed.intervalHours ?? 0);
+    const minutes = Number(parsed.intervalMinutes ?? 0);
+    const totalMinutes = hours * 60 + minutes;
+
+    intervalMs = totalMinutes * 60 * 1000;
+    // Updated constraints: 5 min minimum, 365 days maximum
+    const MIN_MS = 5 * 60 * 1000;
+    const MAX_MS = 365 * 24 * 60 * 60 * 1000;
+
+    if (intervalMs < MIN_MS) {
+      parseWarnings.push(`Minimum interval is 5 minutes. Adjusted from ${Math.round(intervalMs / 60000)} minutes.`);
+      intervalMs = MIN_MS;
+    } else if (intervalMs > MAX_MS) {
+      parseWarnings.push(`Maximum interval is 365 days. Adjusted.`);
+      intervalMs = MAX_MS;
+    }
+
+    anchorAt = Date.now();
+  }
+
+  // Unified schedule system fields
+  let scheduleType: "once" | "interval" | "rrule" | undefined;
+  let onceAt: number | undefined;
+  let rrule: string | undefined;
+  let dtstart: number | undefined;
+  let until: number | undefined;
+
+  // Infer scheduleType from parsed data
+  if (parsed.scheduleType && ["once", "interval", "rrule"].includes(parsed.scheduleType as string)) {
+    scheduleType = parsed.scheduleType as "once" | "interval" | "rrule";
+  } else if (frequency === "interval") {
+    scheduleType = "interval";
+  } else if (parsed.rrule) {
+    scheduleType = "rrule";
+  } else if (frequency === "once") {
+    scheduleType = "once";
+    // Calculate onceAt timestamp
+    if (date) {
+      const [year, month, dayNum] = date.split("-").map(Number);
+      const [hours, minutes] = time.split(":").map(Number);
+      onceAt = new Date(year, month - 1, dayNum, hours, minutes).getTime();
+    } else {
+      const [hours, minutes] = time.split(":").map(Number);
+      const target = new Date();
+      target.setHours(hours, minutes, 0, 0);
+      // Interpret "at HH:MM" as the next occurrence (today or tomorrow).
+      if (target.getTime() <= Date.now()) {
+        target.setDate(target.getDate() + 1);
+      }
+      onceAt = target.getTime();
+    }
+  } else {
+    // Daily/weekly/custom → can be represented as rrule or legacy
+    scheduleType = "rrule";
+
+    // Build RRULE from legacy fields
+    const [hours, minutes] = time.split(":").map(Number);
+
+    if (frequency === "daily") {
+      rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
+    } else if (frequency === "custom" && days && days.length > 0) {
+      const byday = days.map((d: string) => {
+        const map: Record<string, string> = {
+          sun: "SU", mon: "MO", tue: "TU", wed: "WE",
+          thu: "TH", fri: "FR", sat: "SA"
+        };
+        return map[d.toLowerCase()] || "MO";
+      }).join(",");
+      rrule = `FREQ=WEEKLY;BYDAY=${byday};BYHOUR=${hours};BYMINUTE=${minutes}`;
+    } else {
+      // Fallback to daily
+      rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
+    }
+
+    dtstart = Date.now();
+  }
+
+  // Handle explicit RRULE from GPT
+  if (parsed.rrule) {
+    rrule = parsed.rrule as string;
+    scheduleType = "rrule";
+    dtstart = Date.now();
+  }
+
+  // Handle until/bounds
+  if (parsed.until) {
+    const ms = new Date(parsed.until as string).getTime();
+    if (Number.isFinite(ms)) {
+      until = ms;
+    } else {
+      parseWarnings.push(`Invalid until date "${String(parsed.until)}" ignored.`);
+    }
+  }
+
+  // Pre-reminder (heads-up) fields. The '<title> in N minutes' stand-in is
+  // only opener-free when the title is, so the chooser knows about both.
+  const { preReminderMinutes, preDescription, rawPreDescription } =
+    normalizePreReminder(parsed.preReminderMinutes, parsed.preDescription);
+  const preTtsText = buildHeadsUpTtsText({
+    preReminderMinutes,
+    preDescription,
+    rawPreDescription,
+    title: parsed.title,
+  });
+
+  // Assistant replay fields (urgency tier, persistence, escalating variants)
+  const urgency = normalizeUrgency(parsed.urgency);
+  const persistent = normalizePersistent(parsed.persistent);
+  const variants = normalizeVariants(
+    parsed.variants,
+    variantCountForTier(urgency, persistent),
+    description
+  );
+
+  return {
+    title: parsed.title as string,
+    description,
+    time,
+    date,
+    frequency,
+    days,
+    // Card chip emoji (absent when the model returned junk → neutral bell chip)
+    emoji: normalizeEmoji(parsed.emoji),
+    intervalMs,
+    anchorAt,
+    scheduleType,
+    onceAt,
+    rrule,
+    dtstart,
+    until,
+    preReminderMinutes,
+    preTtsText,
+    urgency,
+    persistent,
+    variants,
+    parseWarnings,
+  };
+}
+
+/**
+ * The reminders one raw parse response asks for, each already turned into a
+ * plan. The envelope the model chose is normalized away first (helpers.ts), so
+ * a single-reminder take is simply an array of one and behaves exactly as it
+ * did before multi-reminder takes existed.
+ *
+ * Exported for the unit tests: this is the seam between "what the model said"
+ * and "what gets created", with no network or Convex context in reach.
+ */
+export function planRemindersFromRawParse(
+  rawGptResponse: string,
+  context: { transcript: string; currentTime: string }
+): ReminderPlan[] {
+  const parsed = JSON.parse(rawGptResponse);
+  return normalizeParsedReminders(parsed).map((item) => buildReminderPlan(item, context));
 }
 
 // Shared helper: build system prompt for GPT. Exported for the live-model
@@ -200,7 +431,7 @@ ${buildPreReminderInstruction()}
 ${buildVariantInstruction(context.addressTerm)}
 
 If no time specified, use a reasonable default.
-If no frequency specified, assume "once".`;
+If no frequency specified, assume "once".${MULTI_REMINDER_INSTRUCTION}`;
 }
 
 let cachedResembleProjectUuid: string | null = null;
@@ -466,6 +697,136 @@ export async function speakFirstFiringLines(
   };
 }
 
+/** The slice of an action ctx one reminder's creation needs. */
+type CreateReminderCtx = {
+  storage: {
+    store: (blob: Blob) => Promise<Id<"_storage">>;
+    getUrl: (storageId: Id<"_storage">) => Promise<string | null>;
+  };
+  runMutation: (reference: any, args: any) => Promise<any>;
+};
+
+/**
+ * Synthesize, store and insert ONE planned reminder, and hand back the result
+ * shape the app has always received for a created reminder (slow path — audio
+ * is ready by the time this returns).
+ *
+ * Called once per reminder in the take, so a multi-reminder take draws its
+ * spoken catch per reminder rather than reusing one across the batch
+ * (convex/speechCatch.ts).
+ */
+async function createReminderWithAudio(
+  ctx: CreateReminderCtx,
+  args: { deviceId: string; addressTerm?: string; transcript: string },
+  plan: ReminderPlan
+) {
+  // Generate TTS. The guard floors at the model's own line, so this is empty
+  // only when the parse returned neither a description nor a title — the guard
+  // can trade phrasing away, never the line itself.
+  const ttsText = plan.description;
+  // Persistent reminders nag inside one ringing alarm; every other tier says
+  // its line once and comes back as a later ladder rung.
+  const dense = useDenseAlarmWav(plan.persistent);
+  // First-firing lines are spoken with a catch in front (the payload itself
+  // stays as stored); the dense wav keeps the bare payload it repeats.
+  const spoken = await speakFirstFiringLines(ctx, {
+    text: ttsText,
+    preText: plan.preTtsText || undefined,
+    deviceId: args.deviceId,
+    addressTerm: args.addressTerm,
+  });
+  // Generate + store TTS (mp3 for playback + alarm-ready wav when available)
+  const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
+    text: spoken.text,
+    wavText: dense ? ttsText : undefined,
+    title: plan.title,
+    dense,
+  });
+
+  // Second short line for the pre-alert; failure never blocks the reminder.
+  let preAudioStorageId: Id<"_storage"> | undefined;
+  if (spoken.preText) {
+    try {
+      const preTtsBuffer = await synthesizeReminderTts({
+        text: spoken.preText,
+        title: `${plan.title} (heads-up)`,
+      });
+      const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });
+      preAudioStorageId = await ctx.storage.store(preBlob);
+    } catch (e) {
+      console.error("[VR] Pre-alert TTS generation failed:", e);
+    }
+  }
+
+  // Replay variant lines: kept in lockstep with their audios — a failed synth
+  // drops that variant (fewer variants, never a blocked creation).
+  const { keptVariants, variantAudioStorageIds, variantWavStorageIds } =
+    await synthesizeVariantTts(ctx, plan.title, plan.variants, dense);
+
+  const reminderId: Id<"reminders"> = await ctx.runMutation(internal.reminders.create, {
+    deviceId: args.deviceId,
+    title: plan.title,
+    description: plan.description,
+    time: plan.time,
+    date: plan.date,
+    frequency: plan.frequency,
+    days: plan.days,
+    emoji: plan.emoji,
+    audioStorageId: storageId,
+    wavStorageId,
+    preReminderMinutes: plan.preReminderMinutes > 0 ? plan.preReminderMinutes : undefined,
+    preAudioStorageId,
+    urgency: plan.urgency,
+    persistent: plan.persistent || undefined,
+    variants: keptVariants.length > 0 ? keptVariants : undefined,
+    variantAudioStorageIds:
+      variantAudioStorageIds.length > 0 ? variantAudioStorageIds : undefined,
+    variantWavStorageIds:
+      variantWavStorageIds.length > 0 ? variantWavStorageIds : undefined,
+  });
+
+  const audioUrl = await ctx.storage.getUrl(storageId);
+  const preAudioUrl = preAudioStorageId ? await ctx.storage.getUrl(preAudioStorageId) : null;
+  const variantAudioUrls = (
+    await Promise.all(variantAudioStorageIds.map((id) => ctx.storage.getUrl(id)))
+  ).filter((url): url is string => Boolean(url));
+  // Kept index-aligned with the rungs, so nulls stay in place.
+  const variantWavUrls = await Promise.all(
+    variantWavStorageIds.map((id) => ctx.storage.getUrl(id))
+  );
+
+  return {
+    id: reminderId as string,
+    title: plan.title,
+    description: plan.description,
+    time: plan.time,
+    date: plan.date,
+    frequency: plan.frequency,
+    days: plan.days,
+    emoji: plan.emoji,
+    transcript: args.transcript,
+    audioUrl,
+    preReminderMinutes: plan.preReminderMinutes,
+    preAudioUrl,
+    urgency: plan.urgency,
+    persistent: plan.persistent,
+    variants: keptVariants,
+    variantAudioUrls,
+    variantWavUrls,
+
+    intervalMs: plan.intervalMs,
+    anchorAt: plan.anchorAt,
+
+    // New unified schedule fields
+    scheduleType: plan.scheduleType,
+    onceAt: plan.onceAt,
+    rrule: plan.rrule,
+    dtstart: plan.dtstart,
+    until: plan.until,
+    parseWarnings: plan.parseWarnings.length > 0 ? plan.parseWarnings : undefined,
+  };
+}
+
 export const processVoiceReminder = action({
   args: {
     // Owning install (OLD-74) — stamped on the reminder so only this device can read it back.
@@ -521,107 +882,10 @@ export const processVoiceReminder = action({
       messages: [
         {
           role: "system",
-          content: `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
-
-Return exactly this format:
-{
-  "title": "short title (2-4 words; must not begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself)",
-  "description": "${buildDescriptionInstruction(args.addressTerm)}",
-  "time": "HH:MM in 24-hour format",
-  "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
-  "frequency": "once" | "daily" | "custom" | "interval",
-  "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom),
-  "intervalHours": number (only if frequency is interval),
-  "intervalMinutes": number (only if frequency is interval),
-  
-  // NEW: Unified schedule system (optional, for complex patterns)
-  "scheduleType": "once" | "interval" | "rrule" (infer from other fields if not provided),
-  "rrule": "RFC5545 RRULE string (for complex weekly/monthly/yearly patterns)",
-  "until": "ISO date for bounded recurrences (e.g., 'for 2 weeks')",
-  "preReminderMinutes": number (heads-up lead time in minutes, see PRE-REMINDER RULES),
-  "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
-  "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ASSISTANT REPLAY RULES),
-  "persistent": boolean (true only for critical tasks, see ASSISTANT REPLAY RULES),
-  "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"],
-  "emoji": "ONE emoji that best fits the reminder (see EMOJI RULES)"
-}
-
-EMOJI RULES:
-- Pick exactly ONE emoji that captures the reminder's subject (e.g. 💊 medicine, 🏋️ gym, 📞 call, 💧 drink water, 🍳 cooking)
-- Prefer concrete object/activity emojis over abstract ones; use ⏰ only when nothing fits
-- The "emoji" value must contain the emoji character only — no words, no punctuation
-
-LANGUAGE RULES:
-- If the input is in Arabic, return "title" and "description" in Arabic
-- If the input is in English, return "title" and "description" in English
-- The JSON field names and "frequency"/"days" values always remain in English
-- For Arabic days: الأحد=sun, الاثنين=mon, الثلاثاء=tue, الأربعاء=wed, الخميس=thu, الجمعة=fri, السبت=sat
-
-CURRENT CONTEXT:
-- Current date: ${currentDate} (${currentDayOfWeek})
-- Current time: ${currentTime}
-- User's timezone: ${timezone}
-
-DATE PARSING RULES (English & Arabic):
-- "Sunday"/"يوم الأحد", "tomorrow"/"غداً", "today"/"اليوم" → calculate actual YYYY-MM-DD
-- "next Sunday"/"الأحد القادم" → find the NEXT occurrence
-- "in 3 days"/"بعد ثلاثة أيام" → add days to current date
-- ONLY include "date" for one-time reminders (frequency: "once")
-- Do NOT include "date" for recurring/daily reminders
-
-RELATIVE TIME RULES:
-- "in X minutes"/"بعد X دقائق" = add to current time (${currentTime}) → frequency="once"
-- "in X hours"/"بعد X ساعات" = add hours to current time → frequency="once"
-- "every X minutes"/"كل X دقائق" = INTERVAL reminder (frequency="interval")
-- "every X hours"/"كل X ساعات" = INTERVAL reminder (frequency="interval")
-
-RRULE PATTERNS (for scheduleType="rrule"):
-- "every Sunday at 8am" → FREQ=WEEKLY;BYDAY=SU;BYHOUR=8;BYMINUTE=0
-- "weekdays at 9am" → FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0
-- "1st of every month at 8am" → FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=8;BYMINUTE=0
-- "first Monday monthly at 9am" → FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1;BYHOUR=9;BYMINUTE=0
-- "every day at 9am and 5pm" → create TWO separate reminders (simple approach)
-
-BOUNDED RECURRENCES:
-- "every day at 8am for 2 weeks" → frequency="daily", until="2026-02-22"
-- "weekdays at 9 until March 1st" → rrule with UNTIL
-
-INTERVAL RULES:
-- "every 8 hours"/"كل 8 ساعات" = frequency="interval" and intervalHours=8
-- "every 30 minutes"/"كل 30 دقيقة" = frequency="interval" and intervalMinutes=30
-- "in 8 hours"/"بعد 8 ساعات" = ONE-TIME reminder (frequency="once")
-- For interval reminders: do NOT include a specific date. time can be omitted.
-- Minimum interval: 5 minutes. Maximum interval: 365 days.
-- If user asks for less than 5 minutes, set to 5 minutes with a note.
-
-FREQUENCY RULES (deterministic):
-- If days are provided → frequency="custom" (weekly on specific days)
-- "every day"/"daily" → frequency="daily" (not "custom")
-- "every Sunday" → rrule pattern (FREQ=WEEKLY;BYDAY=SU) OR frequency="custom", days=["sun"]
-- "weekdays" → frequency="custom", days=["mon","tue","wed","thu","fri"] OR rrule
-
-ARABIC TIME EXPRESSIONS:
-- "الساعة ثمانية صباحاً" = 08:00
-- "الساعة تسعة مساءً" = 21:00
-- "صباحاً" = AM, "مساءً" = PM
-
-INTENT + TONE RULES:
-- Keep the exact intent (do not add meaning or extra context)
-- Do not add greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم")
-- Keep the description short, direct, and reminder-like (aim for 4-9 words)
-- Never open a spoken line by announcing the clock ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت") or labelling it a reminder ("Quick reminder", "Just a reminder", "Heads up", Arabic "تذكير سريع") — lead with the task, the object, or the person waiting
-- Arabic example: "دواؤك بانتظارك على الطاولة" (Your medicine is waiting on the table)
-
-TIME PARSING (Speech-to-text quirks):
-- "10 4 p.m." = 22:04, "9 30 a.m." = 09:30
-- The first number is hours, the second is minutes
-
-${buildPreReminderInstruction()}
-
-${buildVariantInstruction(args.addressTerm)}
-
-If no time specified, use a reasonable default.
-If no frequency specified, assume "once".`,
+          // Same prompt as the fast path — one prompt, one place, so the parse
+          // contract (incl. the multi-reminder envelope) cannot drift between the
+          // two paths, and the phrasing evals cover both.
+          content: buildSystemPrompt({ currentDate, currentDayOfWeek, currentTime, timezone, addressTerm: args.addressTerm }),
         },
         {
           role: "user",
@@ -634,271 +898,28 @@ If no frequency specified, assume "once".`,
     console.log("[VR] === STEP 3: Raw GPT Response ===");
     console.log("[VR] GPT returned:", rawGptResponse);
 
-    const parsed = JSON.parse(rawGptResponse);
-    // A leaked banned opener costs the model's phrasing, not the reminder: the
-    // title is the stand-in, on the card and aloud. Titles like 'Time to Sleep'
-    // are banned too, and then the model's own line stands — the guard never
-    // trades a line for nothing (helpers.ts).
-    const description = guardSpokenLine(parsed.description, parsed.title);
+    // One take can hold several reminders (OLD-93). A single-reminder take is
+    // an array of one, so it takes exactly the path it always did.
+    const plans = planRemindersFromRawParse(rawGptResponse, { transcript, currentTime });
+    console.log("[VR] Reminders in this take:", plans.length);
 
-    const rawFrequency = String(parsed.frequency || "once").toLowerCase();
-    let frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
-
-    let days: string[] | undefined = undefined;
-    const modelDaysRaw = Array.isArray(parsed.days) ? (parsed.days as unknown[]) : [];
-    const modelDaysNormalized = modelDaysRaw
-      .map(normalizeDay)
-      .filter((d): d is string => Boolean(d));
-
-    // Initialize days if the model provided them (even if it chose the wrong frequency)
-    if (modelDaysNormalized.length > 0) {
-      days = modelDaysNormalized;
-    }
-    // Only use date for one-time reminders
-    const date = frequency === "once" && parsed.date ? (parsed.date as string) : undefined;
-
-    // Ensure time is always a valid HH:MM string (Convex schema requires it)
-    const currentTimeHm = getCurrentTimeHM(currentTime);
-    const time = typeof parsed.time === "string" && parsed.time ? (parsed.time as string) : currentTimeHm;
-
-    // Parse warnings for normalization issues
-    let parseWarnings: string[] = [];
-
-    // Coerce frequency based on transcript and days
-    const coercionResult = coerceFrequency(frequency, days, transcript, parseWarnings);
-    frequency = coercionResult.frequency;
-    days = coercionResult.days;
-    parseWarnings = coercionResult.warnings;
-
-    // Interval normalization
-    let intervalMs: number | undefined;
-    let anchorAt: number | undefined;
-    if (frequency === "interval") {
-      const hours = Number(parsed.intervalHours ?? 0);
-      const minutes = Number(parsed.intervalMinutes ?? 0);
-      const totalMinutes = hours * 60 + minutes;
-
-      intervalMs = totalMinutes * 60 * 1000;
-      // Updated constraints: 5 min minimum, 365 days maximum
-      const MIN_MS = 5 * 60 * 1000;
-      const MAX_MS = 365 * 24 * 60 * 60 * 1000;
-      
-      if (intervalMs < MIN_MS) {
-        parseWarnings.push(`Minimum interval is 5 minutes. Adjusted from ${Math.round(intervalMs / 60000)} minutes.`);
-        intervalMs = MIN_MS;
-      } else if (intervalMs > MAX_MS) {
-        parseWarnings.push(`Maximum interval is 365 days. Adjusted.`);
-        intervalMs = MAX_MS;
-      }
-
-      anchorAt = Date.now();
+    const created: Awaited<ReturnType<typeof createReminderWithAudio>>[] = [];
+    for (const plan of plans) {
+      created.push(
+        await createReminderWithAudio(
+          ctx,
+          { deviceId: args.deviceId, addressTerm: args.addressTerm, transcript },
+          plan
+        )
+      );
     }
 
-    // NEW: Unified schedule system fields
-    let scheduleType: "once" | "interval" | "rrule" | undefined;
-    let onceAt: number | undefined;
-    let rrule: string | undefined;
-    let dtstart: number | undefined;
-    let until: number | undefined;
-
-    // Infer scheduleType from parsed data
-    if (parsed.scheduleType && ["once", "interval", "rrule"].includes(parsed.scheduleType)) {
-      scheduleType = parsed.scheduleType;
-    } else if (frequency === "interval") {
-      scheduleType = "interval";
-    } else if (parsed.rrule) {
-      scheduleType = "rrule";
-    } else if (frequency === "once") {
-      scheduleType = "once";
-      // Calculate onceAt timestamp
-      if (date) {
-        const [year, month, dayNum] = date.split("-").map(Number);
-        const [hours, minutes] = time.split(":").map(Number);
-        onceAt = new Date(year, month - 1, dayNum, hours, minutes).getTime();
-      } else {
-        const [hours, minutes] = time.split(":").map(Number);
-        const target = new Date();
-        target.setHours(hours, minutes, 0, 0);
-        // Interpret "at HH:MM" as the next occurrence (today or tomorrow).
-        if (target.getTime() <= Date.now()) {
-          target.setDate(target.getDate() + 1);
-        }
-        onceAt = target.getTime();
-      }
-    } else {
-      // Daily/weekly/custom → can be represented as rrule or legacy
-      scheduleType = "rrule";
-      
-      // Build RRULE from legacy fields
-      const [hours, minutes] = time.split(":").map(Number);
-      
-      if (frequency === "daily") {
-        rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
-      } else if (frequency === "custom" && days && days.length > 0) {
-        const byday = days.map((d: string) => {
-          const map: Record<string, string> = {
-            sun: "SU", mon: "MO", tue: "TU", wed: "WE",
-            thu: "TH", fri: "FR", sat: "SA"
-          };
-          return map[d.toLowerCase()] || "MO";
-        }).join(",");
-        rrule = `FREQ=WEEKLY;BYDAY=${byday};BYHOUR=${hours};BYMINUTE=${minutes}`;
-      } else {
-        // Fallback to daily
-        rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
-      }
-      
-      dtstart = Date.now();
-    }
-
-    // Handle explicit RRULE from GPT
-    if (parsed.rrule) {
-      rrule = parsed.rrule;
-      scheduleType = "rrule";
-      dtstart = Date.now();
-    }
-
-    // Handle until/bounds
-    if (parsed.until) {
-      const ms = new Date(parsed.until).getTime();
-      if (Number.isFinite(ms)) {
-        until = ms;
-      } else {
-        parseWarnings.push(`Invalid until date "${String(parsed.until)}" ignored.`);
-      }
-    }
-
-    // Pre-reminder (heads-up) fields. The '<title> in N minutes' stand-in is
-    // only opener-free when the title is, so the chooser knows about both.
-    const { preReminderMinutes, preDescription, rawPreDescription } =
-      normalizePreReminder(parsed.preReminderMinutes, parsed.preDescription);
-    const preTtsText = buildHeadsUpTtsText({
-      preReminderMinutes,
-      preDescription,
-      rawPreDescription,
-      title: parsed.title,
-    });
-
-    // Assistant replay fields (urgency tier, persistence, escalating variants)
-    const urgency = normalizeUrgency(parsed.urgency);
-    const persistent = normalizePersistent(parsed.persistent);
-    const variants = normalizeVariants(
-      parsed.variants,
-      variantCountForTier(urgency, persistent),
-      description
-    );
-
-    // Card chip emoji (absent when the model returned junk → neutral bell chip)
-    const emoji = normalizeEmoji(parsed.emoji);
-
-    // 3. Generate TTS. The guard floors at the model's own line, so this is
-    // empty only when the parse returned neither a description nor a title —
-    // the guard can trade phrasing away, never the line itself.
-    const ttsText = description;
-    // Persistent reminders nag inside one ringing alarm; every other tier says
-    // its line once and comes back as a later ladder rung.
-    const dense = useDenseAlarmWav(persistent);
-    // First-firing lines are spoken with a catch in front (the payload itself
-    // stays as stored); the dense wav keeps the bare payload it repeats.
-    const spoken = await speakFirstFiringLines(ctx, {
-      text: ttsText,
-      preText: preTtsText || undefined,
-      deviceId: args.deviceId,
-      addressTerm: args.addressTerm,
-    });
-    // 4. Generate + store TTS (mp3 for playback + alarm-ready wav when available)
-    const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
-      text: spoken.text,
-      wavText: dense ? ttsText : undefined,
-      title: parsed.title as string,
-      dense,
-    });
-
-    // Second short line for the pre-alert; failure never blocks the reminder.
-    let preAudioStorageId: Id<"_storage"> | undefined;
-    if (spoken.preText) {
-      try {
-        const preTtsBuffer = await synthesizeReminderTts({
-          text: spoken.preText,
-          title: `${parsed.title} (heads-up)`,
-        });
-        const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });
-        preAudioStorageId = await ctx.storage.store(preBlob);
-      } catch (e) {
-        console.error("[VR] Pre-alert TTS generation failed:", e);
-      }
-    }
-
-    // Replay variant lines: kept in lockstep with their audios — a failed
-    // synth drops that variant (fewer variants, never a blocked creation).
-    const { keptVariants, variantAudioStorageIds, variantWavStorageIds } =
-      await synthesizeVariantTts(ctx, parsed.title as string, variants, dense);
-
-    // 5. Save to database
-    const reminderId: Id<"reminders"> = await ctx.runMutation(
-      internal.reminders.create,
-      {
-        deviceId: args.deviceId,
-        title: parsed.title as string,
-        description,
-        time,
-        date,
-        frequency,
-        days,
-        emoji,
-        audioStorageId: storageId,
-        wavStorageId,
-        preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
-        preAudioStorageId,
-        urgency,
-        persistent: persistent || undefined,
-        variants: keptVariants.length > 0 ? keptVariants : undefined,
-        variantAudioStorageIds:
-          variantAudioStorageIds.length > 0 ? variantAudioStorageIds : undefined,
-        variantWavStorageIds:
-          variantWavStorageIds.length > 0 ? variantWavStorageIds : undefined,
-      }
-    );
-
-    const audioUrl = await ctx.storage.getUrl(storageId);
-    const preAudioUrl = preAudioStorageId ? await ctx.storage.getUrl(preAudioStorageId) : null;
-    const variantAudioUrls = (
-      await Promise.all(variantAudioStorageIds.map((id) => ctx.storage.getUrl(id)))
-    ).filter((url): url is string => Boolean(url));
-    // Kept index-aligned with the rungs, so nulls stay in place.
-    const variantWavUrls = await Promise.all(
-      variantWavStorageIds.map((id) => ctx.storage.getUrl(id))
-    );
-
+    // Backwards-compatible shape: the first reminder's fields stay top-level,
+    // where every existing caller reads them, with the whole take alongside.
     const result = {
-      id: reminderId as string,
-      title: parsed.title as string,
-      description,
-      time,
-      date,
-      frequency,
-      days,
-      emoji,
-      transcript,
-      audioUrl,
-      preReminderMinutes,
-      preAudioUrl,
-      urgency,
-      persistent,
-      variants: keptVariants,
-      variantAudioUrls,
-      variantWavUrls,
-
-      intervalMs,
-      anchorAt,
-
-      // New unified schedule fields
-      scheduleType,
-      onceAt,
-      rrule,
-      dtstart,
-      until,
-      parseWarnings: parseWarnings.length > 0 ? parseWarnings : undefined,
+      ...created[0],
+      reminders: created,
+      reminderCount: created.length,
     };
 
     console.log("[VR] === STEP 4: Final Result to App ===");
@@ -1107,215 +1128,98 @@ export const processVoiceReminderFast = action({
       perf.gptMs = Date.now() - tGpt;
 
       const rawGptResponse = completion.choices[0].message.content || "{}";
-      const parsed = JSON.parse(rawGptResponse);
-      // A leaked banned opener costs the model's phrasing, not the reminder:
-      // the title is the stand-in, on card and aloud. A banned title (ordinary
-      // ones like 'Reminder: Water' are) leaves the model's own line standing —
-      // the guard never trades a line for nothing (helpers.ts).
-      const description = guardSpokenLine(parsed.description, parsed.title);
+      // One take can hold several reminders (OLD-93). A single-reminder take is
+      // an array of one, so it takes exactly the path it always did.
+      const plans = planRemindersFromRawParse(rawGptResponse, { transcript, currentTime });
 
-      let frequency = String(parsed.frequency || "once").toLowerCase();
-      if (frequency === "weekly") frequency = "custom";
+      // 4. Create each reminder in DB immediately (audio pending) and enqueue
+      // its TTS. The stage timings accumulate over the take, so `perf` still
+      // reports the total spent in mutations and in scheduling.
+      perf.mutationMs = 0;
+      perf.scheduleMs = 0;
+      // Untyped so the pushed shape types the array (and the action return).
+      const created = [];
 
-      // Normalize days from model output
-      let days: string[] | undefined = undefined;
-      const modelDaysRaw = Array.isArray(parsed.days) ? (parsed.days as unknown[]) : [];
-      const modelDaysNormalized = modelDaysRaw
-        .map(normalizeDay)
-        .filter((d): d is string => Boolean(d));
-      if (modelDaysNormalized.length > 0) {
-        days = modelDaysNormalized;
-      }
-
-      const date = frequency === "once" && parsed.date ? (parsed.date as string) : undefined;
-      const time = typeof parsed.time === "string" && parsed.time 
-        ? (parsed.time as string) 
-        : getCurrentTimeHM(currentTime);
-
-      // Parse warnings and coerce frequency
-      let parseWarnings: string[] = [];
-      const coercionResult = coerceFrequency(frequency, days, transcript, parseWarnings);
-      frequency = coercionResult.frequency;
-      days = coercionResult.days;
-      parseWarnings = coercionResult.warnings;
-
-      // Interval normalization
-      let intervalMs: number | undefined;
-      let anchorAt: number | undefined;
-      if (frequency === "interval") {
-        const hours = Number(parsed.intervalHours ?? 0);
-        const minutes = Number(parsed.intervalMinutes ?? 0);
-        const totalMinutes = hours * 60 + minutes;
-        intervalMs = totalMinutes * 60 * 1000;
-        const MIN_MS = 5 * 60 * 1000;
-        const MAX_MS = 365 * 24 * 60 * 60 * 1000;
-        if (intervalMs < MIN_MS) {
-          parseWarnings.push(`Minimum interval is 5 minutes. Adjusted from ${Math.round(intervalMs / 60000)} minutes.`);
-          intervalMs = MIN_MS;
-        } else if (intervalMs > MAX_MS) {
-          parseWarnings.push(`Maximum interval is 365 days. Adjusted.`);
-          intervalMs = MAX_MS;
-        }
-        anchorAt = Date.now();
-      }
-
-      // Unified schedule fields
-      let scheduleType: "once" | "interval" | "rrule" | undefined;
-      let onceAt: number | undefined;
-      let rrule: string | undefined;
-      let dtstart: number | undefined;
-      let until: number | undefined;
-
-      if (parsed.scheduleType && ["once", "interval", "rrule"].includes(parsed.scheduleType)) {
-        scheduleType = parsed.scheduleType;
-      } else if (frequency === "interval") {
-        scheduleType = "interval";
-      } else if (parsed.rrule) {
-        scheduleType = "rrule";
-      } else if (frequency === "once") {
-        scheduleType = "once";
-        if (date) {
-          const [year, month, dayNum] = date.split("-").map(Number);
-          const [hours, minutes] = time.split(":").map(Number);
-          onceAt = new Date(year, month - 1, dayNum, hours, minutes).getTime();
-        } else {
-          const [hours, minutes] = time.split(":").map(Number);
-          const target = new Date();
-          target.setHours(hours, minutes, 0, 0);
-          // Interpret "at HH:MM" as the next occurrence (today or tomorrow)
-          if (target.getTime() <= Date.now()) {
-            target.setDate(target.getDate() + 1);
+      for (const plan of plans) {
+        const tMutation = Date.now();
+        const reminderId: Id<"reminders"> = await ctx.runMutation(
+          internal.reminders.create,
+          {
+            deviceId: args.deviceId,
+            title: plan.title,
+            description: plan.description,
+            time: plan.time,
+            date: plan.date,
+            frequency: plan.frequency,
+            days: plan.days,
+            emoji: plan.emoji,
+            audioStorageId: undefined,
+            preReminderMinutes:
+              plan.preReminderMinutes > 0 ? plan.preReminderMinutes : undefined,
+            urgency: plan.urgency,
+            persistent: plan.persistent || undefined,
+            variants: plan.variants.length > 0 ? plan.variants : undefined,
+            audioStatus: "pending",
+            audioUpdatedAt: Date.now(),
           }
-          onceAt = target.getTime();
-        }
-      } else {
-        scheduleType = "rrule";
-        const [hours, minutes] = time.split(":").map(Number);
-        if (frequency === "daily") {
-          rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
-        } else if (frequency === "custom" && days && days.length > 0) {
-          const byday = days.map((d: string) => {
-            const map: Record<string, string> = {
-              sun: "SU", mon: "MO", tue: "TU", wed: "WE",
-              thu: "TH", fri: "FR", sat: "SA"
-            };
-            return map[d.toLowerCase()] || "MO";
-          }).join(",");
-          rrule = `FREQ=WEEKLY;BYDAY=${byday};BYHOUR=${hours};BYMINUTE=${minutes}`;
-        } else {
-          rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
-        }
-        dtstart = Date.now();
-      }
+        );
+        perf.mutationMs += Date.now() - tMutation;
 
-      if (parsed.rrule) {
-        rrule = parsed.rrule;
-        scheduleType = "rrule";
-        dtstart = Date.now();
-      }
-
-      if (parsed.until) {
-        const ms = new Date(parsed.until).getTime();
-        if (Number.isFinite(ms)) {
-          until = ms;
-        } else {
-          parseWarnings.push(`Invalid until date "${String(parsed.until)}" ignored.`);
-        }
-      }
-
-      // Pre-reminder (heads-up) fields. The '<title> in N minutes' stand-in is
-      // only opener-free when the title is, so the chooser knows about both.
-      const { preReminderMinutes, preDescription, rawPreDescription } =
-        normalizePreReminder(parsed.preReminderMinutes, parsed.preDescription);
-      const preTtsText = buildHeadsUpTtsText({
-        preReminderMinutes,
-        preDescription,
-        rawPreDescription,
-        title: parsed.title,
-      });
-
-      // Assistant replay fields (urgency tier, persistence, escalating variants)
-      const urgency = normalizeUrgency(parsed.urgency);
-      const persistent = normalizePersistent(parsed.persistent);
-      const variants = normalizeVariants(
-        parsed.variants,
-        variantCountForTier(urgency, persistent),
-        description
-      );
-
-      // Card chip emoji (absent when the model returned junk → neutral bell chip)
-      const emoji = normalizeEmoji(parsed.emoji);
-
-      // 4. Create reminder in DB immediately (audio pending). The guard floors
-      // at the model's own line, so this is empty only when the parse returned
-      // neither a description nor a title.
-      const ttsText = description;
-      const tMutation = Date.now();
-      const reminderId: Id<"reminders"> = await ctx.runMutation(
-        internal.reminders.create,
-        {
+        // 5. Enqueue background TTS generation (persistent picks the dense wav
+        // shape; deviceId + addressTerm are what the spoken catch is drawn from,
+        // and drawing it there keeps the rotation write off this critical path).
+        // One job per reminder, so each reminder draws its own catch.
+        const tSchedule = Date.now();
+        await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
+          reminderId,
+          title: plan.title,
+          // The guard floors at the model's own line, so this is empty only when
+          // the parse returned neither a description nor a title.
+          ttsText: plan.description,
+          preTtsText: plan.preTtsText || undefined,
+          variantTexts: plan.variants.length > 0 ? plan.variants : undefined,
+          persistent: plan.persistent || undefined,
           deviceId: args.deviceId,
-          title: parsed.title as string,
-          description,
-          time,
-          date,
-          frequency,
-          days,
-          emoji,
-          audioStorageId: undefined,
-          preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
-          urgency,
-          persistent: persistent || undefined,
-          variants: variants.length > 0 ? variants : undefined,
+          addressTerm: args.addressTerm,
+        });
+        perf.scheduleMs += Date.now() - tSchedule;
+
+        created.push({
+          id: reminderId as string,
+          title: plan.title,
+          description: plan.description,
+          time: plan.time,
+          date: plan.date,
+          frequency: plan.frequency,
+          days: plan.days,
+          emoji: plan.emoji,
+          transcript,
           audioStatus: "pending",
-          audioUpdatedAt: Date.now(),
-        }
-      );
+          preReminderMinutes: plan.preReminderMinutes,
+          urgency: plan.urgency,
+          persistent: plan.persistent,
+          variants: plan.variants,
+          intervalMs: plan.intervalMs,
+          anchorAt: plan.anchorAt,
+          scheduleType: plan.scheduleType,
+          onceAt: plan.onceAt,
+          rrule: plan.rrule,
+          dtstart: plan.dtstart,
+          until: plan.until,
+          parseWarnings: plan.parseWarnings.length > 0 ? plan.parseWarnings : undefined,
+        });
+      }
 
-      perf.mutationMs = Date.now() - tMutation;
-
-      // 5. Enqueue background TTS generation (persistent picks the dense wav
-      // shape; deviceId + addressTerm are what the spoken catch is drawn from,
-      // and drawing it there keeps the rotation write off this critical path).
-      const tSchedule = Date.now();
-      await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
-        reminderId,
-        title: parsed.title as string,
-        ttsText,
-        preTtsText: preTtsText || undefined,
-        variantTexts: variants.length > 0 ? variants : undefined,
-        persistent: persistent || undefined,
-        deviceId: args.deviceId,
-        addressTerm: args.addressTerm,
-      });
-      perf.scheduleMs = Date.now() - tSchedule;
       perf.actionMs = Date.now() - tActionStart;
 
-      // 6. Return immediately
+      // 6. Return immediately. Backwards-compatible shape: the first reminder's
+      // fields stay top-level, where every existing caller reads them, with the
+      // whole take alongside.
       return {
         perf,
-        id: reminderId as string,
-        title: parsed.title as string,
-        description,
-        time,
-        date,
-        frequency,
-        days,
-        emoji,
-        transcript,
-        audioStatus: "pending",
-        preReminderMinutes,
-        urgency,
-        persistent,
-        variants,
-        intervalMs,
-        anchorAt,
-        scheduleType,
-        onceAt,
-        rrule,
-        dtstart,
-        until,
-        parseWarnings: parseWarnings.length > 0 ? parseWarnings : undefined,
+        ...created[0],
+        reminders: created,
+        reminderCount: created.length,
       };
     } finally {
       // 7. Delete uploaded recording audio (always cleanup).

@@ -17,6 +17,10 @@ import {
   normalizePersistent,
   variantCountForTier,
   normalizeVariants,
+  normalizeEmoji,
+  normalizeParsedReminders,
+  MAX_REMINDERS_PER_TAKE,
+  MULTI_REMINDER_INSTRUCTION,
   buildVariantInstruction,
   useDenseAlarmWav,
   ALARM_PCM_OUTPUT_FORMAT,
@@ -1090,5 +1094,113 @@ describe("alignVariantWavIds", () => {
   it("returns nothing when the first variant has no wav", () => {
     expect(alignVariantWavIds([undefined, "b"])).toEqual([]);
     expect(alignVariantWavIds([])).toEqual([]);
+  });
+});
+
+// ─── normalizeParsedReminders (OLD-93) ──────────────────────────────────────
+
+describe("normalizeParsedReminders", () => {
+  it("unwraps the {reminders:[...]} envelope the prompt asks for", () => {
+    const items = normalizeParsedReminders({
+      reminders: [{ title: "Medicine" }, { title: "Call mom" }],
+    });
+    expect(items).toEqual([{ title: "Medicine" }, { title: "Call mom" }]);
+  });
+
+  it("accepts a bare top-level array (what the model did unprompted)", () => {
+    const items = normalizeParsedReminders([{ title: "Water" }, { title: "Gym" }]);
+    expect(items.map((item) => item.title)).toEqual(["Water", "Gym"]);
+  });
+
+  it("wraps a bare single object — the pre-OLD-93 shape still comes back", () => {
+    expect(normalizeParsedReminders({ title: "Water", time: "20:00" })).toEqual([
+      { title: "Water", time: "20:00" },
+    ]);
+  });
+
+  it("keeps an empty object, so a contentless parse fails where it always did", () => {
+    expect(normalizeParsedReminders({})).toEqual([{}]);
+  });
+
+  it("drops non-object entries instead of trusting them", () => {
+    const items = normalizeParsedReminders({
+      reminders: [{ title: "Water" }, "Gym at 6", null, 42, ["nested"], { title: "Gym" }],
+    });
+    expect(items).toEqual([{ title: "Water" }, { title: "Gym" }]);
+  });
+
+  it("treats a non-array reminders field as an ordinary single object", () => {
+    expect(normalizeParsedReminders({ reminders: "two things" })).toEqual([
+      { reminders: "two things" },
+    ]);
+  });
+
+  it("throws on an envelope with nothing usable in it", () => {
+    expect(() => normalizeParsedReminders({ reminders: [] })).toThrow(
+      /no reminder object/
+    );
+    expect(() => normalizeParsedReminders([])).toThrow(/no reminder object/);
+    expect(() => normalizeParsedReminders([null, "x", 7])).toThrow(
+      /no reminder object/
+    );
+    expect(() => normalizeParsedReminders(null)).toThrow(/no reminder object/);
+    expect(() => normalizeParsedReminders("not json-ish")).toThrow(
+      /no reminder object/
+    );
+  });
+
+  it("caps a runaway parse at MAX_REMINDERS_PER_TAKE", () => {
+    const many = Array.from({ length: MAX_REMINDERS_PER_TAKE + 3 }, (_, i) => ({
+      title: `Task ${i}`,
+    }));
+    const items = normalizeParsedReminders({ reminders: many });
+    expect(items).toHaveLength(MAX_REMINDERS_PER_TAKE);
+    expect(items[0].title).toBe("Task 0");
+  });
+});
+
+describe("MULTI_REMINDER_INSTRUCTION", () => {
+  it("names the exact envelope the normalizer prefers", () => {
+    expect(MULTI_REMINDER_INSTRUCTION).toContain(`{"reminders": [`);
+  });
+
+  it("asks for a one-element array even for a single reminder", () => {
+    expect(MULTI_REMINDER_INSTRUCTION).toMatch(/one-element array/);
+  });
+});
+
+// ─── normalizeEmoji ─────────────────────────────────────────────────────────
+
+describe("normalizeEmoji", () => {
+  it("keeps a single emoji", () => {
+    expect(normalizeEmoji("💊")).toBe("💊");
+    expect(normalizeEmoji("  🏋️  ")).toBe("🏋️");
+  });
+
+  it("keeps only the first cluster when the model sends several", () => {
+    expect(normalizeEmoji("💧💧")).toBe("💧");
+  });
+
+  it("keeps a ZWJ sequence and a skin tone intact", () => {
+    expect(normalizeEmoji("👨‍👩‍👧")).toBe("👨‍👩‍👧");
+    expect(normalizeEmoji("👍🏽")).toBe("👍🏽");
+  });
+
+  it("rejects anything with words or punctuation in it (chips hold pictographs)", () => {
+    expect(normalizeEmoji("💊 medicine")).toBeUndefined();
+    expect(normalizeEmoji("pills")).toBeUndefined();
+    expect(normalizeEmoji(":)")).toBeUndefined();
+  });
+
+  it("rejects non-ASCII text that is not an emoji", () => {
+    expect(normalizeEmoji("دواء")).toBeUndefined();
+  });
+
+  it("rejects empty and non-string input", () => {
+    expect(normalizeEmoji("")).toBeUndefined();
+    expect(normalizeEmoji("   ")).toBeUndefined();
+    expect(normalizeEmoji(undefined)).toBeUndefined();
+    expect(normalizeEmoji(null)).toBeUndefined();
+    expect(normalizeEmoji(42)).toBeUndefined();
   });
 });

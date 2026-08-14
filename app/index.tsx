@@ -27,6 +27,7 @@ import { useReminderStore, Reminder } from "../lib/store";
 import { useSettingsStore } from "../lib/settingsStore";
 import RecordingOverlay from "../components/RecordingOverlay";
 import EditReminderSheet from "../components/EditReminderSheet";
+import { useToast } from "../components/ToastProvider";
 import AiConsentCard from "../components/AiConsentCard";
 import { resolveAiConsent, type AiConsentChoice } from "../lib/aiConsent";
 import { arePermissionsGranted, showPermissionPrompt } from "../components/PermissionPrompt";
@@ -38,7 +39,14 @@ import DaysPage, { subtitleFor } from "../components/days/DaysPage";
 import BottomBar, { BottomBarTab } from "../components/BottomBar";
 import { SettingsContent } from "./settings";
 import { createTraceId, perfLog, recordTap, startStallMonitor } from "../lib/perf";
-import { checkCanCreateWithCount, getFreeActiveLimit } from "../lib/usage";
+import { checkCanCreateWithCount, getActiveReminderCount, getFreeActiveLimit } from "../lib/usage";
+import {
+  describeTakeOutcome,
+  extractTakeItems,
+  intakeTakeReminders,
+  planTakeAllowance,
+  scheduleTakeReminders,
+} from "../lib/voiceTake";
 import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, isCompletedOnDay, occurrencesForDay, todayISO } from "../lib/dayOccurrences";
@@ -63,6 +71,7 @@ export default function HomeScreen() {
   const processVoiceReminderFast = useAction(api.actions.processVoiceReminderFast);
   const generateAudioUploadUrl = useMutation(api.reminders.generateAudioUploadUrl);
   const removeConvexReminder = useMutation(api.reminders.remove);
+  const toast = useToast();
   const insets = useSafeAreaInsets();
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -333,6 +342,20 @@ export default function HomeScreen() {
     [handleOpenRecording]
   );
 
+  // Reopen the overlay in its locked state after the fact: the pre-recording
+  // gate can go stale while a take is in flight.
+  const showLimitLockedOverlay = useCallback(
+    (traceId: string, currentCount: number, limit: number) => {
+      setShowRecording(false);
+      setTimeout(() => {
+        setRecordingTraceId(traceId);
+        setShowRecording(true);
+        lockRecordingForLimit(traceId, currentCount, limit);
+      }, 0);
+    },
+    [lockRecordingForLimit]
+  );
+
   const handleCancelProcessing = useCallback(() => {
     cancelledRef.current = true;
   }, []);
@@ -420,116 +443,124 @@ export default function HomeScreen() {
         perfLog(traceId, "device.processing", "convex_perf", (result as any).perf);
       }
 
-      const frequency = result.frequency === "weekly" ? "custom" : result.frequency;
-      const days = frequency === "custom" ? (result.days || []) : [];
+      // One take can hold several reminders (OLD-93). A result without the
+      // array is the legacy single-reminder shape — a take of exactly one.
+      const takeItems = extractTakeItems(result);
+      const draftContext = {
+        usedFastPath,
+        tzid: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
 
-      const intervalMs = Number((result as any).intervalMs);
-      const anchorAt = Number((result as any).anchorAt);
+      // The gate before recording only knew about one reminder, so the take is
+      // re-gated here, where its size is known.
+      const limit = getFreeActiveLimit();
+      const allowance = await planTakeAllowance({
+        takeCount: takeItems.length,
+        activeCount: getActiveReminderCount(),
+        limit,
+        checkPro: checkProStatus,
+      });
+      perfLog(traceId, "device.processing", "take_gate", {
+        takeCount: takeItems.length,
+        allowed: allowance.allowed,
+        dropped: allowance.dropped,
+        isPro: allowance.isPro,
+        activeCount: allowance.activeCount,
+        limit,
+      });
 
       const tLocal = Date.now();
-
-      // Extract unified schedule fields from Convex result
-      const resultScheduleType = (result as any).scheduleType as 'once' | 'interval' | 'rrule' | undefined;
-      const resultOnceAt = (result as any).onceAt as number | undefined;
-      const resultRrule = (result as any).rrule as string | undefined;
-      const resultDtstart = (result as any).dtstart as number | undefined;
-      const resultUntil = (result as any).until as number | undefined;
-      const resultParseWarnings = (result as any).parseWarnings as string[] | undefined;
-
-      // Determine timezone
-      const deviceTzid = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-      // If using fast path, audio is pending
-      const audioStatus = usedFastPath ? "pending" : (result.audioUrl ? "ready" : undefined);
-
-      const resultPreReminderMinutes = Number((result as any).preReminderMinutes);
-      const resultPreAudioUrl = (result as any).preAudioUrl as string | undefined;
-
-      // Card-chip emoji from the parse (absent = neutral bell chip)
-      const resultEmoji = typeof (result as any).emoji === "string" && (result as any).emoji
-        ? ((result as any).emoji as string)
-        : undefined;
-
-      // Assistant replay fields (OLD-53). Fast path returns urgency/persistent/
-      // variants at parse time; variantAudioUrls arrive via hydration.
-      const resultUrgency = (result as any).urgency as 'urgent' | 'notice' | 'routine' | undefined;
-      const resultPersistent = (result as any).persistent === true;
-      const resultVariants = Array.isArray((result as any).variants)
-        ? ((result as any).variants as string[])
-        : undefined;
-      const resultVariantAudioUrls = Array.isArray((result as any).variantAudioUrls)
-        ? ((result as any).variantAudioUrls as string[])
-        : undefined;
-
-      const newReminder = await storeAddReminder({
-        convexId: result.id,
-        title: result.title,
-        description: result.description,
-        emoji: resultEmoji,
-        time: (result as any).time ?? "00:00",
-        date: (result as any).date,
-        frequency,
-        days,
-        audioUrl: result.audioUrl || "",
-        audioStatus,
-        preReminderMinutes:
-          Number.isFinite(resultPreReminderMinutes) && resultPreReminderMinutes > 0
-            ? resultPreReminderMinutes
-            : undefined,
-        preAudioUrl: resultPreAudioUrl || undefined,
-        urgency: resultUrgency,
-        persistent: resultPersistent || undefined,
-        variants: resultVariants?.length ? resultVariants : undefined,
-        variantAudioUrls: resultVariantAudioUrls?.length ? resultVariantAudioUrls : undefined,
-
-        intervalMs: Number.isFinite(intervalMs) ? intervalMs : undefined,
-        anchorAt: Number.isFinite(anchorAt) ? anchorAt : undefined,
-
-        // New unified schedule fields
-        scheduleType: resultScheduleType,
-        onceAt: resultOnceAt,
-        rrule: resultRrule,
-        dtstart: resultDtstart,
-        tzid: deviceTzid,
-        until: resultUntil,
-        parseWarnings: resultParseWarnings,
-
-        schemaVersion: 4,
+      const outcome = await intakeTakeReminders({
+        items: takeItems,
+        allowed: allowance.allowed,
+        context: draftContext,
+        deps: {
+          addReminder: storeAddReminder,
+          startHydration: (reminder, convexId) => {
+            console.log("[VR] Starting audio hydration for", convexId);
+            // Fire-and-forget hydration
+            hydrateReminderAudio({
+              convexClient: convex,
+              convexId,
+              localReminderId: reminder.id,
+              updateLocal: async (patch) => {
+                const current = useReminderStore.getState().getReminderById(reminder.id);
+                if (current) {
+                  await storeUpdateReminder({ ...current, ...patch });
+                }
+              },
+            }).catch((e) => {
+              console.error("[VR] Hydration failed:", e);
+            });
+          },
+          discardOverflow: async (item) => {
+            const convexId = typeof item?.id === "string" ? item.id : undefined;
+            if (!convexId) return;
+            await removeConvexReminder({ id: convexId as any, deviceId: await getDeviceId() });
+          },
+          onError: (stage, e, index) => {
+            console.log(`[VR] Take item ${index} failed to ${stage}:`, e);
+            perfLog(traceId, "device.processing", "take_item_error", {
+              index,
+              stage,
+              error: String(e),
+            });
+          },
+        },
       });
       perfLog(traceId, "device.processing", "local_addReminder_done", {
         ms: Date.now() - tLocal,
-        reminderId: newReminder.id,
+        reminderId: outcome.created[0]?.id,
+        created: outcome.created.length,
+        failed: outcome.failed,
+        dropped: outcome.dropped,
       });
 
-      // If using fast path, start hydration
-      if (usedFastPath && result.id) {
-        console.log("[VR] Starting audio hydration for", result.id);
-        // Fire-and-forget hydration
-        hydrateReminderAudio({
-          convexClient: convex,
-          convexId: result.id,
-          localReminderId: newReminder.id,
-          updateLocal: async (patch) => {
-            const current = useReminderStore.getState().getReminderById(newReminder.id);
-            if (current) {
-              await storeUpdateReminder({ ...current, ...patch });
-            }
-          },
-        }).catch((e) => {
-          console.error("[VR] Hydration failed:", e);
-        });
+      if (outcome.created.length === 0) {
+        // Everything the take produced was over the free cap: back to the
+        // locked overlay rather than ending on nothing.
+        if (outcome.dropped > 0) {
+          showLimitLockedOverlay(traceId, allowance.activeCount, limit);
+          return;
+        }
+        throw new Error("Take produced no reminders");
       }
 
       setShowRecording(false);
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       // Store already updated - no need for setReminders
 
-      setEditingReminder(newReminder);
+      const feedback = describeTakeOutcome({
+        created: outcome.created.length,
+        dropped: outcome.dropped,
+        failed: outcome.failed,
+        total: outcome.total,
+        limit,
+      });
+      if (feedback) {
+        // A take of several stays on the list — opening one card would hide the
+        // rest — and says what it made (and what it couldn't) in a toast.
+        toast.show({
+          title: feedback.title,
+          message: feedback.message,
+          type: feedback.type,
+          durationMs: feedback.upgrade ? 4000 : undefined,
+          onPress: feedback.upgrade ? openPaywall : undefined,
+        });
+      } else {
+        setEditingReminder(outcome.created[0]);
+      }
 
       InteractionManager.runAfterInteractions(() => {
-        perfLog(traceId, "device.notifications", "scheduleReminder_start");
-        (async () => {
-          try {
+        perfLog(traceId, "device.notifications", "scheduleReminder_start", {
+          count: outcome.created.length,
+        });
+        // One reminder that won't schedule must not cost its siblings their
+        // alarms, so each is scheduled on its own.
+        let promptedForExactAlarm = false;
+        void scheduleTakeReminders(
+          outcome.created,
+          async (newReminder) => {
             const { triggerTimestamp } = await scheduleReminder(
               {
                 id: newReminder.id,
@@ -571,16 +602,18 @@ export default function HomeScreen() {
             if (current) {
               await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
             }
-          } catch (e: any) {
+          },
+          (e: any) => {
             console.log("[VR] Failed to schedule reminder:", e);
-            if (e?.name === "ExactAlarmPermissionError") {
+            if (e?.name === "ExactAlarmPermissionError" && !promptedForExactAlarm) {
+              promptedForExactAlarm = true;
               showPermissionPrompt();
             }
             perfLog(traceId, "device.notifications", "scheduleReminder_error", {
               error: String(e),
             });
           }
-        })();
+        );
       });
     } catch (error: any) {
       console.error("[VR] Processing error:", error);
@@ -589,12 +622,7 @@ export default function HomeScreen() {
       if (error?.name === "ReminderLimitExceededError") {
         const currentCount = Number.isFinite(error?.currentCount) ? error.currentCount : reminders.length;
         const limit = Number.isFinite(error?.limit) ? error.limit : getFreeActiveLimit();
-        setShowRecording(false);
-        setTimeout(() => {
-          setRecordingTraceId(traceId);
-          setShowRecording(true);
-          lockRecordingForLimit(traceId, currentCount, limit);
-        }, 0);
+        showLimitLockedOverlay(traceId, currentCount, limit);
         return;
       }
 
