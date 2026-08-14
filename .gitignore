@@ -55,3 +55,6 @@ tmp-export/
 tmp-screenshots/
 dev-client-qr*.png
 dev-build-install-qr.png
+
+# Python
+__pycache__/
