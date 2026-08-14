@@ -69,10 +69,23 @@ describe("every legal link comes from lib/legalLinks", () => {
 });
 
 describe("legal pages open in an in-app browser", () => {
-  it("Settings and the paywall use openBrowserAsync, not a hand-off to Safari", () => {
+  it("every screen goes through openInAppBrowser — no direct WebBrowser use or Safari hand-off", () => {
     for (const source of [paywall, settings, consentCard]) {
-      expect(source).toContain("openBrowserAsync");
+      expect(source).toContain("openInAppBrowser");
+      // A top-level expo-web-browser import crashes any build that predates the
+      // native module (requireNativeModule throws at load, the route dies with
+      // SceneView's "Cannot read property 'ErrorBoundary' of undefined") — the
+      // 2026-08-14 OTA red screen. Only lib/legalLinks may touch it, lazily.
+      expect(source).not.toMatch(/from ["']expo-web-browser["']/);
       expect(source).not.toContain("Linking.openURL");
     }
+  });
+
+  it("openInAppBrowser requires expo-web-browser lazily, with a system-browser fallback", () => {
+    const legalLinks = read("lib/legalLinks.ts");
+    expect(legalLinks).not.toMatch(/^import .*expo-web-browser/m);
+    expect(legalLinks).toContain("require('expo-web-browser')");
+    expect(legalLinks).toContain("openBrowserAsync");
+    expect(legalLinks).toContain("Linking.openURL");
   });
 });

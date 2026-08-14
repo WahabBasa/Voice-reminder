@@ -50,7 +50,7 @@ export type AiConsentOutcome = {
  * proceeds — the recorder owns that message, and consent is unrelated to it.
  *
  * `not_now` writes nothing: consent stays unset, the recorder stays gated, and
- * the card can be shown again on the next mic tap or from Settings.
+ * the card can be shown again on the next mic tap.
  */
 export async function resolveAiConsent(choice: AiConsentChoice): Promise<AiConsentOutcome> {
     if (choice === 'not_now') {

@@ -2,18 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
 import Constants from "expo-constants";
 import { borderRadius, colors, scaleFontSize, shadows } from "../lib/theme";
 import { FONT_DISPLAY } from "../lib/fonts";
 import { useSettingsStore } from "../lib/settingsStore";
 import AppIcon from "../components/AppIcon";
 import AddressTermSheet from "../components/AddressTermSheet";
-import AiConsentCard from "../components/AiConsentCard";
 import { PRO_PRODUCT_NAME, restorePurchases } from "../lib/purchases";
 // One source of truth for the legal URLs — same constants the paywall and the
 // consent card use.
-import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from "../lib/legalLinks";
+import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL, openInAppBrowser } from "../lib/legalLinks";
 
 type SettingsRowProps = {
   icon: Parameters<typeof AppIcon>[0]["name"];
@@ -54,11 +52,8 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
 
   const addressTerm = useSettingsStore((state) => state.settings.addressTerm);
   const setAddressTerm = useSettingsStore((state) => state.setAddressTerm);
-  const aiConsentAcceptedAt = useSettingsStore((state) => state.settings.aiConsentAcceptedAt);
-  const setAiConsent = useSettingsStore((state) => state.setAiConsent);
   const loadSettings = useSettingsStore((state) => state.loadSettings);
   const [showAddressSheet, setShowAddressSheet] = useState(false);
-  const [showConsentCard, setShowConsentCard] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
 
   useEffect(() => {
@@ -71,35 +66,6 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
     if (!build) return `v${version}`;
     return `v${version} (${build})`;
   }, []);
-
-  const consentSubtitle = useMemo(() => {
-    if (aiConsentAcceptedAt === null) return "Not agreed — asked before your next recording";
-    return `Agreed ${new Date(aiConsentAcceptedAt).toLocaleDateString()} — tap to withdraw`;
-  }, [aiConsentAcceptedAt]);
-
-  const handleConsentRow = () => {
-    // Not agreed yet: show the same card the recorder shows.
-    if (aiConsentAcceptedAt === null) {
-      setShowConsentCard(true);
-      return;
-    }
-    Alert.alert(
-      "Withdraw AI consent",
-      "Voice Reminder will ask again before your next recording. Reminders you've already made are not affected.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Withdraw",
-          style: "destructive",
-          onPress: () => {
-            void setAiConsent(false).catch(() => {
-              Alert.alert("Couldn't save your choice", "Please try again.");
-            });
-          },
-        },
-      ]
-    );
-  };
 
   // App Review 3.1.1 wants restore reachable outside the paywall too.
   const handleRestore = async () => {
@@ -131,7 +97,7 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
   // the user out to Safari and lose their place.
   const handleOpenLegalLink = async (url: string) => {
     try {
-      await WebBrowser.openBrowserAsync(url);
+      await openInAppBrowser(url);
     } catch (e) {
       Alert.alert("Unable to open link", "Please try again later.");
     }
@@ -199,17 +165,6 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
         />
       </View>
 
-      {/* Privacy: the AI disclosure consent, revocable at any time */}
-      <Text style={styles.sectionLabel}>Privacy</Text>
-      <View style={styles.card}>
-        <SettingsRow
-          icon="mic"
-          label="Voice & AI processing"
-          subtitle={consentSubtitle}
-          onPress={handleConsentRow}
-        />
-      </View>
-
       {/* About: the two legal documents, reachable without leaving the app
           (Guideline 5.1.1(i) wants the policy in-app and easy to find) */}
       <Text style={styles.sectionLabel}>About</Text>
@@ -241,16 +196,6 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
         onDismiss={() => setShowAddressSheet(false)}
       />
 
-      <AiConsentCard
-        visible={showConsentCard}
-        onAllow={() => {
-          setShowConsentCard(false);
-          void setAiConsent(true).catch(() => {
-            Alert.alert("Couldn't save your choice", "Please try again.");
-          });
-        }}
-        onDecline={() => setShowConsentCard(false)}
-      />
     </ScrollView>
   );
 }

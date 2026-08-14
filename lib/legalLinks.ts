@@ -14,6 +14,26 @@
  * which is what Apple requires the paywall's "Terms of Use" link to reach.
  */
 
+import { Linking } from 'react-native';
+
 export const PRIVACY_POLICY_URL = 'https://wahabbasa.github.io/voicereminder-legal/privacy.html';
 
 export const TERMS_OF_USE_URL = 'https://wahabbasa.github.io/voicereminder-legal/terms.html';
+
+/**
+ * Open a legal page in the in-app browser sheet, falling back to the system
+ * browser. `expo-web-browser` is required lazily and NEVER imported at module
+ * scope: its import calls `requireNativeModule` at load, which throws on
+ * builds that predate the native module — and since every screen with a legal
+ * link loads this code, a top-level import takes the whole route down
+ * (SceneView's "Cannot read property 'ErrorBoundary' of undefined"). OTA
+ * bundles have to keep running on the previous native build.
+ */
+export async function openInAppBrowser(url: string): Promise<void> {
+  try {
+    const WebBrowser: typeof import('expo-web-browser') = require('expo-web-browser');
+    await WebBrowser.openBrowserAsync(url);
+  } catch {
+    await Linking.openURL(url);
+  }
+}

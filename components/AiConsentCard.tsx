@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef } from "react";
 import { BackHandler, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import BottomSheet, { BottomSheetBackdrop, BottomSheetView } from "@gorhom/bottom-sheet";
 import { Portal } from "@gorhom/portal";
-import * as WebBrowser from "expo-web-browser";
 import { borderRadius, colors, scaleFontSize } from "../lib/theme";
 import { FONT_DISPLAY } from "../lib/fonts";
 import { AI_CONSENT_COPY, AI_CONSENT_LEARN_MORE_URL } from "../lib/aiConsent";
+import { openInAppBrowser } from "../lib/legalLinks";
 
 const ANIMATION_DURATION = 250;
 
@@ -82,7 +82,7 @@ export default function AiConsentCard({
 
     // In-app browser sheet: reading the policy doesn't kick the user out of the app.
     const handleLearnMore = useCallback(() => {
-        void WebBrowser.openBrowserAsync(AI_CONSENT_LEARN_MORE_URL).catch(() => {});
+        void openInAppBrowser(AI_CONSENT_LEARN_MORE_URL).catch(() => {});
     }, []);
 
     if (!visible) return null;

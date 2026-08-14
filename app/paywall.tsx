@@ -9,7 +9,6 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
 import { colors, scaleFontSize, shadows } from "../lib/theme";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
@@ -23,7 +22,7 @@ import {
 } from "../lib/purchases";
 // Schedule 2 §3.8(b): both links have to work from the purchase screen. Same
 // constants Settings and the consent card use.
-import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from "../lib/legalLinks";
+import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL, openInAppBrowser } from "../lib/legalLinks";
 import { getFreeActiveLimit } from "../lib/usageGate";
 
 // Pro gates exactly one thing today: the active-reminder limit in lib/usageGate.ts.
@@ -282,7 +281,7 @@ export default function PaywallScreen() {
     // the purchase they were making.
     const handleOpenLink = async (url: string) => {
         try {
-            await WebBrowser.openBrowserAsync(url);
+            await openInAppBrowser(url);
         } catch (e) {
             showError("Couldn't open that link. Please try again.");
         }
