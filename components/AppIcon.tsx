@@ -18,6 +18,7 @@ import {
   Play,
   RefreshCw,
   Settings,
+  Shield,
   Square,
   Sun,
   Trash2,
@@ -56,6 +57,7 @@ export type AppIconName =
   | "play"
   | "refresh-cw"
   | "settings"
+  | "shield"
   | "square"
   | "sun"
   | "trash-2"
@@ -86,6 +88,7 @@ const iconByName: Record<AppIconName, ComponentType<BaseIconProps>> = {
   play: Play,
   "refresh-cw": RefreshCw,
   settings: Settings,
+  shield: Shield,
   square: Square,
   sun: Sun,
   "trash-2": Trash2,

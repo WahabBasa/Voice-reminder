@@ -2,17 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import * as Linking from "expo-linking";
+import * as WebBrowser from "expo-web-browser";
 import Constants from "expo-constants";
 import { borderRadius, colors, scaleFontSize, shadows } from "../lib/theme";
 import { FONT_DISPLAY } from "../lib/fonts";
 import { useSettingsStore } from "../lib/settingsStore";
 import AppIcon from "../components/AppIcon";
 import AddressTermSheet from "../components/AddressTermSheet";
-import AiConsentSheet from "../components/AiConsentSheet";
-// Apple's standard EULA lives with the subscription code so the paywall and this
-// screen can't drift apart.
-import { PRO_PRODUCT_NAME, TERMS_OF_USE_URL, restorePurchases } from "../lib/purchases";
+import AiConsentCard from "../components/AiConsentCard";
+import { PRO_PRODUCT_NAME, restorePurchases } from "../lib/purchases";
+// One source of truth for the legal URLs — same constants the paywall and the
+// consent card use.
+import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from "../lib/legalLinks";
 
 type SettingsRowProps = {
   icon: Parameters<typeof AppIcon>[0]["name"];
@@ -57,7 +58,7 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
   const setAiConsent = useSettingsStore((state) => state.setAiConsent);
   const loadSettings = useSettingsStore((state) => state.loadSettings);
   const [showAddressSheet, setShowAddressSheet] = useState(false);
-  const [showConsentSheet, setShowConsentSheet] = useState(false);
+  const [showConsentCard, setShowConsentCard] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
 
   useEffect(() => {
@@ -77,9 +78,9 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
   }, [aiConsentAcceptedAt]);
 
   const handleConsentRow = () => {
-    // Not agreed yet: show the same disclosure the recorder shows.
+    // Not agreed yet: show the same card the recorder shows.
     if (aiConsentAcceptedAt === null) {
-      setShowConsentSheet(true);
+      setShowConsentCard(true);
       return;
     }
     Alert.alert(
@@ -126,9 +127,11 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
     );
   };
 
-  const handleOpenTerms = async () => {
+  // Legal pages open in an in-app browser sheet — reading them doesn't bounce
+  // the user out to Safari and lose their place.
+  const handleOpenLegalLink = async (url: string) => {
     try {
-      await Linking.openURL(TERMS_OF_USE_URL);
+      await WebBrowser.openBrowserAsync(url);
     } catch (e) {
       Alert.alert("Unable to open link", "Please try again later.");
     }
@@ -207,14 +210,22 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
         />
       </View>
 
-      {/* About */}
+      {/* About: the two legal documents, reachable without leaving the app
+          (Guideline 5.1.1(i) wants the policy in-app and easy to find) */}
       <Text style={styles.sectionLabel}>About</Text>
       <View style={styles.card}>
         <SettingsRow
+          icon="shield"
+          label="Privacy Policy"
+          subtitle="What we collect and who processes it"
+          onPress={() => void handleOpenLegalLink(PRIVACY_POLICY_URL)}
+        />
+        <View style={styles.separator} />
+        <SettingsRow
           icon="file-text"
           label="Terms of Use"
-          subtitle="App Store subscription terms"
-          onPress={handleOpenTerms}
+          subtitle="Subscription terms and app licence"
+          onPress={() => void handleOpenLegalLink(TERMS_OF_USE_URL)}
         />
       </View>
 
@@ -230,15 +241,15 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
         onDismiss={() => setShowAddressSheet(false)}
       />
 
-      <AiConsentSheet
-        visible={showConsentSheet}
-        onAgree={() => {
-          setShowConsentSheet(false);
+      <AiConsentCard
+        visible={showConsentCard}
+        onAllow={() => {
+          setShowConsentCard(false);
           void setAiConsent(true).catch(() => {
             Alert.alert("Couldn't save your choice", "Please try again.");
           });
         }}
-        onDecline={() => setShowConsentSheet(false)}
+        onDecline={() => setShowConsentCard(false)}
       />
     </ScrollView>
   );

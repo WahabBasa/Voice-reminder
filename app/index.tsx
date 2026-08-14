@@ -27,7 +27,8 @@ import { useReminderStore, Reminder } from "../lib/store";
 import { useSettingsStore } from "../lib/settingsStore";
 import RecordingOverlay from "../components/RecordingOverlay";
 import EditReminderSheet from "../components/EditReminderSheet";
-import AiConsentSheet from "../components/AiConsentSheet";
+import AiConsentCard from "../components/AiConsentCard";
+import { resolveAiConsent, type AiConsentChoice } from "../lib/aiConsent";
 import { arePermissionsGranted, showPermissionPrompt } from "../components/PermissionPrompt";
 import SwipePager from "../components/SwipePager";
 import AppIcon from "../components/AppIcon";
@@ -85,7 +86,7 @@ export default function HomeScreen() {
   const [canStartRecording, setCanStartRecording] = useState(false);
   const [gateStatusText, setGateStatusText] = useState<string | undefined>(undefined);
   const [showUpgradeCta, setShowUpgradeCta] = useState(false);
-  const [showConsentSheet, setShowConsentSheet] = useState(false);
+  const [showConsentCard, setShowConsentCard] = useState(false);
   const [page, setPage] = useState(PAGE_TODAY);
   const cancelledRef = useRef(false);
   const [isConnected, setIsConnected] = useState(true);
@@ -215,7 +216,7 @@ export default function HomeScreen() {
     }
     if (useSettingsStore.getState().settings.aiConsentAcceptedAt === null) {
       perfLog(traceId, "ui.recording", "open_blocked_consent");
-      setShowConsentSheet(true);
+      setShowConsentCard(true);
       return;
     }
 
@@ -313,22 +314,24 @@ export default function HomeScreen() {
     perfLog(traceId, "ui.recording", "gate_allowed");
   }, [showRecording, isConnected, activeReminders.length, hasLoadedReminders, loadReminders, lockRecordingForLimit]);
 
-  // Agreeing continues straight into the recording the user originally tapped for.
-  const handleConsentAgree = useCallback(async () => {
-    setShowConsentSheet(false);
-    try {
-      await useSettingsStore.getState().setAiConsent(true);
-    } catch {
-      Alert.alert("Couldn't save your choice", "Please try again.");
-      return;
-    }
-    void handleOpenRecording();
-  }, [handleOpenRecording]);
-
-  // "Not now", backdrop tap, swipe-down, Android back — no recording starts.
-  const handleConsentDecline = useCallback(() => {
-    setShowConsentSheet(false);
-  }, []);
+  // Both card buttons land here. "Allow" persists consent, chains straight into
+  // the system mic prompt and then continues into the recording the user
+  // originally tapped for; "Not now" (also backdrop tap, swipe-down and Android
+  // back) saves nothing and starts nothing — the card returns on the next tap.
+  const handleConsentChoice = useCallback(
+    async (choice: AiConsentChoice) => {
+      setShowConsentCard(false);
+      const outcome = await resolveAiConsent(choice);
+      if (outcome.error === "persist_failed") {
+        Alert.alert("Couldn't save your choice", "Please try again.");
+        return;
+      }
+      if (outcome.proceedToRecording) {
+        void handleOpenRecording();
+      }
+    },
+    [handleOpenRecording]
+  );
 
   const handleCancelProcessing = useCallback(() => {
     cancelledRef.current = true;
@@ -891,10 +894,10 @@ export default function HomeScreen() {
       />
 
       {/* First-run AI disclosure — gates the very first recording */}
-      <AiConsentSheet
-        visible={showConsentSheet}
-        onAgree={handleConsentAgree}
-        onDecline={handleConsentDecline}
+      <AiConsentCard
+        visible={showConsentCard}
+        onAllow={() => void handleConsentChoice("allow")}
+        onDecline={() => void handleConsentChoice("not_now")}
       />
 
       {/* Edit overlay - renders on top without navigation */}

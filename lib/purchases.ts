@@ -21,13 +21,8 @@ const PRO_ENTITLEMENT_ID = 'pro';
 /** Product name shown to users. Must match the App Store subscription display name. */
 export const PRO_PRODUCT_NAME = 'Voice Reminder Pro';
 
-// Apple's standard EULA — the terms that govern App Store subscriptions.
-// Single source of truth: the paywall and Settings both link here.
-export const TERMS_OF_USE_URL = 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/';
-
-// TODO(OLD-73): replace with the real hosted privacy policy before submitting to App Review.
-// App Review rejects paywalls whose privacy link 404s, so this must land before the build ships.
-export const PRIVACY_POLICY_URL = 'https://wahabbasa.github.io/Voice-reminder/privacy.html';
+// The Terms of Use and Privacy Policy URLs live in lib/legalLinks.ts — the
+// paywall, Settings and the AI consent card all read them from there.
 
 let cachedCustomerInfo: CustomerInfo | null = null;
 let cachedIsPro: boolean | null = null;

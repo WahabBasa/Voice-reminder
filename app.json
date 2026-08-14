@@ -59,7 +59,8 @@
           "url": "https://de.sentry.io/",
           "organization": "oldowan"
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "extra": {
       "router": {},
