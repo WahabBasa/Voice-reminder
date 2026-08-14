@@ -11,6 +11,7 @@
 import type * as actions from "../actions.js";
 import type * as helpers from "../helpers.js";
 import type * as reminders from "../reminders.js";
+import type * as speechCatch from "../speechCatch.js";
 
 import type {
   ApiFromModules,
@@ -22,6 +23,7 @@ declare const fullApi: ApiFromModules<{
   actions: typeof actions;
   helpers: typeof helpers;
   reminders: typeof reminders;
+  speechCatch: typeof speechCatch;
 }>;
 
 /**

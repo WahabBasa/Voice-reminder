@@ -41,9 +41,13 @@ afterAll(() => {
   console.warn = originalWarn;
 });
 
-// Silence console.log in tests (passing tests = no output)
+// Silence console.log in tests (passing tests = no output).
+// Evals (__evals__/) are the exception: the lines the live model generated are
+// the whole point of the run, so they must reach the terminal.
 const originalLog = console.log;
 beforeAll(() => {
+  const testPath = expect.getState().testPath ?? "";
+  if (testPath.includes("__evals__")) return;
   console.log = jest.fn();
 });
 

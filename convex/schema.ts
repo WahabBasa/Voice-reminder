@@ -43,4 +43,15 @@ export default defineSchema({
     soundRepeatCount: v.optional(v.number()),
     soundRepeatMode: v.optional(v.string()),
   }).index("by_device", ["deviceId"]),
+
+  // Rotation state for the spoken catch (convex/speechCatch.ts): the last catch
+  // this install heard, so the next draw can skip it and nobody gets the same
+  // opener twice running. Per device for the same reason reminders are —
+  // there are no accounts (OLD-74). One row per device; losing it costs a
+  // possible repeat, nothing more.
+  speechCatchState: defineTable({
+    deviceId: v.string(),
+    lastCatchId: v.string(),
+    updatedAt: v.number(),
+  }).index("by_device", ["deviceId"]),
 });

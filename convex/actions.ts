@@ -36,7 +36,8 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeVariants, variantCountForTier, buildAlarmWav, alignVariantWavIds, useDenseAlarmWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT } from "./helpers";
+import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeVariants, variantCountForTier, buildAlarmWav, alignVariantWavIds, useDenseAlarmWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT } from "./helpers";
+import { catchCandidateOrder, selectCatchIds, withSpeechCatch } from "./speechCatch";
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -98,13 +99,14 @@ function coerceFrequency(
   return { frequency: coercedFrequency, days: coercedDays, warnings };
 }
 
-// Shared helper: build system prompt for GPT
-function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string; addressTerm?: string }): string {
+// Shared helper: build system prompt for GPT. Exported for the live-model
+// phrasing evals (__evals__/), which must test the exact prompt this ships.
+export function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string; addressTerm?: string }): string {
   return `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
 
 Return exactly this format:
 {
-  "title": "short title (2-4 words)",
+  "title": "short title (2-4 words; must not begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself)",
   "description": "${buildDescriptionInstruction(context.addressTerm)}",
   "time": "HH:MM in 24-hour format",
   "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
@@ -185,8 +187,8 @@ ARABIC TIME EXPRESSIONS:
 INTENT + TONE RULES:
 - Keep the exact intent (do not add meaning or extra context)
 - Do not add greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم")
-- Keep the description short, direct, and reminder-like
-- Never open a spoken line by announcing the clock ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت") — lead with the task, the object, or the person waiting
+- Keep the description short, direct, and reminder-like (aim for 4-9 words)
+- Never open a spoken line by announcing the clock ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت") or labelling it a reminder ("Quick reminder", "Just a reminder", "Heads up", Arabic "تذكير سريع") — lead with the task, the object, or the person waiting
 - Arabic example: "دواؤك بانتظارك على الطاولة" (Your medicine is waiting on the table)
 
 TIME PARSING (Speech-to-text quirks):
@@ -349,14 +351,19 @@ async function synthesizeAlarmWav(text: string, dense: boolean): Promise<Uint8Ar
   return buildAlarmWav(new Uint8Array(pcm), rate, { dense });
 }
 
-/** One line's TTS bundle: mp3 (playback, all platforms) + wav (iOS alarm sound). */
+/**
+ * One line's TTS bundle: mp3 (playback, all platforms) + wav (iOS alarm sound).
+ * `wavText` overrides what the wav says — a dense wav repeats its utterance
+ * every couple of seconds inside one ring, and a catch repeated that often is
+ * no longer a catch (convex/speechCatch.ts).
+ */
 async function synthesizeAndStoreLineTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
-  args: { text: string; title?: string; dense: boolean }
+  args: { text: string; wavText?: string; title?: string; dense: boolean }
 ): Promise<{ audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> }> {
   const [ttsBuffer, wavBytes] = await Promise.all([
     synthesizeReminderTts(args),
-    synthesizeAlarmWav(args.text, args.dense).catch((e) => {
+    synthesizeAlarmWav(args.wavText || args.text, args.dense).catch((e) => {
       console.error("[VR] Alarm WAV synthesis failed (system default alarm sound will be used):", e);
       return null;
     }),
@@ -409,6 +416,53 @@ async function synthesizeVariantTts(
     keptVariants,
     variantAudioStorageIds,
     variantWavStorageIds: alignVariantWavIds(wavStorageIds),
+  };
+}
+
+/**
+ * Spoken form of the lines a reminder says on its first firing: a rotating
+ * catch in front of the heads-up, another in front of the main line
+ * (convex/speechCatch.ts). The stored description is not touched — the catch
+ * exists only in the text handed to TTS — and ladder replays get none.
+ *
+ * The heads-up speaks first, so it takes the first draw. Both catches follow
+ * the main line's language: a reminder has one language, and the heads-up
+ * fallback is built from that same reminder's title.
+ *
+ * Rotation is per device. A missing deviceId (a job enqueued before this
+ * shipped) or a failed claim draws without rotation state instead of throwing —
+ * a repeated catch costs far less than a blocked TTS job.
+ *
+ * Exported for the unit tests (like buildSystemPrompt): this is the one seam
+ * where a spoken line stops being what was stored.
+ */
+export async function speakFirstFiringLines(
+  ctx: { runMutation: (reference: any, args: any) => Promise<any> },
+  args: { text: string; preText?: string; deviceId?: string; addressTerm?: string }
+): Promise<{ text: string; preText?: string }> {
+  const count = args.preText ? 2 : 1;
+  const candidateIds = catchCandidateOrder({
+    payload: args.text,
+    addressTerm: args.addressTerm,
+  });
+  let catchIds = selectCatchIds(candidateIds, null, count);
+  if (args.deviceId) {
+    try {
+      catchIds = (await ctx.runMutation(internal.reminders.claimSpeechCatches, {
+        deviceId: args.deviceId,
+        candidateIds,
+        count,
+      })) as string[];
+    } catch (e) {
+      console.error("[VR] Speech catch rotation unavailable (drawing without it):", e);
+    }
+  }
+  const mainCatchId = args.preText ? catchIds[1] ?? catchIds[0] : catchIds[0];
+  return {
+    text: withSpeechCatch(args.text, mainCatchId, args.addressTerm),
+    preText: args.preText
+      ? withSpeechCatch(args.preText, catchIds[0], args.addressTerm)
+      : undefined,
   };
 }
 
@@ -471,7 +525,7 @@ export const processVoiceReminder = action({
 
 Return exactly this format:
 {
-  "title": "short title (2-4 words)",
+  "title": "short title (2-4 words; must not begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself)",
   "description": "${buildDescriptionInstruction(args.addressTerm)}",
   "time": "HH:MM in 24-hour format",
   "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
@@ -554,8 +608,8 @@ ARABIC TIME EXPRESSIONS:
 INTENT + TONE RULES:
 - Keep the exact intent (do not add meaning or extra context)
 - Do not add greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم")
-- Keep the description short, direct, and reminder-like
-- Never open a spoken line by announcing the clock ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت") — lead with the task, the object, or the person waiting
+- Keep the description short, direct, and reminder-like (aim for 4-9 words)
+- Never open a spoken line by announcing the clock ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت") or labelling it a reminder ("Quick reminder", "Just a reminder", "Heads up", Arabic "تذكير سريع") — lead with the task, the object, or the person waiting
 - Arabic example: "دواؤك بانتظارك على الطاولة" (Your medicine is waiting on the table)
 
 TIME PARSING (Speech-to-text quirks):
@@ -581,7 +635,11 @@ If no frequency specified, assume "once".`,
     console.log("[VR] GPT returned:", rawGptResponse);
 
     const parsed = JSON.parse(rawGptResponse);
-    const description = normalizeReminderDescription(parsed.description);
+    // A leaked banned opener costs the model's phrasing, not the reminder: the
+    // title is the stand-in, on the card and aloud. Titles like 'Time to Sleep'
+    // are banned too, and then the model's own line stands — the guard never
+    // trades a line for nothing (helpers.ts).
+    const description = guardSpokenLine(parsed.description, parsed.title);
 
     const rawFrequency = String(parsed.frequency || "once").toLowerCase();
     let frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
@@ -710,16 +768,16 @@ If no frequency specified, assume "once".`,
       }
     }
 
-    // Pre-reminder (heads-up) fields
-    const { preReminderMinutes, preDescription } = normalizePreReminder(
-      parsed.preReminderMinutes,
-      parsed.preDescription
-    );
-    const preTtsText =
-      preReminderMinutes > 0
-        // Fallback stays factual and opener-free, like the model's own line.
-        ? preDescription || `${parsed.title} in ${preReminderMinutes} minutes`
-        : "";
+    // Pre-reminder (heads-up) fields. The '<title> in N minutes' stand-in is
+    // only opener-free when the title is, so the chooser knows about both.
+    const { preReminderMinutes, preDescription, rawPreDescription } =
+      normalizePreReminder(parsed.preReminderMinutes, parsed.preDescription);
+    const preTtsText = buildHeadsUpTtsText({
+      preReminderMinutes,
+      preDescription,
+      rawPreDescription,
+      title: parsed.title,
+    });
 
     // Assistant replay fields (urgency tier, persistence, escalating variants)
     const urgency = normalizeUrgency(parsed.urgency);
@@ -733,24 +791,35 @@ If no frequency specified, assume "once".`,
     // Card chip emoji (absent when the model returned junk → neutral bell chip)
     const emoji = normalizeEmoji(parsed.emoji);
 
-    // 3. Generate TTS
-    const ttsText = description || String(parsed.description ?? "");
+    // 3. Generate TTS. The guard floors at the model's own line, so this is
+    // empty only when the parse returned neither a description nor a title —
+    // the guard can trade phrasing away, never the line itself.
+    const ttsText = description;
     // Persistent reminders nag inside one ringing alarm; every other tier says
     // its line once and comes back as a later ladder rung.
     const dense = useDenseAlarmWav(persistent);
+    // First-firing lines are spoken with a catch in front (the payload itself
+    // stays as stored); the dense wav keeps the bare payload it repeats.
+    const spoken = await speakFirstFiringLines(ctx, {
+      text: ttsText,
+      preText: preTtsText || undefined,
+      deviceId: args.deviceId,
+      addressTerm: args.addressTerm,
+    });
     // 4. Generate + store TTS (mp3 for playback + alarm-ready wav when available)
     const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
-      text: ttsText,
+      text: spoken.text,
+      wavText: dense ? ttsText : undefined,
       title: parsed.title as string,
       dense,
     });
 
     // Second short line for the pre-alert; failure never blocks the reminder.
     let preAudioStorageId: Id<"_storage"> | undefined;
-    if (preTtsText) {
+    if (spoken.preText) {
       try {
         const preTtsBuffer = await synthesizeReminderTts({
-          text: preTtsText,
+          text: spoken.preText,
           title: `${parsed.title} (heads-up)`,
         });
         const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });
@@ -856,9 +925,17 @@ export const processTextReminder = action({
 
     const normalizedDescription = normalizeReminderDescription(args.description);
     const ttsText = normalizedDescription || args.description;
+    // The line is the user's own wording, so the opener guard (model output
+    // only) stays out of it. The spoken catch still goes in front, so a typed
+    // reminder does not fire flatter than a spoken one; this screen sends no
+    // address term, so it draws from the address-free pool.
+    const spoken = await speakFirstFiringLines(ctx, {
+      text: ttsText,
+      deviceId: args.deviceId,
+    });
     // Typed reminders carry no tier yet, so they get the plain one-utterance shape.
     const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
-      text: ttsText,
+      text: spoken.text,
       title: args.title,
       dense: false,
     });
@@ -1031,7 +1108,11 @@ export const processVoiceReminderFast = action({
 
       const rawGptResponse = completion.choices[0].message.content || "{}";
       const parsed = JSON.parse(rawGptResponse);
-      const description = normalizeReminderDescription(parsed.description);
+      // A leaked banned opener costs the model's phrasing, not the reminder:
+      // the title is the stand-in, on card and aloud. A banned title (ordinary
+      // ones like 'Reminder: Water' are) leaves the model's own line standing —
+      // the guard never trades a line for nothing (helpers.ts).
+      const description = guardSpokenLine(parsed.description, parsed.title);
 
       let frequency = String(parsed.frequency || "once").toLowerCase();
       if (frequency === "weekly") frequency = "custom";
@@ -1142,16 +1223,16 @@ export const processVoiceReminderFast = action({
         }
       }
 
-      // Pre-reminder (heads-up) fields
-      const { preReminderMinutes, preDescription } = normalizePreReminder(
-        parsed.preReminderMinutes,
-        parsed.preDescription
-      );
-      const preTtsText =
-        preReminderMinutes > 0
-          // Fallback stays factual and opener-free, like the model's own line.
-          ? preDescription || `${parsed.title} in ${preReminderMinutes} minutes`
-          : "";
+      // Pre-reminder (heads-up) fields. The '<title> in N minutes' stand-in is
+      // only opener-free when the title is, so the chooser knows about both.
+      const { preReminderMinutes, preDescription, rawPreDescription } =
+        normalizePreReminder(parsed.preReminderMinutes, parsed.preDescription);
+      const preTtsText = buildHeadsUpTtsText({
+        preReminderMinutes,
+        preDescription,
+        rawPreDescription,
+        title: parsed.title,
+      });
 
       // Assistant replay fields (urgency tier, persistence, escalating variants)
       const urgency = normalizeUrgency(parsed.urgency);
@@ -1165,8 +1246,10 @@ export const processVoiceReminderFast = action({
       // Card chip emoji (absent when the model returned junk → neutral bell chip)
       const emoji = normalizeEmoji(parsed.emoji);
 
-      // 4. Create reminder in DB immediately (audio pending)
-      const ttsText = description || String(parsed.description ?? "");
+      // 4. Create reminder in DB immediately (audio pending). The guard floors
+      // at the model's own line, so this is empty only when the parse returned
+      // neither a description nor a title.
+      const ttsText = description;
       const tMutation = Date.now();
       const reminderId: Id<"reminders"> = await ctx.runMutation(
         internal.reminders.create,
@@ -1191,7 +1274,9 @@ export const processVoiceReminderFast = action({
 
       perf.mutationMs = Date.now() - tMutation;
 
-      // 5. Enqueue background TTS generation (persistent picks the dense wav shape)
+      // 5. Enqueue background TTS generation (persistent picks the dense wav
+      // shape; deviceId + addressTerm are what the spoken catch is drawn from,
+      // and drawing it there keeps the rotation write off this critical path).
       const tSchedule = Date.now();
       await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
         reminderId,
@@ -1200,6 +1285,8 @@ export const processVoiceReminderFast = action({
         preTtsText: preTtsText || undefined,
         variantTexts: variants.length > 0 ? variants : undefined,
         persistent: persistent || undefined,
+        deviceId: args.deviceId,
+        addressTerm: args.addressTerm,
       });
       perf.scheduleMs = Date.now() - tSchedule;
       perf.actionMs = Date.now() - tActionStart;
@@ -1260,25 +1347,40 @@ export const generateReminderTtsForReminder = internalAction({
     // Optional so jobs enqueued by an older deploy still run (they get the
     // plain one-utterance shape).
     persistent: v.optional(v.boolean()),
+    // Spoken-catch context, also optional for in-flight older jobs: without a
+    // deviceId the catch is drawn without rotation state, without an address
+    // term the name-bearing catches are simply not eligible.
+    deviceId: v.optional(v.string()),
+    addressTerm: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     try {
       const dense = useDenseAlarmWav(normalizePersistent(args.persistent));
 
-      // 1. Generate + store TTS (mp3 + alarm-ready wav when available)
+      // First-firing lines get their catch here, off the create path.
+      const spoken = await speakFirstFiringLines(ctx, {
+        text: args.ttsText,
+        preText: args.preTtsText,
+        deviceId: args.deviceId,
+        addressTerm: args.addressTerm,
+      });
+
+      // 1. Generate + store TTS (mp3 + alarm-ready wav when available). The
+      // dense wav repeats what it holds, so it holds the catch-free payload.
       const { audioStorageId: newAudioStorageId, wavStorageId: newWavStorageId } =
         await synthesizeAndStoreLineTts(ctx, {
-          text: args.ttsText,
+          text: spoken.text,
+          wavText: dense ? args.ttsText : undefined,
           title: args.title,
           dense,
         });
 
       // 2b. Pre-alert line (optional); failure never blocks the main audio.
       let preAudioStorageId: Id<"_storage"> | undefined;
-      if (args.preTtsText) {
+      if (spoken.preText) {
         try {
           const preTtsBuffer = await synthesizeReminderTts({
-            text: args.preTtsText,
+            text: spoken.preText,
             title: `${args.title} (heads-up)`,
           });
           const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });

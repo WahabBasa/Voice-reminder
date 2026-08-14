@@ -2,10 +2,14 @@ import {
   clamp,
   normalizeDay,
   normalizeReminderDescription,
+  BANNED_OPENERS,
+  hasBannedOpener,
+  guardSpokenLine,
   getCurrentTimeHM,
   buildDescriptionInstruction,
   buildPreReminderInstruction,
   normalizePreReminder,
+  buildHeadsUpTtsText,
   MAX_PRE_REMINDER_MINUTES,
   MAX_REPLAY_VARIANTS,
   SPOKEN_OPENER_RULE,
@@ -201,7 +205,8 @@ describe("buildDescriptionInstruction", () => {
     ]) {
       expect(result).toContain("the way a human assistant would say it out loud");
       expect(result).toContain("in the input's language");
-      expect(result).toContain("One natural sentence, roughly 5-14 words");
+      expect(result).toContain("One natural sentence, roughly 4-9 words");
+      expect(result).toContain("Plain words only");
       expect(result).toContain("no set opening formula");
     }
   });
@@ -300,8 +305,18 @@ describe("instruction phrasing", () => {
 // ─── SPOKEN_OPENER_RULE (OLD-61: the model's own favourite opener) ──────────
 
 describe("SPOKEN_OPENER_RULE", () => {
-  it("forbids the clock-announcing openers by name, in both languages", () => {
-    for (const banned of ["'It is time'", "'It's time'", "'Time to ...'", "'حان وقت'", "'حان الوقت'"]) {
+  it("forbids the clock and label openers by name, in both languages", () => {
+    for (const banned of [
+      "'It is time'",
+      "'It's time'",
+      "'Time to ...'",
+      "'حان وقت'",
+      "'حان الوقت'",
+      "'Quick reminder'",
+      "'Just a reminder'",
+      "'Heads up'",
+      "'تذكير سريع'",
+    ]) {
       expect(SPOKEN_OPENER_RULE).toContain(banned);
     }
     expect(SPOKEN_OPENER_RULE).toContain("forbidden wordings, not merely discouraged");
@@ -335,18 +350,152 @@ describe("SPOKEN_OPENER_RULE", () => {
   });
 });
 
+// ─── BANNED_OPENERS / hasBannedOpener / guardSpokenLine ─────────────────────
+
+describe("BANNED_OPENERS", () => {
+  it("names the clock and label openers in both languages", () => {
+    for (const opener of [
+      "it is time",
+      "it's time",
+      "time to",
+      "quick reminder",
+      "just a reminder",
+      "heads up",
+      "حان وقت",
+      "حان الوقت",
+      "تذكير سريع",
+    ]) {
+      expect(BANNED_OPENERS).toContain(opener);
+    }
+  });
+
+  it("is lowercase throughout (the match form is lowercased)", () => {
+    for (const opener of BANNED_OPENERS) {
+      expect(opener).toBe(opener.toLowerCase());
+    }
+  });
+});
+
+describe("hasBannedOpener", () => {
+  // The live-model leak this guard exists for (__evals__/reminder-phrasing).
+  it("catches the Arabic clock opener the model keeps leaking", () => {
+    expect(hasBannedOpener("حان وقت شرب كوب من الماء.")).toBe(true);
+  });
+
+  it("catches an English clock opener", () => {
+    expect(hasBannedOpener("It's time to drink some water")).toBe(true);
+  });
+
+  it("catches a reminder label opener", () => {
+    expect(hasBannedOpener("Quick reminder — your medicine is waiting")).toBe(true);
+  });
+
+  it("ignores case", () => {
+    expect(hasBannedOpener("HEADS UP — the meeting starts")).toBe(true);
+  });
+
+  it("looks past leading quotes and dashes", () => {
+    expect(hasBannedOpener('"حان وقت الدواء."')).toBe(true);
+    expect(hasBannedOpener("— It is time to leave")).toBe(true);
+  });
+
+  it("passes a clean line", () => {
+    expect(hasBannedOpener("Your evening medicine is still sitting there.")).toBe(false);
+    expect(hasBannedOpener("دواؤك المسائي بانتظارك.")).toBe(false);
+  });
+
+  it("only matches at the opening, not mid-line", () => {
+    expect(hasBannedOpener("Your medicine is time-sensitive")).toBe(false);
+  });
+
+  it("treats a missing line as clean", () => {
+    expect(hasBannedOpener(undefined)).toBe(false);
+    expect(hasBannedOpener(null)).toBe(false);
+  });
+});
+
+describe("guardSpokenLine", () => {
+  it("passes a clean line through, greetings stripped", () => {
+    expect(guardSpokenLine("Hey! Your medicine is waiting")).toBe("Your medicine is waiting");
+  });
+
+  it("never lets the Arabic clock leak reach storage", () => {
+    expect(guardSpokenLine("حان وقت شرب كوب من الماء.", "شرب الماء")).toBe("شرب الماء");
+  });
+
+  it("replaces a leaked line whole rather than trimming the opener off", () => {
+    const guarded = guardSpokenLine("It is time to take your medicine", "Evening medicine");
+    expect(guarded).toBe("Evening medicine");
+    expect(guarded).not.toContain("take your medicine");
+  });
+
+  it("uses the fallback when the line is missing entirely", () => {
+    expect(guardSpokenLine(undefined, "Evening medicine")).toBe("Evening medicine");
+    expect(guardSpokenLine("   ", "Evening medicine")).toBe("Evening medicine");
+  });
+
+  // The floor. Emitting "" here would hand TTS an empty string: the provider
+  // rejects it, which costs the reminder its audio on the fast path and the
+  // reminder itself on the slow one. A formulaic line is the status quo.
+  it("keeps the original line when the fallback is banned too", () => {
+    expect(guardSpokenLine("حان وقت الدواء", "تذكير سريع")).toBe("حان وقت الدواء");
+  });
+
+  it("keeps the original line when no fallback is offered", () => {
+    expect(guardSpokenLine("Time to drink water")).toBe("Time to drink water");
+  });
+
+  it("keeps the original line when the fallback is empty", () => {
+    expect(guardSpokenLine("Time to drink water", "")).toBe("Time to drink water");
+    expect(guardSpokenLine("Time to drink water", "   ")).toBe("Time to drink water");
+    expect(guardSpokenLine("Time to drink water", undefined)).toBe("Time to drink water");
+  });
+
+  it("never empties a non-empty line, whatever the fallback is", () => {
+    for (const fallback of [undefined, "", "  ", "Reminder: Water", "تذكير"]) {
+      expect(guardSpokenLine("Heads up — drink water", fallback)).not.toBe("");
+    }
+  });
+
+  // Why the floor has to exist: the fallback is the title, and ordinary titles
+  // trip the ban. Without it, these three reminders would go out silent.
+  it("still speaks a line when an ordinary title is what trips the ban", () => {
+    for (const title of ["Reminder: Water", "Time to Sleep", "تذكير بالدواء"]) {
+      expect(hasBannedOpener(title)).toBe(true);
+      expect(guardSpokenLine("Time to drink water", title)).toBe("Time to drink water");
+    }
+  });
+
+  it("returns empty only when neither side has any text", () => {
+    expect(guardSpokenLine("", "")).toBe("");
+    expect(guardSpokenLine(undefined, undefined)).toBe("");
+    expect(guardSpokenLine("   ", "  ")).toBe("");
+  });
+
+  // A missing line with a banned title still beats silence: the banned title is
+  // the only text there is.
+  it("falls back to a banned stand-in when the line itself is missing", () => {
+    expect(guardSpokenLine("", "Time to Sleep")).toBe("Time to Sleep");
+  });
+
+  it("normalizes the fallback like any other spoken line", () => {
+    expect(guardSpokenLine("Heads up — drink water", "Hey! Water break")).toBe("Water break");
+  });
+});
+
 // ─── normalizePreReminder ───────────────────────────────────────────────────
 
 describe("normalizePreReminder", () => {
   it("passes through valid minutes and a heads-up line", () => {
-    expect(normalizePreReminder(15, "Heads up — meeting with Ahmed in 15 minutes")).toEqual({
+    expect(normalizePreReminder(15, "Your meeting with Ahmed starts in 15 minutes")).toEqual({
       preReminderMinutes: 15,
-      preDescription: "Heads up — meeting with Ahmed in 15 minutes",
+      preDescription: "Your meeting with Ahmed starts in 15 minutes",
+      rawPreDescription: "Your meeting with Ahmed starts in 15 minutes",
     });
   });
 
   it("parses numeric-string minutes", () => {
-    expect(normalizePreReminder("10", "Heads up — flight in 10 minutes").preReminderMinutes).toBe(10);
+    expect(normalizePreReminder("10", "Your flight leaves in 10 minutes").preReminderMinutes).toBe(10);
   });
 
   it("rounds fractional minutes", () => {
@@ -361,6 +510,7 @@ describe("normalizePreReminder", () => {
     expect(normalizePreReminder(0, "should be ignored")).toEqual({
       preReminderMinutes: 0,
       preDescription: "",
+      rawPreDescription: "",
     });
   });
 
@@ -372,6 +522,7 @@ describe("normalizePreReminder", () => {
     expect(normalizePreReminder(undefined, undefined)).toEqual({
       preReminderMinutes: 0,
       preDescription: "",
+      rawPreDescription: "",
     });
   });
 
@@ -384,13 +535,109 @@ describe("normalizePreReminder", () => {
   });
 
   it("normalizes greetings out of the pre description", () => {
-    expect(normalizePreReminder(15, "Hey! Heads up — meeting in 15 minutes").preDescription).toBe(
-      "Heads up — meeting in 15 minutes"
+    expect(normalizePreReminder(15, "Hey! Your meeting starts in 15 minutes").preDescription).toBe(
+      "Your meeting starts in 15 minutes"
     );
   });
 
   it("returns an empty pre description when the model omits it", () => {
     expect(normalizePreReminder(15, undefined).preDescription).toBe("");
+  });
+
+  // Empty is what hands the line to the caller's '<title> in N minutes'
+  // fallback, which is deterministic and opener-free by construction.
+  it("empties a heads-up that opens with a banned label", () => {
+    expect(normalizePreReminder(15, "Heads up — meeting with Ahmed").preDescription).toBe("");
+  });
+
+  it("empties an Arabic heads-up that opens with the clock", () => {
+    expect(normalizePreReminder(15, "حان وقت اجتماعك مع أحمد.").preDescription).toBe("");
+  });
+
+  // The banned line is still kept: the caller needs it when the title it would
+  // otherwise fall back to is banned as well (buildHeadsUpTtsText).
+  it("keeps the model's banned line alongside the emptied one", () => {
+    const pre = normalizePreReminder(15, "Heads up — meeting with Ahmed");
+    expect(pre.preDescription).toBe("");
+    expect(pre.rawPreDescription).toBe("Heads up — meeting with Ahmed");
+  });
+
+  it("strips greetings out of the kept raw line too", () => {
+    expect(normalizePreReminder(15, "Hey! Heads up — meeting").rawPreDescription).toBe(
+      "Heads up — meeting"
+    );
+  });
+
+  it("drops the raw line as well when there is no lead time", () => {
+    expect(normalizePreReminder(0, "Heads up — meeting").rawPreDescription).toBe("");
+  });
+});
+
+// ─── buildHeadsUpTtsText ────────────────────────────────────────────────────
+
+describe("buildHeadsUpTtsText", () => {
+  const build = (over: Partial<Parameters<typeof buildHeadsUpTtsText>[0]>) =>
+    buildHeadsUpTtsText({
+      preReminderMinutes: 15,
+      preDescription: "",
+      rawPreDescription: "",
+      title: "Meeting with Ahmed",
+      ...over,
+    });
+
+  it("speaks the model's line when it came back clean", () => {
+    expect(
+      build({
+        preDescription: "Your meeting with Ahmed starts in 15 minutes",
+        rawPreDescription: "Your meeting with Ahmed starts in 15 minutes",
+      })
+    ).toBe("Your meeting with Ahmed starts in 15 minutes");
+  });
+
+  it("falls back to the deterministic title line when the model gave nothing", () => {
+    expect(build({})).toBe("Meeting with Ahmed in 15 minutes");
+  });
+
+  it("keeps preferring the clean title line over a banned model line", () => {
+    expect(build({ rawPreDescription: "Heads up — meeting soon" })).toBe(
+      "Meeting with Ahmed in 15 minutes"
+    );
+  });
+
+  // The bug this exists for: '<title> in N minutes' interpolates the title raw,
+  // so a banned title laundered a banned opener in through the safety path.
+  it("prefers the model's own line, banned or not, over a banned title", () => {
+    expect(
+      build({
+        title: "Time to Sleep",
+        rawPreDescription: "Heads up — you are going to bed in 15 minutes",
+      })
+    ).toBe("Heads up — you are going to bed in 15 minutes");
+  });
+
+  it("speaks the banned title line as a last resort rather than nothing", () => {
+    expect(build({ title: "Reminder: Water" })).toBe("Reminder: Water in 15 minutes");
+    expect(build({ title: "تذكير بالدواء" })).toBe("تذكير بالدواء in 15 minutes");
+  });
+
+  it("never returns empty while there is a lead time and any text at all", () => {
+    for (const title of ["Meeting", "Time to Sleep", "تذكير بالدواء", ""]) {
+      for (const raw of ["", "Heads up — soon"]) {
+        if (!title && !raw) continue;
+        expect(build({ title, rawPreDescription: raw })).not.toBe("");
+      }
+    }
+  });
+
+  it("says nothing when there is no lead time", () => {
+    expect(
+      build({ preReminderMinutes: 0, preDescription: "ignored", rawPreDescription: "ignored" })
+    ).toBe("");
+  });
+
+  it("says nothing when the parse produced neither a line nor a title", () => {
+    expect(build({ title: "", rawPreDescription: "" })).toBe("");
+    expect(build({ title: undefined, rawPreDescription: "" })).toBe("");
   });
 });
 
@@ -508,6 +755,19 @@ describe("normalizeVariants", () => {
     expect(normalizeVariants(["Hey! Take your medicine now"], 3, "base")).toEqual([
       "Take your medicine now",
     ]);
+  });
+
+  // A rung has no deterministic stand-in, so a leaked opener costs the rung.
+  it("drops a variant that opens with a banned opener", () => {
+    expect(
+      normalizeVariants(["حان وقت شرب كوب من الماء.", "كوب الماء ما زال ينتظرك."], 3, "base")
+    ).toEqual(["كوب الماء ما زال ينتظرك."]);
+  });
+
+  it("drops every variant when the model leaks openers into all of them", () => {
+    expect(
+      normalizeVariants(["It is time to drink water", "Time to hydrate"], 3, "base")
+    ).toEqual([]);
   });
 
   it("returns [] for non-array input", () => {

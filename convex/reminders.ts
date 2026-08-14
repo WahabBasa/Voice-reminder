@@ -1,5 +1,6 @@
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import { selectCatchIds } from "./speechCatch";
 
 async function resolveVariantAudioUrls(
   ctx: { storage: { getUrl: (id: any) => Promise<string | null> } },
@@ -186,6 +187,43 @@ export const updateAudio = internalMutation({
       audioStorageId: args.newStorageId,
       wavStorageId: args.newWavStorageId,
     });
+  },
+});
+
+/**
+ * Draw this device's next spoken catches (convex/speechCatch.ts). The caller
+ * sends its weighted preference order; the skip and the write happen together
+ * here so two reminders created at once cannot both draw the same catch off a
+ * stale read. Returns the chosen ids in speaking order and remembers the last.
+ */
+export const claimSpeechCatches = internalMutation({
+  args: {
+    deviceId: v.string(),
+    candidateIds: v.array(v.string()),
+    count: v.number(),
+  },
+  handler: async (ctx, args) => {
+    // first(), not unique(): a duplicated row is a rotation glitch, not an error
+    // worth failing a TTS job over.
+    const state = await ctx.db
+      .query("speechCatchState")
+      .withIndex("by_device", (q) => q.eq("deviceId", args.deviceId))
+      .first();
+
+    const chosen = selectCatchIds(args.candidateIds, state?.lastCatchId, args.count);
+    const lastCatchId = chosen[chosen.length - 1];
+    if (lastCatchId) {
+      if (state) {
+        await ctx.db.patch(state._id, { lastCatchId, updatedAt: Date.now() });
+      } else {
+        await ctx.db.insert("speechCatchState", {
+          deviceId: args.deviceId,
+          lastCatchId,
+          updatedAt: Date.now(),
+        });
+      }
+    }
+    return chosen;
   },
 });
 

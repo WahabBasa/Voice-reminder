@@ -47,19 +47,95 @@ export function getCurrentTimeHM(currentTime: string): string {
   return `${match[1].padStart(2, "0")}:${match[2]}`;
 }
 
-// Banned openers (OLD-61). Taking the canned hooks out of the prompt was not
-// enough: with nothing offered, the model converged on announcing the clock —
-// almost every generated line came back as 'It is time to ...'. So the ban has
-// to be said out loud, and it has to come with somewhere else to start, or the
-// model just swaps in the next formula it can find. Shared verbatim by every
-// builder that describes a spoken line. Single-quoted throughout — it is
-// embedded inside a double-quoted JSON field in the prompt.
-export const SPOKEN_OPENER_RULE = `Never announce the clock at the start of a spoken line: 'It is time', 'It's time', a bare 'Time to ...', and the Arabic 'حان وقت' / 'حان الوقت' are forbidden wordings, not merely discouraged. Open on something concrete instead — the task, the object, the person waiting, the place to be, or what slips if this is ignored — so the first two or three words already tell the user what this is about. There is no approved replacement opener: vary it with the reminder rather than reusing one phrasing.`;
+// Banned openers (OLD-61) as literal text, one source of truth for the two places
+// that have to agree on the list: the storage-time guard below and the
+// live-model eval (__evals__/reminder-phrasing.eval.ts). Matched as prefixes of
+// the normalized line, so 'حان وقت' also catches 'حان وقت شرب كوب من الماء.'.
+// Lowercase — the match form is lowercased first.
+export const BANNED_OPENERS = [
+  "it is time",
+  "it's time",
+  "its time",
+  "time to",
+  "quick reminder",
+  "a quick reminder",
+  "just a reminder",
+  "friendly reminder",
+  "a friendly reminder",
+  "heads up",
+  "reminder",
+  "this is a reminder",
+  "this is your reminder",
+  "حان وقت",
+  "حان الوقت",
+  "تذكير سريع",
+  "تذكير",
+  "مجرد تذكير",
+];
+
+/** Prefix-match form of a spoken line: leading quotes/dashes off, lowercased. */
+function openerKey(line: unknown): string {
+  return String(line ?? "")
+    .trim()
+    .replace(/^["'“”‘’—–\-\s]+/u, "")
+    .toLowerCase();
+}
+
+/** Whether a spoken line opens with one of the banned openers. */
+export function hasBannedOpener(line: unknown): boolean {
+  const key = openerKey(line);
+  return BANNED_OPENERS.some((opener) => key.startsWith(opener));
+}
+
+/**
+ * Storage-time guard for a model-produced spoken line. The prompt bans these
+ * openers outright and the model leaks them anyway — 'حان وقت' turns up in
+ * roughly a third of Arabic descriptions. A leaked line is replaced whole,
+ * never repaired: cutting the opener out of Arabic leaves the remainder
+ * ungrammatical. `fallback` is the caller's deterministic stand-in and is held
+ * to the same rule.
+ *
+ * The guard only ever trades UP, and never destroys a line. The stand-in is
+ * usually the title, and ordinary titles trip this ban all the time —
+ * 'Reminder: Water', 'Time to Sleep', 'تذكير بالدواء' all start with a banned
+ * opener — so "when both are banned" is a routine case, not an exotic one. It
+ * returns the ORIGINAL line: a formulaic spoken line is the pre-feature status
+ * quo, while "" is a silent failure. Empty text is rejected by the TTS
+ * provider, which costs the reminder its audio (fast path) or the reminder
+ * itself (slow path, where the synth call is not wrapped). A non-empty input
+ * therefore never comes back empty.
+ *
+ * Code-assembled catches (./speechCatch.ts) are exempt by construction — they
+ * go on at TTS time, after this guard has seen the stored line.
+ */
+export function guardSpokenLine(line: unknown, fallback: unknown = ""): string {
+  const normalized = normalizeReminderDescription(line);
+  if (normalized && !hasBannedOpener(normalized)) return normalized;
+  const standIn = normalizeReminderDescription(fallback);
+  if (standIn && !hasBannedOpener(standIn)) return standIn;
+  // The floor: banned text beats no text. "" only when neither side had any.
+  return normalized || standIn;
+}
+
+// The prompt-side half of the ban (OLD-61). Taking the canned hooks out of the
+// prompt was not enough: with nothing offered, the model converged on
+// announcing the clock — almost every generated line came back as 'It is time
+// to ...'. Banning only the clock left the old hook menu's 'Quick reminder —'
+// label as the next formula in reach (stored rows show it), so the ban covers
+// announcing anything — clock or reminder label — and it has to come with
+// somewhere else to start, or the model just swaps in the next formula it can
+// find. Shared verbatim by every builder that describes a spoken line.
+// Single-quoted throughout — it is embedded inside a double-quoted JSON field
+// in the prompt. Instructing is not enforcing: what leaks through anyway is
+// caught by guardSpokenLine above.
+export const SPOKEN_OPENER_RULE = `Never open a spoken line by announcing what it is. Clock announcements ('It is time', 'It's time', a bare 'Time to ...', the Arabic 'حان وقت' / 'حان الوقت') and reminder labels ('Quick reminder', 'Just a reminder', 'Friendly reminder', 'Heads up', the Arabic 'تذكير سريع') are forbidden wordings, not merely discouraged — the line never says that it is a reminder, it just says the thing. Open on something concrete instead — the task, the object, the person waiting, the place to be, or what slips if this is ignored — so the first two or three words already tell the user what this is about. There is no approved replacement opener: vary it with the reminder rather than reusing one phrasing.`;
 
 // Instruction text for the parse prompt's "description" field.
 // No opener templates: the line has to read like something a person would say
-// out loud, not a notification. When addressTerm is set the model weaves it in
-// verbatim (it may be Arabic); when unset the line stays address-free (no
+// out loud, not a notification. The word budget is deliberately tight — lines
+// that escaped the opener ban did it by padding instead ('Hydrate yourself
+// with a fresh glass of water now'). When addressTerm is set the model weaves
+// it in verbatim (it may be Arabic); when unset the line stays address-free (no
 // 'Sir', no invented names). Single-quoted throughout — this string is embedded
 // inside a double-quoted JSON field in the prompt.
 export function buildDescriptionInstruction(addressTerm?: string): string {
@@ -70,7 +146,7 @@ export function buildDescriptionInstruction(addressTerm?: string): string {
   const example = term
     ? `'${term}, your meeting with Ahmed is starting.'`
     : `'Your meeting with Ahmed is starting.'`;
-  return `the sentence spoken aloud when the reminder fires, in the input's language. Say it the way a human assistant would say it out loud: the task plus whatever time or place context the user gave. One natural sentence, roughly 5-14 words, with no set opening formula and no greeting — start with the substance, specific enough that it catches the ear across a room. ${SPOKEN_OPENER_RULE} ${addressRule}. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: ${example} / 'Your evening medicine is still sitting there.' / 'دواؤك المسائي بانتظارك.'`;
+  return `the sentence spoken aloud when the reminder fires, in the input's language. Say it the way a human assistant would say it out loud: the task plus whatever time or place context the user gave. One natural sentence, roughly 4-9 words, with no set opening formula and no greeting — start with the substance, specific enough that it catches the ear across a room. Plain words only: no filler adjectives, no dressing up a simple task — every added word slows the line down. ${SPOKEN_OPENER_RULE} ${addressRule}. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: ${example} / 'Your evening medicine is still sitting there.' / 'دواؤك المسائي بانتظارك.'`;
 }
 
 // Instruction block for the parse prompt's pre-reminder (heads-up) fields.
@@ -139,9 +215,14 @@ export function useDenseAlarmWav(persistent: boolean): boolean {
 }
 
 /**
- * Sanitize the model's replay variants: normalize each line, drop empties,
- * drop verbatim repeats of the base description or of earlier variants
- * (no spoken line may repeat back-to-back), cap at maxCount.
+ * Sanitize the model's replay variants: normalize each line, drop empties and
+ * banned openers (a rung has no deterministic stand-in — one fewer rung beats a
+ * rung that announces itself), drop verbatim repeats of the base description or
+ * of earlier variants (no spoken line may repeat back-to-back), cap at maxCount.
+ *
+ * Deliberately not guardSpokenLine: that guard floors at the original line
+ * rather than lose it, which is right where losing the line empties the
+ * reminder. A dropped rung empties nothing, so a banned rung is dropped here.
  */
 export function normalizeVariants(
   raw: unknown,
@@ -155,7 +236,7 @@ export function normalizeVariants(
   for (const item of raw) {
     if (variants.length >= maxCount) break;
     const line = normalizeReminderDescription(item);
-    if (!line) continue;
+    if (!line || hasBannedOpener(line)) continue;
     const key = line.toLowerCase();
     if (key === baseKey || seen.has(key)) continue;
     seen.add(key);
@@ -178,7 +259,7 @@ export function buildVariantInstruction(addressTerm?: string): string {
   return `ASSISTANT REPLAY RULES (the follow-up lines an assistant would use when the first one is ignored):
 - "urgency": how hard the reminder has to push — "urgent" when the user must act right now (meeting starting, leaving the house), "notice" for advance warning of something coming up, "routine" for ordinary everyday tasks.
 - "persistent": true ONLY when missing the task would be harmful (medicine regimens, flights, picking up children). Otherwise false or omit.
-- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from gentle nudge to insistent; ${firmNote}. One natural sentence each, roughly 5-14 words, with no set opening formula, and still true when heard minutes late (no countdowns). ${SPOKEN_OPENER_RULE} Every variant must also start on a different word from the description and from the other variants, and the later ones lean harder — name the cost of ignoring it rather than raising the volume of the same sentence. Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
+- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from gentle nudge to insistent; ${firmNote}. One natural sentence each, roughly 4-10 words, with no set opening formula, and still true when heard minutes late (no countdowns). ${SPOKEN_OPENER_RULE} Every variant must also start on a different word from the description and from the other variants, and the later ones lean harder — name the cost of ignoring it rather than raising the volume of the same sentence. A variant urges the act; it never recites the task's benefits or adds wellness commentary. Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
 }
 
 // Upper bound keeps a mis-parsed lead time from scheduling a heads-up hours early.
@@ -187,16 +268,57 @@ export const MAX_PRE_REMINDER_MINUTES = 120;
 export function normalizePreReminder(
   minutesRaw: unknown,
   descriptionRaw: unknown
-): { preReminderMinutes: number; preDescription: string } {
+): {
+  preReminderMinutes: number;
+  preDescription: string;
+  rawPreDescription: string;
+} {
   const minutes = Number(minutesRaw ?? 0);
   let preReminderMinutes =
     Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes) : 0;
   if (preReminderMinutes > MAX_PRE_REMINDER_MINUTES) {
     preReminderMinutes = MAX_PRE_REMINDER_MINUTES;
   }
-  const preDescription =
+  // What the model actually sent, greetings stripped. Kept alongside the
+  // guarded form because the caller's '<title> in N minutes' stand-in is only
+  // usable when the title itself is opener-free (buildHeadsUpTtsText).
+  const rawPreDescription =
     preReminderMinutes > 0 ? normalizeReminderDescription(descriptionRaw) : "";
-  return { preReminderMinutes, preDescription };
+  // A heads-up that opens with a banned opener comes back empty, which hands
+  // the line to the caller's deterministic '<title> in N minutes' fallback.
+  const preDescription =
+    rawPreDescription && !hasBannedOpener(rawPreDescription)
+      ? rawPreDescription
+      : "";
+  return { preReminderMinutes, preDescription, rawPreDescription };
+}
+
+/**
+ * The line spoken at the heads-up, from a normalized pre-reminder plus the
+ * reminder's title. Preference order, best first:
+ *
+ * 1. the model's own line when it is clean;
+ * 2. the deterministic '<title> in N minutes' stand-in — but only when the
+ *    title is opener-free, since a 'Time to Sleep' title would launder a banned
+ *    opener in through the safety path itself;
+ * 3. the model's line even though it is banned (same trade-up as
+ *    guardSpokenLine: formulaic beats silent);
+ * 4. the stand-in anyway, banned title and all — last resort, never "".
+ *
+ * "" only when there is no lead time, or genuinely nothing to say.
+ */
+export function buildHeadsUpTtsText(args: {
+  preReminderMinutes: number;
+  preDescription: string;
+  rawPreDescription: string;
+  title: unknown;
+}): string {
+  if (!(args.preReminderMinutes > 0)) return "";
+  if (args.preDescription) return args.preDescription;
+  const title = String(args.title ?? "").trim();
+  const standIn = title ? `${title} in ${args.preReminderMinutes} minutes` : "";
+  if (standIn && !hasBannedOpener(title)) return standIn;
+  return args.rawPreDescription || standIn;
 }
 
 // ─── Alarm WAV pipeline (AK-3) ──────────────────────────────────────────────
