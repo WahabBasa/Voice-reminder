@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Privacy Policy — VoiceReminder</title>
+<meta name="description" content="How VoiceReminder handles your voice recordings, reminder text, and other data.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+
+<h1>Privacy Policy</h1>
+<p class="meta">VoiceReminder &middot; Last updated: 14 August 2026</p>
+
+<p class="lede">Your privacy matters. VoiceReminder is a voice-first reminder app: you speak a reminder, the app works out what you meant, and it speaks the reminder back to you when it's due. Making that work means your voice leaves your phone for a few seconds. This policy explains exactly what happens to it, who handles it, and how long anything is kept.</p>
+
+<h2>1. Who we are</h2>
+<p>VoiceReminder is built and run by an independent developer ("we", "us", "our"), who is the data controller for everything described here. There's no support department to get lost in &mdash; questions come straight to a person, at <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a>.</p>
+
+<h2>2. What we collect</h2>
+<p>VoiceReminder has no accounts and no sign-in. We never ask for your name, email address, phone number, or contacts, and we don't collect your location. Here is everything the app actually handles:</p>
+<ul>
+  <li><strong>Voice recordings.</strong> Only what you say while the recorder is open and you're holding the button. The microphone is never listening in the background.</li>
+  <li><strong>Reminder content.</strong> The title, description, time, date, and repeat schedule of each reminder &mdash; whether it came from your voice or you typed it in.</li>
+  <li><strong>Generated reminder audio.</strong> The spoken version of your reminder that plays when the alarm goes off.</li>
+  <li><strong>An install identifier.</strong> A random string your device generates the first time you open the app. It is not your Apple Account, not a hardware serial number, and not tied to your identity. It exists so our backend can tell your reminders apart from everyone else's. Delete the app and it's gone; reinstall and a brand-new one is made.</li>
+  <li><strong>Crash and diagnostic reports.</strong> If something breaks, technical details &mdash; device model, operating system version, and where in the code the failure happened &mdash; go to our error-monitoring service so we can fix it.</li>
+  <li><strong>Subscription status.</strong> If you subscribe to Pro, our subscription-management service records that a purchase exists against an anonymous identifier.</li>
+</ul>
+
+<h2>3. How your voice becomes a reminder</h2>
+<p>This is the part worth reading closely, because it's the only time your data leaves your phone. When you record a reminder:</p>
+<ol class="steps">
+  <li>The recording is uploaded to our backend over an encrypted connection.</li>
+  <li>The audio is turned into text.</li>
+  <li>That text is interpreted to work out the actual reminder &mdash; what it's about, when it should fire, whether it repeats.</li>
+  <li>The finished reminder wording is turned into the spoken audio your alarm plays.</li>
+  <li>Your original recording is then deleted from our backend. The reminder text and the generated audio stay, because the app needs them to remind you.</li>
+</ol>
+<p>Some of these steps run on specialised processing services working on our behalf &mdash; they act only on our instructions, perform only the step described, and are never permitted to use your data for their own purposes (more in section 5).</p>
+<p>Because your voice is processed outside your phone, the app asks for your explicit permission before your first recording and won't record until you agree. You can withdraw that permission at any time in <strong>Settings</strong>; reminders you've already made keep working, and the app will ask again before it records anything new. You can also skip voice entirely and type reminders by hand.</p>
+
+<h2>4. Why we're allowed to process it (legal bases)</h2>
+<ul>
+  <li><strong>Your consent</strong> &mdash; for processing your voice recordings as described in section 3. Freely given, and withdrawable in Settings.</li>
+  <li><strong>Performance of a contract</strong> &mdash; storing your reminders and delivering alarms is the service you asked for, and managing a Pro subscription is part of it.</li>
+  <li><strong>Our legitimate interests</strong> &mdash; keeping the app stable and secure, which is what the crash reports are for.</li>
+</ul>
+
+<h2>5. Who we share your data with</h2>
+<p><strong>We do not sell your personal data.</strong> We never share it for advertising, and nobody receives it for their own use &mdash; not to train their models, not to build profiles, not for anything of theirs.</p>
+<p>Like nearly every app, we rely on a small number of trusted service providers to run the machinery behind VoiceReminder: the speech-to-text, reminder-interpretation, and voice-generation steps described in section 3, plus hosting and storage, crash reporting, and subscription management. Each processes data strictly on our behalf and on our instructions, sees only what its specific job requires, is contractually bound to protect it, and is prohibited from using it for any purpose of its own.</p>
+<p>Purchases themselves are handled entirely by <strong>Apple</strong> through the App Store. Apple processes the payment; we never see your card details, billing address, or Apple Account credentials.</p>
+<p>These providers operate in various countries, so your data may be processed outside the country you live in. Where that involves a transfer out of the UK or EEA, we rely on the safeguards those providers have in place, such as standard contractual clauses. We may also disclose data if the law genuinely requires it.</p>
+
+<h2>6. How long we keep it</h2>
+<ul>
+  <li><strong>Voice recordings:</strong> deleted from our backend as soon as processing finishes &mdash; normally within seconds of you speaking. We do not keep an archive of your recordings.</li>
+  <li><strong>Reminder text and generated audio:</strong> kept until you delete the reminder. Deleting a reminder in the app deletes its stored text and its audio files from our backend as well.</li>
+  <li><strong>Reminders on your device:</strong> stored locally so the app works offline, and removed when you delete the reminder or uninstall the app.</li>
+  <li><strong>Crash reports:</strong> retained by our error-monitoring service for a limited period (typically up to 90 days) and then discarded.</li>
+  <li><strong>Subscription records:</strong> kept by our subscription-management service and by Apple for as long as needed for billing and tax purposes.</li>
+</ul>
+
+<h2>7. What we never do</h2>
+<ul>
+  <li>We don't sell or rent your data to anyone.</li>
+  <li>We don't run ads, and there are no advertising or analytics trackers in the app.</li>
+  <li>We don't collect your location, contacts, photos, or health records.</li>
+  <li>We don't build a profile of you or use your reminders to target you with anything.</li>
+  <li>We don't let anyone else use your data for their own purposes &mdash; the services that help run the app work for us, under contract, and that's the whole relationship.</li>
+  <li>We don't record in the background &mdash; only while the recorder is open.</li>
+</ul>
+
+<h2>8. How we keep your data safe</h2>
+<p>Everything travels over encrypted (HTTPS) connections and is stored by our backend provider on encrypted infrastructure. Reminders are scoped to the install identifier that created them, so one device can't read another's. In the App Store version of the app, diagnostic reporting is limited to crashes and errors: it doesn't send app logs, screenshots, or the contents of your screen. No system is perfectly secure, but we keep the amount of data we hold deliberately small &mdash; the less there is, the less there is to lose.</p>
+
+<h2>9. Your rights</h2>
+<p>Wherever you live, you can ask us to:</p>
+<ul>
+  <li><strong>Access</strong> the data we hold about you, and get a copy of it.</li>
+  <li><strong>Correct</strong> anything that's wrong or incomplete.</li>
+  <li><strong>Delete</strong> your data &mdash; the "right to be forgotten".</li>
+  <li><strong>Object to or restrict</strong> how we process it.</li>
+  <li><strong>Receive it in a portable format</strong> you can take elsewhere.</li>
+  <li><strong>Withdraw consent</strong> at any time, without affecting anything done before you withdrew it.</li>
+  <li><strong>Complain</strong> to your local data protection authority if you think we've got it wrong.</li>
+</ul>
+
+<h2>10. How to exercise your rights</h2>
+<p>Most of it you can do yourself, instantly: delete a reminder in the app and its text and audio are deleted from our backend too, and withdrawing AI consent in Settings stops any further processing.</p>
+<div class="card">
+  <p>For anything else &mdash; a copy of your data, or deletion of everything associated with your install &mdash; email <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a> and say what you'd like. Because the app has no accounts, we can't look you up by name or email, so please include enough detail to identify your records (for example the titles and times of a few of your reminders); we may ask a follow-up question before acting. We'll respond within 30 days, free of charge.</p>
+  <p>If you'd rather not wait: deleting every reminder in the app, then uninstalling it, removes everything we hold that relates to you.</p>
+</div>
+
+<h2>11. Children's privacy</h2>
+<p>VoiceReminder is not directed at children under 13, and we don't knowingly collect data from them. If you believe a child has used the app and sent us data, email us and we'll delete it.</p>
+
+<h2>12. Changes to this policy</h2>
+<p>If we change how the app handles data, we'll update this page and change the "last updated" date at the top. Material changes &mdash; a new category of data, or a new kind of processor &mdash; will also be surfaced in the app. Continuing to use VoiceReminder after a change means you accept the updated policy.</p>
+
+<h2>13. Contact us</h2>
+<p>Questions, privacy requests, or something in here that doesn't add up: <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a>. A real person reads it.</p>
+
+<footer>
+  <p><a href="index.html">VoiceReminder</a> &middot; <a href="terms.html">Terms of Use</a></p>
+</footer>
+
+</main>
+</body>
+</html>
