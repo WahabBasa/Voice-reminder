@@ -3,7 +3,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
   Modal,
   Pressable,
   useWindowDimensions,
@@ -25,6 +24,7 @@ import { useState, useEffect, useRef } from "react";
 import { colors, scaleFontSize } from "../lib/theme";
 import AppIcon from "./AppIcon";
 import VoiceMeter from "./VoiceMeter";
+import ProcessingWave from "./ProcessingWave";
 import {
   requestMicrophonePermission,
   startRecording,
@@ -411,7 +411,14 @@ export default function RecordingOverlay({
               )}
 
               <View style={styles.meterRow}>
-                <VoiceMeter active={state === "recording"} />
+                {/* The live meter hands off to the processing wave in the same
+                    slot — the bars that were listening keep moving while we
+                    build the reminder. */}
+                {state === "processing" ? (
+                  <ProcessingWave accessibilityLabel="Creating your reminder" />
+                ) : (
+                  <VoiceMeter active={state === "recording"} />
+                )}
               </View>
 
               <Text style={styles.transcript} numberOfLines={2}>
@@ -425,7 +432,6 @@ export default function RecordingOverlay({
 
               {state === "processing" && (
                 <View style={styles.processingRow}>
-                  <ActivityIndicator size="small" color={colors.textSecondary} />
                   <Text style={styles.processingText}>Processing…</Text>
                 </View>
               )}
