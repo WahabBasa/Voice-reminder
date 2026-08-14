@@ -110,3 +110,14 @@ a single alarm).
 - `docs/issues/CL-1-server-audio-and-phrasing.md` — convex/*
 - `docs/issues/CL-2-native-sibling-intents.md` — plugins/*
 - `docs/issues/CL-3-js-ladder-and-dedup.md` — lib/*
+
+## Amendment (2026-08-14): attention catches
+
+The "ANY fixed opener dies" rule now applies to **model-generated payloads only**. A design
+session concluded spoken reminders need a two-beat shape — attention catch, then payload,
+like a person ("Heads up, Wahab — your meeting is starting"). Catches are **code-assembled**
+at TTS time from an approved rotating pool (`convex/speechCatch.ts`; persona rule: the
+assistant never forgets), on the first firing + heads-up only. Ladder rungs stay bare
+payloads, and the model is still banned from writing any opener — the app owns those words
+now. Rationale: catches address the person; labels ("Quick reminder") describe the message.
+The first died for being robotic, the second stays dead.
