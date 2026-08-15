@@ -404,28 +404,20 @@ enum VRAlarmScheduler {
   /// sync by hand with \`colors.accent\` in lib/theme.ts.
   private static let brandTint = Color(red: 61.0 / 255.0, green: 139.0 / 255.0, blue: 255.0 / 255.0)
 
-  /// The alert half of the presentation. Forked on 26.1 because that is where the
-  /// non-deprecated init lands — see the availability note on each branch.
+  /// The alert half of the presentation. Deliberately the deprecated init: the
+  /// EAS default image compiles against the iOS 26.0 SDK, where the 26.1
+  /// replacement (no stopButton) does not exist — an #available fork still has
+  /// to compile both branches and fails there. Deprecated ≠ removed: on 26.1+
+  /// the system supplies its own stop control, our label is ignored, and
+  /// \`stopIntent\` runs from it either way. Warning at compile time is expected.
   private static func makeAlert(title: String) -> AlarmPresentation.Alert {
     let later = AlarmButton(text: "Later", textColor: .white, systemImageName: "clock.badge")
 
-    if #available(iOS 26.1, *) {
-      // System-provided stop control (slide-to-stop). We no longer describe it —
-      // the label was already ignored — but \`stopIntent\` still runs from it.
-      return AlarmPresentation.Alert(
-        title: LocalizedStringResource(stringLiteral: title),
-        secondaryButton: later,
-        // .custom (not .countdown) so VRSnoozeIntent actually runs on tap.
-        secondaryButtonBehavior: .custom
-      )
-    }
-
-    // iOS 26.0 only: the init above does not exist yet, so the deprecated one stays
-    // as the floor. Emits a deprecation warning when compiled; that is expected.
     return AlarmPresentation.Alert(
       title: LocalizedStringResource(stringLiteral: title),
       stopButton: AlarmButton(text: "Done", textColor: .white, systemImageName: "checkmark.circle.fill"),
       secondaryButton: later,
+      // .custom (not .countdown) so VRSnoozeIntent actually runs on tap.
       secondaryButtonBehavior: .custom
     )
   }
