@@ -7,6 +7,7 @@ import {
   buildCtaLabel,
   buildDisclosure,
   buildHonestyCaption,
+  captionLineToString,
   describePlan,
   getFeatureRows,
   getHeroCopy,
@@ -114,6 +115,7 @@ describe("describePlan", () => {
     expect(plan.trialLength).toBeNull();
     expect(plan.trialLabel).toBe("(No trial)");
     expect(plan.billedLabel).toBe("Billed monthly");
+    expect(plan.termShortLabel).toBe("mo");
   });
 
   it("reads an Apple intro price as the trial length", () => {
@@ -123,6 +125,11 @@ describe("describePlan", () => {
     expect(plan.trialLength).toBe("7 days");
     expect(plan.trialLabel).toBe("(7 days trial)");
     expect(plan.billedLabel).toBe("Billed yearly");
+    expect(plan.termShortLabel).toBe("yr");
+  });
+
+  it("keeps the long term when there is no natural abbreviation", () => {
+    expect(describePlan(makePackage({ subscriptionPeriod: "P6M" })).termShortLabel).toBe("6 months");
   });
 
   it("reads a Google free phase, spelling weeks as days", () => {
@@ -183,13 +190,31 @@ describe("buildHonestyCaption", () => {
     );
     const lines = buildHonestyCaption(plan);
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toBe("7 days free, then $39.99 per year.");
-    expect(lines[1]).toMatch(/Cancel any time/);
+    expect(captionLineToString(lines[0])).toBe("7 days free trial, $39.99/yr.");
+    expect(captionLineToString(lines[1])).toBe("No commitment. Cancel anytime.");
+  });
+
+  it("marks the price run bold and nothing else — one ink, weight for emphasis", () => {
+    const plan = describePlan(
+      makePackage({ packageType: "ANNUAL", subscriptionPeriod: "P1Y", introPriceDays: 7, priceString: "$39.99" })
+    );
+    const [first, second] = buildHonestyCaption(plan);
+    expect(first.filter((segment) => segment.bold).map((segment) => segment.text)).toEqual([
+      "$39.99/yr",
+    ]);
+    expect(second.some((segment) => segment.bold)).toBe(false);
   });
 
   it("says there is no trial when there is none", () => {
     const lines = buildHonestyCaption(describePlan(makePackage({ priceString: "$4.99" })));
-    expect(lines[0]).toBe("$4.99 per month, no free trial.");
+    expect(captionLineToString(lines[0])).toBe("No free trial, $4.99/mo.");
+    expect(captionLineToString(lines[1])).toBe("No commitment. Cancel anytime.");
+  });
+
+  it("falls back to the plans-unavailable copy with no plan", () => {
+    const lines = buildHonestyCaption(null);
+    expect(captionLineToString(lines[0])).toBe(PAYWALL_COPY.plansUnavailable);
+    expect(captionLineToString(lines[1])).toBe(PAYWALL_COPY.plansUnavailableHint);
   });
 });
 

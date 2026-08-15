@@ -16,7 +16,12 @@ import {
   PROOF_CARDS,
   TESTIMONIALS,
 } from "../../lib/paywallContent";
-import { PAYWALL_GUTTER, paywallColors } from "./paywallTheme";
+import {
+  PAYWALL_CARD_RADIUS,
+  PAYWALL_GUTTER,
+  paywallColors,
+  paywallWeight,
+} from "./paywallTheme";
 
 /** Warm-tone star row. `count` is whatever the real review carried. */
 function Stars({ count }: { count: number }) {
@@ -75,7 +80,7 @@ function Laurel({ flipped }: { flipped?: boolean }) {
     >
       <Path
         d="M18 2C8 8 4 18 6 38M15 9C10 9 8 12 8 15M14 17C9 17 7 20 7 23M13 25C8 25 7 28 7 31"
-        stroke={paywallColors.textSecondary}
+        stroke={paywallColors.muted}
         strokeWidth={1.4}
         strokeLinecap="round"
         fill="none"
@@ -111,7 +116,7 @@ const styles = StyleSheet.create({
   },
   proofCard: {
     width: 260,
-    borderRadius: 22,
+    borderRadius: PAYWALL_CARD_RADIUS,
     padding: 18,
     backgroundColor: paywallColors.accentWash,
     borderWidth: 1,
@@ -120,21 +125,21 @@ const styles = StyleSheet.create({
   proofHeadline: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(17),
-    color: paywallColors.textHeading,
+    color: paywallColors.ink,
   },
   proofBody: {
     marginTop: 8,
     fontSize: scaleFontSize(13),
     lineHeight: scaleFontSize(19),
-    color: paywallColors.textSecondary,
+    color: paywallColors.ink,
   },
   proofSource: {
     marginTop: 12,
     fontSize: scaleFontSize(11),
-    fontWeight: "700",
+    fontWeight: paywallWeight.bold,
     letterSpacing: 0.8,
     textTransform: "uppercase",
-    color: paywallColors.textTertiary,
+    color: paywallColors.ink,
   },
   testimonials: {
     paddingHorizontal: PAYWALL_GUTTER,
@@ -153,13 +158,13 @@ const styles = StyleSheet.create({
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(19),
     lineHeight: scaleFontSize(27),
-    color: paywallColors.textHeading,
+    color: paywallColors.ink,
     textAlign: "center",
   },
   quoteName: {
     marginTop: 10,
     fontSize: scaleFontSize(13),
-    color: paywallColors.textSecondary,
+    color: paywallColors.ink,
   },
   badges: {
     paddingHorizontal: PAYWALL_GUTTER,
@@ -176,14 +181,14 @@ const styles = StyleSheet.create({
   },
   badgeTitle: {
     fontSize: scaleFontSize(14),
-    fontWeight: "700",
-    color: paywallColors.textPrimary,
+    fontWeight: paywallWeight.bold,
+    color: paywallColors.ink,
     textAlign: "center",
   },
   badgeSubtitle: {
     marginTop: 2,
     fontSize: scaleFontSize(12),
-    color: paywallColors.textSecondary,
+    color: paywallColors.ink,
     textAlign: "center",
   },
   laurelFlipped: {

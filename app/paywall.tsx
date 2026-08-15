@@ -10,7 +10,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { colors, scaleFontSize } from "../lib/theme";
-import { FONT_DISPLAY } from "../lib/fonts";
+import { FONT_DISPLAY_REGULAR } from "../lib/fonts";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
 import Purchases, { PurchasesPackage } from "react-native-purchases";
@@ -18,6 +18,7 @@ import {
     categorizePurchasesError,
     isPurchasesConfigured,
     restorePurchases,
+    PRO_ENTITLEMENT_ID,
     PRO_PRODUCT_NAME,
     type PurchaseErrorCategory,
 } from "../lib/purchases";
@@ -39,7 +40,7 @@ import PricingCards from "../components/paywall/PricingCards";
 import FeatureTable from "../components/paywall/FeatureTable";
 import ClosingBlock from "../components/paywall/ClosingBlock";
 import { AwardBadgeRow, ProofCarousel, TestimonialWall } from "../components/paywall/ProofSlots";
-import { PAYWALL_GUTTER, paywallColors } from "../components/paywall/paywallTheme";
+import { PAYWALL_GUTTER, paywallColors, paywallWeight } from "../components/paywall/paywallTheme";
 
 const ERROR_COPY: Record<Exclude<PurchaseErrorCategory, "cancelled">, string> = {
     network: "No connection to the App Store. Check your internet and try again.",
@@ -174,7 +175,7 @@ export default function PaywallScreen() {
             console.log("[RevenueCat] Purchase complete. Entitlements:", customerInfo.entitlements.active);
 
             // Check if pro entitlement is now active
-            if (customerInfo.entitlements.active["pro"]) {
+            if (customerInfo.entitlements.active[PRO_ENTITLEMENT_ID]) {
                 toast.show({
                     title: "Pro Activated! 🎉",
                     message: `Welcome to ${PRO_PRODUCT_NAME}!`,
@@ -299,7 +300,7 @@ export default function PaywallScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Close"
             >
-                <AppIcon name="x" size={20} color={paywallColors.textPrimary} />
+                <AppIcon name="x" size={20} color={paywallColors.ink} />
             </TouchableOpacity>
 
             {/* Error banner - appears above footer */}
@@ -308,7 +309,7 @@ export default function PaywallScreen() {
                     <AppIcon name="info" size={18} color={colors.destructive} />
                     <Text style={styles.errorBannerText}>{errorMessage}</Text>
                     <TouchableOpacity onPress={() => setErrorMessage(null)} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
-                        <AppIcon name="x" size={16} color={paywallColors.textTertiary} />
+                        <AppIcon name="x" size={16} color={paywallColors.muted} />
                     </TouchableOpacity>
                 </View>
             )}
@@ -331,9 +332,18 @@ export default function PaywallScreen() {
                     )}
                 </TouchableOpacity>
 
-                {captionLines.map((line) => (
-                    <Text key={line} style={styles.caption}>
-                        {line}
+                {/* Caption arrives as segments so the price run can carry the
+                    weight — one ink, emphasis by bold, never by gray. */}
+                {captionLines.map((line, lineIndex) => (
+                    <Text key={lineIndex} style={styles.caption}>
+                        {line.map((segment, segmentIndex) => (
+                            <Text
+                                key={segmentIndex}
+                                style={segment.bold ? styles.captionStrong : undefined}
+                            >
+                                {segment.text}
+                            </Text>
+                        ))}
                     </Text>
                 ))}
             </View>
@@ -360,10 +370,10 @@ const styles = StyleSheet.create({
         marginTop: 34,
         marginBottom: 34,
         paddingHorizontal: PAYWALL_GUTTER + 10,
-        fontFamily: FONT_DISPLAY,
+        fontFamily: FONT_DISPLAY_REGULAR,
         fontSize: scaleFontSize(20),
         lineHeight: scaleFontSize(29),
-        color: paywallColors.textHeading,
+        color: paywallColors.ink,
         textAlign: "center",
     },
     section: {
@@ -375,11 +385,11 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        paddingTop: 14,
+        // No top rule: the footer floats on the same plain surface as the
+        // scroll body, the way the reference paywall does it.
+        paddingTop: 16,
         paddingHorizontal: PAYWALL_GUTTER,
         backgroundColor: paywallColors.surface,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: paywallColors.hairline,
     },
     cta: {
         height: 56,
@@ -393,15 +403,20 @@ const styles = StyleSheet.create({
     },
     ctaText: {
         fontSize: scaleFontSize(16),
-        fontWeight: "700",
+        fontWeight: paywallWeight.bold,
         color: "white",
     },
     caption: {
-        marginTop: 6,
-        fontSize: scaleFontSize(11),
-        lineHeight: scaleFontSize(15),
-        color: paywallColors.textSecondary,
+        marginTop: 8,
+        fontSize: scaleFontSize(12),
+        lineHeight: scaleFontSize(17),
+        fontWeight: paywallWeight.regular,
+        color: paywallColors.ink,
         textAlign: "center",
+    },
+    captionStrong: {
+        fontWeight: paywallWeight.bold,
+        color: paywallColors.ink,
     },
     errorBanner: {
         position: "absolute",

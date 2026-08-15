@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Full-bleed background: iOS applies the corner mask itself -->
+  <rect width="1024" height="1024" fill="#3D8BFF"/>
+
+  <!-- Mic capsule -->
+  <rect x="352" y="200" width="320" height="440" rx="160" fill="#FFFFFF"/>
+
+  <!-- Face -->
+  <circle cx="452" cy="412" r="31" fill="#1A1A1A"/>
+  <circle cx="572" cy="412" r="31" fill="#1A1A1A"/>
+  <path d="M 458 480 Q 512 534 566 480" stroke="#1A1A1A" stroke-width="27" stroke-linecap="round" fill="none"/>
+
+  <!-- Yoke -->
+  <path d="M 267 545 A 245 245 0 0 0 757 545" stroke="#FFFFFF" stroke-width="66" stroke-linecap="round" fill="none"/>
+
+  <!-- Stem + base -->
+  <rect x="486" y="790" width="52" height="82" fill="#FFFFFF"/>
+  <rect x="367" y="862" width="290" height="78" rx="39" fill="#FFFFFF"/>
+</svg>

@@ -189,6 +189,22 @@ function getBilledLabel(pkg: PurchasesPackage): string {
   return `Billed every ${term}`;
 }
 
+const TERM_SHORT_LABELS: Record<string, string> = {
+  month: "mo",
+  year: "yr",
+  week: "wk",
+  day: "day",
+};
+
+/**
+ * "mo" / "yr" — the price-tag suffix in the footer caption ("$39.99/yr").
+ * Anything without a natural abbreviation keeps its long form.
+ */
+export function getShortTermLabel(pkg: PurchasesPackage): string {
+  const term = getTermLabel(pkg);
+  return TERM_SHORT_LABELS[term] ?? term;
+}
+
 /**
  * The free trial the store actually grants, or null. Apple reports it as a zero
  * priced `introPrice`; Google reports it as the default option's `freePhase`.
@@ -232,6 +248,8 @@ export type PlanCopy = {
   priceString: string;
   /** "month" | "year" | "6 months" … */
   termLabel: string;
+  /** "mo" | "yr" | "wk" — price-tag suffix for the footer caption. */
+  termShortLabel: string;
   /** "Billed monthly" / "Billed yearly". */
   billedLabel: string;
   /** "7 days" when the store grants a free trial, otherwise null. */
@@ -246,6 +264,7 @@ export function describePlan(pkg: PurchasesPackage): PlanCopy {
     pkg,
     priceString: pkg.product.priceString,
     termLabel: getTermLabel(pkg),
+    termShortLabel: getShortTermLabel(pkg),
     billedLabel: getBilledLabel(pkg),
     trialLength,
     trialLabel: trialLength ? `(${trialLength} trial)` : "(No trial)",
@@ -300,22 +319,46 @@ export function buildCtaLabel(plan: PlanCopy | null): string {
 }
 
 /**
- * Two-line honesty caption under the CTA: what the trial costs, what happens
- * after it, and that cancelling is on the table.
+ * A run of caption text. `bold` is the only variation the footer draws — the
+ * whole caption is one ink, so emphasis has to come from weight.
  */
-export function buildHonestyCaption(plan: PlanCopy | null): string[] {
+export type CaptionSegment = { text: string; bold?: boolean };
+/** One rendered line: the footer joins these into a single <Text>. */
+export type CaptionLine = CaptionSegment[];
+
+/** "No commitment. Cancel anytime." — true on both plans, so it never varies. */
+const CAPTION_COMMITMENT_LINE = "No commitment. Cancel anytime.";
+
+/** Flattens a caption line back to plain text (labels, tests, logs). */
+export function captionLineToString(line: CaptionLine): string {
+  return line.map((segment) => segment.text).join("");
+}
+
+/**
+ * Two-line honesty caption under the CTA: what the trial costs, what it turns
+ * into, and that cancelling is on the table. The price run comes back marked
+ * bold so the footer can weight it without knowing how the sentence is built.
+ */
+export function buildHonestyCaption(plan: PlanCopy | null): CaptionLine[] {
   if (!plan) {
-    return [PAYWALL_COPY.plansUnavailable, PAYWALL_COPY.plansUnavailableHint];
+    return [[{ text: PAYWALL_COPY.plansUnavailable }], [{ text: PAYWALL_COPY.plansUnavailableHint }]];
   }
+
+  const price: CaptionSegment = {
+    text: `${plan.priceString}/${plan.termShortLabel}`,
+    bold: true,
+  };
+
   if (plan.trialLength) {
     return [
-      `${plan.trialLength} free, then ${plan.priceString} per ${plan.termLabel}.`,
-      "Cancel any time before it ends and you pay nothing.",
+      [{ text: `${plan.trialLength} free trial, ` }, price, { text: "." }],
+      [{ text: CAPTION_COMMITMENT_LINE }],
     ];
   }
+
   return [
-    `${plan.priceString} per ${plan.termLabel}, no free trial.`,
-    "Renews until you cancel — cancel any time.",
+    [{ text: "No free trial, " }, price, { text: "." }],
+    [{ text: CAPTION_COMMITMENT_LINE }],
   ];
 }
 

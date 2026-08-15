@@ -1,12 +1,17 @@
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import type { PurchasesPackage } from "react-native-purchases";
 import { scaleFontSize } from "../../lib/theme";
-import { FONT_DISPLAY } from "../../lib/fonts";
+import { FONT_DISPLAY_MEDIUM, FONT_DISPLAY_REGULAR } from "../../lib/fonts";
 import { PAYWALL_COPY, type PlanCopy } from "../../lib/paywallContent";
-import { PAYWALL_GUTTER, paywallColors } from "./paywallTheme";
+import {
+  PAYWALL_CARD_RADIUS,
+  PAYWALL_GUTTER,
+  paywallColors,
+  paywallWeight,
+} from "./paywallTheme";
 
 type PricingCardProps = {
-  /** Small letterspaced label above the price. */
+  /** Plan name above the price — serif, sentence case. */
   kicker: string;
   plan: PlanCopy;
   selected: boolean;
@@ -111,9 +116,9 @@ const styles = StyleSheet.create({
   },
   card: {
     flex: 1,
-    borderRadius: 22,
+    borderRadius: PAYWALL_CARD_RADIUS,
     paddingVertical: 22,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     alignItems: "center",
     backgroundColor: paywallColors.surface,
   },
@@ -136,40 +141,44 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     fontSize: scaleFontSize(9),
-    fontWeight: "800",
+    fontWeight: paywallWeight.bold,
     letterSpacing: 1,
+    textTransform: "uppercase",
     color: "white",
   },
   kicker: {
-    fontSize: scaleFontSize(11),
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: paywallColors.textSecondary,
+    fontFamily: FONT_DISPLAY_REGULAR,
+    fontSize: scaleFontSize(16),
+    color: paywallColors.ink,
   },
   price: {
-    marginTop: 10,
-    fontFamily: FONT_DISPLAY,
+    marginTop: 8,
+    fontFamily: FONT_DISPLAY_MEDIUM,
     fontSize: scaleFontSize(28),
-    color: paywallColors.textHeading,
+    // No explicit lineHeight: it fights `adjustsFontSizeToFit` and clips the
+    // shrunk glyphs on long price strings ("AED 149.99").
+    color: paywallColors.ink,
   },
   billed: {
     marginTop: 8,
     fontSize: scaleFontSize(12),
-    color: paywallColors.textSecondary,
+    fontWeight: paywallWeight.regular,
+    color: paywallColors.ink,
+    textAlign: "center",
   },
   trial: {
-    marginTop: 2,
+    marginTop: 4,
     fontSize: scaleFontSize(12),
-    fontWeight: "700",
-    color: paywallColors.textPrimary,
+    fontWeight: paywallWeight.bold,
+    color: paywallColors.ink,
+    textAlign: "center",
   },
   stateBox: {
     marginHorizontal: PAYWALL_GUTTER,
     marginTop: 14,
     paddingVertical: 30,
     paddingHorizontal: 20,
-    borderRadius: 22,
+    borderRadius: PAYWALL_CARD_RADIUS,
     borderWidth: 1,
     borderColor: paywallColors.cardBorder,
     backgroundColor: paywallColors.surface,
@@ -177,14 +186,15 @@ const styles = StyleSheet.create({
   },
   stateTitle: {
     fontSize: scaleFontSize(15),
-    fontWeight: "700",
-    color: paywallColors.textPrimary,
+    fontWeight: paywallWeight.bold,
+    color: paywallColors.ink,
     textAlign: "center",
   },
   stateBody: {
     marginTop: 6,
     fontSize: scaleFontSize(13),
-    color: paywallColors.textSecondary,
+    fontWeight: paywallWeight.regular,
+    color: paywallColors.ink,
     textAlign: "center",
   },
 });

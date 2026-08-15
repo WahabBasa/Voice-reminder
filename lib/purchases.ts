@@ -10,13 +10,11 @@ import { Platform } from 'react-native';
 // RevenueCat public SDK keys. These are publishable by design (they only identify
 // the app to RevenueCat), which is why they sit inline rather than in env.
 const REVENUECAT_ANDROID_KEY: string | null = 'goog_CajJDmwNngamdqNKtBAJerwrxSV';
-// TODO(OLD-72): the RevenueCat project ("NoteToSelf") has no App Store app yet, so
-// there is no `appl_…` key in existence to paste here. Create the App Store app in
-// the RevenueCat dashboard and drop its public SDK key in — until then iOS skips
-// configure entirely instead of hammering the API with a junk key.
-const REVENUECAT_IOS_KEY: string | null = null;
+const REVENUECAT_IOS_KEY: string | null = 'appl_wKXHGzcWRaiqcfwGyWzBjnAwPxc';
 
-const PRO_ENTITLEMENT_ID = 'pro';
+// Must match the RevenueCat entitlement lookup_key exactly — it is "Pro"
+// (capital P) in the dashboard, and entitlements.active is case-sensitive.
+export const PRO_ENTITLEMENT_ID = 'Pro';
 
 /** Product name shown to users. Must match the App Store subscription display name. */
 export const PRO_PRODUCT_NAME = 'Voice Reminder Pro';

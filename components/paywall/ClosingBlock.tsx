@@ -1,10 +1,10 @@
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
 import { scaleFontSize } from "../../lib/theme";
-import { FONT_DISPLAY } from "../../lib/fonts";
+import { FONT_DISPLAY, FONT_DISPLAY_REGULAR } from "../../lib/fonts";
 import { PAYWALL_COPY } from "../../lib/paywallContent";
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from "../../lib/legalLinks";
-import { PAYWALL_GUTTER, paywallColors } from "./paywallTheme";
+import { PAYWALL_GUTTER, paywallColors, paywallWeight } from "./paywallTheme";
 
 /**
  * Our own line illustration: the brand crescent with three spoken arcs coming
@@ -71,7 +71,7 @@ export default function ClosingBlock({
       >
         {isRestoring ? (
           <View style={styles.restoreRow}>
-            <ActivityIndicator size="small" color={paywallColors.textSecondary} />
+            <ActivityIndicator size="small" color={paywallColors.ink} />
             <Text style={styles.restoreText}>Restoring…</Text>
           </View>
         ) : (
@@ -105,7 +105,7 @@ const styles = StyleSheet.create({
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(26),
     lineHeight: scaleFontSize(34),
-    color: paywallColors.textHeading,
+    color: paywallColors.ink,
     textAlign: "center",
   },
   illustration: {
@@ -129,20 +129,23 @@ const styles = StyleSheet.create({
   },
   restoreText: {
     fontSize: scaleFontSize(14),
-    fontWeight: "600",
-    color: paywallColors.textPrimary,
+    fontWeight: paywallWeight.semibold,
+    color: paywallColors.ink,
   },
   brandStatement: {
     marginTop: 18,
-    fontSize: scaleFontSize(13),
-    color: paywallColors.textSecondary,
+    fontFamily: FONT_DISPLAY_REGULAR,
+    fontSize: scaleFontSize(15),
+    lineHeight: scaleFontSize(22),
+    color: paywallColors.ink,
     textAlign: "center",
   },
   disclosure: {
     marginTop: 16,
     fontSize: scaleFontSize(11),
-    lineHeight: scaleFontSize(15),
-    color: paywallColors.textTertiary,
+    lineHeight: scaleFontSize(16),
+    fontWeight: paywallWeight.regular,
+    color: paywallColors.ink,
     textAlign: "center",
   },
   links: {
@@ -154,12 +157,12 @@ const styles = StyleSheet.create({
   },
   linkText: {
     fontSize: scaleFontSize(12),
-    fontWeight: "600",
-    color: paywallColors.textSecondary,
+    fontWeight: paywallWeight.semibold,
+    color: paywallColors.ink,
     textDecorationLine: "underline",
   },
   linkSeparator: {
     fontSize: scaleFontSize(12),
-    color: paywallColors.textTertiary,
+    color: paywallColors.ink,
   },
 });

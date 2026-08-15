@@ -3,7 +3,12 @@ import { scaleFontSize } from "../../lib/theme";
 import { FONT_DISPLAY } from "../../lib/fonts";
 import AppIcon from "../AppIcon";
 import { PAYWALL_COPY, getFeatureRows, type TierCell } from "../../lib/paywallContent";
-import { PAYWALL_GUTTER, paywallColors } from "./paywallTheme";
+import {
+  PAYWALL_CARD_RADIUS,
+  PAYWALL_GUTTER,
+  paywallColors,
+  paywallWeight,
+} from "./paywallTheme";
 
 /** A check circle, a short value, or an em dash for "not on this tier". */
 function Cell({ cell, muted }: { cell: TierCell; muted?: boolean }) {
@@ -15,6 +20,7 @@ function Cell({ cell, muted }: { cell: TierCell; muted?: boolean }) {
     );
   }
   if (cell.kind === "text") {
+    // Same ink either way — the PRO value carries its emphasis in the weight.
     return <Text style={[styles.cellText, muted && styles.cellTextMuted]}>{cell.label}</Text>;
   }
   return <Text style={styles.cellEmpty}>—</Text>;
@@ -23,6 +29,9 @@ function Cell({ cell, muted }: { cell: TierCell; muted?: boolean }) {
 /**
  * PRO / FREE comparison. Rows come from `getFeatureRows()`, which mirrors what
  * the build actually gates — nothing here is aspirational.
+ *
+ * Layout note: the horizontal padding sits on the rows, not on the container,
+ * so every hairline divider runs the full width of the table.
  */
 export default function FeatureTable() {
   const rows = getFeatureRows();
@@ -35,11 +44,11 @@ export default function FeatureTable() {
         <View style={styles.headRow}>
           <View style={styles.featureCol} />
           <Text style={styles.colHead}>PRO</Text>
-          <Text style={[styles.colHead, styles.colHeadMuted]}>FREE</Text>
+          <Text style={styles.colHead}>FREE</Text>
         </View>
 
-        {rows.map((row, index) => (
-          <View key={row.feature} style={[styles.row, index > 0 && styles.rowDivided]}>
+        {rows.map((row) => (
+          <View key={row.feature} style={[styles.row, styles.rowDivided]}>
             <Text style={styles.feature}>{row.feature}</Text>
             <View style={styles.tierCol}>
               <Cell cell={row.pro} />
@@ -61,19 +70,20 @@ const styles = StyleSheet.create({
   heading: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(24),
-    color: paywallColors.textHeading,
+    color: paywallColors.ink,
     textAlign: "center",
     marginBottom: 16,
   },
   container: {
-    borderRadius: 24,
+    borderRadius: PAYWALL_CARD_RADIUS,
     backgroundColor: paywallColors.accentWash,
-    paddingHorizontal: 18,
     paddingVertical: 6,
+    overflow: "hidden",
   },
   headRow: {
     flexDirection: "row",
     alignItems: "center",
+    paddingHorizontal: 18,
     paddingVertical: 12,
   },
   featureCol: {
@@ -83,16 +93,15 @@ const styles = StyleSheet.create({
     width: 56,
     textAlign: "center",
     fontSize: scaleFontSize(10),
-    fontWeight: "800",
+    fontWeight: paywallWeight.bold,
     letterSpacing: 1.4,
-    color: paywallColors.accent,
-  },
-  colHeadMuted: {
-    color: paywallColors.textTertiary,
+    textTransform: "uppercase",
+    color: paywallColors.ink,
   },
   row: {
     flexDirection: "row",
     alignItems: "center",
+    paddingHorizontal: 18,
     paddingVertical: 14,
   },
   rowDivided: {
@@ -104,7 +113,8 @@ const styles = StyleSheet.create({
     paddingRight: 10,
     fontSize: scaleFontSize(14),
     lineHeight: scaleFontSize(19),
-    color: paywallColors.textPrimary,
+    fontWeight: paywallWeight.regular,
+    color: paywallColors.ink,
   },
   tierCol: {
     width: 56,
@@ -119,19 +129,19 @@ const styles = StyleSheet.create({
     backgroundColor: paywallColors.accent,
   },
   checkMuted: {
-    backgroundColor: paywallColors.textTertiary,
+    backgroundColor: paywallColors.muted,
   },
   cellText: {
     fontSize: scaleFontSize(12),
-    fontWeight: "700",
-    color: paywallColors.accent,
+    fontWeight: paywallWeight.bold,
+    color: paywallColors.ink,
     textAlign: "center",
   },
   cellTextMuted: {
-    color: paywallColors.textSecondary,
+    fontWeight: paywallWeight.regular,
   },
   cellEmpty: {
     fontSize: scaleFontSize(14),
-    color: paywallColors.textTertiary,
+    color: paywallColors.ink,
   },
 });
