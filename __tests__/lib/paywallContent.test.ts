@@ -77,7 +77,7 @@ describe("proof slots", () => {
 
 describe("getFeatureRows", () => {
   it("quotes the free cap from the gate, not a hardcoded number", () => {
-    const capRow = getFeatureRows().find((row) => row.feature === "Active reminders at once");
+    const capRow = getFeatureRows().find((row) => row.feature === "Reminders running at once");
     expect(capRow?.free).toEqual({ kind: "text", label: String(getFreeActiveLimit()) });
     expect(capRow?.pro).toEqual({ kind: "text", label: "Unlimited" });
   });
@@ -89,7 +89,7 @@ describe("getFeatureRows", () => {
   });
 
   it("keeps multi-time schedules free — they are not part of the split", () => {
-    const multiTime = getFeatureRows().find((row) => row.feature.includes("Several times a day"));
+    const multiTime = getFeatureRows().find((row) => row.feature.includes("several times a day"));
     expect(multiTime?.free).toEqual({ kind: "check" });
   });
 });
@@ -260,6 +260,9 @@ describe("getHeroCopy", () => {
       lines: PAYWALL_COPY.heroLines,
       subtitle: PAYWALL_COPY.heroSubtitle,
     });
+    // Everyday forgetting only — the general hero carries no condition talk either.
+    const hero = [...PAYWALL_COPY.heroLines, PAYWALL_COPY.heroSubtitle].join(" ").toLowerCase();
+    expect(hero).not.toMatch(/adhd|memory|dementia|health|medical/);
   });
 
   it("headlines the repeat behaviour when that is what was blocked", () => {

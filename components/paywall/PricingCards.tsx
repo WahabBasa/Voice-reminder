@@ -56,8 +56,8 @@ type PricingCardsProps = {
 
 /**
  * The two-card row: monthly at full price as the anchor (no trial), annual
- * highlighted with the "MOST POPULAR" pill. Both cards are tappable — the one
- * you pick is what the sticky CTA buys.
+ * highlighted with the value pill. Both cards are tappable — the one you pick
+ * is what the sticky CTA buys.
  */
 export default function PricingCards({
   monthly,
@@ -97,7 +97,7 @@ export default function PricingCards({
         <PricingCard
           kicker="Annual"
           plan={annual}
-          badge="MOST POPULAR"
+          badge={PAYWALL_COPY.annualBadge}
           selected={selectedIdentifier === annual.pkg.identifier}
           onPress={() => onSelect(annual.pkg)}
         />

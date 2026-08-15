@@ -45,19 +45,27 @@ export const AWARD_BADGES: AwardBadge[] = [];
 // ---------------------------------------------------------------------------
 
 /**
+ * The pitch is the person, not the feature list: you forget things, and this
+ * makes them happen anyway. The mechanism only shows up as the reason to
+ * believe it — an alarm that says the reminder out loud, so you know what it is
+ * the second it rings.
+ *
  * Copy targets everyday forgetting — the thing that slipped your mind — and
  * never memory conditions, health outcomes, or how the app is built under the
  * hood (no provider names anywhere in user-facing strings).
  */
 export const PAYWALL_COPY = {
   /** Three lines, one per row of the serif display hero. */
-  heroLines: ["Never miss", "what actually", "matters."],
-  heroSubtitle: "Say it once. It comes back, out loud, at the right moment.",
-  affinityLine: "For everyone who has remembered five minutes too late.",
-  featureHeading: "What Pro adds",
-  closingHeadline: "Let it do the remembering.",
+  heroLines: ["You'll forget.", "It'll still", "get done."],
+  heroSubtitle:
+    "Say it once. The alarm says it back out loud, so you know what it's for the second it rings.",
+  affinityLine: "For everyone who meant to, and then didn't.",
+  featureHeading: "Where Pro kicks in",
+  closingHeadline: "Forget it. It still gets done.",
   brandStatement: "Made by one developer who kept forgetting things.",
   restoreLabel: "Restore purchase",
+  /** Annual card pill. A value claim we can stand behind — not a popularity one. */
+  annualBadge: "BEST VALUE",
   plansUnavailable: "Plans couldn't load right now.",
   plansUnavailableHint: "Check your connection and reopen this screen.",
 };
@@ -78,8 +86,8 @@ export type HeroCopy = { lines: string[]; subtitle: string };
 const HERO_COPY: Record<PaywallContext, HeroCopy> = {
   default: { lines: PAYWALL_COPY.heroLines, subtitle: PAYWALL_COPY.heroSubtitle },
   interval: {
-    lines: ["Keep it", "coming back", "until it's done."],
-    subtitle: "Pro lets one reminder repeat every few minutes, inside the hours you pick.",
+    lines: ["Some things", "need asking", "more than once."],
+    subtitle: "Pro brings one reminder back every few minutes, inside the hours you pick.",
   },
 };
 
@@ -119,12 +127,12 @@ const text = (label: string): TierCell => ({ kind: "text", label });
 export function getFeatureRows(): FeatureRow[] {
   const freeLimit = getFreeActiveLimit();
   return [
-    { feature: "Set a reminder by speaking it", pro: CHECK, free: CHECK },
-    { feature: "Alarms that say the reminder out loud", pro: CHECK, free: CHECK },
-    { feature: "Several times a day on one reminder", pro: CHECK, free: CHECK },
-    { feature: "Weekdays, dates and every-few-days repeats", pro: CHECK, free: CHECK },
-    { feature: "Active reminders at once", pro: text("Unlimited"), free: text(String(freeLimit)) },
-    { feature: "Reminders that repeat every few minutes", pro: CHECK, free: NONE },
+    { feature: "Set a reminder just by saying it", pro: CHECK, free: CHECK },
+    { feature: "Alarms that say what they're for", pro: CHECK, free: CHECK },
+    { feature: "One reminder, several times a day", pro: CHECK, free: CHECK },
+    { feature: "Weekdays, dates, every few days", pro: CHECK, free: CHECK },
+    { feature: "Reminders running at once", pro: text("Unlimited"), free: text(String(freeLimit)) },
+    { feature: "Nudges every few minutes, inside your hours", pro: CHECK, free: NONE },
   ];
 }
 
