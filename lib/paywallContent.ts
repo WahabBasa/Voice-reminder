@@ -56,12 +56,12 @@ export const AWARD_BADGES: AwardBadge[] = [];
  */
 export const PAYWALL_COPY = {
   /** Three lines, one per row of the serif display hero. */
-  heroLines: ["You'll forget.", "It'll still", "get done."],
+  heroLines: ["Forget less.", "Remember", "on time."],
   heroSubtitle:
-    "Say it once. The alarm says it back out loud, so you know what it's for the second it rings.",
-  affinityLine: "For everyone who meant to, and then didn't.",
-  featureHeading: "Where Pro kicks in",
-  closingHeadline: "Forget it. It still gets done.",
+    "Say a reminder once. It's spoken back to you out loud at the right time, so you know exactly what to do.",
+  affinityLine: "Built for people who forget a lot.",
+  featureHeading: "What Pro adds",
+  closingHeadline: "Forget less. Get things done on time.",
   brandStatement: "Made by one developer who kept forgetting things.",
   restoreLabel: "Restore purchase",
   /** Annual card pill. A value claim we can stand behind — not a popularity one. */
@@ -86,8 +86,8 @@ export type HeroCopy = { lines: string[]; subtitle: string };
 const HERO_COPY: Record<PaywallContext, HeroCopy> = {
   default: { lines: PAYWALL_COPY.heroLines, subtitle: PAYWALL_COPY.heroSubtitle },
   interval: {
-    lines: ["Some things", "need asking", "more than once."],
-    subtitle: "Pro brings one reminder back every few minutes, inside the hours you pick.",
+    lines: ["Repeat it", "until it's", "done."],
+    subtitle: "Pro repeats one reminder every few minutes, inside the hours you pick.",
   },
 };
 
@@ -132,7 +132,7 @@ export function getFeatureRows(): FeatureRow[] {
     { feature: "One reminder, several times a day", pro: CHECK, free: CHECK },
     { feature: "Weekdays, dates, every few days", pro: CHECK, free: CHECK },
     { feature: "Reminders running at once", pro: text("Unlimited"), free: text(String(freeLimit)) },
-    { feature: "Nudges every few minutes, inside your hours", pro: CHECK, free: NONE },
+    { feature: "Repeat every few minutes, in the hours you pick", pro: CHECK, free: NONE },
   ];
 }
 
