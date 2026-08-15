@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, InteractionManager, LogBox, Platform } from "react-native";
+import * as SplashScreen from "expo-splash-screen";
 import * as Sentry from "@sentry/react-native";
 import { initSentry } from "../lib/sentry";
 import { Stack, useRouter } from "expo-router";
@@ -25,6 +26,7 @@ import { hydrateReminderAudio } from "../lib/audioHydration";
 import { getDeviceId } from "../lib/deviceId";
 import ErrorBoundary from "../components/ErrorBoundary";
 import PermissionPrompt from "../components/PermissionPrompt";
+import AnimatedSplash from "../components/AnimatedSplash";
 import { useAppFonts } from "../lib/fonts";
 
 // Suppress RevenueCat network errors from Expo's LogBox/error overlay.
@@ -37,6 +39,10 @@ LogBox.ignoreLogs([
 
 // Init before first render so startup crashes are captured too.
 initSentry();
+
+// The native splash stays up until AnimatedSplash has drawn its identical copy.
+// Rejects harmlessly if a fast reload gets here after the splash is already gone.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 function StartupTasks() {
   const router = useRouter();
@@ -289,6 +295,8 @@ function RootLayout() {
   // Fraunces display font (JS-bundled asset, OTA-safe). Gate first render so
   // serif page titles never flash the system font.
   const fontsLoaded = useAppFonts();
+  const [splashVisible, setSplashVisible] = useState(true);
+  const hideSplash = useCallback(() => setSplashVisible(false), []);
 
   useEffect(() => {
     // Log build info first to detect stale bundles
@@ -305,13 +313,10 @@ function RootLayout() {
     return () => task.cancel();
   }, []);
 
-  if (!fontsLoaded) {
-    return null;
-  }
-
   return (
     <ErrorBoundary>
     <GestureHandlerRootView style={{ flex: 1 }}>
+      {fontsLoaded ? (
       <PortalProvider>
         <SafeAreaProvider>
           <ConvexProvider client={convex}>
@@ -391,6 +396,9 @@ function RootLayout() {
           </ConvexProvider>
         </SafeAreaProvider>
       </PortalProvider>
+      ) : null}
+      {/* Last child, so it covers the app until its exit animation finishes. */}
+      {splashVisible ? <AnimatedSplash ready={fontsLoaded} onFinish={hideSplash} /> : null}
     </GestureHandlerRootView>
     </ErrorBoundary>
   );
