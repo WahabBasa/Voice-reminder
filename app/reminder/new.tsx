@@ -149,8 +149,6 @@ export default function NewReminderScreen() {
           frequency: newReminder.frequency,
           days: newReminder.days,
           audioUrl,
-          snoozeEnabled: newReminder.snoozeEnabled,
-          snoozeDuration: newReminder.snoozeDuration,
           volume: newReminder.volume,
           volumeStyle: newReminder.volumeStyle,
         });

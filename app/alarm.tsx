@@ -32,6 +32,7 @@ import { removeReminderFully } from "../lib/reminderRemoval";
 import { getDeviceId } from "../lib/deviceId";
 import { vrLog, logAlarmLifecycle } from "../lib/vrLog";
 import { logAppTaskState } from "../lib/activityControl";
+import { NAG_DELAY_MINUTES, parseNagCount, shouldNagAgain } from "../lib/notificationDecisions";
 
 const { width, height } = Dimensions.get("window");
 const ANDROID_ALARM_ACTIVITY = "com.wahabbasa.VoiceReminder.AlarmActivity";
@@ -49,8 +50,6 @@ export default function AlarmScreen() {
         days?: string;
         time?: string;
         intervalDays?: string;
-        snoozeEnabled?: string;
-        snoozeDuration?: string;
         volume?: string;
         volumeStyle?: string;
         scheduledFor?: string;
@@ -58,6 +57,7 @@ export default function AlarmScreen() {
         anchorAt?: string;
         kind?: string;
         autoSnoozeCount?: string;
+        nagCount?: string;
     }>();
 
     const [isPlaying, setIsPlaying] = useState(true);
@@ -71,8 +71,6 @@ export default function AlarmScreen() {
     const reminderId = params.reminderId;
     const notificationId = params.notificationId;
 
-    const snoozeEnabled = params.snoozeEnabled !== "false";
-    const snoozeDurationMinutes = Math.max(1, Math.min(60, Number(params.snoozeDuration ?? "5") || 5));
     const targetVolume = Math.max(0, Math.min(1, Number(params.volume ?? "1") || 1));
 
     useEffect(() => {
@@ -256,7 +254,11 @@ export default function AlarmScreen() {
             await cancelDisplayedAlarmNotifications(notificationId);
             await clearPendingAlarm();
 
-            if (!snoozeEnabled || !reminderId) {
+            // OLD-96: "Later" feeds the fixed nag — same audio, NAG_DELAY_MINUTES
+            // out, capped at MAX_NAG_COMEBACKS. There is no per-reminder snooze
+            // duration and no toggle any more.
+            const nagCount = parseNagCount(params.nagCount);
+            if (!reminderId || !shouldNagAgain(nagCount)) {
                 closeAlarmScreen();
                 return;
             }
@@ -271,7 +273,7 @@ export default function AlarmScreen() {
                 (params.intervalDays ? Number(params.intervalDays) : undefined) ?? reminder?.intervalDays;
 
             const channelId = `reminder_${reminderId}`;
-            const triggerTimestamp = Date.now() + snoozeDurationMinutes * 60_000;
+            const triggerTimestamp = Date.now() + NAG_DELAY_MINUTES * 60_000;
             const trigger: TimestampTrigger = {
                 type: TriggerType.TIMESTAMP,
                 timestamp: triggerTimestamp,
@@ -302,8 +304,7 @@ export default function AlarmScreen() {
                         title,
                         description,
                         audioUrl,
-                        snoozeEnabled: String(snoozeEnabled),
-                        snoozeDuration: String(snoozeDurationMinutes),
+                        nagCount: String(nagCount + 1),
                         volume: String(targetVolume),
                         volumeStyle: String(params.volumeStyle ?? "standard"),
                         kind: "snooze_occurrence",
@@ -374,8 +375,7 @@ export default function AlarmScreen() {
                                 title,
                                 description,
                                 audioUrl,
-                                snoozeEnabled: String(snoozeEnabled),
-                                snoozeDuration: String(snoozeDurationMinutes),
+                                nagCount: "0",
                                 volume: String(targetVolume),
                                 volumeStyle: String(volumeStyle),
                                 intervalMs: String(intervalMs),
@@ -433,16 +433,14 @@ export default function AlarmScreen() {
 
             {/* Action buttons */}
             <View style={styles.actions}>
-                {snoozeEnabled ? (
-                    <TouchableOpacity
-                        style={styles.snoozeButton}
-                        onPress={handleSnooze}
-                        activeOpacity={0.8}
-                    >
-                        <AppIcon name="clock" size={24} color="white" />
-                        <Text style={styles.snoozeText}>Later</Text>
-                    </TouchableOpacity>
-                ) : null}
+                <TouchableOpacity
+                    style={styles.snoozeButton}
+                    onPress={handleSnooze}
+                    activeOpacity={0.8}
+                >
+                    <AppIcon name="clock" size={24} color="white" />
+                    <Text style={styles.snoozeText}>Later</Text>
+                </TouchableOpacity>
 
                 <TouchableOpacity
                     style={styles.dismissButton}

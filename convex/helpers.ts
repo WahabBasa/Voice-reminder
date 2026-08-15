@@ -42,7 +42,8 @@ MULTIPLE REMINDERS IN ONE REQUEST:
 - The user may ask for SEVERAL distinct reminders in a single request.
 - ALWAYS return: {"reminders": [ <reminder object exactly as specified above>, ... ]}
 - One array entry per distinct reminder the user asked for. A request with a single reminder still returns a one-element array.
-- Never merge distinct tasks into one reminder. Each entry gets its own title, description, time, and frequency.`;
+- Never merge distinct tasks into one reminder. Each entry gets its own title, description, time, and frequency.
+- Never SPLIT one task across entries either. The SAME task at several times is ONE entry with several "times" — "my pills at 8 and 9" is one reminder, not two.`;
 
 /**
  * Ceiling on how many reminders one take may create. A take that asks for more
@@ -104,11 +105,16 @@ export function getCurrentTimeHM(currentTime: string): string {
   return `${match[1].padStart(2, "0")}:${match[2]}`;
 }
 
-// Banned openers (OLD-61) as literal text, one source of truth for the two places
-// that have to agree on the list: the storage-time guard below and the
-// live-model eval (__evals__/reminder-phrasing.eval.ts). Matched as prefixes of
-// the normalized line, so 'حان وقت' also catches 'حان وقت شرب كوب من الماء.'.
-// Lowercase — the match form is lowercased first.
+// Banned openers (OLD-61, widened in OLD-95) as literal text, one source of
+// truth for the two places that have to agree on the list: the storage-time
+// guard below and the live-model eval (__evals__/reminder-phrasing.eval.ts).
+// Matched as prefixes of the normalized line, so 'حان وقت' also catches
+// 'حان وقت شرب كوب من الماء.'. Lowercase — the match form is lowercased first.
+//
+// Three families: clock announcements, reminder labels, and the conversational
+// lead-ins ('By the way', 'Heads up', 'Don't forget'). The lead-ins used to be
+// exempt because the app assembled them itself at TTS time; that feature is
+// gone (OLD-95) and the line now opens on the task, so nothing is exempt.
 export const BANNED_OPENERS = [
   "it is time",
   "it's time",
@@ -120,14 +126,25 @@ export const BANNED_OPENERS = [
   "friendly reminder",
   "a friendly reminder",
   "heads up",
+  "just a heads up",
   "reminder",
   "this is a reminder",
   "this is your reminder",
+  "by the way",
+  "just so you know",
+  "don't forget",
+  "dont forget",
+  "remember",
   "حان وقت",
   "حان الوقت",
   "تذكير سريع",
   "تذكير",
   "مجرد تذكير",
+  "على فكرة",
+  "بالمناسبة",
+  "لا تنسى",
+  "تذكر",
+  "انتبه",
 ];
 
 /** Prefix-match form of a spoken line: leading quotes/dashes off, lowercased. */
@@ -162,8 +179,8 @@ export function hasBannedOpener(line: unknown): boolean {
  * itself (slow path, where the synth call is not wrapped). A non-empty input
  * therefore never comes back empty.
  *
- * Code-assembled catches (./speechCatch.ts) are exempt by construction — they
- * go on at TTS time, after this guard has seen the stored line.
+ * Nothing is exempt: what is stored is what is spoken (OLD-95). No layer
+ * downstream prepends anything to the line after this guard has seen it.
  */
 export function guardSpokenLine(line: unknown, fallback: unknown = ""): string {
   const normalized = normalizeReminderDescription(line);
@@ -174,46 +191,41 @@ export function guardSpokenLine(line: unknown, fallback: unknown = ""): string {
   return normalized || standIn;
 }
 
-// The prompt-side half of the ban (OLD-61). Taking the canned hooks out of the
-// prompt was not enough: with nothing offered, the model converged on
-// announcing the clock — almost every generated line came back as 'It is time
-// to ...'. Banning only the clock left the old hook menu's 'Quick reminder —'
-// label as the next formula in reach (stored rows show it), so the ban covers
-// announcing anything — clock or reminder label — and it has to come with
-// somewhere else to start, or the model just swaps in the next formula it can
-// find. Shared verbatim by every builder that describes a spoken line.
+// The one voice rule (OLD-95), shared verbatim by every builder that describes
+// a spoken line.
+//
+// History, so it is not re-litigated: the prompt used to offer a menu of canned
+// hooks, and every line came out stamped from it. Taking the menu away made the
+// model announce the clock instead ('It is time to ...'); banning the clock made
+// it reach for the reminder label ('Quick reminder —'); the app then prepended
+// its own attention catch ('Heads up —') and the whole voice read as small talk
+// in front of the point. All of it is gone. What is left is the point itself:
+// ONE short present-tense sentence about the thing, in one of three registers
+// the model picks from by content — instruction, stated fact, or polite request.
+//
 // Single-quoted throughout — it is embedded inside a double-quoted JSON field
 // in the prompt. Instructing is not enforcing: what leaks through anyway is
 // caught by guardSpokenLine above.
-export const SPOKEN_OPENER_RULE = `Never open a spoken line by announcing what it is. Clock announcements ('It is time', 'It's time', a bare 'Time to ...', the Arabic 'حان وقت' / 'حان الوقت') and reminder labels ('Quick reminder', 'Just a reminder', 'Friendly reminder', 'Heads up', the Arabic 'تذكير سريع') are forbidden wordings, not merely discouraged — the line never says that it is a reminder, it just says the thing. Open on something concrete instead — the task, the object, the person waiting, the place to be, or what slips if this is ignored — so the first two or three words already tell the user what this is about. There is no approved replacement opener: vary it with the reminder rather than reusing one phrasing.`;
+export const SPOKEN_LINE_RULE = `ONE short sentence, present tense, about the thing itself and nothing else. Pick the register the content calls for: a direct instruction ('Drink your water right now.'), a stated fact ('Your son's game is starting this minute.'), or a polite request ('Please take your pills.'). Start on the substance — the task, the object, the person, or the place — so the first two or three words already are the point. These are forbidden wordings, not merely discouraged: any opener or lead-in in front of the substance, whether a clock announcement ('It is time', 'It's time', a bare 'Time to ...', the Arabic 'حان وقت' / 'حان الوقت'), a reminder label ('Quick reminder', 'Just a reminder', 'Friendly reminder', 'Heads up', the Arabic 'تذكير سريع'), or a conversational lead-in ('By the way', 'Just so you know', 'Remember', 'Don't forget', the Arabic 'على فكرة' / 'لا تنسى'). Also forbidden: any greeting; addressing the user by name or title (no 'Sir', no invented names, no 'يا' + name); and wellness, benefit or encouragement commentary (never say why the task is good, how it will make the user feel, or add a sign-off). There is no approved replacement opener — the line never says that it is a reminder, it just says the thing.`;
 
 // Instruction text for the parse prompt's "description" field.
-// No opener templates: the line has to read like something a person would say
-// out loud, not a notification. The word budget is deliberately tight — lines
-// that escaped the opener ban did it by padding instead ('Hydrate yourself
-// with a fresh glass of water now'). When addressTerm is set the model weaves
-// it in verbatim (it may be Arabic); when unset the line stays address-free (no
-// 'Sir', no invented names). Single-quoted throughout — this string is embedded
-// inside a double-quoted JSON field in the prompt.
-export function buildDescriptionInstruction(addressTerm?: string): string {
-  const term = String(addressTerm ?? "").trim();
-  const addressRule = term
-    ? `Weave in the address term '${term}' verbatim, exactly as the user wrote it (it may be Arabic)`
-    : `Never address the user by any name or title (no 'Sir', no invented names)`;
-  const example = term
-    ? `'${term}, your meeting with Ahmed is starting.'`
-    : `'Your meeting with Ahmed is starting.'`;
-  return `the sentence spoken aloud when the reminder fires, in the input's language. Say it the way a human assistant would say it out loud: the task plus whatever time or place context the user gave. One natural sentence, roughly 4-9 words, with no set opening formula and no greeting — start with the substance, specific enough that it catches the ear across a room. Plain words only: no filler adjectives, no dressing up a simple task — every added word slows the line down. ${SPOKEN_OPENER_RULE} ${addressRule}. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: ${example} / 'Your evening medicine is still sitting there.' / 'دواؤك المسائي بانتظارك.'`;
+// The word budget is deliberately tight — lines that escaped the opener ban did
+// it by padding instead ('Hydrate yourself with a fresh glass of water now').
+// The canon examples are the product decision made flesh (OLD-95): same task,
+// three registers, no name in any of them. Single-quoted throughout — this
+// string is embedded inside a double-quoted JSON field in the prompt.
+export function buildDescriptionInstruction(): string {
+  return `the sentence spoken aloud when the reminder fires, in the input's language. ${SPOKEN_LINE_RULE} Roughly 4-9 words. Plain words only: no filler adjectives, no dressing up a simple task — every added word slows the line down. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: 'Drink your water right now.' / 'Take your pills right now.' / 'Please take your pills.' / 'Your son's game is starting this minute.' / 'Your son has a game right now.' The same in Arabic: 'اشرب ماءك الآن.' / 'خذ حبوبك الآن.' / 'من فضلك خذ حبوبك.' / 'مباراة ابنك تبدأ الآن.'`;
 }
 
 // Instruction block for the parse prompt's pre-reminder (heads-up) fields.
-// The advance-notice line keeps its factual content (event + how far off) but,
-// like the description, gets no template opener.
+// The advance-notice line keeps its factual content (event + how far off) and
+// is held to the same voice as the description.
 export function buildPreReminderInstruction(): string {
   return `PRE-REMINDER RULES (automatic heads-up before the event):
 - "preReminderMinutes": 10-15 for hard-start events the user must be somewhere for or start on time (meetings, appointments, flights, games, classes, calls). 0 for ambient/routine tasks (drink water, take medicine, generic todos).
 - If the user explicitly asks for a heads-up ("give me a 20 minute warning"), use that many minutes.
-- "preDescription": ONLY when preReminderMinutes > 0. The spoken advance-notice line, in the input's language (Arabic input gets an Arabic line), under 12 words: name the event and how far off it is, phrased naturally with no set opening formula — 'Your flight leaves in 40 minutes.', 'اجتماعك يبدأ بعد ربع ساعة.'. ${SPOKEN_OPENER_RULE} Omit the field entirely when preReminderMinutes is 0.`;
+- "preDescription": ONLY when preReminderMinutes > 0. The spoken advance-notice line, in the input's language (Arabic input gets an Arabic line), under 12 words: it states the event and how far off it is, which is the one place a time span belongs — 'Your flight leaves in 40 minutes.', 'اجتماعك يبدأ بعد ربع ساعة.'. ${SPOKEN_LINE_RULE} Omit the field entirely when preReminderMinutes is 0.`;
 }
 
 // ─── Assistant-style replays (OLD-53) ───────────────────────────────────────
@@ -304,19 +316,14 @@ export function normalizeVariants(
 
 // Instruction block for the parse prompt's replay fields (urgency, persistent,
 // variants). Variants are spoken minutes after the description was ignored, so
-// they must stay true when heard late. When addressTerm is set, firmer variants
-// may weave it in verbatim. Each variant is its own ladder rung, so each one
-// opens differently — a rung that starts like the rung before it stops being
+// they must stay true when heard late. Each variant is its own attempt, so each
+// one opens differently — a line that starts like the one before it stops being
 // heard as a new attempt.
-export function buildVariantInstruction(addressTerm?: string): string {
-  const term = String(addressTerm ?? "").trim();
-  const firmNote = term
-    ? `firmer variants may weave in the address term '${term}' verbatim, exactly as the user wrote it (it may be Arabic)`
-    : `never address the user by any name or title in any variant (no 'Sir', no invented names)`;
+export function buildVariantInstruction(): string {
   return `ASSISTANT REPLAY RULES (the follow-up lines an assistant would use when the first one is ignored):
 - "urgency": how hard the reminder has to push — "urgent" when the user must act right now (meeting starting, leaving the house), "notice" for advance warning of something coming up, "routine" for ordinary everyday tasks.
 - "persistent": true ONLY when missing the task would be harmful (medicine regimens, flights, picking up children). Otherwise false or omit.
-- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from gentle nudge to insistent; ${firmNote}. One natural sentence each, roughly 4-10 words, with no set opening formula, and still true when heard minutes late (no countdowns). ${SPOKEN_OPENER_RULE} Every variant must also start on a different word from the description and from the other variants, and the later ones lean harder — name the cost of ignoring it rather than raising the volume of the same sentence. A variant urges the act; it never recites the task's benefits or adds wellness commentary. Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
+- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from gentle nudge to insistent, still true when heard minutes late (no countdowns). ${SPOKEN_LINE_RULE} Every variant must also start on a different word from the description and from the other variants, and the later ones lean harder — name the cost of ignoring it rather than raising the volume of the same sentence. Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
 }
 
 // Upper bound keeps a mis-parsed lead time from scheduling a heads-up hours early.

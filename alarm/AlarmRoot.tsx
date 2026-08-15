@@ -35,8 +35,6 @@ function buildOverlayProps(pending: PendingAlarm): AlarmOverlayProps | null {
     days: String(data?.days ?? ""),
     time: String(data?.time ?? ""),
     intervalDays: String(data?.intervalDays ?? ""),
-    snoozeEnabled: String(data?.snoozeEnabled ?? "true"),
-    snoozeDuration: String(data?.snoozeDuration ?? "5"),
     volume: String(data?.volume ?? "1"),
     volumeStyle: String(data?.volumeStyle ?? "standard"),
     scheduledFor: String(data?.scheduledFor ?? ""),
@@ -50,7 +48,8 @@ function buildOverlayProps(pending: PendingAlarm): AlarmOverlayProps | null {
     variants: String(data?.variants ?? ""),
     variantAudioUrls: String(data?.variantAudioUrls ?? ""),
     variantCount: String(data?.variantCount ?? "0"),
-    followUpCount: String(data?.followUpCount ?? "0"),
+    // Pre-OLD-96 payloads still in flight carry the counter under the old name.
+    nagCount: String(data?.nagCount ?? data?.followUpCount ?? "0"),
     variantIndex: String(data?.variantIndex ?? "-1"),
   };
 

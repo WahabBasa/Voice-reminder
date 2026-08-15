@@ -39,7 +39,6 @@ const PROMPT_CONTEXT = {
   currentDayOfWeek: "Thursday",
   currentTime: "14:00",
   timezone: "Asia/Dubai",
-  addressTerm: undefined as string | undefined,
 };
 
 /** The shipping prompt exactly as the actions send it. */

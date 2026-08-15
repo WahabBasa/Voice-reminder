@@ -3,12 +3,21 @@ import {
   normalizeSchedule,
   migrateLegacySchedule,
   tryParseScheduleFromText,
+  buildGridSchedule,
+  gridDayOccurrences,
+  gridFromLegacyReminder,
+  legacyFieldsFromGrid,
+  isIntervalGrid,
+  describeGrid,
+  normalizeClockTime,
+  normalizeClockTimes,
   MIN_INTERVAL_MS,
   MAX_INTERVAL_MS,
   type Schedule,
   type OnceSchedule,
   type IntervalSchedule,
   type RRuleSchedule,
+  type GridSchedule,
 } from "../../lib/schedule";
 
 function utc(
@@ -436,5 +445,332 @@ describe("tryParseScheduleFromText", () => {
     expect(result).not.toBeNull();
     expect(result!.type).toBe("interval");
     expect((result as IntervalSchedule).intervalMs).toBe(600000);
+  });
+});
+
+// ─── The days × times grid (OLD-97) ─────────────────────────────────────────
+//
+// Jest pins TZ=UTC, so the local midnights the grid walks are the utc() helper's.
+
+const grid = (over: Partial<GridSchedule> = {}): GridSchedule => ({
+  type: "grid",
+  days: { kind: "everyday" },
+  times: { kind: "clock", times: ["09:00"] },
+  ...over,
+});
+
+describe("buildGridSchedule", () => {
+  const now = utc(2026, 8, 15, 12, 0); // Saturday
+
+  it("crosses named weekdays with several clock times", () => {
+    const schedule = buildGridSchedule(
+      { frequency: "custom", days: ["Thursday"], time: "08:00", times: ["21:00", "08:00"] },
+      { now }
+    );
+
+    expect(schedule).toEqual({
+      type: "grid",
+      days: { kind: "weekdays", days: ["thu"] },
+      times: { kind: "clock", times: ["08:00", "21:00"] },
+    });
+  });
+
+  it("orders weekdays by the calendar, not by how the model listed them", () => {
+    const schedule = buildGridSchedule({ frequency: "custom", days: ["fri", "mon", "fri"] }, { now });
+    expect(schedule.days).toEqual({ kind: "weekdays", days: ["mon", "fri"] });
+  });
+
+  it("falls back to a usable time when nothing was given", () => {
+    expect(buildGridSchedule({ frequency: "daily" }, { now }).times).toEqual({
+      kind: "clock",
+      times: ["09:00"],
+    });
+    expect(buildGridSchedule({ frequency: "daily" }, { now, fallbackTime: "17:45" }).times).toEqual({
+      kind: "clock",
+      times: ["17:45"],
+    });
+  });
+
+  it("clamps an interval and warns", () => {
+    const warnings: string[] = [];
+    const tooSmall = buildGridSchedule(
+      { frequency: "interval", intervalMinutes: 2 },
+      { now, warnings }
+    );
+    expect(tooSmall.times).toMatchObject({ kind: "interval", everyMinutes: 5 });
+    expect(warnings[0]).toContain("Minimum interval is 5 minutes");
+
+    const tooBig = buildGridSchedule({ frequency: "interval", intervalHours: 48 }, { now, warnings });
+    expect(tooBig.times).toMatchObject({ everyMinutes: 24 * 60 });
+  });
+
+  it("rejects a window that does not span a day and says so", () => {
+    const warnings: string[] = [];
+    const schedule = buildGridSchedule(
+      { frequency: "interval", intervalHours: 1, windowStart: "22:00", windowEnd: "06:00" },
+      { now, warnings }
+    );
+
+    expect(schedule.times).toMatchObject({ windowStart: "08:00", windowEnd: "22:00" });
+    expect(warnings[0]).toContain("does not span a day");
+  });
+
+  it("anchors every-N-days on the day it was made", () => {
+    const schedule = buildGridSchedule({ frequency: "everyNDays", everyNDays: 3 }, { now });
+    expect(schedule.days).toEqual({
+      kind: "everyNDays",
+      interval: 3,
+      startDate: "2026-08-15",
+    });
+  });
+
+  it("treats everyNDays=1 as plain every day", () => {
+    expect(buildGridSchedule({ frequency: "everyNDays", everyNDays: 1 }, { now }).days).toEqual({
+      kind: "everyday",
+    });
+  });
+
+  it("dates an undated one-off today when the time is still ahead, tomorrow when not", () => {
+    expect(buildGridSchedule({ frequency: "once", time: "18:00" }, { now }).days).toEqual({
+      kind: "date",
+      date: "2026-08-15",
+    });
+    expect(buildGridSchedule({ frequency: "once", time: "06:00" }, { now }).days).toEqual({
+      kind: "date",
+      date: "2026-08-16",
+    });
+  });
+
+  it("drops a date the calendar does not have", () => {
+    const schedule = buildGridSchedule({ frequency: "once", time: "09:00", date: "2026-02-31" }, { now });
+    expect(schedule.days).toEqual({ kind: "date", date: "2026-08-16" });
+  });
+
+  it("bounds a recurrence at the end of the until day", () => {
+    const schedule = buildGridSchedule({ frequency: "daily", until: "2026-09-01" }, { now });
+    expect(schedule.until).toBe(utc(2026, 9, 1, 23, 59) + 59999);
+  });
+});
+
+describe("normalizeClockTime / normalizeClockTimes", () => {
+  it("accepts the shapes speech-to-text actually produces", () => {
+    expect(normalizeClockTime("8")).toBe("08:00");
+    expect(normalizeClockTime("8:05")).toBe("08:05");
+    expect(normalizeClockTime("0800")).toBe("08:00");
+    expect(normalizeClockTime("8.30")).toBe("08:30");
+    expect(normalizeClockTime("24:00")).toBeNull();
+    expect(normalizeClockTime("8:99")).toBeNull();
+    expect(normalizeClockTime("quarter past")).toBeNull();
+    expect(normalizeClockTime(undefined)).toBeNull();
+  });
+
+  it("dedupes, sorts and falls back to the single time", () => {
+    expect(normalizeClockTimes(["21:00", "8:00", "08:00"])).toEqual(["08:00", "21:00"]);
+    expect(normalizeClockTimes([], "07:15")).toEqual(["07:15"]);
+    expect(normalizeClockTimes(undefined, undefined)).toEqual([]);
+  });
+
+  it("caps a runaway list", () => {
+    const many = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`);
+    expect(normalizeClockTimes(many)).toHaveLength(12);
+  });
+});
+
+describe("gridDayOccurrences", () => {
+  it("expands every clock time of a matching day", () => {
+    const schedule = grid({
+      days: { kind: "weekdays", days: ["thu"] },
+      times: { kind: "clock", times: ["08:00", "21:00"] },
+    });
+
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 13, 15, 0))).toEqual([
+      utc(2026, 8, 13, 8, 0),
+      utc(2026, 8, 13, 21, 0),
+    ]);
+    // Friday is not on the days axis.
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 14, 15, 0))).toEqual([]);
+  });
+
+  it("walks an interval across its window and stops at the end", () => {
+    const schedule = grid({
+      times: { kind: "interval", everyMinutes: 120, windowStart: "08:00", windowEnd: "13:00" },
+    });
+
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 15, 3, 0))).toEqual([
+      utc(2026, 8, 15, 8, 0),
+      utc(2026, 8, 15, 10, 0),
+      utc(2026, 8, 15, 12, 0),
+    ]);
+  });
+
+  it("produces nothing past until", () => {
+    const schedule = grid({
+      times: { kind: "clock", times: ["08:00", "21:00"] },
+      until: utc(2026, 8, 15, 12, 0),
+    });
+
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 15, 0, 0))).toEqual([utc(2026, 8, 15, 8, 0)]);
+  });
+
+  it("counts every-N-days from its anchor", () => {
+    const schedule = grid({
+      days: { kind: "everyNDays", interval: 3, startDate: "2026-08-15" },
+    });
+
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 15, 0, 0))).toHaveLength(1);
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 16, 0, 0))).toEqual([]);
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 18, 0, 0))).toHaveLength(1);
+    // Before the anchor the schedule has not started.
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 12, 0, 0))).toEqual([]);
+  });
+
+  it("fires a dated schedule on that day only", () => {
+    const schedule = grid({ days: { kind: "date", date: "2026-08-20" } });
+
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 20, 0, 0))).toHaveLength(1);
+    expect(gridDayOccurrences(schedule, utc(2026, 8, 21, 0, 0))).toEqual([]);
+  });
+});
+
+describe("getNextOccurrence — grid", () => {
+  it("returns the same day's later ring before rolling over", () => {
+    const schedule = grid({
+      days: { kind: "weekdays", days: ["thu"] },
+      times: { kind: "clock", times: ["08:00", "21:00"] },
+    });
+
+    expect(getNextOccurrence(schedule, utc(2026, 8, 13, 9, 0))).toBe(utc(2026, 8, 13, 21, 0));
+    // After the last ring of the day, the next Thursday.
+    expect(getNextOccurrence(schedule, utc(2026, 8, 13, 22, 0))).toBe(utc(2026, 8, 20, 8, 0));
+  });
+
+  it("keeps an interval inside its window instead of ringing at 3am", () => {
+    const schedule = grid({
+      times: { kind: "interval", everyMinutes: 120, windowStart: "08:00", windowEnd: "22:00" },
+    });
+
+    expect(getNextOccurrence(schedule, utc(2026, 8, 15, 3, 0))).toBe(utc(2026, 8, 15, 8, 0));
+    expect(getNextOccurrence(schedule, utc(2026, 8, 15, 23, 0))).toBe(utc(2026, 8, 16, 8, 0));
+  });
+
+  it("jumps ahead to a far-off dated one-off, and gives up once it passes", () => {
+    const schedule = grid({
+      days: { kind: "date", date: "2026-12-24" },
+      times: { kind: "clock", times: ["18:00"] },
+    });
+
+    expect(getNextOccurrence(schedule, utc(2026, 8, 15, 12, 0))).toBe(utc(2026, 12, 24, 18, 0));
+    expect(getNextOccurrence(schedule, utc(2026, 12, 25, 12, 0))).toBeNull();
+  });
+
+  it("skips forward to a future every-N-days anchor", () => {
+    const schedule = grid({
+      days: { kind: "everyNDays", interval: 10, startDate: "2026-09-01" },
+    });
+
+    expect(getNextOccurrence(schedule, utc(2026, 8, 15, 12, 0))).toBe(utc(2026, 9, 1, 9, 0));
+  });
+
+  it("returns null once until has passed", () => {
+    const schedule = grid({ until: utc(2026, 8, 15, 12, 0) });
+    expect(getNextOccurrence(schedule, utc(2026, 8, 16, 0, 0))).toBeNull();
+  });
+
+  it("normalizes a grid through normalizeSchedule with a display line", () => {
+    const result = normalizeSchedule(
+      grid({
+        days: { kind: "weekdays", days: ["mon", "thu"] },
+        times: { kind: "clock", times: ["08:00", "21:00"] },
+      }),
+      { tzid: "Asia/Riyadh" }
+    );
+
+    expect(result.schedule.type).toBe("grid");
+    expect((result.schedule as GridSchedule).tzid).toBe("Asia/Riyadh");
+    expect(result.displayText).toBe("Mon, Thu · 08:00, 21:00");
+  });
+});
+
+describe("grid to legacy fields", () => {
+  it("projects each days rule onto the columns pre-grid readers use", () => {
+    expect(legacyFieldsFromGrid(grid({ times: { kind: "clock", times: ["08:00", "21:00"] } }))).toEqual({
+      time: "08:00",
+      frequency: "daily",
+      days: [],
+    });
+    expect(legacyFieldsFromGrid(grid({ days: { kind: "weekdays", days: ["thu"] } }))).toEqual({
+      time: "09:00",
+      frequency: "custom",
+      days: ["thu"],
+    });
+    expect(
+      legacyFieldsFromGrid(grid({ days: { kind: "everyNDays", interval: 3, startDate: "2026-08-15" } }))
+    ).toEqual({ time: "09:00", frequency: "daily", days: [], intervalDays: 3 });
+    expect(legacyFieldsFromGrid(grid({ days: { kind: "date", date: "2026-08-20" } }))).toEqual({
+      time: "09:00",
+      date: "2026-08-20",
+      frequency: "once",
+      days: [],
+    });
+    expect(
+      legacyFieldsFromGrid(
+        grid({ times: { kind: "interval", everyMinutes: 30, windowStart: "09:00", windowEnd: "17:00" } })
+      )
+    ).toEqual({ time: "09:00", frequency: "interval", days: [], intervalMs: 1800000 });
+  });
+
+  it("derives a grid from a stored pre-grid reminder", () => {
+    expect(
+      gridFromLegacyReminder({ frequency: "custom", time: "18:00", days: ["mon", "wed"] })
+    ).toEqual({
+      type: "grid",
+      days: { kind: "weekdays", days: ["mon", "wed"] },
+      times: { kind: "clock", times: ["18:00"] },
+    });
+
+    // A one-off knows its day through scheduledFor when it has no date.
+    expect(
+      gridFromLegacyReminder({
+        frequency: "once",
+        time: "10:00",
+        scheduledFor: utc(2026, 8, 20, 10, 0),
+      }).days
+    ).toEqual({ kind: "date", date: "2026-08-20" });
+
+    expect(
+      gridFromLegacyReminder({ frequency: "interval", time: "09:00", intervalMs: 3600000 }).times
+    ).toEqual({ kind: "interval", everyMinutes: 60, windowStart: "08:00", windowEnd: "22:00" });
+  });
+});
+
+describe("grid descriptions", () => {
+  it("names the premium half of the times axis", () => {
+    expect(isIntervalGrid(grid())).toBe(false);
+    expect(
+      isIntervalGrid(
+        grid({ times: { kind: "interval", everyMinutes: 60, windowStart: "08:00", windowEnd: "22:00" } })
+      )
+    ).toBe(true);
+    expect(isIntervalGrid(undefined)).toBe(false);
+  });
+
+  it("reads back as something a card can show", () => {
+    expect(describeGrid(grid())).toBe("Every day · 09:00");
+    expect(describeGrid(grid({ days: { kind: "everyNDays", interval: 3, startDate: "2026-08-15" } }))).toBe(
+      "Every 3 days · 09:00"
+    );
+    expect(describeGrid(grid({ days: { kind: "date", date: "2026-08-20" } }))).toBe(
+      "2026-08-20 · 09:00"
+    );
+    expect(
+      describeGrid(
+        grid({ times: { kind: "interval", everyMinutes: 90, windowStart: "08:00", windowEnd: "22:00" } })
+      )
+    ).toBe("Every day · Every 90 min, 08:00–22:00");
+    expect(
+      describeGrid(
+        grid({ times: { kind: "interval", everyMinutes: 60, windowStart: "09:00", windowEnd: "17:00" } })
+      )
+    ).toBe("Every day · Every 1 hr, 09:00–17:00");
   });
 });

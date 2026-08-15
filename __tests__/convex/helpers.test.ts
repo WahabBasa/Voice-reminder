@@ -12,7 +12,7 @@ import {
   buildHeadsUpTtsText,
   MAX_PRE_REMINDER_MINUTES,
   MAX_REPLAY_VARIANTS,
-  SPOKEN_OPENER_RULE,
+  SPOKEN_LINE_RULE,
   normalizeUrgency,
   normalizePersistent,
   variantCountForTier,
@@ -169,67 +169,54 @@ describe("getCurrentTimeHM", () => {
 // ─── buildDescriptionInstruction ────────────────────────────────────────────
 
 describe("buildDescriptionInstruction", () => {
-  it("weaves the address term in verbatim, including in the example", () => {
-    const result = buildDescriptionInstruction("Wahab");
-    expect(result).toContain("address term 'Wahab' verbatim");
-    expect(result).toContain("'Wahab, your meeting with Ahmed is starting.'");
-    expect(result).not.toContain("Sir");
+  it("asks for one short spoken sentence in the input's language", () => {
+    const result = buildDescriptionInstruction();
+    expect(result).toContain("in the input's language");
+    expect(result).toContain("ONE short sentence, present tense");
+    expect(result).toContain("Roughly 4-9 words");
+    expect(result).toContain("Plain words only");
   });
 
-  it("passes an Arabic address term through as written", () => {
-    const result = buildDescriptionInstruction("وهاب");
-    expect(result).toContain("address term 'وهاب' verbatim");
-  });
-
-  it("trims whitespace around the address term", () => {
-    const result = buildDescriptionInstruction("  Ma'am  ");
-    expect(result).toContain("address term 'Ma'am' verbatim");
-  });
-
-  it("forbids any name or title when no term is provided", () => {
-    const result = buildDescriptionInstruction(undefined);
-    expect(result).toContain("Never address the user by any name or title");
-    expect(result).toContain("no 'Sir'");
-    expect(result).not.toContain("'Sir,'");
-  });
-
-  it("treats an empty or whitespace-only term as unset", () => {
-    expect(buildDescriptionInstruction("")).toBe(
-      buildDescriptionInstruction(undefined)
-    );
-    expect(buildDescriptionInstruction("   ")).toBe(
-      buildDescriptionInstruction(undefined)
-    );
-  });
-
-  it("asks for one natural spoken sentence in the input's language", () => {
-    for (const result of [
-      buildDescriptionInstruction("Wahab"),
-      buildDescriptionInstruction(undefined),
+  it("carries the canon few-shots the voice was defined by (OLD-95)", () => {
+    const result = buildDescriptionInstruction();
+    for (const example of [
+      "'Drink your water right now.'",
+      "'Take your pills right now.'",
+      "'Please take your pills.'",
+      "'Your son's game is starting this minute.'",
+      "'Your son has a game right now.'",
     ]) {
-      expect(result).toContain("the way a human assistant would say it out loud");
-      expect(result).toContain("in the input's language");
-      expect(result).toContain("One natural sentence, roughly 4-9 words");
-      expect(result).toContain("Plain words only");
-      expect(result).toContain("no set opening formula");
+      expect(result).toContain(example);
     }
   });
 
+  it("gives the same few-shots in Arabic so Arabic input gets an Arabic line", () => {
+    const result = buildDescriptionInstruction();
+    for (const example of [
+      "'اشرب ماءك الآن.'",
+      "'خذ حبوبك الآن.'",
+      "'من فضلك خذ حبوبك.'",
+      "'مباراة ابنك تبدأ الآن.'",
+    ]) {
+      expect(result).toContain(example);
+    }
+  });
+
+  it("forbids any name or title — the line addresses nobody", () => {
+    const result = buildDescriptionInstruction();
+    expect(result).toContain("addressing the user by name or title");
+    expect(result).toContain("no 'Sir'");
+    expect(result).not.toContain("address term");
+  });
+
   it("keeps the line true when it is heard late", () => {
-    expect(buildDescriptionInstruction(undefined)).toContain(
+    expect(buildDescriptionInstruction()).toContain(
       "still be true if it is heard a few minutes late"
     );
   });
 
-  it("keeps an Arabic example so Arabic input gets an Arabic line", () => {
-    expect(buildDescriptionInstruction(undefined)).toContain(
-      "'دواؤك المسائي بانتظارك.'"
-    );
-  });
-
   it("never embeds a double quote (it is inlined in a JSON string field)", () => {
-    expect(buildDescriptionInstruction("Wahab")).not.toContain('"');
-    expect(buildDescriptionInstruction(undefined)).not.toContain('"');
+    expect(buildDescriptionInstruction()).not.toContain('"');
   });
 });
 
@@ -247,15 +234,21 @@ describe("buildPreReminderInstruction", () => {
   it("describes the preDescription advance-notice line", () => {
     const result = buildPreReminderInstruction();
     expect(result).toContain("preDescription");
-    expect(result).toContain("name the event and how far off it is");
+    expect(result).toContain("states the event and how far off it is");
     expect(result).toContain("ONLY when preReminderMinutes > 0");
   });
 
   it("keeps the advance notice factual but opener-free, with an Arabic example", () => {
     const result = buildPreReminderInstruction();
-    expect(result).toContain("no set opening formula");
+    expect(result).toContain(SPOKEN_LINE_RULE);
     expect(result).toContain("'Your flight leaves in 40 minutes.'");
     expect(result).toContain("'اجتماعك يبدأ بعد ربع ساعة.'");
+  });
+
+  // The one place a time span is allowed: the description bans countdowns
+  // because it may be heard late, the heads-up exists to name the lead time.
+  it("keeps the lead time in the heads-up line", () => {
+    expect(buildPreReminderInstruction()).toContain("the one place a time span belongs");
   });
 });
 
@@ -265,9 +258,10 @@ describe("instruction phrasing", () => {
   // The parse prompt used to hand the model a menu of fixed hooks, so every
   // spoken line came out stamped from the same template. They are gone; this
   // fails the moment one is reintroduced. "it is time" / "time to" joined the
-  // list in OLD-61: the model kept reinventing them on its own, so they are now
-  // named as forbidden — which means the ban text itself is the one place they
-  // are allowed to appear, and it is stripped before the guard runs.
+  // list in OLD-61 and the catch wordings ("heads up", "by the way") in OLD-95:
+  // the model kept reinventing them on its own, so they are now named as
+  // forbidden — which means the ban text itself is the one place they are
+  // allowed to appear, and it is stripped before the guard runs.
   const CANNED_OPENERS = [
     "it's time",
     "it is time",
@@ -275,21 +269,22 @@ describe("instruction phrasing", () => {
     "heads up",
     "quick reminder",
     "hook",
+    "by the way",
+    "don't forget",
     "حان وقت",
     "حان الوقت",
+    "على فكرة",
   ];
 
-  const withoutOpenerBan = (instruction: string) =>
-    instruction.replace(SPOKEN_OPENER_RULE, "");
+  const withoutLineRule = (instruction: string) =>
+    instruction.replace(SPOKEN_LINE_RULE, "");
 
   const instructions = () =>
     [
-      buildDescriptionInstruction(undefined),
-      buildDescriptionInstruction("Wahab"),
+      buildDescriptionInstruction(),
       buildPreReminderInstruction(),
-      buildVariantInstruction(undefined),
-      buildVariantInstruction("Wahab"),
-    ].map(withoutOpenerBan);
+      buildVariantInstruction(),
+    ].map(withoutLineRule);
 
   for (const opener of CANNED_OPENERS) {
     it(`never offers "${opener}" as an opener`, () => {
@@ -298,18 +293,25 @@ describe("instruction phrasing", () => {
       }
     });
   }
-
-  it("tells every builder to skip the opening formula", () => {
-    for (const instruction of instructions()) {
-      expect(instruction).toContain("no set opening formula");
-    }
-  });
 });
 
-// ─── SPOKEN_OPENER_RULE (OLD-61: the model's own favourite opener) ──────────
+// ─── SPOKEN_LINE_RULE (OLD-95: the one voice rule) ─────────────────────────
 
-describe("SPOKEN_OPENER_RULE", () => {
-  it("forbids the clock and label openers by name, in both languages", () => {
+describe("SPOKEN_LINE_RULE", () => {
+  it("asks for one short present-tense sentence about the thing", () => {
+    expect(SPOKEN_LINE_RULE).toContain("ONE short sentence, present tense");
+    expect(SPOKEN_LINE_RULE).toContain("about the thing itself and nothing else");
+  });
+
+  it("offers the three registers the model may pick between", () => {
+    expect(SPOKEN_LINE_RULE).toContain("a direct instruction ('Drink your water right now.')");
+    expect(SPOKEN_LINE_RULE).toContain(
+      "a stated fact ('Your son's game is starting this minute.')"
+    );
+    expect(SPOKEN_LINE_RULE).toContain("a polite request ('Please take your pills.')");
+  });
+
+  it("forbids the clock, label and lead-in openers by name, in both languages", () => {
     for (const banned of [
       "'It is time'",
       "'It's time'",
@@ -320,35 +322,45 @@ describe("SPOKEN_OPENER_RULE", () => {
       "'Just a reminder'",
       "'Heads up'",
       "'تذكير سريع'",
+      "'By the way'",
+      "'Just so you know'",
+      "'Don't forget'",
+      "'على فكرة'",
+      "'لا تنسى'",
     ]) {
-      expect(SPOKEN_OPENER_RULE).toContain(banned);
+      expect(SPOKEN_LINE_RULE).toContain(banned);
     }
-    expect(SPOKEN_OPENER_RULE).toContain("forbidden wordings, not merely discouraged");
+    expect(SPOKEN_LINE_RULE).toContain("forbidden wordings, not merely discouraged");
+  });
+
+  it("bans greetings, names and wellness commentary outright", () => {
+    expect(SPOKEN_LINE_RULE).toContain("any greeting");
+    expect(SPOKEN_LINE_RULE).toContain("addressing the user by name or title");
+    expect(SPOKEN_LINE_RULE).toContain("no 'Sir'");
+    expect(SPOKEN_LINE_RULE).toContain("wellness, benefit or encouragement commentary");
   });
 
   it("gives the model somewhere else to start instead of a replacement formula", () => {
-    expect(SPOKEN_OPENER_RULE).toContain("Open on something concrete instead");
-    expect(SPOKEN_OPENER_RULE).toContain("There is no approved replacement opener");
+    expect(SPOKEN_LINE_RULE).toContain("Start on the substance");
+    expect(SPOKEN_LINE_RULE).toContain("There is no approved replacement opener");
   });
 
   it("never embeds a double quote (it is inlined in a JSON string field)", () => {
-    expect(SPOKEN_OPENER_RULE).not.toContain('"');
+    expect(SPOKEN_LINE_RULE).not.toContain('"');
   });
 
   it("ships in every builder that describes a spoken line", () => {
     for (const instruction of [
-      buildDescriptionInstruction(undefined),
-      buildDescriptionInstruction("Wahab"),
+      buildDescriptionInstruction(),
       buildPreReminderInstruction(),
-      buildVariantInstruction(undefined),
-      buildVariantInstruction("Wahab"),
+      buildVariantInstruction(),
     ]) {
-      expect(instruction).toContain(SPOKEN_OPENER_RULE);
+      expect(instruction).toContain(SPOKEN_LINE_RULE);
     }
   });
 
-  it("keeps each ladder rung opening on a different word", () => {
-    expect(buildVariantInstruction(undefined)).toContain(
+  it("keeps each replay line opening on a different word", () => {
+    expect(buildVariantInstruction()).toContain(
       "start on a different word from the description and from the other variants"
     );
   });
@@ -368,6 +380,22 @@ describe("BANNED_OPENERS", () => {
       "حان وقت",
       "حان الوقت",
       "تذكير سريع",
+    ]) {
+      expect(BANNED_OPENERS).toContain(opener);
+    }
+  });
+
+  // These were the app's own catch wordings until OLD-95 removed the feature.
+  // Nothing prepends them any more, so the model may not write them either.
+  it("names the conversational lead-ins the catches used to supply", () => {
+    for (const opener of [
+      "by the way",
+      "just so you know",
+      "don't forget",
+      "remember",
+      "على فكرة",
+      "لا تنسى",
+      "انتبه",
     ]) {
       expect(BANNED_OPENERS).toContain(opener);
     }
@@ -787,50 +815,29 @@ describe("normalizeVariants", () => {
 // ─── buildVariantInstruction ────────────────────────────────────────────────
 
 describe("buildVariantInstruction", () => {
-  it("includes the address term verbatim when set", () => {
-    const result = buildVariantInstruction("Wahab");
-    expect(result).toContain("'Wahab'");
-    expect(result).not.toContain("never address the user");
-  });
-
-  it("supports an Arabic address term", () => {
-    const result = buildVariantInstruction("وهاب");
-    expect(result).toContain("'وهاب'");
-  });
-
-  it("trims surrounding whitespace from the term", () => {
-    const result = buildVariantInstruction("  Ma'am  ");
-    expect(result).toContain("'Ma'am'");
-  });
-
-  it("forbids invented names when no term is set", () => {
-    const result = buildVariantInstruction(undefined);
-    expect(result).toContain("never address the user by any name or title");
-    expect(result).toContain("no 'Sir'");
-  });
-
-  it("treats empty and whitespace terms as unset", () => {
-    expect(buildVariantInstruction("")).toBe(buildVariantInstruction(undefined));
-    expect(buildVariantInstruction("   ")).toBe(buildVariantInstruction(undefined));
+  it("holds replay lines to the same voice as the description", () => {
+    const result = buildVariantInstruction();
+    expect(result).toContain(SPOKEN_LINE_RULE);
+    // Names went with the catches (OLD-95): no variant addresses the user.
+    expect(result).not.toContain("address term");
   });
 
   it("documents all three replay fields and the economize policy", () => {
-    for (const result of [buildVariantInstruction("Wahab"), buildVariantInstruction(undefined)]) {
-      expect(result).toContain('"urgency"');
-      expect(result).toContain('"persistent"');
-      expect(result).toContain('"variants"');
-      expect(result).toContain(`${MAX_REPLAY_VARIANTS} variants`);
-    }
+    const result = buildVariantInstruction();
+    expect(result).toContain('"urgency"');
+    expect(result).toContain('"persistent"');
+    expect(result).toContain('"variants"');
+    expect(result).toContain(`${MAX_REPLAY_VARIANTS} variants`);
   });
 
   it("describes urgency by how hard the reminder pushes, not by opener", () => {
-    const result = buildVariantInstruction(undefined);
+    const result = buildVariantInstruction();
     expect(result).toContain("how hard the reminder has to push");
     expect(result).toContain('"urgent" when the user must act right now');
   });
 
   it("keeps the escalation and the late-delivery rule", () => {
-    const result = buildVariantInstruction(undefined);
+    const result = buildVariantInstruction();
     expect(result).toContain("escalate in firmness");
     expect(result).toContain("never repeat the description or another variant verbatim");
     expect(result).toContain("still true when heard minutes late (no countdowns)");

@@ -1,7 +1,7 @@
 import React from "react";
 import { StyleSheet, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Calendar, List, Mic, Settings } from "lucide-react-native";
+import { Calendar, Keyboard, List, Mic, Settings } from "lucide-react-native";
 import { borderRadius, colors, shadows } from "../lib/theme";
 
 export type BottomBarTab = "today" | "days" | "settings";
@@ -11,6 +11,8 @@ type BottomBarProps = {
     onTab: (tab: BottomBarTab) => void;
     /** When set, renders the round record button anchored bottom-right (Tiimo style). */
     onRecord?: () => void;
+    /** Typed composer (OLD-101) — a smaller sibling of the mic, never its equal. */
+    onCompose?: () => void;
 };
 
 const TABS: { key: BottomBarTab; Icon: typeof List }[] = [
@@ -19,7 +21,7 @@ const TABS: { key: BottomBarTab; Icon: typeof List }[] = [
     { key: "settings", Icon: Settings },
 ];
 
-export default function BottomBar({ activeTab, onTab, onRecord }: BottomBarProps) {
+export default function BottomBar({ activeTab, onTab, onRecord, onCompose }: BottomBarProps) {
     const insets = useSafeAreaInsets();
 
     return (
@@ -47,6 +49,18 @@ export default function BottomBar({ activeTab, onTab, onRecord }: BottomBarProps
                         );
                     })}
                 </View>
+
+                {onCompose && (
+                    <TouchableOpacity
+                        style={styles.composeButton}
+                        onPress={onCompose}
+                        activeOpacity={0.9}
+                        accessibilityRole="button"
+                        accessibilityLabel="Type a reminder"
+                    >
+                        <Keyboard size={20} color={colors.textHeading} strokeWidth={1.75} />
+                    </TouchableOpacity>
+                )}
 
                 {onRecord && (
                     <TouchableOpacity
@@ -99,6 +113,20 @@ const styles = StyleSheet.create({
     // Tiimo-style active tab: dark rounded square, light icon.
     itemActive: {
         backgroundColor: colors.textHeading,
+    },
+    // Deliberately smaller and lighter than the mic: the keyboard is the
+    // alternative, not the invitation.
+    composeButton: {
+        width: 46,
+        height: 46,
+        borderRadius: 23,
+        backgroundColor: colors.card,
+        alignItems: "center",
+        justifyContent: "center",
+        ...shadows.card,
+        shadowOpacity: 0.12,
+        shadowRadius: 10,
+        elevation: 4,
     },
     recordButton: {
         width: 58,

@@ -20,7 +20,13 @@ import {
   deleteAsync,
   getInfoAsync,
 } from "expo-file-system/legacy";
-import { getNextIntervalOccurrence, getNextTriggerTime, ReminderSchedule } from "./time";
+import {
+  getNextIntervalOccurrence,
+  getNextTriggerTime,
+  planGridOccurrences,
+  MAX_PENDING_OCCURRENCES,
+  ReminderSchedule,
+} from "./time";
 import { Reminder, ReminderHistory, useReminderStore } from "./store";
 import { vrLog, buildTraceId } from "./vrLog";
 import { logAppTaskState } from "./activityControl";
@@ -30,6 +36,7 @@ import {
   normalizeSchedule,
   Schedule,
   ScheduleWarning,
+  type GridSchedule,
 } from "./schedule";
 import {
   isAlarmOccurrenceNotification as isAlarmOccurrenceKind,
@@ -46,7 +53,6 @@ import {
   getAlarmStartTime,
   shouldHandleTimeout,
   hasActivePendingAlarm,
-  parseAutoSnoozeCount,
   adjustPastDueTrigger,
   shouldRecordAsMissedInstead,
   isStaleDelivery,
@@ -58,25 +64,22 @@ import {
   preAlertTriggerTime,
   filterPreAlertTriggerIds,
   buildPreAlertBody,
-  parsePersistentFlag,
-  parseFollowUpCount,
-  parseVariantCount,
   normalizeUrgencyTier,
-  shouldContinueFollowUps,
-  followUpDelayMinutes,
-  followUpVariantIndex,
-  parseVariantList,
-  variantLineForIndex,
+  parseNagCount,
+  shouldNagAgain,
+  planNagChain,
+  remainingNagComebacks,
+  nagIndexForFireTime,
+  NAG_DELAY_MINUTES,
+  MAX_NAG_COMEBACKS,
   MAX_REPLAY_VARIANTS,
-  ladderOffsetsMs,
-  ladderRungTimes,
 } from "./notificationDecisions";
 import {
   alarmAppKey,
+  nagAppKey,
+  isNagAppKey,
   parseAlarmAppKey,
   reconcileAlarmEvents,
-  buildAlarmLadder,
-  ladderMetadata,
   dedupeByAppKey,
   cancelAlarm as cancelNativeAlarm,
   getAndClearEventLog as drainNativeAlarmEvents,
@@ -95,11 +98,6 @@ import {
 // fall back to the system default alarm sound.
 let alarmSounds: {
   ensureAlarmSound?: (reminderId: string, wavUrl?: string | null) => Promise<string | null>;
-  ensureVariantAlarmSound?: (
-    reminderId: string,
-    rung: number,
-    wavUrl?: string | null
-  ) => Promise<string | null>;
   removeAlarmSound?: (reminderId: string) => Promise<void>;
 } | null = null;
 
@@ -183,7 +181,12 @@ function shouldIgnoreInternalDismiss(notificationId?: string): boolean {
   return true;
 }
 
-async function cancelExistingReminderOccurrenceTriggers(reminderId: string, exceptId?: string): Promise<number> {
+// OLD-98: `exceptId` is a SET of occurrences to keep, not one — a reminder that
+// rings at 08:00 and 21:00 holds both triggers at the same time.
+async function cancelExistingReminderOccurrenceTriggers(
+  reminderId: string,
+  exceptId?: string | string[]
+): Promise<number> {
   if (!reminderId) return 0;
   try {
     const scheduledIds = await notifee.getTriggerNotificationIds();
@@ -344,21 +347,9 @@ async function startAlarmAudioFromNotification(notification?: PendingAlarmNotifi
   const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
   if (!reminderId) return;
 
-  // Follow-up occurrences carry the variant index of their spoken line; play
-  // that file when it exists locally, else fall back to the base line.
-  let localAudioPath = getLocalAudioPath(reminderId);
-  const variantIndexRaw = Number(data.variantIndex ?? "-1");
-  if (Number.isFinite(variantIndexRaw) && variantIndexRaw >= 0) {
-    const variantPath = getLocalVariantAudioPath(reminderId, variantIndexRaw);
-    try {
-      const variantInfo = await getInfoAsync(variantPath);
-      if (variantInfo.exists && variantInfo.size) {
-        localAudioPath = variantPath;
-      }
-    } catch {
-      // fall back to base
-    }
-  }
+  // Every ring of a reminder — the occurrence and every nag comeback — speaks
+  // the same recorded take (OLD-96). No per-ring line selection.
+  const localAudioPath = getLocalAudioPath(reminderId);
 
   try {
     const fileInfo = await getInfoAsync(localAudioPath);
@@ -390,8 +381,7 @@ async function startAlarmAudioFromNotification(notification?: PendingAlarmNotifi
 async function scheduleSnoozeOccurrenceFromNotification(
   notification: PendingAlarmNotification,
   snoozeMinutes: number,
-  extraData?: Record<string, string>,
-  bodyOverride?: string
+  extraData?: Record<string, string>
 ): Promise<void> {
   const data = notification.data || {};
   const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
@@ -405,7 +395,8 @@ async function scheduleSnoozeOccurrenceFromNotification(
   };
   const channelId = `reminder_${reminderId}`;
   const title = (data.title as string) || notification.title || "Reminder";
-  const body = bodyOverride || (data.description as string) || notification.body || "";
+  // Identical text, identical audio — a comeback is the same ring again.
+  const body = (data.description as string) || notification.body || "";
 
   await notifee.createTriggerNotification(
     {
@@ -453,6 +444,69 @@ async function scheduleSnoozeOccurrenceFromNotification(
     },
     trigger
   );
+}
+
+/**
+ * The nag: bring this ring back in NAG_DELAY_MINUTES with the identical audio.
+ *
+ * Returns false when the chain is over (MAX_NAG_COMEBACKS already delivered),
+ * which is the caller's signal to record the occurrence as missed instead.
+ * The comeback lives under the `snooze_<id>_` prefix, so it never collides with
+ * — and is never cancelled alongside — the reminder's next scheduled ring.
+ */
+async function scheduleNagComeback(
+  notification: PendingAlarmNotification,
+  reason: "dismissed" | "ring_timeout" | "later_action"
+): Promise<boolean> {
+  const data = notification.data || {};
+  const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
+  if (!reminderId) return false;
+
+  // Pre-OLD-96 payloads carry the ladder's counter under the old name; reading
+  // it keeps a ring that was already in flight during the update capped.
+  const nagCount = parseNagCount(data.nagCount ?? data.followUpCount);
+  if (!shouldNagAgain(nagCount)) return false;
+
+  const nextCount = nagCount + 1;
+  await scheduleSnoozeOccurrenceFromNotification(notification, NAG_DELAY_MINUTES, {
+    nagCount: String(nextCount),
+    nagReason: reason,
+  });
+  vrLog("pending_alarm", "nag_scheduled", {
+    notificationId: notification.id || "",
+    reminderId,
+    nagCount: nextCount,
+    delayMinutes: NAG_DELAY_MINUTES,
+    reason,
+  });
+  return true;
+}
+
+/**
+ * "Done" ends the chain: drop a comeback that is already registered and reset
+ * the counter. Only `snooze_<id>_` keys die — the reminder's own upcoming
+ * occurrences stay armed.
+ */
+async function cancelPendingNags(reminderId: string): Promise<void> {
+  if (!reminderId) return;
+  const prefix = `snooze_${reminderId}_`;
+  try {
+    const scheduledIds = await notifee.getTriggerNotificationIds();
+    for (const id of scheduledIds) {
+      if (!id.startsWith(prefix)) continue;
+      try {
+        await notifee.cancelTriggerNotification(id);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+  if (await alarmKitEnabled()) {
+    await cancelAlarmKitNags(reminderId);
+    await patchAlarmKitState(reminderId, { nagCount: 0 });
+  }
 }
 
 async function promoteNextQueuedAlarm(reason: string): Promise<boolean> {
@@ -761,6 +815,7 @@ export async function cancelDisplayedAlarmNotifications(
   if (stored) ids.add(stored);
 
   for (const id of ids) {
+    markInternalDismissIgnore(id);
     try {
       await notifee.cancelDisplayedNotification(id);
     } catch {
@@ -768,12 +823,16 @@ export async function cancelDisplayedAlarmNotifications(
     }
   }
 
-  // AlarmKit mirror: acknowledging one rung in-app has to silence the rest of
-  // the occurrence's ladder, exactly as the native Done intent does. Pre-alert
-  // ids do not parse as alarm app keys, so they never reach the registry.
-  const parsed = [...ids].map(parseAlarmAppKey).find((p) => p !== null);
-  if (parsed && (await alarmKitEnabled())) {
-    await cancelStaleAlarmKitAlarms(parsed.reminderId, new Set());
+  // AlarmKit mirror: the acknowledged ring's own native alarm goes with it —
+  // and nothing else. One occurrence is one alarm now (OLD-96), so there are no
+  // siblings to chase, and the reminder's other pending rings (08:00 answered,
+  // 21:00 still armed) must survive. Pre-alert ids do not parse as alarm app
+  // keys, so they never reach the registry.
+  if (await alarmKitEnabled()) {
+    for (const id of ids) {
+      if (!parseAlarmAppKey(id)) continue;
+      await cancelNativeAlarm(id);
+    }
   }
 
   await clearDisplayedAlarm();
@@ -798,17 +857,13 @@ export async function handlePendingAlarmTimeout(
 
     const data = pending.notification.data || {};
     const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
-    const persistent = parsePersistentFlag(data.persistent);
-    const followUpCount = parseFollowUpCount(data.followUpCount);
-    const continueLadder = shouldContinueFollowUps(persistent, followUpCount);
+    const nagCount = parseNagCount(data.nagCount ?? data.followUpCount);
 
     vrLog("pending_alarm", "timeout_fired", {
       notificationId,
       reminderId,
       source,
-      followUpCount,
-      persistent,
-      continueLadder,
+      nagCount,
     });
 
     await alarmAudioService.stop().catch(() => {});
@@ -819,40 +874,9 @@ export async function handlePendingAlarmTimeout(
     }
     await cancelDisplayedAlarmNotifications(notificationId);
 
-    if (continueLadder) {
-      // Assistant-style replay: come back with the NEXT variant line, firmer
-      // each time. Persistent reminders keep going (interval capped at 10 min
-      // after the 3rd follow-up); default reminders stop after 2 follow-ups.
-      const nextFollowUp = followUpCount + 1;
-      const delayMinutes = followUpDelayMinutes(nextFollowUp);
-      const variantCount = parseVariantCount(data.variantCount);
-      const variantIndex = followUpVariantIndex(nextFollowUp, variantCount);
-      const variants = parseVariantList(data.variants);
-      const baseLine =
-        (typeof data.description === "string" && data.description) ||
-        pending.notification.body ||
-        "";
-      const followUpLine = variantLineForIndex(variants, variantIndex, baseLine);
-
-      vrLog("pending_alarm", "follow_up_scheduled", {
-        notificationId,
-        reminderId,
-        followUpCount: nextFollowUp,
-        delayMinutes,
-        variantIndex,
-        persistent,
-      });
-
-      await scheduleSnoozeOccurrenceFromNotification(
-        pending.notification,
-        delayMinutes,
-        {
-          followUpCount: String(nextFollowUp),
-          variantIndex: String(variantIndex),
-          followUpReason: "ring_timeout",
-        },
-        followUpLine
-      );
+    // An unattended ring counts as a dismissal (OLD-96): the same take comes
+    // back in five minutes until the comebacks run out.
+    if (await scheduleNagComeback(pending.notification, "ring_timeout")) {
       await markPendingAlarmResolved(notificationId, "snooze");
       await clearPendingAlarm({ promoteNext: true });
       return true;
@@ -1042,16 +1066,14 @@ export interface ReminderNotification {
   wavUrl?: string;
   preReminderMinutes?: number; // heads-up lead time in minutes (0/absent = none)
   preAudioUrl?: string;
-  // Assistant-style replays (OLD-53)
+  // Ring cadence (how the spoken lines play while an alarm is ringing).
   urgency?: string; // "urgent" | "notice" | "routine"
   persistent?: boolean;
   variants?: string[];
   variantAudioUrls?: string[];
-  // Alarm-ready wavs for the ladder rungs, index-aligned with `variants`.
-  // iOS AlarmKit only; a null/absent entry falls back to the base wav.
+  /** Unused since OLD-96 — every ring speaks the base wav. Kept so the store
+   *  and lib/audioHydration.ts round-trip unchanged. */
   variantWavUrls?: (string | null)[];
-  snoozeEnabled?: boolean;
-  snoozeDuration?: number; // minutes
   volume?: number; // 0-1
   volumeStyle?: "standard" | "progressive";
 
@@ -1061,14 +1083,65 @@ export interface ReminderNotification {
   intervalDays?: number;
   scheduledFor?: number;
 
-  // New unified schedule system
-  scheduleType?: 'once' | 'interval' | 'rrule';
+  /**
+   * The days × times grid (OLD-97). Authoritative for WHEN this rings whenever
+   * it is present: the execution layer plans off the grid and only falls back
+   * to `scheduleType`/`frequency` for reminders created before it existed.
+   */
+  schedule?: GridSchedule;
+
+  // New unified schedule system ('grid' is OLD-97's days × times model)
+  scheduleType?: 'once' | 'interval' | 'rrule' | 'grid';
   onceAt?: number;
   rrule?: string;
   dtstart?: number;
   tzid?: string;
   until?: number;
   parseWarnings?: string[];
+}
+
+// ─── Occurrence set (OLD-98) ────────────────────────────────────────────────
+//
+// A grid reminder rings N times a day, so it owns N pending triggers rather
+// than one. The id scheme already separates them — `reminder_<id>_<ts>` is
+// unique per ring — so the work is keeping the SET intact wherever the old code
+// assumed a single trigger it could freely cancel.
+
+function occurrenceGrid(reminder: ReminderNotification): GridSchedule | null {
+  return reminder.schedule?.type === "grid" ? reminder.schedule : null;
+}
+
+/**
+ * Read the grid back off the store when the caller's object predates it.
+ *
+ * Same read-through as `withStoredWavUrls`, same reason: some create flows
+ * still hand-build a ReminderNotification out of legacy fields only, while the
+ * store always has a grid (it backfills one on every write). A caller that DOES
+ * supply a grid always wins, so a freshly edited schedule is never overwritten
+ * by the stored one.
+ */
+function withStoredSchedule(reminder: ReminderNotification): ReminderNotification {
+  if (occurrenceGrid(reminder)) return reminder;
+  try {
+    const stored = useReminderStore.getState().getReminderById(reminder.id);
+    if (stored?.schedule?.type === "grid") {
+      return { ...reminder, schedule: stored.schedule };
+    }
+  } catch {
+    // Store unavailable (headless task) — the legacy path below still works.
+  }
+  return reminder;
+}
+
+/** The grid a notification payload carries, or null on a pre-grid payload. */
+function parseOccurrenceGrid(value: unknown): GridSchedule | null {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && parsed.type === "grid" ? (parsed as GridSchedule) : null;
+  } catch {
+    return null;
+  }
 }
 
 function getLocalAudioPath(reminderId: string): string {
@@ -1333,17 +1406,39 @@ async function schedulePreAlertForOccurrence(
 // alarmKitEnabled(), which is false on Android, on iOS < 26, and in Jest.
 
 // Per-reminder guard state the native side cannot hold for us: the snooze
-// window (PRD guard 3) and the escalation-ladder counter, which travels in
-// notification data on the notifee path and has nowhere to live here.
+// window (PRD guard 3) and the nag counter, which travels in notification data
+// on the notifee path and has nowhere to live here.
 const ALARMKIT_STATE_KEY = "@alarmkit_state";
+
+/**
+ * FB21273655 (developer.apple.com/forums/thread/809398): alarms scheduled before
+ * an OS point-upgrade silently stopped firing. `getScheduledAlarms()` reads OUR
+ * UserDefaults registry, not the daemon, so it keeps listing alarms the system
+ * has already dropped — "the key is there" is not evidence the alarm is armed.
+ *
+ * The first startup sync of a process therefore re-registers every live alarm
+ * instead of trusting the registry. Cold start only: reconciliation, not this,
+ * runs on each foreground.
+ */
+let alarmKitRelaunchRefreshPending = true;
+
+/** Test seam — makes the next startup sync behave like a fresh launch again. */
+export function resetAlarmKitLaunchRefresh(): void {
+  alarmKitRelaunchRefreshPending = true;
+}
 
 type AlarmKitReminderState = {
   snoozeUntil?: number;
-  followUpCount?: number;
-  // Ladder rung wavs arrive with hydration but the reminder store has no field
-  // for them, so the urls live here — a rung re-staged in a later session
-  // re-downloads its own wav instead of silently dropping to the base line.
-  variantWavUrls?: (string | null)[];
+  /** Comebacks already delivered for the current ring (OLD-96). */
+  nagCount?: number;
+  /** Fire time of the occurrence the running nag chain belongs to. */
+  nagFor?: number;
+  /**
+   * Nag app key -> the occurrence it belongs to. A reminder can hold several
+   * pre-scheduled chains at once (08:00 and 21:00 of the same day), so a single
+   * `nagFor` cannot say which ring a comeback is repeating.
+   */
+  nagOrigins?: Record<string, number>;
 };
 
 async function getAlarmKitState(): Promise<Record<string, AlarmKitReminderState>> {
@@ -1395,23 +1490,6 @@ async function ensureAlarmSoundSafe(
   }
 }
 
-/** AK-3's variant hydration for ladder rung `rung` (>= 1), absent-safe. */
-async function ensureVariantAlarmSoundSafe(
-  reminderId: string,
-  rung: number,
-  wavUrl?: string | null
-): Promise<string | null> {
-  if (!alarmSounds?.ensureVariantAlarmSound) return null;
-  try {
-    return (
-      (await alarmSounds.ensureVariantAlarmSound(reminderId, rung, wavUrl ?? null)) ?? null
-    );
-  } catch (e) {
-    vrLog("alarmkit", "variant_sound_hydration_failed", { reminderId, rung, error: String(e) });
-    return null;
-  }
-}
-
 async function removeAlarmSoundSafe(reminderId: string): Promise<void> {
   if (!alarmSounds?.removeAlarmSound) return;
   try {
@@ -1422,200 +1500,331 @@ async function removeAlarmSoundSafe(reminderId: string): Promise<void> {
 }
 
 /**
- * The ladder's variant wav urls, remembered across sessions.
+ * PRD guard 5: there is no cancelAll() — every occurrence alarm of this
+ * reminder that is not part of the set we are about to register is cancelled
+ * first, because a changed occurrence time changes the app key and the native
+ * UUID registry would otherwise keep the stale alarm ringing.
  *
- * They arrive with hydration and the reminder store has no column for them, so
- * a fresh set is written through to the AlarmKit state and a later session
- * (startup resync, reschedule) reads them back from there.
- */
-async function resolveVariantWavUrls(
-  reminder: ReminderNotification
-): Promise<(string | null)[]> {
-  const fresh = reminder.variantWavUrls;
-  if (fresh?.length) {
-    await patchAlarmKitState(reminder.id, { variantWavUrls: fresh });
-    return fresh;
-  }
-  const state = await getAlarmKitState();
-  return state[reminder.id]?.variantWavUrls ?? [];
-}
-
-/**
- * PRD guard 5: there is no cancelAll() — every alarm of this reminder that is
- * not part of the set we are about to register is cancelled first, because a
- * changed occurrence time changes the app key and the native UUID registry
- * would otherwise keep the stale alarm ringing.
+ * A dropped occurrence takes its pre-scheduled comebacks with it, but only when
+ * it has not rung yet: a ring in the future is being replaced and owes nothing,
+ * while a ring already in the past may be mid-chain and must keep its comebacks
+ * (re-planning tomorrow's occurrences must never silence a nag owed right now).
+ * Expired comebacks are swept at the same time — the native registry keeps an
+ * entry per fired alarm, and those entries count against the alarm budget.
  */
 async function cancelStaleAlarmKitAlarms(
   reminderId: string,
   keep: Set<string>
 ): Promise<void> {
-  const scheduled = await getScheduledNativeAlarms();
-  for (const alarm of scheduled) {
-    if (!alarm.id.startsWith(`reminder_${reminderId}_`)) continue;
+  const occurrencePrefix = `reminder_${reminderId}_`;
+  const nagPrefix = `snooze_${reminderId}_`;
+  const now = Date.now();
+
+  for (const alarm of await getScheduledNativeAlarms()) {
     if (keep.has(alarm.id)) continue;
-    await cancelNativeAlarm(alarm.id);
-    vrLog("alarmkit", "cancelled_stale", { appKey: alarm.id, reminderId });
+
+    if (alarm.id.startsWith(occurrencePrefix)) {
+      await cancelNativeAlarm(alarm.id);
+      vrLog("alarmkit", "cancelled_stale", { appKey: alarm.id, reminderId });
+      if (alarm.fireDate > now) {
+        await cancelAlarmKitNagChain(reminderId, alarm.fireDate, keep);
+      }
+      continue;
+    }
+
+    if (alarm.id.startsWith(nagPrefix) && alarm.fireDate <= now) {
+      await cancelNativeAlarm(alarm.id);
+      vrLog("alarmkit", "cancelled_spent_nag", { appKey: alarm.id, reminderId });
+    }
   }
 }
 
-/** The Library/Sounds filename rung `rung` should ring, base wav as fallback. */
-async function rungSoundName(
+/**
+ * Drop the comebacks belonging to ONE ring. Chain-scoped on purpose: a reminder
+ * that rings at 08:00 and 21:00 holds two pre-scheduled chains, and answering
+ * the morning ring must not disarm the evening one.
+ */
+async function cancelAlarmKitNagChain(
   reminderId: string,
-  rung: number,
-  variantIndex: number,
-  variantWavUrls: (string | null)[],
-  baseSound: string | null
-): Promise<string | null> {
-  if (rung <= 0) return baseSound;
-  const variantSound = await ensureVariantAlarmSoundSafe(
-    reminderId,
-    rung,
-    variantWavUrls[variantIndex]
-  );
-  // A missing variant wav falls back to the base wav, never to the system
-  // default — the assistant repeating itself beats it going silent.
-  return variantSound ?? baseSound;
+  originAt: number,
+  keep?: Set<string>
+): Promise<void> {
+  const keys = planNagChain(originAt).map((ts) => nagAppKey(reminderId, ts));
+  for (const appKey of keys) {
+    if (keep?.has(appKey)) continue;
+    await cancelNativeAlarm(appKey);
+    vrLog("alarmkit", "cancelled_nag", { appKey, reminderId, originAt });
+  }
+  await forgetNagOrigins(reminderId, keys);
+}
+
+/** Drop every nag comeback registered for this reminder, whatever ring it owes. */
+async function cancelAlarmKitNags(reminderId: string): Promise<void> {
+  const prefix = `snooze_${reminderId}_`;
+  const cancelled: string[] = [];
+  for (const alarm of await getScheduledNativeAlarms()) {
+    if (!alarm.id.startsWith(prefix)) continue;
+    await cancelNativeAlarm(alarm.id);
+    cancelled.push(alarm.id);
+    vrLog("alarmkit", "cancelled_nag", { appKey: alarm.id, reminderId });
+  }
+  await forgetNagOrigins(reminderId, cancelled);
+}
+
+/** Record which ring each pre-scheduled comeback repeats. */
+async function rememberNagOrigins(
+  reminderId: string,
+  origins: Record<string, number>
+): Promise<void> {
+  if (Object.keys(origins).length === 0) return;
+  const state = await getAlarmKitState();
+  await patchAlarmKitState(reminderId, {
+    nagOrigins: { ...(state[reminderId]?.nagOrigins || {}), ...origins },
+  });
+}
+
+async function forgetNagOrigins(reminderId: string, appKeys: string[]): Promise<void> {
+  if (appKeys.length === 0) return;
+  const state = await getAlarmKitState();
+  const existing = state[reminderId]?.nagOrigins;
+  if (!existing) return;
+  const next = { ...existing };
+  let changed = false;
+  for (const appKey of appKeys) {
+    if (appKey in next) {
+      delete next[appKey];
+      changed = true;
+    }
+  }
+  if (changed) await patchAlarmKitState(reminderId, { nagOrigins: next });
 }
 
 /**
- * Fill wav fields the caller's reminder object is missing from the store copy.
+ * Fill the wav field the caller's reminder object is missing from the store copy.
  *
  * The creation flow (app/index.tsx) and the edit sheet both schedule with
- * objects built before audio hydration landed, so `wavUrl`/`variantWavUrls`
- * only exist on the store reminder by then. Without this read-through a ladder
- * registered by those callers bakes the fallback sound into every rung — the
- * base wav (or the system default) on rung 1 and 2 instead of their variants —
- * and AlarmKit sounds cannot be patched after registration. Fields the caller
- * does provide always win, so schedule-time wavs behave exactly as before.
+ * objects built before audio hydration landed, so `wavUrl` only exists on the
+ * store reminder by then. Without this read-through those callers bake the
+ * fallback sound (the system default) into the alarm, and AlarmKit sounds
+ * cannot be patched after registration. A wav the caller does provide always
+ * wins, so schedule-time wavs behave exactly as before.
  */
 function withStoredWavUrls(reminder: ReminderNotification): ReminderNotification {
-  if (reminder.wavUrl && reminder.variantWavUrls?.length) return reminder;
+  if (reminder.wavUrl) return reminder;
   const stored = useReminderStore.getState().getReminderById(reminder.id);
   if (!stored) return reminder;
-  const fromStore = toReminderNotification(stored);
+  return { ...reminder, wavUrl: toReminderNotification(stored).wavUrl };
+}
+
+/**
+ * How many of a reminder's pending occurrences get their comebacks armed up
+ * front — the registration budget knob.
+ *
+ * The arithmetic, because AlarmKit's cap (`AlarmError.maximumLimitReached`) is
+ * real and Apple publishes no number: a reminder plans up to
+ * MAX_PENDING_OCCURRENCES (4) rings, each chain costs 3 more registrations, and
+ * the free tier allows 5 active reminders. Arming every chain would be
+ * 5 × (4 + 4×3) = 80 concurrent alarms. At horizon 2 it is 5 × (4 + 2×3) = 50.
+ *
+ * Horizon 2 covers the rings the app genuinely cannot react to (the next hour of
+ * an interval reminder, tonight and tomorrow morning of a clock one). Anything
+ * further out is re-armed by the next foreground reconcile or the next launch
+ * pass, both of which run long before it fires.
+ *
+ * Known and accepted: registrations are issued reminder-by-reminder, so under a
+ * cap the comebacks of an early reminder can starve the OCCURRENCE of a late
+ * one. Handling it properly means a global two-pass scheduler (all occurrences
+ * first, then chains); today the mitigation is this horizon plus
+ * scheduleAlarmKitNagChain bailing out of a chain on the first refusal.
+ */
+const NAG_CHAIN_HORIZON = 2;
+
+/** Every app key of one ring's chain: the occurrence first, then its comebacks. */
+function nagChainKeys(reminderId: string, originAt: number, comebacks: number[]): string[] {
+  return [
+    alarmAppKey(reminderId, originAt),
+    ...comebacks.map((fireDate) => nagAppKey(reminderId, fireDate)),
+  ];
+}
+
+/**
+ * The metadata every ring of a chain carries.
+ *
+ * `siblings` is what lets the native intents disarm the rest of the chain the
+ * moment the user answers, without the app ever running: VRAlarmIntents.swift
+ * reads it back out of the alarm's stored record and cancels those keys.
+ */
+function nagChainMetadata(
+  reminder: ReminderNotification,
+  originAt: number,
+  fireDate: number,
+  nagIndex: number,
+  chainKeys: string[],
+  selfKey: string
+): Record<string, string> {
   return {
-    ...reminder,
-    wavUrl: reminder.wavUrl || fromStore.wavUrl,
-    variantWavUrls: reminder.variantWavUrls?.length
-      ? reminder.variantWavUrls
-      : fromStore.variantWavUrls,
+    reminderId: reminder.id,
+    scheduledFor: String(fireDate),
+    tier: normalizeUrgencyTier(reminder.urgency),
+    nagFor: String(originAt),
+    nagIndex: String(nagIndex),
+    nagMax: String(MAX_NAG_COMEBACKS),
+    siblings: chainKeys.filter((key) => key !== selfKey).join(","),
   };
 }
 
 /**
- * Register one occurrence as its full ladder of sibling alarms.
+ * Register one occurrence AND the comebacks it may end up owing (OLD-96).
+ *
+ * The comebacks are pre-scheduled because they have to be: no code of ours runs
+ * when an AlarmKit ring times out unattended, so a comeback that is not already
+ * on the daemon's books never happens on a locked phone
+ * (docs/alarmkit-focus-breakthrough.md §7). They are cancelled the instant the
+ * user answers — natively through the `siblings` metadata, and again from
+ * reconciliation as a backstop for the after-first-unlock intent gap.
  *
  * De-duped on the occurrence's appKey: startup gap_resync and a fresh create
- * race on the same occurrence, and with up to three alarms per occurrence a
- * double registration triples (2026-08-07 devlog).
+ * race on the same occurrence and would otherwise register it twice
+ * (2026-08-07 devlog).
+ *
+ * `keepAppKeys` is the whole reminder's expected set when several occurrences
+ * are registered together (OLD-98) — without it, registering the 21:00 ring
+ * would cancel the 08:00 one as stale.
  */
 async function scheduleAlarmKitOccurrence(
   reminder: ReminderNotification,
-  triggerTimestamp: number
+  triggerTimestamp: number,
+  keepAppKeys?: Set<string>,
+  options?: { withNagChain?: boolean }
 ): Promise<void> {
-  const rungs = buildAlarmLadder(
-    reminder.id,
-    triggerTimestamp,
-    reminder.urgency,
-    reminder.persistent
-  );
+  const appKey = alarmAppKey(reminder.id, triggerTimestamp);
 
-  return dedupeByAppKey(rungs[0].appKey, async () => {
-    // Read the store at execution time: hydration may have landed the wavs
+  return dedupeByAppKey(appKey, async () => {
+    // Read the store at execution time: hydration may have landed the wav
     // between the caller building its reminder object and this work running.
     const hydrated = withStoredWavUrls(reminder);
-    await cancelStaleAlarmKitAlarms(reminder.id, new Set(rungs.map((r) => r.appKey)));
+    const withChain = options?.withNagChain !== false;
+    const comebacks = withChain
+      ? remainingNagComebacks(triggerTimestamp, Date.now())
+      : [];
+    const chainKeys = nagChainKeys(reminder.id, triggerTimestamp, comebacks);
 
-    const baseSound = await ensureAlarmSoundSafe(reminder.id, hydrated.wavUrl);
-    const variantWavUrls = await resolveVariantWavUrls(hydrated);
+    const keep = new Set(keepAppKeys ?? [appKey]);
+    for (const key of chainKeys) keep.add(key);
+    await cancelStaleAlarmKitAlarms(reminder.id, keep);
 
-    for (const rung of rungs) {
-      const soundName = await rungSoundName(
-        reminder.id,
-        rung.rung,
-        rung.variantIndex,
-        variantWavUrls,
-        baseSound
-      );
-      const uuid = await scheduleNativeAlarm({
-        id: rung.appKey,
-        fireDate: rung.fireDate,
-        title: reminder.title,
-        soundName,
-        snoozeMinutes: reminder.snoozeDuration ?? 5,
-        metadata: {
-          reminderId: reminder.id,
-          scheduledFor: String(rung.fireDate),
-          tier: normalizeUrgencyTier(reminder.urgency),
-          variantIndex: String(rung.variantIndex),
-          ...ladderMetadata(rung),
-        },
-      });
+    const soundName = await ensureAlarmSoundSafe(reminder.id, hydrated.wavUrl);
+    const uuid = await scheduleNativeAlarm({
+      id: appKey,
+      fireDate: triggerTimestamp,
+      title: reminder.title,
+      soundName,
+      // The native Snooze button is the nag by another name — same interval.
+      snoozeMinutes: NAG_DELAY_MINUTES,
+      metadata: nagChainMetadata(
+        hydrated,
+        triggerTimestamp,
+        triggerTimestamp,
+        0,
+        chainKeys,
+        appKey
+      ),
+    });
 
-      vrLog("alarmkit", "scheduled", {
-        appKey: rung.appKey,
-        reminderId: reminder.id,
-        fireDate: rung.fireDate,
-        rung: rung.rung,
-        rungCount: rung.rungCount,
-        soundName: soundName ?? "system_default",
-        uuid: uuid ?? "none",
-      });
-    }
+    vrLog("alarmkit", "scheduled", {
+      appKey,
+      reminderId: reminder.id,
+      fireDate: triggerTimestamp,
+      soundName: soundName ?? "system_default",
+      uuid: uuid ?? "none",
+      comebacks: comebacks.length,
+    });
+
+    await scheduleAlarmKitNagChain(hydrated, triggerTimestamp, comebacks, {
+      chainKeys,
+      soundName,
+    });
   });
 }
 
-/**
- * Register a single alarm outside the ladder — the ignored-occurrence follow-up.
- * PRD: follow-ups stay one alarm, so it carries rung 0 of 1 and no siblings.
- */
-async function scheduleAlarmKitFollowUp(
-  reminder: ReminderNotification,
-  fireDate: number,
-  appKey: string,
-  variantIndex: number
-): Promise<void> {
-  return dedupeByAppKey(appKey, async () => {
-    await cancelStaleAlarmKitAlarms(reminder.id, new Set([appKey]));
+/** The appKey of every occurrence in a planned set. */
+function occurrenceAppKeys(reminderId: string, occurrences: number[]): Set<string> {
+  return new Set(occurrences.map((timestamp) => alarmAppKey(reminderId, timestamp)));
+}
 
-    const baseSound = await ensureAlarmSoundSafe(reminder.id, withStoredWavUrls(reminder).wavUrl);
+/**
+ * Arm the comebacks of one ring: the same title, the same sound, the same
+ * spoken take, five minutes apart, under the `snooze_<id>_` key family so they
+ * coexist with the reminder's other scheduled rings.
+ *
+ * A registration that fails takes the rest of the chain with it — past
+ * AlarmKit's undocumented cap every further call fails too, and comebacks are
+ * the tier we are willing to lose (the occurrence itself is already registered).
+ */
+async function scheduleAlarmKitNagChain(
+  reminder: ReminderNotification,
+  originAt: number,
+  comebacks: number[],
+  precomputed?: { chainKeys?: string[]; soundName?: string | null }
+): Promise<void> {
+  if (comebacks.length === 0) return;
+
+  const chainKeys =
+    precomputed?.chainKeys ?? nagChainKeys(reminder.id, originAt, comebacks);
+  const soundName =
+    precomputed?.soundName !== undefined
+      ? precomputed.soundName
+      : await ensureAlarmSoundSafe(reminder.id, withStoredWavUrls(reminder).wavUrl);
+
+  const origins: Record<string, number> = {};
+  for (const [index, fireDate] of comebacks.entries()) {
+    const appKey = nagAppKey(reminder.id, fireDate);
     const uuid = await scheduleNativeAlarm({
       id: appKey,
       fireDate,
       title: reminder.title,
-      soundName: baseSound,
-      snoozeMinutes: reminder.snoozeDuration ?? 5,
-      metadata: {
-        reminderId: reminder.id,
-        scheduledFor: String(fireDate),
-        tier: normalizeUrgencyTier(reminder.urgency),
-        variantIndex: String(variantIndex),
-        rung: "0",
-        rungCount: "1",
-        siblings: "",
-      },
+      soundName,
+      snoozeMinutes: NAG_DELAY_MINUTES,
+      metadata: nagChainMetadata(
+        reminder,
+        originAt,
+        fireDate,
+        index + 1,
+        chainKeys,
+        appKey
+      ),
     });
 
-    vrLog("alarmkit", "scheduled_follow_up", {
+    if (!uuid) {
+      vrLog("alarmkit", "nag_chain_truncated", {
+        reminderId: reminder.id,
+        appKey,
+        armed: index,
+        wanted: comebacks.length,
+      });
+      break;
+    }
+
+    origins[appKey] = originAt;
+    vrLog("alarmkit", "scheduled_nag", {
       appKey,
       reminderId: reminder.id,
       fireDate,
-      soundName: baseSound ?? "system_default",
-      uuid: uuid ?? "none",
+      nagIndex: index + 1,
+      soundName: soundName ?? "system_default",
+      uuid,
     });
-  });
+  }
+
+  await rememberNagOrigins(reminder.id, origins);
 }
 
 /**
- * Re-register the reminder's live alarms once its wavs exist. The sound is
+ * Re-register the reminder's live alarms once its wav exists. The sound is
  * baked into the alarm at schedule time (a filename, not notification data),
- * so hydration has to rewrite the alarm rather than patch a payload.
- *
- * Rung identity is recovered by matching each live alarm against the ladder
- * that starts at the reminder's earliest pending alarm — the native registry
- * only reports id/uuid/fireDate. Anything outside that ladder (a follow-up)
- * keeps today's shape: base wav, rung 0 of 1, no siblings.
+ * so hydration has to rewrite the alarm rather than patch a payload. Every
+ * ring of the reminder — occurrences and the owed nag alike — speaks the same
+ * take, so there is nothing to match up beyond "is it still in the future".
  */
 async function refreshAlarmKitSound(reminderId: string): Promise<void> {
   const stored = useReminderStore.getState().getReminderById(reminderId);
@@ -1623,73 +1832,61 @@ async function refreshAlarmKitSound(reminderId: string): Promise<void> {
   const reminder = toReminderNotification(stored);
   if (!reminder.wavUrl) return;
 
-  // A ladder still registering (startup sync racing hydration) must land
-  // before the registry is read, or this refresh would rewrite the rungs
+  // An occurrence set still registering (startup sync racing hydration) must
+  // land before the registry is read, or this refresh would rewrite the alarms
   // that already exist while the rest register with stale sounds.
   await settleInFlightAppKeys(`reminder_${reminderId}_`);
 
-  const scheduled = (await getScheduledNativeAlarms()).filter((alarm) =>
-    alarm.id.startsWith(`reminder_${reminderId}_`)
+  const scheduled = (await getScheduledNativeAlarms()).filter(
+    (alarm) => parseAlarmAppKey(alarm.id)?.reminderId === reminderId
   );
   if (scheduled.length === 0) return;
 
-  const baseSound = await ensureAlarmSoundSafe(reminderId, reminder.wavUrl);
-  if (!baseSound) return;
-  const variantWavUrls = await resolveVariantWavUrls(reminder);
+  const soundName = await ensureAlarmSoundSafe(reminderId, reminder.wavUrl);
+  if (!soundName) return;
 
-  const occurrenceStart = Math.min(...scheduled.map((alarm) => alarm.fireDate));
-  const ladder = buildAlarmLadder(
-    reminderId,
-    occurrenceStart,
-    reminder.urgency,
-    reminder.persistent
-  );
-  const byAppKey = new Map(ladder.map((rung) => [rung.appKey, rung]));
-
+  const state = await getAlarmKitState();
+  const origins = state[reminderId]?.nagOrigins || {};
   const now = Date.now();
   for (const alarm of scheduled) {
-    // Never touch a rung at or past its fire time: a native re-register is
+    // Never touch an alarm at or past its fire time: a native re-register is
     // cancel-then-schedule, which would silence an alarm ringing right now.
     if (alarm.fireDate <= now) continue;
-    const rung = byAppKey.get(alarm.id);
-    const variantIndex = rung?.variantIndex ?? -1;
-    const soundName = await rungSoundName(
-      reminderId,
-      rung?.rung ?? 0,
-      variantIndex,
-      variantWavUrls,
-      baseSound
-    );
+    // Re-registering is a full replace, so the chain metadata has to be rebuilt
+    // with it — dropping `siblings` here would leave the native intents unable
+    // to disarm the comebacks when the user answers.
+    const originAt = isNagAppKey(alarm.id)
+      ? origins[alarm.id] ?? alarm.fireDate
+      : alarm.fireDate;
+    const chainKeys = nagChainKeys(reminderId, originAt, planNagChain(originAt));
     await scheduleNativeAlarm({
       id: alarm.id,
       fireDate: alarm.fireDate,
       title: reminder.title,
       soundName,
-      snoozeMinutes: reminder.snoozeDuration ?? 5,
-      metadata: {
-        reminderId,
-        scheduledFor: String(alarm.fireDate),
-        tier: normalizeUrgencyTier(reminder.urgency),
-        variantIndex: String(variantIndex),
-        rung: String(rung?.rung ?? 0),
-        rungCount: String(rung?.rungCount ?? 1),
-        siblings: rung ? rung.siblings.join(",") : "",
-      },
+      snoozeMinutes: NAG_DELAY_MINUTES,
+      metadata: nagChainMetadata(
+        reminder,
+        originAt,
+        alarm.fireDate,
+        nagIndexForFireTime(originAt, alarm.fireDate),
+        chainKeys,
+        alarm.id
+      ),
     });
     vrLog("alarmkit", "sound_refreshed", {
       appKey: alarm.id,
       reminderId,
-      rung: rung?.rung ?? 0,
-      soundName: soundName ?? "system_default",
+      nag: isNagAppKey(alarm.id),
+      soundName,
     });
   }
 }
 
 /**
- * Cancel every native alarm belonging to a reminder — every ladder rung of
- * every occurrence, plus follow-ups. This is the fan-out behind in-app Done,
- * reminder deletion and rescheduling: all rungs share the `reminder_<id>_`
- * prefix, so acknowledging one occurrence never leaves a sibling to ring.
+ * Cancel every native alarm belonging to a reminder — every pending occurrence
+ * plus any owed nag. This is the fan-out behind reminder deletion and
+ * rescheduling, so both key families (`reminder_<id>_`, `snooze_<id>_`) go.
  */
 async function cancelAlarmKitForReminder(reminderId: string): Promise<number> {
   const scheduled = await getScheduledNativeAlarms();
@@ -1739,8 +1936,10 @@ export async function reconcileAlarmKitEvents(): Promise<{
   missed: number;
   pending: number;
   cancelled: number;
+  /** Rings that went unanswered but still owe a comeback. */
+  nagged: number;
 }> {
-  const summary = { stopped: 0, snoozed: 0, missed: 0, pending: 0, cancelled: 0 };
+  const summary = { stopped: 0, snoozed: 0, missed: 0, pending: 0, cancelled: 0, nagged: 0 };
   if (!(await alarmKitEnabled())) return summary;
 
   const events = await drainNativeAlarmEvents();
@@ -1748,6 +1947,32 @@ export async function reconcileAlarmKitEvents(): Promise<{
 
   const now = Date.now();
   const outcomes = reconcileAlarmEvents(events, now, ALARM_RING_TIMEOUT_MS);
+
+  // One ring is up to four alarms since OLD-96 (the occurrence plus the
+  // comebacks pre-scheduled with it), so a single drain routinely carries
+  // several outcomes for the SAME ring — a phone left alone for twenty minutes
+  // hands back four "it fired and nobody answered". They collapse to one
+  // outcome per ring here, or the user gets four missed entries for one dose.
+  const alarmKitState = await getAlarmKitState();
+  const chainOriginOf = (appKey: string, reminderId: string, scheduledFor: number) =>
+    isNagAppKey(appKey)
+      ? alarmKitState[reminderId]?.nagOrigins?.[appKey] ??
+        alarmKitState[reminderId]?.nagFor ??
+        scheduledFor
+      : scheduledFor;
+
+  // An answer anywhere in a chain wins over the rings ignored before it: Done on
+  // the third comeback means the reminder was done, not missed three times.
+  const answered = new Set<string>();
+  for (const outcome of outcomes) {
+    if (outcome.outcome !== "completed") continue;
+    const parsed = parseAlarmAppKey(outcome.id);
+    if (!parsed) continue;
+    answered.add(
+      `${parsed.reminderId}:${chainOriginOf(outcome.id, parsed.reminderId, parsed.scheduledFor)}`
+    );
+  }
+  const handledChains = new Set<string>();
 
   for (const outcome of outcomes) {
     const parsed = parseAlarmAppKey(outcome.id);
@@ -1774,11 +1999,11 @@ export async function reconcileAlarmKitEvents(): Promise<{
     }
 
     if (outcome.outcome === "cancelled") {
-      // A ladder rung CL-2's intents killed because a sibling was answered.
-      // The answered sibling records the completion and drives the reschedule;
+      // An alarm the native side killed rather than the user answering it.
+      // Whatever cancelled it recorded the outcome and drove the reschedule;
       // this key must add no history and resurrect nothing.
       summary.cancelled++;
-      vrLog("alarmkit", "reconciled_sibling_cancelled", {
+      vrLog("alarmkit", "reconciled_cancelled", {
         appKey: outcome.id,
         reminderId,
         scheduledFor,
@@ -1794,66 +2019,110 @@ export async function reconcileAlarmKitEvents(): Promise<{
     }
     const isOneTime = isOneTimeReminder(reminder.scheduleType || null, reminder.frequency);
 
+    // History and rescheduling belong to the OCCURRENCE, not to whichever
+    // comeback rang last, so every branch below works off the chain's origin.
+    const originAt = chainOriginOf(outcome.id, reminderId, scheduledFor);
+    const chainId = `${reminderId}:${originAt}`;
+
+    // A ring the user answered later in the chain is not a miss, and a ring
+    // already resolved by an earlier outcome in this drain is not a second one.
+    if (outcome.outcome === "missed" && answered.has(chainId)) continue;
+    if (handledChains.has(chainId)) continue;
+
     if (outcome.outcome === "completed") {
+      handledChains.add(chainId);
       summary.stopped++;
       await store.recordCompletion(reminderId, reminder.title, "completed", {
-        scheduledFor,
+        scheduledFor: originAt,
         action: "dismissed",
       });
-      await patchAlarmKitState(reminderId, { snoozeUntil: 0, followUpCount: 0 });
-      vrLog("alarmkit", "reconciled_stopped", { appKey: outcome.id, reminderId, scheduledFor });
+      // "Done" ends the chain wherever it was answered — the ring itself or one
+      // of its comebacks. The native stop intent already cancelled the siblings;
+      // this is the backstop for the case where it could not run (intents are
+      // only available after first unlock).
+      await cancelAlarmKitNagChain(reminderId, originAt);
+      await patchAlarmKitState(reminderId, { snoozeUntil: 0, nagCount: 0 });
+      vrLog("alarmkit", "reconciled_stopped", {
+        appKey: outcome.id,
+        reminderId,
+        scheduledFor: originAt,
+      });
 
       if (isOneTime) {
         const { removeReminderFully } = await import("./reminderRemoval");
         await removeReminderFully(reminderId);
       } else if (outcome.allowReschedule) {
-        await rescheduleAlarmKitNextOccurrence(reminder, scheduledFor);
+        await rescheduleAlarmKitNextOccurrence(reminder, originAt);
       }
       continue;
     }
 
-    // "missed": the alarm rang out unanswered. Same escalation ladder the
-    // notifee path runs from handlePendingAlarmTimeout, driven by the shared
-    // decision helpers — v1 replays the occurrence line, not the variant
-    // cadence (PRD non-goal).
-    const state = await getAlarmKitState();
-    const followUpCount = parseFollowUpCount(state[reminderId]?.followUpCount);
-    const persistent = parsePersistentFlag(reminder.persistent);
+    // "missed": the ring went unanswered, which counts as a dismissal (OLD-96).
+    // The comebacks were armed when the occurrence was registered — nothing of
+    // ours runs at ring-timeout — so the job here is to notice whether the chain
+    // still has one owed, NOT to create one.
+    const armed = (await getScheduledNativeAlarms()).filter(
+      (alarm) =>
+        isNagAppKey(alarm.id) &&
+        alarm.id.startsWith(`snooze_${reminderId}_`) &&
+        alarm.fireDate > now &&
+        (alarmKitState[reminderId]?.nagOrigins?.[alarm.id] ?? originAt) === originAt
+    );
 
-    if (shouldContinueFollowUps(persistent, followUpCount)) {
-      const nextFollowUp = followUpCount + 1;
-      const fireDate = now + followUpDelayMinutes(nextFollowUp) * 60_000;
-      const variantIndex = followUpVariantIndex(
-        nextFollowUp,
-        parseVariantCount(reminder.variants?.length ?? 0)
-      );
-      await scheduleAlarmKitFollowUp(
-        toReminderNotification(reminder),
-        fireDate,
-        alarmAppKey(reminderId, fireDate),
-        variantIndex
-      );
-      await patchAlarmKitState(reminderId, { followUpCount: nextFollowUp });
-      vrLog("alarmkit", "reconciled_follow_up", {
+    if (armed.length > 0) {
+      handledChains.add(chainId);
+      summary.nagged++;
+      await patchAlarmKitState(reminderId, {
+        nagFor: originAt,
+        nagCount: nagIndexForFireTime(originAt, scheduledFor),
+      });
+      vrLog("alarmkit", "nag_already_armed", {
         appKey: outcome.id,
         reminderId,
-        followUpCount: nextFollowUp,
-        variantIndex,
-        persistent,
+        originAt,
+        owed: armed.length,
       });
       continue;
     }
 
+    // Nothing armed. Either the pre-scheduling failed (AlarmKit's registration
+    // cap, an OS upgrade that dropped the alarms) or the chain is simply spent.
+    // Re-deriving it from the origin answers both: the comebacks are a pure
+    // function of the occurrence time.
+    const owed = remainingNagComebacks(originAt, now);
+    if (owed.length > 0) {
+      handledChains.add(chainId);
+      summary.nagged++;
+      await scheduleAlarmKitNagChain(toReminderNotification(reminder), originAt, owed);
+      await patchAlarmKitState(reminderId, {
+        nagFor: originAt,
+        nagCount: nagIndexForFireTime(originAt, scheduledFor),
+      });
+      vrLog("alarmkit", "nag_chain_repaired", {
+        appKey: outcome.id,
+        reminderId,
+        originAt,
+        armed: owed.length,
+      });
+      continue;
+    }
+
+    handledChains.add(chainId);
     summary.missed++;
     await store.recordCompletion(reminderId, reminder.title, "missed", {
-      scheduledFor,
+      scheduledFor: originAt,
       action: "auto_missed",
     });
-    await patchAlarmKitState(reminderId, { followUpCount: 0 });
-    vrLog("alarmkit", "reconciled_missed", { appKey: outcome.id, reminderId, scheduledFor });
+    await cancelAlarmKitNagChain(reminderId, originAt);
+    await patchAlarmKitState(reminderId, { nagCount: 0 });
+    vrLog("alarmkit", "reconciled_missed", {
+      appKey: outcome.id,
+      reminderId,
+      scheduledFor: originAt,
+    });
 
     if (!isOneTime && outcome.allowReschedule) {
-      await rescheduleAlarmKitNextOccurrence(reminder, scheduledFor);
+      await rescheduleAlarmKitNextOccurrence(reminder, originAt);
     }
   }
 
@@ -1861,9 +2130,10 @@ export async function reconcileAlarmKitEvents(): Promise<{
 }
 
 export async function scheduleReminder(
-  reminder: ReminderNotification,
+  input: ReminderNotification,
   _options?: { traceId?: string; occurrenceAfter?: number }
 ): Promise<{ triggerTimestamp: number; notificationId: string }> {
+  const reminder = withStoredSchedule(input);
   const hasPermission = await requestNotificationPermission();
   if (!hasPermission) {
     throw new Error("Notification permission not granted");
@@ -1899,8 +2169,26 @@ export async function scheduleReminder(
   const occurrenceRef = Math.max(Date.now(), _options?.occurrenceAfter ?? 0);
   let triggerTimestamp: number;
 
-  // Try new unified schedule system first
-  if (reminder.scheduleType) {
+  // OLD-98: a grid reminder rings N times a day, so it plans a SET of pending
+  // occurrences. One occurrence is one registration on both platforms now
+  // (OLD-96), so both budgets are the same.
+  const grid = occurrenceGrid(reminder);
+  let plannedOccurrences: number[] = [];
+
+  if (grid) {
+    plannedOccurrences = planGridOccurrences(grid, occurrenceRef, {
+      max: MAX_PENDING_OCCURRENCES,
+    });
+    if (plannedOccurrences.length === 0) {
+      // A dated one-off whose day passed keeps the old user-facing wording;
+      // anything else is a recurrence that simply ran out (an `until` bound).
+      if (grid.days.kind === "date") {
+        throw new Error("Reminder time is in the past. Please choose a future time.");
+      }
+      throw new NoFutureOccurrenceError("No future occurrence for schedule grid", "grid");
+    }
+    triggerTimestamp = plannedOccurrences[0];
+  } else if (reminder.scheduleType) {
     // Backward/fast-path safety: if we have a one-time scheduleType but no onceAt,
     // derive it from `date` + `time` on-device (local timezone).
     let onceAt = reminder.onceAt;
@@ -1987,27 +2275,28 @@ export async function scheduleReminder(
       triggerTimestamp = now + 5000;
     }
 
-  const trigger: TimestampTrigger = {
-    type: TriggerType.TIMESTAMP,
-    timestamp: triggerTimestamp,
-    alarmManager: {
-      type: AlarmType.SET_ALARM_CLOCK, // Use AlarmClock for lockscreen reliability
-    },
-  };
+  // A legacy reminder still has exactly one occurrence — the set is just a
+  // single element, so everything below runs one lap and behaves as before.
+  if (plannedOccurrences.length === 0) plannedOccurrences = [triggerTimestamp];
+  const notificationIds = plannedOccurrences.map((ts) => `reminder_${reminder.id}_${ts}`);
+  const notificationId = notificationIds[0];
 
-  const notificationId = `reminder_${reminder.id}_${triggerTimestamp}`;
+  // Defensive: only the occurrences we just planned may hold a "reminder_*"
+  // trigger. Some Android/Notifee edge cases leave stale triggers around, which
+  // then fire duplicates. Snoozes use the "snooze_*" prefix and are not touched.
+  await cancelExistingReminderOccurrenceTriggers(reminder.id, notificationIds);
 
-  // Defensive: ensure we only ever have a single upcoming "reminder_*" trigger per reminder.
-  // Some Android/Notifee edge cases can leave multiple triggers around, which then fire duplicates.
-  // Snoozes use the "snooze_*" prefix and are intentionally not canceled here.
-  await cancelExistingReminderOccurrenceTriggers(reminder.id, notificationId);
-
-  // AlarmKit owns this occurrence: register its ladder of sibling alarms and
-  // skip the notifee trigger entirely. The pre-alert heads-up stays a plain
-  // notification (it is not an alarm surface) so it keeps today's behavior.
+  // AlarmKit owns these occurrences: register one native alarm per planned ring
+  // and skip the notifee trigger entirely. The pre-alert heads-up stays a plain
+  // notification (it is not an alarm surface) so it keeps today's shape.
   if (alarmKitActive) {
-    await scheduleAlarmKitOccurrence(reminder, triggerTimestamp);
-    await patchAlarmKitState(reminder.id, { snoozeUntil: 0, followUpCount: 0 });
+    const keepAppKeys = occurrenceAppKeys(reminder.id, plannedOccurrences);
+    for (const [index, occurrence] of plannedOccurrences.entries()) {
+      await scheduleAlarmKitOccurrence(reminder, occurrence, keepAppKeys, {
+        withNagChain: index < NAG_CHAIN_HORIZON,
+      });
+    }
+    await patchAlarmKitState(reminder.id, { snoozeUntil: 0, nagCount: 0 });
     await schedulePreAlertForOccurrence({
       reminderId: reminder.id,
       title: reminder.title,
@@ -2037,88 +2326,105 @@ export async function scheduleReminder(
     },
   ];
 
-  await notifee.createTriggerNotification(
-    {
-      id: notificationId,
-      title: reminder.title,
-      body: reminder.description,
-      ios: {
-        sound: "default",
-        foregroundPresentationOptions: {
-          banner: true,
-          list: true,
-          badge: true,
-          sound: true,
-        },
+  // One trigger per planned ring. Each carries the same payload apart from its
+  // own `scheduledFor`, so whichever one fires can plan the set again from the
+  // grid it is carrying.
+  for (const occurrence of plannedOccurrences) {
+    const trigger: TimestampTrigger = {
+      type: TriggerType.TIMESTAMP,
+      timestamp: occurrence,
+      alarmManager: {
+        type: AlarmType.SET_ALARM_CLOCK, // AlarmClock for lockscreen reliability
       },
-      android: {
-        channelId,
-        importance: AndroidImportance.HIGH,
-        category: AndroidCategory.ALARM,
-        visibility: AndroidVisibility.PUBLIC,
-        autoCancel: false,
-        lightUpScreen: true,
-        actions,
-        pressAction: {
-          id: "default",
-          launchActivity: ANDROID_ALARM_ACTIVITY,
-          launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
-        },
-        // Show the alarm UI immediately when the trigger fires (Android).
-        // Requires `android.permission.USE_FULL_SCREEN_INTENT` in AndroidManifest.xml.
-        fullScreenAction: {
-          id: "default",
-          launchActivity: ANDROID_ALARM_ACTIVITY,
-          launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
-        },
-      },
-      data: {
-        reminderId: reminder.id,
-        frequency: reminder.frequency,
-        time: reminder.time,
-        days: reminder.days?.join(",") || "",
+    };
+    await notifee.createTriggerNotification(
+      {
+        id: `reminder_${reminder.id}_${occurrence}`,
         title: reminder.title,
-        description: reminder.description,
-        audioUrl: reminder.audioUrl ?? "",
-        preReminderMinutes: String(parsePreReminderMinutes(reminder.preReminderMinutes)),
-        preAudioUrl: reminder.preAudioUrl ?? "",
-        snoozeEnabled: String(reminder.snoozeEnabled ?? true),
-        snoozeDuration: String(reminder.snoozeDuration ?? 5),
-        volume: String(reminder.volume ?? 1),
-        volumeStyle: reminder.volumeStyle ?? "standard",
+        body: reminder.description,
+        ios: {
+          sound: "default",
+          foregroundPresentationOptions: {
+            banner: true,
+            list: true,
+            badge: true,
+            sound: true,
+          },
+        },
+        android: {
+          channelId,
+          importance: AndroidImportance.HIGH,
+          category: AndroidCategory.ALARM,
+          visibility: AndroidVisibility.PUBLIC,
+          autoCancel: false,
+          lightUpScreen: true,
+          actions,
+          pressAction: {
+            id: "default",
+            launchActivity: ANDROID_ALARM_ACTIVITY,
+            launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+          },
+          // Show the alarm UI immediately when the trigger fires (Android).
+          // Requires `android.permission.USE_FULL_SCREEN_INTENT` in AndroidManifest.xml.
+          fullScreenAction: {
+            id: "default",
+            launchActivity: ANDROID_ALARM_ACTIVITY,
+            launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+          },
+        },
+        data: {
+          reminderId: reminder.id,
+          frequency: reminder.frequency,
+          time: reminder.time,
+          days: reminder.days?.join(",") || "",
+          title: reminder.title,
+          description: reminder.description,
+          audioUrl: reminder.audioUrl ?? "",
+          preReminderMinutes: String(parsePreReminderMinutes(reminder.preReminderMinutes)),
+          preAudioUrl: reminder.preAudioUrl ?? "",
+          volume: String(reminder.volume ?? 1),
+          volumeStyle: reminder.volumeStyle ?? "standard",
 
-        intervalMs: String(reminder.intervalMs ?? ""),
-        anchorAt: String(reminder.anchorAt ?? ""),
-        intervalDays: String(reminder.intervalDays ?? ""),
-        scheduledFor: String(triggerTimestamp),
-        kind: "reminder_occurrence",
-        autoSnoozeCount: "0",
+          intervalMs: String(reminder.intervalMs ?? ""),
+          anchorAt: String(reminder.anchorAt ?? ""),
+          intervalDays: String(reminder.intervalDays ?? ""),
+          scheduledFor: String(occurrence),
+          kind: "reminder_occurrence",
+          autoSnoozeCount: "0",
 
-        // Assistant-style replays (OLD-53): escalation ladder state travels in
-        // the notification data. variantIndex -1 = base spoken line.
-        urgency: reminder.urgency ?? "",
-        persistent: String(reminder.persistent ?? false),
-        variants: JSON.stringify((reminder.variants ?? []).slice(0, MAX_REPLAY_VARIANTS)),
-        variantAudioUrls: JSON.stringify(
-          (reminder.variantAudioUrls ?? []).slice(0, MAX_REPLAY_VARIANTS)
-        ),
-        variantCount: String(
-          Math.min(reminder.variants?.length ?? 0, MAX_REPLAY_VARIANTS)
-        ),
-        followUpCount: "0",
-        variantIndex: "-1",
+          // Ring cadence data (how the spoken lines play while ringing).
+          // variantIndex -1 = the base spoken line, which is what every ring
+          // and every nag comeback speaks (OLD-96).
+          urgency: reminder.urgency ?? "",
+          persistent: String(reminder.persistent ?? false),
+          variants: JSON.stringify((reminder.variants ?? []).slice(0, MAX_REPLAY_VARIANTS)),
+          variantAudioUrls: JSON.stringify(
+            (reminder.variantAudioUrls ?? []).slice(0, MAX_REPLAY_VARIANTS)
+          ),
+          variantCount: String(
+            Math.min(reminder.variants?.length ?? 0, MAX_REPLAY_VARIANTS)
+          ),
+          // Comebacks delivered so far for this ring (OLD-96).
+          nagCount: "0",
+          variantIndex: "-1",
 
-        // New unified schedule fields
-        scheduleType: reminder.scheduleType ?? "",
-        onceAt: String(reminder.onceAt ?? ""),
-        rrule: reminder.rrule ?? "",
-        dtstart: String(reminder.dtstart ?? ""),
-        tzid: reminder.tzid ?? "",
-        until: String(reminder.until ?? ""),
+          // The days × times grid (OLD-98) — what the delivery handler plans the
+          // next rings from. `scheduleType` stays the legacy token so the
+          // one-off checks that read it keep working.
+          schedule: grid ? JSON.stringify(grid) : "",
+
+          // New unified schedule fields
+          scheduleType: reminder.scheduleType ?? "",
+          onceAt: String(reminder.onceAt ?? ""),
+          rrule: reminder.rrule ?? "",
+          dtstart: String(reminder.dtstart ?? ""),
+          tzid: reminder.tzid ?? "",
+          until: String(reminder.until ?? ""),
+        },
       },
-    },
-    trigger
-  );
+      trigger
+    );
+  }
 
   // Soft heads-up before the main alarm (also clears stale pre-alerts when off).
   await schedulePreAlertForOccurrence({
@@ -2136,7 +2442,7 @@ export async function scheduleReminder(
   const deltaMs = triggerTimestamp - logNow;
   const scheduleSource = _options?.traceId ? "create_flow" : "sync_or_internal";
   console.log(
-    `[VR] schedule_debug source=${scheduleSource} id=${reminder.id} freq=${reminder.frequency} scheduleType=${reminder.scheduleType ?? "legacy"} now=${new Date(logNow).toISOString()} trigger=${new Date(triggerTimestamp).toISOString()} deltaMs=${deltaMs} deltaMin=${Math.round(deltaMs / 60000)}`
+    `[VR] schedule_debug source=${scheduleSource} id=${reminder.id} freq=${reminder.frequency} scheduleType=${reminder.scheduleType ?? "legacy"} occurrences=${plannedOccurrences.length} now=${new Date(logNow).toISOString()} trigger=${new Date(triggerTimestamp).toISOString()} deltaMs=${deltaMs} deltaMin=${Math.round(deltaMs / 60000)}`
   );
 
   console.log(
@@ -2214,19 +2520,18 @@ export async function refreshNotificationWithAudio(
   replay?: {
     variants?: string[];
     variantAudioUrls?: string[];
-    // iOS-only ladder rung wavs; they never enter the notifee payload.
+    /**
+     * Ignored since OLD-96 — every ring speaks the base take, so there is no
+     * per-variant alarm sound to stage. Kept in the signature because
+     * lib/audioHydration.ts still passes it.
+     */
     variantWavUrls?: (string | null)[];
   }
 ): Promise<void> {
   try {
     // AlarmKit occurrences carry their sound as a Library/Sounds filename, not
-    // as notification data, so hydration has to re-register them instead. The
-    // rung wavs are remembered first: refreshAlarmKitSound reads them back
-    // through the AlarmKit state, which the store has no field for.
+    // as notification data, so hydration has to re-register them instead.
     if (await alarmKitEnabled()) {
-      if (replay?.variantWavUrls?.length) {
-        await patchAlarmKitState(reminderId, { variantWavUrls: replay.variantWavUrls });
-      }
       await refreshAlarmKitSound(reminderId);
     }
 
@@ -2327,14 +2632,15 @@ function toReminderNotification(reminder: Reminder): ReminderNotification {
     variantAudioUrls: reminder.variantAudioUrls,
     variantWavUrls: (reminder as Reminder & { variantWavUrls?: (string | null)[] })
       .variantWavUrls,
-    snoozeEnabled: reminder.snoozeEnabled,
-    snoozeDuration: reminder.snoozeDuration,
     volume: reminder.volume,
     volumeStyle: reminder.volumeStyle,
     intervalMs: reminder.intervalMs,
     anchorAt: reminder.anchorAt,
     intervalDays: reminder.intervalDays,
     scheduledFor: reminder.scheduledFor,
+    // The grid is authoritative for when this rings (OLD-98); the legacy fields
+    // above are only its first-ring projection.
+    schedule: reminder.schedule,
     // New unified schedule fields
     scheduleType: reminder.scheduleType,
     onceAt: reminder.onceAt,
@@ -2449,12 +2755,18 @@ async function handlePreAlertDonePress(notification: PendingAlarmNotification): 
 
   if (!reminderId) return;
 
-  // Cancel the main trigger for this occurrence.
+  // Cancel the main trigger for this occurrence — and, on the AlarmKit path,
+  // the comebacks registered alongside it. Answering early is still answering:
+  // leaving the chain armed would nag about a reminder already marked done.
   if (Number.isFinite(mainScheduledFor) && mainScheduledFor > 0) {
     try {
       await notifee.cancelNotification(`reminder_${reminderId}_${mainScheduledFor}`);
     } catch {
       // ignore
+    }
+    if (await alarmKitEnabled()) {
+      await cancelNativeAlarm(alarmAppKey(reminderId, mainScheduledFor));
+      await cancelAlarmKitNagChain(reminderId, mainScheduledFor);
     }
   }
 
@@ -2672,9 +2984,16 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
 
       await stopAlarmAudioIfPlaying();
       await cancelDisplayedAlarmNotifications(notificationId);
+      // Swiping a ring away is a dismissal, not a completion: the same take
+      // comes back in five minutes (OLD-96). "Done" is the only thing that
+      // ends the chain.
+      const nagged = await scheduleNagComeback(
+        detail.notification as PendingAlarmNotification,
+        "dismissed"
+      );
       const resolveId = isCurrentPending ? notificationId : pendingId;
       if (resolveId) {
-        await markPendingAlarmResolved(resolveId, "dismiss");
+        await markPendingAlarmResolved(resolveId, nagged ? "snooze" : "dismiss");
       }
       await clearPendingAlarm({ promoteNext: true });
       return;
@@ -2729,18 +3048,13 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       const resolveId = isCurrentPending ? notificationId : pendingId;
 
       if (actionId === "snooze_action" && reminderId) {
-        console.log("[VR] Snooze action from notification");
-        const snoozeDuration = Number(notificationData?.snoozeDuration ?? "5") || 5;
-        const autoSnoozeCount = parseAutoSnoozeCount(notificationData?.autoSnoozeCount);
-        await scheduleSnoozeOccurrenceFromNotification(
+        // "Later" is a dismissal like any other: it feeds the same fixed nag
+        // chain instead of a per-reminder snooze duration (OLD-96).
+        console.log("[VR] Later action from notification");
+        await scheduleNagComeback(
           detail.notification as PendingAlarmNotification,
-          snoozeDuration,
-          {
-            autoSnoozeCount: String(autoSnoozeCount),
-            autoSnoozeReason: "manual_action",
-          }
+          "later_action"
         );
-        console.log(`[VR] Snoozed for ${snoozeDuration} minutes`);
       }
 
       if (actionId === "dismiss_action") {
@@ -2759,7 +3073,9 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
 
     // Handle dismiss action
     if (actionId === "dismiss_action" && reminderId) {
-      console.log("[VR] Dismiss action from notification");
+      console.log("[VR] Done action from notification");
+      // Done ends the nag chain — drop the comeback this ring already earned.
+      await cancelPendingNags(reminderId);
       // Record completion and handle one-time reminders
       const { useReminderStore } = await import("./store");
       const store = useReminderStore.getState();
@@ -2996,9 +3312,22 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       }
 
       let nextTrigger: number | null = null;
-      
-      // Try unified schedule system first
-      if (scheduleType) {
+
+      // OLD-98: the grid the trigger carries is the authority. It plans the
+      // whole pending set, so a reminder that rings twice a day tops itself
+      // back up on every delivery instead of walking one ring at a time.
+      const deliveredGrid = parseOccurrenceGrid(data.schedule);
+      let plannedNext: number[] = [];
+      if (deliveredGrid) {
+        plannedNext = planGridOccurrences(deliveredGrid, Date.now(), {
+          max: MAX_PENDING_OCCURRENCES,
+        });
+        nextTrigger = plannedNext[0] ?? null;
+      }
+
+      // Try unified schedule system first (only when there is no grid — a grid
+      // that ran out has genuinely ended and must not be revived from here).
+      if (!deliveredGrid && scheduleType) {
         const schedule: Schedule = {
           type: scheduleType,
           onceAt: data.onceAt ? Number(data.onceAt) : undefined,
@@ -3014,7 +3343,7 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
       }
       
       // Fall back to legacy scheduling
-      if (nextTrigger === null && frequency) {
+      if (!deliveredGrid && nextTrigger === null && frequency) {
         if (frequency === "interval") {
           const intervalMs = Number(data.intervalMs);
           const anchorAt = Number(data.anchorAt);
@@ -3055,50 +3384,62 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
         console.warn("[VR] Next trigger in past, adjusted to now + 5s");
       }
       nextTrigger = adjustedTrigger;
+      // A legacy reminder still tops up exactly one occurrence.
+      if (plannedNext.length === 0) plannedNext = [nextTrigger];
 
-      const newNotificationId = `reminder_${data.reminderId}_${nextTrigger}`;
+      const reminderId = data.reminderId as string;
+      const wantedIds = plannedNext.map((ts) => `reminder_${reminderId}_${ts}`);
 
-      // Defensive: cancel any existing reminder triggers before scheduling the next one.
-      // Prevents accumulating duplicates if older versions/edge cases created more than one.
-      await cancelExistingReminderOccurrenceTriggers(data.reminderId as string);
+      // Keep the occurrences we still want and drop everything else, instead of
+      // cancelling the lot: the other rings of a multi-time day are already
+      // registered and re-creating them would lose their pending state.
+      await cancelExistingReminderOccurrenceTriggers(reminderId, wantedIds);
+      const liveIds = new Set(await notifee.getTriggerNotificationIds());
 
-      const trigger: TimestampTrigger = {
-        type: TriggerType.TIMESTAMP,
-        timestamp: nextTrigger,
-        alarmManager: {
-          type: AlarmType.SET_ALARM_CLOCK,
-        },
-      };
+      for (const [index, occurrence] of plannedNext.entries()) {
+        const occurrenceId = wantedIds[index];
+        // The delivered trigger is gone from the registry, so it is recreated
+        // here only if the grid still wants it; the rest are left alone.
+        if (liveIds.has(occurrenceId)) continue;
 
-      await notifee.createTriggerNotification(
-        {
-          ...detail.notification!,
-          android: {
-            ...(detail.notification?.android ?? {}),
-            visibility: AndroidVisibility.PUBLIC,
-            fullScreenAction: {
-              id: "default",
-              launchActivity: ANDROID_ALARM_ACTIVITY,
-              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+        const trigger: TimestampTrigger = {
+          type: TriggerType.TIMESTAMP,
+          timestamp: occurrence,
+          alarmManager: {
+            type: AlarmType.SET_ALARM_CLOCK,
+          },
+        };
+
+        await notifee.createTriggerNotification(
+          {
+            ...detail.notification!,
+            android: {
+              ...(detail.notification?.android ?? {}),
+              visibility: AndroidVisibility.PUBLIC,
+              fullScreenAction: {
+                id: "default",
+                launchActivity: ANDROID_ALARM_ACTIVITY,
+                launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+              },
+              pressAction: {
+                id: "default",
+                launchActivity: ANDROID_ALARM_ACTIVITY,
+                launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+              },
             },
-            pressAction: {
-              id: "default",
-              launchActivity: ANDROID_ALARM_ACTIVITY,
-              launchActivityFlags: [AndroidLaunchActivityFlag.NEW_TASK],
+            id: occurrenceId,
+            data: {
+              ...detail.notification!.data,
+              scheduledFor: String(occurrence),
+              kind: "reminder_occurrence",
+              // Each fresh occurrence starts its nag chain from scratch.
+              nagCount: "0",
+              variantIndex: "-1",
             },
           },
-          id: newNotificationId,
-          data: {
-            ...detail.notification!.data,
-            scheduledFor: String(nextTrigger),
-            kind: "reminder_occurrence",
-            // Each fresh occurrence starts its escalation ladder from scratch.
-            followUpCount: "0",
-            variantIndex: "-1",
-          },
-        },
-        trigger
-      );
+          trigger
+        );
+      }
 
       // Move the pre-alert along with the main trigger (clears stale ones when off).
       await schedulePreAlertForOccurrence({
@@ -3141,6 +3482,10 @@ export async function syncRemindersOnStartup(
       ? (await getScheduledNativeAlarms()).map((a) => a.id)
       : [];
     const alarmKitState = alarmKitActive ? await getAlarmKitState() : {};
+    // FB21273655 guard: this is the launch pass, so every live alarm is
+    // re-registered rather than trusted (see the flag's comment).
+    const relaunchRefresh = alarmKitActive && alarmKitRelaunchRefreshPending;
+    if (alarmKitActive) alarmKitRelaunchRefreshPending = false;
 
     const pending = await getPendingAlarm();
     const pendingReminderId =
@@ -3191,6 +3536,7 @@ export async function syncRemindersOnStartup(
               date: reminder.date,
               frequency: reminder.frequency,
               days: reminder.days,
+              schedule: reminder.schedule,
               intervalDays: reminder.intervalDays,
               scheduledFor: reminder.scheduledFor,
             },
@@ -3230,9 +3576,23 @@ export async function syncRemindersOnStartup(
         continue;
       }
 
-      // The AlarmKit path expects the whole expected-set of rungs, not just
-      // one alarm: a ladder that lost rungs (OS eviction, a half-finished
+      // What the grid says this reminder should be holding right now (OLD-98).
+      // Null for a pre-grid reminder, which still owns exactly one occurrence.
+      const grid = reminder.schedule?.type === "grid" ? reminder.schedule : null;
+      const planned = grid
+        ? planGridOccurrences(grid, now, { max: MAX_PENDING_OCCURRENCES })
+        : null;
+      if (planned && planned.length === 0) {
+        // The recurrence ran out (an `until` bound, a passed one-off).
+        skipped++;
+        continue;
+      }
+
+      // The AlarmKit path expects the whole planned SET to be live, not just
+      // one alarm: a set that lost occurrences (OS eviction, a half-finished
       // schedule) is repaired in place before the reminder counts as intact.
+      // Nag comebacks are a different key family and never enter this check —
+      // an owed nag must not make the next occurrence look already scheduled.
       let scheduledMainId: string | undefined;
       if (alarmKitActive) {
         const mine = alarmKitIds.filter((id) => id.startsWith(mainPrefix));
@@ -3241,57 +3601,48 @@ export async function syncRemindersOnStartup(
           .filter((ts) => Number.isFinite(ts) && ts > 0);
 
         if (fireTimes.length > 0) {
-          // The occurrence starts at T, which is NOT always the earliest
-          // surviving rung: if rung 0 was evicted, the survivors are a suffix
-          // of the ladder. Rebasing on the earliest survivor would shift the
-          // whole cadence forward and cancel the real later rungs as strays,
-          // so recover T by testing each rung offset as the survivor's index.
-          // Offset 0 is tried first, so an intact or prefix-complete ladder
-          // resolves to the earliest rung exactly as before.
-          const earliest = Math.min(...fireTimes);
-          const occurrenceStart =
-            ladderOffsetsMs(reminder.urgency, reminder.persistent)
-              .map((offset) => earliest - offset)
-              .find((candidate) => {
-                const ladder = new Set(
-                  ladderRungTimes(candidate, reminder.urgency, reminder.persistent).map(
-                    (ts) => `${mainPrefix}${ts}`
-                  )
-                );
-                return mine.every((id) => ladder.has(id));
-              }) ?? earliest;
-          scheduledMainId = `${mainPrefix}${occurrenceStart}`;
-
-          // A live follow-up is deliberately a single alarm (PRD) — never
-          // grow it into a ladder.
-          const followUpLive =
-            parseFollowUpCount(alarmKitState[reminder.id]?.followUpCount) > 0;
-          const expected = ladderRungTimes(
-            occurrenceStart,
-            reminder.urgency,
-            reminder.persistent
-          ).map((ts) => `${mainPrefix}${ts}`);
+          // An alarm that is mid-flight (at or before now) is left alone: it is
+          // ringing or has just rung, and re-registering it would silence it.
+          const midFlight = fireTimes.some((ts) => ts <= now);
+          // Pre-grid reminder: one occurrence, one alarm — the earliest live
+          // alarm IS the occurrence, nothing to reconstruct.
+          const targets = planned ?? [Math.min(...fireTimes)];
+          const expected = occurrenceAppKeys(reminder.id, targets);
           const present = new Set(mine);
-          const missing = expected.filter((id) => !present.has(id));
-          const stray = mine.filter((id) => !expected.includes(id));
+          const missing = [...expected].filter((id) => !present.has(id));
+          // Only a grid knows which of the reminder's alarms are surplus; a
+          // pre-grid reminder's extra keys are left where they are.
+          const stray = planned ? mine.filter((id) => !expected.has(id)) : [];
 
-          if (!followUpLive && occurrenceStart > now && (missing.length || stray.length)) {
-            vrLog("alarmkit", "ladder_repair", {
+          if (!midFlight && (relaunchRefresh || missing.length || stray.length)) {
+            vrLog("alarmkit", "occurrence_set_repair", {
               reminderId: reminder.id,
-              occurrenceStart,
+              occurrences: targets.length,
               missing: missing.length,
               stray: stray.length,
+              reason: relaunchRefresh ? "launch_reregister" : "gap",
             });
-            try {
-              await scheduleAlarmKitOccurrence(
-                toReminderNotification(reminder),
-                occurrenceStart
-              );
-            } catch (repairErr) {
-              console.log(`[VR] Ladder repair failed for ${reminder.id}:`, repairErr);
+            for (const [index, occurrence] of targets.entries()) {
+              try {
+                await scheduleAlarmKitOccurrence(
+                  toReminderNotification(reminder),
+                  occurrence,
+                  planned ? expected : present,
+                  { withNagChain: index < NAG_CHAIN_HORIZON }
+                );
+              } catch (repairErr) {
+                console.log(`[VR] Occurrence repair failed for ${reminder.id}:`, repairErr);
+              }
             }
           }
+          scheduledMainId = `${mainPrefix}${targets[0]}`;
         }
+      } else if (planned) {
+        // The whole planned set has to be live, not just one of it: a reminder
+        // that rings at 08:00 and 21:00 is only intact when both triggers exist.
+        const present = new Set(scheduledIds.filter((id) => id.startsWith(mainPrefix)));
+        const intact = planned.every((ts) => present.has(`${mainPrefix}${ts}`));
+        scheduledMainId = intact ? `${mainPrefix}${planned[0]}` : undefined;
       } else {
         scheduledMainId = scheduledIds.find((id) => id.startsWith(mainPrefix));
       }

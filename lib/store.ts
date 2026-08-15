@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createTraceId, perfLog } from './perf';
-import { migrateLegacySchedule } from './schedule';
+import { migrateLegacySchedule, gridFromLegacyReminder, type GridSchedule } from './schedule';
 import { checkCanCreateWithCount, ReminderLimitExceededError } from './usageGate';
 import { getNextTriggerTime, type ReminderSchedule } from './time';
 
@@ -14,9 +14,14 @@ export const INTERVAL_MAX_MS = 365 * 24 * 60 * 60 * 1000; // 365 days (changed f
 
 export type VolumeStyle = 'standard' | 'progressive';
 
+/**
+ * Stored shape version. 5 adds the days × times grid (OLD-97): every reminder
+ * carries a `schedule`, and the old `frequency`/`time`/`days` trio is kept as
+ * its projection so pre-grid readers keep working.
+ */
+export const CURRENT_SCHEMA_VERSION = 5;
+
 export const DEFAULT_ALARM_SETTINGS = {
-    snoozeEnabled: true,
-    snoozeDuration: 5,
     volume: 1,
     volumeStyle: 'standard' as VolumeStyle,
 };
@@ -27,10 +32,20 @@ export interface Reminder {
     convexId?: string;
     title: string;
     description: string;
+    // Legacy projection of `schedule` (see legacyFieldsFromGrid): `time` is the
+    // FIRST ring of the day, so a multi-time reminder's later rings live only in
+    // the grid. Kept because cards, the old notification path and the Convex
+    // columns still read them.
     time: string;
     date?: string; // YYYY-MM-DD for one-time reminders on specific days
     frequency: string;
     days: string[];
+    /**
+     * The days × times grid (OLD-97) — authoritative for when this rings.
+     * Optional only on the type: the store fills it on load and on write, so a
+     * reminder that reached state always has one.
+     */
+    schedule?: GridSchedule;
     emoji?: string; // single card-chip emoji from the parse (absent = neutral bell chip)
     audioUrl?: string;
     wavUrl?: string; // alarm-ready wav of the base spoken line (iOS AlarmKit sound)
@@ -44,8 +59,6 @@ export interface Reminder {
     variants?: string[]; // escalating alternative spoken lines
     variantAudioUrls?: string[]; // TTS audio per variant (parallel to variants)
     createdAt: string;
-    snoozeEnabled?: boolean;
-    snoozeDuration?: number; // minutes
     volume?: number; // 0-1
     volumeStyle?: VolumeStyle;
 
@@ -56,7 +69,7 @@ export interface Reminder {
     scheduledFor?: number; // Next computed occurrence timestamp (stable cadence)
 
     // New unified schedule system (Step 1-3)
-    scheduleType?: 'once' | 'interval' | 'rrule'; // Canonical schedule type
+    scheduleType?: 'once' | 'interval' | 'rrule' | 'grid'; // Canonical schedule type
     onceAt?: number; // Absolute timestamp for one-time reminders
     rrule?: string; // RFC5545 RRULE string for complex recurrences
     dtstart?: number; // Start date for RRULE in ms
@@ -65,7 +78,7 @@ export interface Reminder {
     parseWarnings?: string[]; // Warnings from parsing/normalization
 
     // Schema version for migrations
-    schemaVersion?: number; // 1 = legacy, 2 = interval support, 3 = custom repetition, 4 = unified schedule
+    schemaVersion?: number; // 1 = legacy, 2 = interval support, 3 = custom repetition, 4 = unified schedule, 5 = days×times grid
 }
 
 // History types
@@ -194,57 +207,56 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
                 perfLog(traceId, 'device.storage', 'getReminders_parse_start', { t: tParse0 });
                 let parsed = JSON.parse(data) as Reminder[];
 
-                // Migrate legacy reminders to schemaVersion 4 (unified schedule system)
+                // Migrate legacy reminders forward: v4 = unified schedule system,
+                // v5 = the days × times grid. A row is only rewritten when it is
+                // actually missing something, so a second load is a no-op.
                 let didMigrateAny = false;
                 parsed = parsed.map((r) => {
-                    // v4+ reminders: ensure tzid exists, otherwise leave unchanged.
-                    if (r.schemaVersion && r.schemaVersion >= 4) {
-                        if (!r.tzid) {
-                            didMigrateAny = true;
-                            return {
-                                ...r,
-                                tzid: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                            };
-                        }
-                        return r;
-                    }
+                    const needsGrid = !r.schedule;
+                    const needsTzid = !r.tzid;
+                    const isCurrent = (r.schemaVersion ?? 0) >= CURRENT_SCHEMA_VERSION;
+
+                    if (isCurrent && !needsGrid && !needsTzid) return r;
 
                     didMigrateAny = true;
-
-                    // Migrate to v4: unified schedule system
                     const migrated = { ...r };
 
-                    // If already has scheduleType, just bump version
-                    if (migrated.scheduleType) {
-                        migrated.schemaVersion = 4;
-                    } else if (migrated.frequency === 'interval' && migrated.intervalMs && migrated.anchorAt) {
-                        // Derive schedule fields from legacy format
-                        migrated.scheduleType = 'interval';
-                        migrated.schemaVersion = 4;
-                    } else if (migrated.frequency === 'once') {
-                        migrated.scheduleType = 'once';
-                        if (migrated.scheduledFor) {
-                            migrated.onceAt = migrated.scheduledFor;
-                        } else if (migrated.date && migrated.time) {
-                            const [year, month, day] = migrated.date.split('-').map(Number);
-                            const [hours, minutes] = migrated.time.split(':').map(Number);
-                            migrated.onceAt = new Date(year, month - 1, day, hours, minutes).getTime();
+                    // Step 1 — v4: unified schedule system. Reminders already on
+                    // v4 keep the scheduleType/onceAt/rrule they were given.
+                    if ((migrated.schemaVersion ?? 0) < 4) {
+                        if (migrated.scheduleType) {
+                            // already carries schedule fields — nothing to derive
+                        } else if (migrated.frequency === 'interval' && migrated.intervalMs && migrated.anchorAt) {
+                            // Derive schedule fields from legacy format
+                            migrated.scheduleType = 'interval';
+                        } else if (migrated.frequency === 'once') {
+                            migrated.scheduleType = 'once';
+                            if (migrated.scheduledFor) {
+                                migrated.onceAt = migrated.scheduledFor;
+                            } else if (migrated.date && migrated.time) {
+                                const [year, month, day] = migrated.date.split('-').map(Number);
+                                const [hours, minutes] = migrated.time.split(':').map(Number);
+                                migrated.onceAt = new Date(year, month - 1, day, hours, minutes).getTime();
+                            }
+                        } else if (migrated.frequency === 'daily' || migrated.frequency === 'custom' || migrated.frequency === 'weekly') {
+                            // Convert to RRULE
+                            const schedule = migrateLegacySchedule(migrated);
+                            if (schedule.type === 'rrule') {
+                                migrated.scheduleType = 'rrule';
+                                migrated.rrule = schedule.rrule;
+                                migrated.dtstart = schedule.dtstart;
+                                migrated.tzid = schedule.tzid;
+                            }
                         }
-                        migrated.schemaVersion = 4;
-                    } else if (migrated.frequency === 'daily' || migrated.frequency === 'custom' || migrated.frequency === 'weekly') {
-                        // Convert to RRULE
-                        const schedule = migrateLegacySchedule(migrated);
-                        if (schedule.type === 'rrule') {
-                            migrated.scheduleType = 'rrule';
-                            migrated.rrule = schedule.rrule;
-                            migrated.dtstart = schedule.dtstart;
-                            migrated.tzid = schedule.tzid;
-                        }
-                        migrated.schemaVersion = 4;
-                    } else {
-                        // Unknown legacy frequency - still bump schema version for consistency
-                        migrated.schemaVersion = 4;
+                        // Unknown legacy frequency keeps its fields and still moves up.
                     }
+
+                    // Step 2 — v5: every reminder gets a grid, derived from the
+                    // same legacy fields it has always described itself with.
+                    if (!migrated.schedule) {
+                        migrated.schedule = gridFromLegacyReminder(migrated);
+                    }
+                    migrated.schemaVersion = CURRENT_SCHEMA_VERSION;
 
                     // Default tzid if not set
                     if (!migrated.tzid) {
@@ -307,11 +319,13 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
             ...reminder,
             id: Math.random().toString(36).substr(2, 9),
             createdAt: new Date().toISOString(),
-            snoozeEnabled: reminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled,
-            snoozeDuration: reminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
             volume: reminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
             volumeStyle: reminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
-            schemaVersion: reminder.schemaVersion ?? 4,
+            // Callers that still speak only legacy fields (the typed-reminder
+            // screen) get their grid derived here, so the invariant "a stored
+            // reminder has a schedule" holds for every writer.
+            schedule: reminder.schedule ?? gridFromLegacyReminder(reminder),
+            schemaVersion: reminder.schemaVersion ?? CURRENT_SCHEMA_VERSION,
         };
 
         const currentReminders = get().reminders;
@@ -345,11 +359,10 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
 
         const reminderWithDefaults: Reminder = {
             ...updatedReminder,
-            snoozeEnabled: updatedReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled,
-            snoozeDuration: updatedReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
             volume: updatedReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
             volumeStyle: updatedReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
-            schemaVersion: updatedReminder.schemaVersion ?? 4,
+            schedule: updatedReminder.schedule ?? gridFromLegacyReminder(updatedReminder),
+            schemaVersion: updatedReminder.schemaVersion ?? CURRENT_SCHEMA_VERSION,
         };
 
         const newReminders = [...currentReminders];

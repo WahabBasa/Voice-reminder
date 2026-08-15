@@ -1,13 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import Constants from "expo-constants";
 import { borderRadius, colors, scaleFontSize, shadows } from "../lib/theme";
 import { FONT_DISPLAY } from "../lib/fonts";
-import { useSettingsStore } from "../lib/settingsStore";
 import AppIcon from "../components/AppIcon";
-import AddressTermSheet from "../components/AddressTermSheet";
 import { PRO_PRODUCT_NAME, restorePurchases } from "../lib/purchases";
 // One source of truth for the legal URLs — same constants the paywall and the
 // consent card use.
@@ -50,15 +48,7 @@ type SettingsContentProps = {
 export function SettingsContent({ embedded = false }: SettingsContentProps) {
   const router = useRouter();
 
-  const addressTerm = useSettingsStore((state) => state.settings.addressTerm);
-  const setAddressTerm = useSettingsStore((state) => state.setAddressTerm);
-  const loadSettings = useSettingsStore((state) => state.loadSettings);
-  const [showAddressSheet, setShowAddressSheet] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
-
-  useEffect(() => {
-    void loadSettings();
-  }, [loadSettings]);
 
   const versionLabel = useMemo(() => {
     const version = Constants.expoConfig?.version ?? "1.0.0";
@@ -140,16 +130,9 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
         <AppIcon name="chevron-right" size={18} color={colors.accent} />
       </TouchableOpacity>
 
-      {/* General: personalization + the ONE notifications entry point */}
+      {/* General: the ONE notifications entry point */}
       <Text style={styles.sectionLabel}>General</Text>
       <View style={styles.card}>
-        <SettingsRow
-          icon="user"
-          label="How should I address you?"
-          subtitle={addressTerm ? addressTerm : "Not set"}
-          onPress={() => setShowAddressSheet(true)}
-        />
-        <View style={styles.separator} />
         <SettingsRow
           icon="bell"
           label="Notifications & alarms"
@@ -186,16 +169,6 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
 
       {/* Version footer */}
       <Text style={styles.versionFooter}>Voice Reminder {versionLabel}</Text>
-
-      <AddressTermSheet
-        visible={showAddressSheet}
-        value={addressTerm}
-        onSave={(value) => {
-          void setAddressTerm(value);
-        }}
-        onDismiss={() => setShowAddressSheet(false)}
-      />
-
     </ScrollView>
   );
 }

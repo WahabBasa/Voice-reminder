@@ -13,9 +13,7 @@ import {
   getAlarmStartTime,
   shouldHandleTimeout,
   hasActivePendingAlarm,
-  parseSnoozeEnabled,
   parseAutoSnoozeCount,
-  canAutoSnooze,
   adjustPastDueTrigger,
   shouldRecordAsMissedInstead,
   isStaleDelivery,
@@ -29,22 +27,20 @@ import {
   filterPreAlertTriggerIds,
   buildPreAlertBody,
   PRE_ALERT_MIN_SLACK_MS,
-  parsePersistentFlag,
-  parseFollowUpCount,
   parseVariantCount,
   normalizeUrgencyTier,
-  shouldContinueFollowUps,
-  followUpDelayMinutes,
-  followUpVariantIndex,
   parseVariantList,
   variantLineForIndex,
   ringCadenceMode,
   nextAlternateIndex,
   MAX_REPLAY_VARIANTS,
-  MAX_FOLLOW_UPS,
-  FOLLOW_UP_DELAY_MINUTES,
-  FOLLOW_UP_POLITE_AFTER,
-  FOLLOW_UP_POLITE_DELAY_MINUTES,
+  parseNagCount,
+  shouldNagAgain,
+  planNagChain,
+  remainingNagComebacks,
+  nagIndexForFireTime,
+  NAG_DELAY_MINUTES,
+  MAX_NAG_COMEBACKS,
 } from "../../lib/notificationDecisions";
 
 // ─── Group 1: Notification classification and repost detection ──────────────
@@ -235,6 +231,18 @@ describe("filterDuplicateTriggerIds", () => {
     ]);
   });
 
+  it("keeps every id in an exceptId list (OLD-98 multi-occurrence)", () => {
+    const ids = ["reminder_abc_1", "reminder_abc_2", "reminder_abc_3"];
+    expect(
+      filterDuplicateTriggerIds(ids, "abc", ["reminder_abc_1", "reminder_abc_3"])
+    ).toEqual(["reminder_abc_2"]);
+  });
+
+  it("drops everything when the exceptId list is empty", () => {
+    const ids = ["reminder_abc_1", "reminder_abc_2"];
+    expect(filterDuplicateTriggerIds(ids, "abc", [])).toEqual(ids);
+  });
+
   it("returns empty array when no matches", () => {
     expect(filterDuplicateTriggerIds(["reminder_xyz_1"], "abc")).toEqual([]);
   });
@@ -288,24 +296,6 @@ describe("hasActivePendingAlarm", () => {
   });
 });
 
-describe("parseSnoozeEnabled", () => {
-  it("returns true for undefined (default)", () => {
-    expect(parseSnoozeEnabled(undefined)).toBe(true);
-  });
-
-  it("returns true for 'true'", () => {
-    expect(parseSnoozeEnabled("true")).toBe(true);
-  });
-
-  it("returns false for 'false'", () => {
-    expect(parseSnoozeEnabled("false")).toBe(false);
-  });
-
-  it("returns true for non-false string", () => {
-    expect(parseSnoozeEnabled("yes")).toBe(true);
-  });
-});
-
 describe("parseAutoSnoozeCount", () => {
   it("parses valid number", () => {
     expect(parseAutoSnoozeCount("2")).toBe(2);
@@ -321,20 +311,6 @@ describe("parseAutoSnoozeCount", () => {
 
   it("returns 0 for NaN string", () => {
     expect(parseAutoSnoozeCount("abc")).toBe(0);
-  });
-});
-
-describe("canAutoSnooze", () => {
-  it("returns true when enabled and under max", () => {
-    expect(canAutoSnooze(true, 0, 1)).toBe(true);
-  });
-
-  it("returns false when count equals max", () => {
-    expect(canAutoSnooze(true, 1, 1)).toBe(false);
-  });
-
-  it("returns false when disabled", () => {
-    expect(canAutoSnooze(false, 0, 1)).toBe(false);
   });
 });
 
@@ -590,80 +566,41 @@ describe("filterPreAlertTriggerIds", () => {
 });
 
 describe("buildPreAlertBody", () => {
-  it("builds the heads-up line", () => {
+  it("states the subject and the lead time, with no opener", () => {
     expect(buildPreAlertBody("Meeting with Ahmed", 15)).toBe(
-      "Heads up — Meeting with Ahmed in 15 minutes"
+      "Meeting with Ahmed in 15 minutes"
     );
   });
 
   it("uses singular unit for one minute", () => {
-    expect(buildPreAlertBody("Standup", 1)).toBe("Heads up — Standup in 1 minute");
+    expect(buildPreAlertBody("Standup", 1)).toBe("Standup in 1 minute");
   });
 
   it("falls back for an empty title", () => {
-    expect(buildPreAlertBody("", 10)).toBe("Heads up — your reminder in 10 minutes");
+    expect(buildPreAlertBody("", 10)).toBe("your reminder in 10 minutes");
   });
 
   it("falls back for a whitespace title", () => {
-    expect(buildPreAlertBody("   ", 5)).toBe("Heads up — your reminder in 5 minutes");
+    expect(buildPreAlertBody("   ", 5)).toBe("your reminder in 5 minutes");
   });
 
   it("falls back for an undefined title", () => {
-    expect(buildPreAlertBody(undefined, 30)).toBe(
-      "Heads up — your reminder in 30 minutes"
-    );
+    expect(buildPreAlertBody(undefined, 30)).toBe("your reminder in 30 minutes");
+  });
+
+  // The voice rewrite (OLD-95) banned conversational lead-ins from spoken lines;
+  // the visible pre-alert body is the same voice on a different surface, and it
+  // matches convex/helpers.ts's deterministic "<title> in N minutes" fallback.
+  it("carries no banned lead-in", () => {
+    for (const title of ["Meeting with Ahmed", "", undefined]) {
+      expect(buildPreAlertBody(title, 15)).not.toMatch(
+        /heads up|don't forget|just so you know|by the way/i
+      );
+    }
   });
 });
 
-// ─── Group 7: Assistant-style replays (escalation ladder + ring cadence) ────
-
-describe("parsePersistentFlag", () => {
-  it("returns true for boolean true", () => {
-    expect(parsePersistentFlag(true)).toBe(true);
-  });
-
-  it('returns true for "true"', () => {
-    expect(parsePersistentFlag("true")).toBe(true);
-  });
-
-  it('returns true for "1"', () => {
-    expect(parsePersistentFlag("1")).toBe(true);
-  });
-
-  it('returns false for "false"', () => {
-    expect(parsePersistentFlag("false")).toBe(false);
-  });
-
-  it("returns false for undefined", () => {
-    expect(parsePersistentFlag(undefined)).toBe(false);
-  });
-
-  it("returns false for empty string", () => {
-    expect(parsePersistentFlag("")).toBe(false);
-  });
-
-  it("returns false for random string", () => {
-    expect(parsePersistentFlag("yes please")).toBe(false);
-  });
-});
-
-describe("parseFollowUpCount", () => {
-  it("parses valid number", () => {
-    expect(parseFollowUpCount("2")).toBe(2);
-  });
-
-  it("returns 0 for undefined", () => {
-    expect(parseFollowUpCount(undefined)).toBe(0);
-  });
-
-  it("clamps negative to 0", () => {
-    expect(parseFollowUpCount("-3")).toBe(0);
-  });
-
-  it("returns 0 for NaN string", () => {
-    expect(parseFollowUpCount("abc")).toBe(0);
-  });
-});
+// ─── Group 7: Ring cadence ──────────────────────────────────────────────────
 
 describe("parseVariantCount", () => {
   it("parses valid count", () => {
@@ -718,94 +655,6 @@ describe("normalizeUrgencyTier", () => {
 
   it("defaults undefined to notice", () => {
     expect(normalizeUrgencyTier(undefined)).toBe("notice");
-  });
-});
-
-describe("shouldContinueFollowUps", () => {
-  it("continues for the first follow-up of a default reminder", () => {
-    expect(shouldContinueFollowUps(false, 0)).toBe(true);
-  });
-
-  it("continues for the second follow-up of a default reminder", () => {
-    expect(shouldContinueFollowUps(false, 1)).toBe(true);
-  });
-
-  it("stops a default reminder after MAX_FOLLOW_UPS follow-ups", () => {
-    expect(shouldContinueFollowUps(false, MAX_FOLLOW_UPS)).toBe(false);
-  });
-
-  it("persistent reminders never stop", () => {
-    expect(shouldContinueFollowUps(true, 50)).toBe(true);
-  });
-
-  it("respects a custom max", () => {
-    expect(shouldContinueFollowUps(false, 3, 4)).toBe(true);
-    expect(shouldContinueFollowUps(false, 4, 4)).toBe(false);
-  });
-});
-
-describe("followUpDelayMinutes", () => {
-  it("uses the base delay for the first follow-up", () => {
-    expect(followUpDelayMinutes(1)).toBe(FOLLOW_UP_DELAY_MINUTES);
-  });
-
-  it("uses the base delay up to the polite threshold", () => {
-    expect(followUpDelayMinutes(FOLLOW_UP_POLITE_AFTER)).toBe(FOLLOW_UP_DELAY_MINUTES);
-  });
-
-  it("caps interval growth after the polite threshold", () => {
-    expect(followUpDelayMinutes(FOLLOW_UP_POLITE_AFTER + 1)).toBe(
-      FOLLOW_UP_POLITE_DELAY_MINUTES
-    );
-  });
-
-  it("stays at the cap for later follow-ups", () => {
-    expect(followUpDelayMinutes(20)).toBe(FOLLOW_UP_POLITE_DELAY_MINUTES);
-  });
-});
-
-describe("followUpVariantIndex", () => {
-  it("returns -1 (base line) when there are no variants", () => {
-    expect(followUpVariantIndex(1, 0)).toBe(-1);
-    expect(followUpVariantIndex(5, 0)).toBe(-1);
-  });
-
-  it("walks the ladder in order while variants remain", () => {
-    expect(followUpVariantIndex(1, 3)).toBe(0);
-    expect(followUpVariantIndex(2, 3)).toBe(1);
-    expect(followUpVariantIndex(3, 3)).toBe(2);
-  });
-
-  it("cycles the firmest two variants once the ladder is exhausted", () => {
-    expect(followUpVariantIndex(4, 3)).toBe(1);
-    expect(followUpVariantIndex(5, 3)).toBe(2);
-    expect(followUpVariantIndex(6, 3)).toBe(1);
-    expect(followUpVariantIndex(7, 3)).toBe(2);
-  });
-
-  it("cycles both variants when only two exist", () => {
-    expect(followUpVariantIndex(1, 2)).toBe(0);
-    expect(followUpVariantIndex(2, 2)).toBe(1);
-    expect(followUpVariantIndex(3, 2)).toBe(0);
-    expect(followUpVariantIndex(4, 2)).toBe(1);
-  });
-
-  it("alternates a single variant with the base line", () => {
-    expect(followUpVariantIndex(1, 1)).toBe(0);
-    expect(followUpVariantIndex(2, 1)).toBe(-1);
-    expect(followUpVariantIndex(3, 1)).toBe(0);
-    expect(followUpVariantIndex(4, 1)).toBe(-1);
-  });
-
-  it("never repeats an index back-to-back", () => {
-    for (const variantCount of [1, 2, 3]) {
-      let prev = -2;
-      for (let n = 1; n <= 10; n++) {
-        const idx = followUpVariantIndex(n, variantCount);
-        expect(idx).not.toBe(prev);
-        prev = idx;
-      }
-    }
   });
 });
 
@@ -912,5 +761,139 @@ describe("nextAlternateIndex", () => {
 
   it("returns 0 for an empty playlist", () => {
     expect(nextAlternateIndex(5, 0)).toBe(0);
+  });
+});
+
+// ─── Group 8: The snooze-nag (OLD-96) ───────────────────────────────────────
+
+describe("nag policy constants", () => {
+  it("pins the comeback interval at five minutes", () => {
+    expect(NAG_DELAY_MINUTES).toBe(5);
+  });
+
+  it("pins the chain at three comebacks", () => {
+    expect(MAX_NAG_COMEBACKS).toBe(3);
+  });
+});
+
+describe("parseNagCount", () => {
+  it("parses the counter notification data carries as a string", () => {
+    expect(parseNagCount("2")).toBe(2);
+  });
+
+  it("treats an absent counter as a fresh ring", () => {
+    expect(parseNagCount(undefined)).toBe(0);
+  });
+
+  it("clamps a negative counter to 0", () => {
+    expect(parseNagCount("-3")).toBe(0);
+  });
+
+  it("treats garbage as a fresh ring", () => {
+    expect(parseNagCount("abc")).toBe(0);
+  });
+
+  it("accepts a plain number (the AlarmKit state shape)", () => {
+    expect(parseNagCount(1)).toBe(1);
+  });
+});
+
+describe("shouldNagAgain", () => {
+  it("owes a comeback to a ring that was never nagged", () => {
+    expect(shouldNagAgain(0)).toBe(true);
+  });
+
+  it("keeps going through the whole chain", () => {
+    expect(shouldNagAgain(1)).toBe(true);
+    expect(shouldNagAgain(MAX_NAG_COMEBACKS - 1)).toBe(true);
+  });
+
+  it("goes quiet after the last comeback", () => {
+    expect(shouldNagAgain(MAX_NAG_COMEBACKS)).toBe(false);
+    expect(shouldNagAgain(MAX_NAG_COMEBACKS + 5)).toBe(false);
+  });
+
+  it("respects a custom cap", () => {
+    expect(shouldNagAgain(0, 1)).toBe(true);
+    expect(shouldNagAgain(1, 1)).toBe(false);
+  });
+});
+
+// ─── Group 8b: the chain as a schedule ──────────────────────────────────────
+//
+// On iOS the comebacks have to exist before the ring goes unanswered — no app
+// code runs at that moment. These three functions are what makes that possible:
+// the whole chain is a pure function of the occurrence time, so it can be armed
+// up front, re-derived after an OS upgrade dropped it, and recognised on the way
+// back in without a stored counter.
+
+const MIN = 60_000;
+const T = Date.UTC(2026, 7, 17, 8, 0, 0, 0);
+
+describe("planNagChain", () => {
+  it("puts the three comebacks five minutes apart after the ring", () => {
+    expect(planNagChain(T)).toEqual([T + 5 * MIN, T + 10 * MIN, T + 15 * MIN]);
+  });
+
+  it("leaves the occurrence itself out of the chain", () => {
+    expect(planNagChain(T)).not.toContain(T);
+  });
+
+  it("is anchored to the ring, not to the moment it is asked", () => {
+    expect(planNagChain(T)).toEqual(planNagChain(T));
+    expect(planNagChain(T + MIN)[0]).toBe(T + 6 * MIN);
+  });
+
+  it("honours a custom cap and interval", () => {
+    expect(planNagChain(T, 1)).toEqual([T + 5 * MIN]);
+    expect(planNagChain(T, 2, 20)).toEqual([T + 20 * MIN, T + 40 * MIN]);
+    expect(planNagChain(T, 0)).toEqual([]);
+  });
+
+  it("returns nothing for a nonsense occurrence time", () => {
+    expect(planNagChain(Number.NaN)).toEqual([]);
+  });
+});
+
+describe("remainingNagComebacks", () => {
+  it("owes the whole chain the moment the ring fires", () => {
+    expect(remainingNagComebacks(T, T)).toHaveLength(MAX_NAG_COMEBACKS);
+  });
+
+  it("drops the links that have already rung", () => {
+    expect(remainingNagComebacks(T, T + 7 * MIN)).toEqual([T + 10 * MIN, T + 15 * MIN]);
+  });
+
+  it("owes nothing once the chain is spent", () => {
+    expect(remainingNagComebacks(T, T + 16 * MIN)).toEqual([]);
+  });
+
+  it("owes nothing for a ring the app only noticed hours later", () => {
+    // The chain belongs to the ring, not to when reconciliation ran: nagging at
+    // 11:00 about an 08:00 dose is worse than recording the miss.
+    expect(remainingNagComebacks(T, T + 180 * MIN)).toEqual([]);
+  });
+});
+
+describe("nagIndexForFireTime", () => {
+  it("calls the occurrence link zero", () => {
+    expect(nagIndexForFireTime(T, T)).toBe(0);
+  });
+
+  it("numbers the comebacks in order", () => {
+    expect(nagIndexForFireTime(T, T + 5 * MIN)).toBe(1);
+    expect(nagIndexForFireTime(T, T + 10 * MIN)).toBe(2);
+    expect(nagIndexForFireTime(T, T + 15 * MIN)).toBe(3);
+  });
+
+  it("tolerates a few seconds of drift on either side", () => {
+    expect(nagIndexForFireTime(T, T + 5 * MIN + 4000)).toBe(1);
+    expect(nagIndexForFireTime(T, T + 5 * MIN - 4000)).toBe(1);
+  });
+
+  it("clamps instead of running off the end of the chain", () => {
+    expect(nagIndexForFireTime(T, T + 90 * MIN)).toBe(MAX_NAG_COMEBACKS);
+    expect(nagIndexForFireTime(T, T - 10 * MIN)).toBe(0);
+    expect(nagIndexForFireTime(Number.NaN, T)).toBe(0);
   });
 });

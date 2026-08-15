@@ -37,7 +37,7 @@ function getTtsProvider(): TtsProvider {
 }
 
 import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeVariants, normalizeParsedReminders, variantCountForTier, buildAlarmWav, alignVariantWavIds, useDenseAlarmWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, type Urgency } from "./helpers";
-import { catchCandidateOrder, selectCatchIds, withSpeechCatch } from "./speechCatch";
+import { buildGridSchedule, legacyFieldsFromGrid, type GridSchedule } from "./scheduleShape";
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -57,25 +57,41 @@ function booleanEnv(name: string, fallback: boolean): boolean {
 
 // normalizeReminderDescription, normalizeDay, getCurrentTimeHM, clamp — imported from ./helpers
 
-// Shared helper: coerce frequency based on transcript and days
+/**
+ * Coerce ONE reminder's frequency (OLD-97).
+ *
+ * Two kinds of rule live here and they have different reach. Item rules read
+ * only what the model said about this reminder — days present means weekly, full
+ * stop. Transcript rules read the raw sentence, which is the whole take: a
+ * "weekdays" anywhere in it used to rewrite every reminder the take produced, so
+ * "standup on weekdays at 9 and water at 8pm" came back as two weekday
+ * reminders. A transcript is only unambiguously about one reminder when the take
+ * has exactly one, so that is the only time transcript rules fire; a multi-item
+ * take is coerced from each item's own fields.
+ */
 function coerceFrequency(
   frequency: string,
   days: string[] | undefined,
   transcript: string,
-  parseWarnings: string[]
+  parseWarnings: string[],
+  options: { useTranscriptHints: boolean }
 ): { frequency: string; days: string[] | undefined; warnings: string[] } {
   const warnings = [...parseWarnings];
   let coercedFrequency = frequency;
   let coercedDays = days;
   const transcriptLower = transcript.toLowerCase();
 
-  // Rule: If days are provided, force frequency to "custom"
+  // Item rule: If days are provided, force frequency to "custom"
   if (coercedDays && coercedDays.length > 0 && coercedFrequency !== "custom") {
     warnings.push("Coerced frequency to custom because days were provided.");
     coercedFrequency = "custom";
   }
 
-  // Rule: If transcript implies weekly but model returns daily, coerce
+  if (!options.useTranscriptHints) {
+    return { frequency: coercedFrequency, days: coercedDays, warnings };
+  }
+
+  // Transcript rule: If transcript implies weekly but model returns daily, coerce
   const impliesWeekly = /every\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday|week|weekly)/.test(transcriptLower);
   if (impliesWeekly && coercedFrequency === "daily") {
     warnings.push("Transcript implies weekly but model returned daily. Coercing to custom weekly.");
@@ -89,7 +105,7 @@ function coerceFrequency(
     }
   }
 
-  // Rule: "weekdays" implies custom MO-FR.
+  // Transcript rule: "weekdays" implies custom MO-FR.
   if (/\bweekdays?\b/.test(transcriptLower) && coercedFrequency !== "interval") {
     coercedFrequency = "custom";
     coercedDays = ["mon", "tue", "wed", "thu", "fri"];
@@ -109,11 +125,16 @@ function coerceFrequency(
 type ReminderPlan = {
   title: string;
   description: string;
+  /** Authoritative days × times schedule (OLD-97). */
+  schedule: GridSchedule;
+  /** Every clock time of the day, in order. `time` is its first entry. */
+  times: string[];
   time: string;
   date: string | undefined;
   frequency: string;
   days: string[] | undefined;
   emoji: string | undefined;
+  intervalDays: number | undefined;
   intervalMs: number | undefined;
   anchorAt: number | undefined;
   scheduleType: "once" | "interval" | "rrule" | undefined;
@@ -131,7 +152,7 @@ type ReminderPlan = {
 
 export function buildReminderPlan(
   parsed: Record<string, unknown>,
-  context: { transcript: string; currentTime: string }
+  context: { transcript: string; currentTime: string; takeSize?: number }
 ): ReminderPlan {
   // A leaked banned opener costs the model's phrasing, not the reminder: the
   // title is the stand-in, on the card and aloud. Titles like 'Time to Sleep'
@@ -164,35 +185,48 @@ export function buildReminderPlan(
   // Parse warnings for normalization issues
   let parseWarnings: string[] = [];
 
-  // Coerce frequency based on transcript and days
-  const coercionResult = coerceFrequency(frequency, days, context.transcript, parseWarnings);
+  // Coerce frequency. Transcript-wide hints only apply to a take of one — see
+  // coerceFrequency for why a sibling must not be dragged along.
+  const coercionResult = coerceFrequency(frequency, days, context.transcript, parseWarnings, {
+    useTranscriptHints: (context.takeSize ?? 1) <= 1,
+  });
   frequency = coercionResult.frequency;
   days = coercionResult.days;
   parseWarnings = coercionResult.warnings;
 
-  // Interval normalization
-  let intervalMs: number | undefined;
-  let anchorAt: number | undefined;
-  if (frequency === "interval") {
-    const hours = Number(parsed.intervalHours ?? 0);
-    const minutes = Number(parsed.intervalMinutes ?? 0);
-    const totalMinutes = hours * 60 + minutes;
+  // The days × times grid (OLD-97). Everything above says at most one time a
+  // day; this is what lets "Thursday 8 and 9" be one reminder with two rings,
+  // and what gives an interval its waking window.
+  const schedule = buildGridSchedule(
+    {
+      frequency,
+      time,
+      times: parsed.times,
+      date,
+      days,
+      everyNDays: parsed.everyNDays,
+      intervalHours: parsed.intervalHours,
+      intervalMinutes: parsed.intervalMinutes,
+      windowStart: parsed.windowStart,
+      windowEnd: parsed.windowEnd,
+      until: parsed.until,
+    },
+    { fallbackTime: time, warnings: parseWarnings }
+  );
 
-    intervalMs = totalMinutes * 60 * 1000;
-    // Updated constraints: 5 min minimum, 365 days maximum
-    const MIN_MS = 5 * 60 * 1000;
-    const MAX_MS = 365 * 24 * 60 * 60 * 1000;
+  // Legacy projection of the grid: the four columns every pre-grid reader still
+  // speaks. `time` is the FIRST ring of the day — the rest of a multi-time
+  // reminder exists only inside the grid.
+  const legacy = legacyFieldsFromGrid(schedule);
+  frequency = legacy.frequency;
+  days = legacy.days.length > 0 ? legacy.days : undefined;
+  const times = schedule.times.kind === "clock" ? schedule.times.times : [legacy.time];
+  const primaryTime = legacy.time;
+  const scheduleDate = legacy.date;
 
-    if (intervalMs < MIN_MS) {
-      parseWarnings.push(`Minimum interval is 5 minutes. Adjusted from ${Math.round(intervalMs / 60000)} minutes.`);
-      intervalMs = MIN_MS;
-    } else if (intervalMs > MAX_MS) {
-      parseWarnings.push(`Maximum interval is 365 days. Adjusted.`);
-      intervalMs = MAX_MS;
-    }
-
-    anchorAt = Date.now();
-  }
+  // Interval recurrence, still carried flat for the pre-grid scheduler.
+  const intervalMs = legacy.intervalMs;
+  const anchorAt = intervalMs !== undefined ? Date.now() : undefined;
 
   // Unified schedule system fields
   let scheduleType: "once" | "interval" | "rrule" | undefined;
@@ -211,12 +245,12 @@ export function buildReminderPlan(
   } else if (frequency === "once") {
     scheduleType = "once";
     // Calculate onceAt timestamp
-    if (date) {
-      const [year, month, dayNum] = date.split("-").map(Number);
-      const [hours, minutes] = time.split(":").map(Number);
+    if (scheduleDate) {
+      const [year, month, dayNum] = scheduleDate.split("-").map(Number);
+      const [hours, minutes] = primaryTime.split(":").map(Number);
       onceAt = new Date(year, month - 1, dayNum, hours, minutes).getTime();
     } else {
-      const [hours, minutes] = time.split(":").map(Number);
+      const [hours, minutes] = primaryTime.split(":").map(Number);
       const target = new Date();
       target.setHours(hours, minutes, 0, 0);
       // Interpret "at HH:MM" as the next occurrence (today or tomorrow).
@@ -230,7 +264,7 @@ export function buildReminderPlan(
     scheduleType = "rrule";
 
     // Build RRULE from legacy fields
-    const [hours, minutes] = time.split(":").map(Number);
+    const [hours, minutes] = primaryTime.split(":").map(Number);
 
     if (frequency === "daily") {
       rrule = `FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes}`;
@@ -258,15 +292,8 @@ export function buildReminderPlan(
     dtstart = Date.now();
   }
 
-  // Handle until/bounds
-  if (parsed.until) {
-    const ms = new Date(parsed.until as string).getTime();
-    if (Number.isFinite(ms)) {
-      until = ms;
-    } else {
-      parseWarnings.push(`Invalid until date "${String(parsed.until)}" ignored.`);
-    }
-  }
+  // Bounds: the grid already parsed (and warned about) `until`.
+  until = schedule.until;
 
   // Pre-reminder (heads-up) fields. The '<title> in N minutes' stand-in is
   // only opener-free when the title is, so the chooser knows about both.
@@ -291,12 +318,15 @@ export function buildReminderPlan(
   return {
     title: parsed.title as string,
     description,
-    time,
-    date,
+    schedule,
+    times,
+    time: primaryTime,
+    date: scheduleDate,
     frequency,
     days,
     // Card chip emoji (absent when the model returned junk → neutral bell chip)
     emoji: normalizeEmoji(parsed.emoji),
+    intervalDays: legacy.intervalDays,
     intervalMs,
     anchorAt,
     scheduleType,
@@ -327,26 +357,34 @@ export function planRemindersFromRawParse(
   context: { transcript: string; currentTime: string }
 ): ReminderPlan[] {
   const parsed = JSON.parse(rawGptResponse);
-  return normalizeParsedReminders(parsed).map((item) => buildReminderPlan(item, context));
+  const items = normalizeParsedReminders(parsed);
+  // takeSize is what tells each item whether the transcript is about it alone
+  // (coerceFrequency) — a take of two must not share one item's "weekdays".
+  return items.map((item) => buildReminderPlan(item, { ...context, takeSize: items.length }));
 }
 
 // Shared helper: build system prompt for GPT. Exported for the live-model
 // phrasing evals (__evals__/), which must test the exact prompt this ships.
-export function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string; addressTerm?: string }): string {
+//
+// The spoken line addresses nobody by name (OLD-95): there is no address term
+// anywhere in this signature, so none can reach the prompt.
+export function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string }): string {
   return `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
 
 Return exactly this format:
 {
   "title": "short title (2-4 words; must not begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself)",
-  "description": "${buildDescriptionInstruction(context.addressTerm)}",
-  "time": "HH:MM in 24-hour format",
+  "description": "${buildDescriptionInstruction()}",
+  "time": "HH:MM in 24-hour format (the FIRST of \\"times\\")",
+  "times": ["HH:MM", ...] (EVERY clock time this one reminder rings at — see SCHEDULE RULES),
   "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
-  "frequency": "once" | "daily" | "custom" | "interval",
+  "frequency": "once" | "daily" | "custom" | "everyNDays" | "interval",
   "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom),
+  "everyNDays": number (only if frequency is everyNDays, e.g. 3 for "every three days"),
   "intervalHours": number (only if frequency is interval),
   "intervalMinutes": number (only if frequency is interval),
-  "scheduleType": "once" | "interval" | "rrule",
-  "rrule": "RFC5545 RRULE string (for complex patterns)",
+  "windowStart": "HH:MM (only if frequency is interval — earliest it may ring)",
+  "windowEnd": "HH:MM (only if frequency is interval — latest it may ring)",
   "until": "ISO date for bounded recurrences",
   "preReminderMinutes": number (heads-up lead time in minutes, see PRE-REMINDER RULES),
   "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
@@ -385,42 +423,49 @@ RELATIVE TIME RULES:
 - "every X minutes"/"كل X دقائق" = INTERVAL reminder (frequency="interval")
 - "every X hours"/"كل X ساعات" = INTERVAL reminder (frequency="interval")
 
-RRULE PATTERNS (for scheduleType="rrule"):
-- "every Sunday at 8am" → FREQ=WEEKLY;BYDAY=SU;BYHOUR=8;BYMINUTE=0
-- "weekdays at 9am" → FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0
-- "1st of every month at 8am" → FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=8;BYMINUTE=0
-- "first Monday monthly at 9am" → FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1;BYHOUR=9;BYMINUTE=0
-- "every day at 9am and 5pm" → create TWO separate reminders (simple approach)
+SCHEDULE RULES — a schedule is TWO independent choices, WHICH DAYS and WHAT TIMES.
+Pick one from each; any combination is valid.
 
-BOUNDED RECURRENCES:
-- "every day at 8am for 2 weeks" → frequency="daily", until="2026-02-22"
-- "weekdays at 9 until March 1st" → rrule with UNTIL
+WHICH DAYS ("frequency"):
+- "every day"/"daily"/"كل يوم" → frequency="daily" (not "custom")
+- named weekdays → frequency="custom", days=[...]. "every Sunday" → days=["sun"]; "weekdays" → days=["mon","tue","wed","thu","fri"]; "weekends" → days=["sat","sun"]
+- "every N days"/"كل ثلاثة أيام" → frequency="everyNDays", everyNDays=N
+- one specific day → frequency="once" with "date"
+
+WHAT TIMES ("times" or the interval fields):
+- List EVERY clock time the user named in "times", and repeat the first one in "time".
+- SEVERAL TIMES FOR THE SAME TASK ARE ONE REMINDER, NOT SEVERAL. "take my pills at 8 and 9" → ONE reminder with times=["08:00","21:00"]. "water every day at 9am and 5pm" → ONE reminder, times=["09:00","17:00"]. "Thursday at 8 and 9" → ONE reminder, frequency="custom", days=["thu"], times=["08:00","21:00"].
+- Only a DIFFERENT task becomes a second reminder (see MULTIPLE REMINDERS below).
+- Repeating over and over instead of at named times → frequency="interval" with intervalHours/intervalMinutes.
 
 INTERVAL RULES:
 - "every 8 hours"/"كل 8 ساعات" = frequency="interval" and intervalHours=8
 - "every 30 minutes"/"كل 30 دقيقة" = frequency="interval" and intervalMinutes=30
 - "in 8 hours"/"بعد 8 ساعات" = ONE-TIME reminder (frequency="once")
-- For interval reminders: do NOT include a specific date. time can be omitted.
-- Minimum interval: 5 minutes. Maximum interval: 365 days.
-- If user asks for less than 5 minutes, set to 5 minutes with a note.
+- An interval reminder rings only inside a window. If the user gave one ("every hour from 9 to 5", "كل ساعة من التاسعة حتى الخامسة") set windowStart/windowEnd; otherwise OMIT both and it defaults to 08:00–22:00. Never schedule an interval through the night.
+- For interval reminders: do NOT include a specific date, "times", or "days" unless the user named weekdays.
+- Minimum interval: 5 minutes. Maximum interval: 24 hours.
+
+BOUNDED RECURRENCES:
+- "every day at 8am for 2 weeks" → frequency="daily", until="2026-02-22"
+- "weekdays at 9 until March 1st" → frequency="custom", days=["mon".."fri"], until="2026-03-01"
 
 FREQUENCY RULES (deterministic):
 - If days are provided → frequency="custom" (weekly on specific days)
-- "every day"/"daily" → frequency="daily" (not "custom")
-- "every Sunday" → rrule pattern (FREQ=WEEKLY;BYDAY=SU) OR frequency="custom", days=["sun"]
-- "weekdays" → frequency="custom", days=["mon","tue","wed","thu","fri"] OR rrule
+- If no frequency is implied at all → frequency="once"
 
 ARABIC TIME EXPRESSIONS:
 - "الساعة ثمانية صباحاً" = 08:00
 - "الساعة تسعة مساءً" = 21:00
 - "صباحاً" = AM, "مساءً" = PM
 
-INTENT + TONE RULES:
+INTENT + TONE RULES (the spoken voice — every spoken field obeys these):
 - Keep the exact intent (do not add meaning or extra context)
-- Do not add greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم")
-- Keep the description short, direct, and reminder-like (aim for 4-9 words)
-- Never open a spoken line by announcing the clock ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت") or labelling it a reminder ("Quick reminder", "Just a reminder", "Heads up", Arabic "تذكير سريع") — lead with the task, the object, or the person waiting
-- Arabic example: "دواؤك بانتظارك على الطاولة" (Your medicine is waiting on the table)
+- ONE short sentence, present tense, about the thing itself (aim for 4-9 words)
+- Pick the register the content calls for: instruction ("Drink your water right now."), stated fact ("Your son's game is starting this minute."), or polite request ("Please take your pills.")
+- Never put anything in front of the substance: no greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم"), no clock announcements ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت"), no reminder labels ("Quick reminder", "Just a reminder", "Heads up", Arabic "تذكير سريع"), no conversational lead-ins ("By the way", "Just so you know", "Remember", "Don't forget", Arabic "على فكرة"/"لا تنسى")
+- Never address the user by name or title, and never add wellness, benefit or encouragement commentary — say the thing and stop
+- Arabic examples: "اشرب ماءك الآن." / "خذ حبوبك الآن." / "مباراة ابنك تبدأ الآن."
 
 TIME PARSING (Speech-to-text quirks):
 - "10 4 p.m." = 22:04, "9 30 a.m." = 09:30
@@ -428,7 +473,7 @@ TIME PARSING (Speech-to-text quirks):
 
 ${buildPreReminderInstruction()}
 
-${buildVariantInstruction(context.addressTerm)}
+${buildVariantInstruction()}
 
 If no time specified, use a reasonable default.
 If no frequency specified, assume "once".${MULTI_REMINDER_INSTRUCTION}`;
@@ -584,17 +629,16 @@ async function synthesizeAlarmWav(text: string, dense: boolean): Promise<Uint8Ar
 
 /**
  * One line's TTS bundle: mp3 (playback, all platforms) + wav (iOS alarm sound).
- * `wavText` overrides what the wav says — a dense wav repeats its utterance
- * every couple of seconds inside one ring, and a catch repeated that often is
- * no longer a catch (convex/speechCatch.ts).
+ * Both say exactly the stored line — nothing is prepended on the way to TTS
+ * (OLD-95), so the mp3 and the wav can never drift apart.
  */
 async function synthesizeAndStoreLineTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
-  args: { text: string; wavText?: string; title?: string; dense: boolean }
+  args: { text: string; title?: string; dense: boolean }
 ): Promise<{ audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> }> {
   const [ttsBuffer, wavBytes] = await Promise.all([
     synthesizeReminderTts(args),
-    synthesizeAlarmWav(args.wavText || args.text, args.dense).catch((e) => {
+    synthesizeAlarmWav(args.text, args.dense).catch((e) => {
       console.error("[VR] Alarm WAV synthesis failed (system default alarm sound will be used):", e);
       return null;
     }),
@@ -651,49 +695,27 @@ async function synthesizeVariantTts(
 }
 
 /**
- * Spoken form of the lines a reminder says on its first firing: a rotating
- * catch in front of the heads-up, another in front of the main line
- * (convex/speechCatch.ts). The stored description is not touched — the catch
- * exists only in the text handed to TTS — and ladder replays get none.
- *
- * The heads-up speaks first, so it takes the first draw. Both catches follow
- * the main line's language: a reminder has one language, and the heads-up
- * fallback is built from that same reminder's title.
- *
- * Rotation is per device. A missing deviceId (a job enqueued before this
- * shipped) or a failed claim draws without rotation state instead of throwing —
- * a repeated catch costs far less than a blocked TTS job.
- *
- * Exported for the unit tests (like buildSystemPrompt): this is the one seam
- * where a spoken line stops being what was stored.
+ * Every schedule column a planned reminder writes to Convex. Before OLD-97 only
+ * the first four crossed the wire and the rest lived in AsyncStorage, so a
+ * reminder read back from Convex had lost its schedule.
  */
-export async function speakFirstFiringLines(
-  ctx: { runMutation: (reference: any, args: any) => Promise<any> },
-  args: { text: string; preText?: string; deviceId?: string; addressTerm?: string }
-): Promise<{ text: string; preText?: string }> {
-  const count = args.preText ? 2 : 1;
-  const candidateIds = catchCandidateOrder({
-    payload: args.text,
-    addressTerm: args.addressTerm,
-  });
-  let catchIds = selectCatchIds(candidateIds, null, count);
-  if (args.deviceId) {
-    try {
-      catchIds = (await ctx.runMutation(internal.reminders.claimSpeechCatches, {
-        deviceId: args.deviceId,
-        candidateIds,
-        count,
-      })) as string[];
-    } catch (e) {
-      console.error("[VR] Speech catch rotation unavailable (drawing without it):", e);
-    }
-  }
-  const mainCatchId = args.preText ? catchIds[1] ?? catchIds[0] : catchIds[0];
+function scheduleColumnsFor(plan: ReminderPlan) {
   return {
-    text: withSpeechCatch(args.text, mainCatchId, args.addressTerm),
-    preText: args.preText
-      ? withSpeechCatch(args.preText, catchIds[0], args.addressTerm)
-      : undefined,
+    time: plan.time,
+    date: plan.date,
+    frequency: plan.frequency,
+    days: plan.days,
+    schedule: plan.schedule,
+    scheduleType: plan.scheduleType,
+    onceAt: plan.onceAt,
+    rrule: plan.rrule,
+    dtstart: plan.dtstart,
+    until: plan.until,
+    intervalMs: plan.intervalMs,
+    anchorAt: plan.anchorAt,
+    intervalDays: plan.intervalDays,
+    tzid: plan.schedule.tzid,
+    parseWarnings: plan.parseWarnings.length > 0 ? plan.parseWarnings : undefined,
   };
 }
 
@@ -711,13 +733,11 @@ type CreateReminderCtx = {
  * shape the app has always received for a created reminder (slow path — audio
  * is ready by the time this returns).
  *
- * Called once per reminder in the take, so a multi-reminder take draws its
- * spoken catch per reminder rather than reusing one across the batch
- * (convex/speechCatch.ts).
+ * Called once per reminder in the take.
  */
 async function createReminderWithAudio(
   ctx: CreateReminderCtx,
-  args: { deviceId: string; addressTerm?: string; transcript: string },
+  args: { deviceId: string; transcript: string },
   plan: ReminderPlan
 ) {
   // Generate TTS. The guard floors at the model's own line, so this is empty
@@ -727,28 +747,20 @@ async function createReminderWithAudio(
   // Persistent reminders nag inside one ringing alarm; every other tier says
   // its line once and comes back as a later ladder rung.
   const dense = useDenseAlarmWav(plan.persistent);
-  // First-firing lines are spoken with a catch in front (the payload itself
-  // stays as stored); the dense wav keeps the bare payload it repeats.
-  const spoken = await speakFirstFiringLines(ctx, {
-    text: ttsText,
-    preText: plan.preTtsText || undefined,
-    deviceId: args.deviceId,
-    addressTerm: args.addressTerm,
-  });
-  // Generate + store TTS (mp3 for playback + alarm-ready wav when available)
+  // Generate + store TTS (mp3 for playback + alarm-ready wav when available).
+  // What was stored is what is spoken — no prefix goes on here (OLD-95).
   const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
-    text: spoken.text,
-    wavText: dense ? ttsText : undefined,
+    text: ttsText,
     title: plan.title,
     dense,
   });
 
   // Second short line for the pre-alert; failure never blocks the reminder.
   let preAudioStorageId: Id<"_storage"> | undefined;
-  if (spoken.preText) {
+  if (plan.preTtsText) {
     try {
       const preTtsBuffer = await synthesizeReminderTts({
-        text: spoken.preText,
+        text: plan.preTtsText,
         title: `${plan.title} (heads-up)`,
       });
       const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });
@@ -767,10 +779,7 @@ async function createReminderWithAudio(
     deviceId: args.deviceId,
     title: plan.title,
     description: plan.description,
-    time: plan.time,
-    date: plan.date,
-    frequency: plan.frequency,
-    days: plan.days,
+    ...scheduleColumnsFor(plan),
     emoji: plan.emoji,
     audioStorageId: storageId,
     wavStorageId,
@@ -799,10 +808,13 @@ async function createReminderWithAudio(
     id: reminderId as string,
     title: plan.title,
     description: plan.description,
+    schedule: plan.schedule,
+    times: plan.times,
     time: plan.time,
     date: plan.date,
     frequency: plan.frequency,
     days: plan.days,
+    intervalDays: plan.intervalDays,
     emoji: plan.emoji,
     transcript: args.transcript,
     audioUrl,
@@ -836,7 +848,6 @@ export const processVoiceReminder = action({
     deviceLocalDate: v.optional(v.string()),
     deviceLocalTime: v.optional(v.string()),
     deviceTimezone: v.optional(v.string()),
-    addressTerm: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const openai = new OpenAI({
@@ -885,7 +896,7 @@ export const processVoiceReminder = action({
           // Same prompt as the fast path — one prompt, one place, so the parse
           // contract (incl. the multi-reminder envelope) cannot drift between the
           // two paths, and the phrasing evals cover both.
-          content: buildSystemPrompt({ currentDate, currentDayOfWeek, currentTime, timezone, addressTerm: args.addressTerm }),
+          content: buildSystemPrompt({ currentDate, currentDayOfWeek, currentTime, timezone }),
         },
         {
           role: "user",
@@ -908,7 +919,7 @@ export const processVoiceReminder = action({
       created.push(
         await createReminderWithAudio(
           ctx,
-          { deviceId: args.deviceId, addressTerm: args.addressTerm, transcript },
+          { deviceId: args.deviceId, transcript },
           plan
         )
       );
@@ -943,20 +954,19 @@ export const processTextReminder = action({
     const rawFrequency = String(args.frequency || "once").toLowerCase();
     const frequency = rawFrequency === "weekly" ? "custom" : rawFrequency;
     const days = frequency === "custom" ? args.days : undefined;
+    // Typed reminders get a grid too, so nothing reaches storage schedule-less.
+    const schedule = buildGridSchedule(
+      { frequency, time: args.time, days },
+      { fallbackTime: args.time }
+    );
 
     const normalizedDescription = normalizeReminderDescription(args.description);
     const ttsText = normalizedDescription || args.description;
     // The line is the user's own wording, so the opener guard (model output
-    // only) stays out of it. The spoken catch still goes in front, so a typed
-    // reminder does not fire flatter than a spoken one; this screen sends no
-    // address term, so it draws from the address-free pool.
-    const spoken = await speakFirstFiringLines(ctx, {
-      text: ttsText,
-      deviceId: args.deviceId,
-    });
+    // only) stays out of it — and it is spoken exactly as typed.
     // Typed reminders carry no tier yet, so they get the plain one-utterance shape.
     const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
-      text: spoken.text,
+      text: ttsText,
       title: args.title,
       dense: false,
     });
@@ -970,6 +980,7 @@ export const processTextReminder = action({
         time: args.time,
         frequency,
         days,
+        schedule,
         audioStorageId: storageId,
         wavStorageId,
       }
@@ -984,6 +995,7 @@ export const processTextReminder = action({
       time: args.time,
       frequency,
       days,
+      schedule,
       audioUrl,
     };
   },
@@ -1049,6 +1061,146 @@ export const regenerateReminderAudio = action({
 
 // =================== FAST VOICE REMINDER (no base64, TTS in background) ===================
 
+/** The slice of an action ctx a deferred-audio take needs. */
+type FastTakeCtx = {
+  runMutation: (reference: any, args: any) => Promise<any>;
+  scheduler: { runAfter: (delayMs: number, reference: any, args: any) => Promise<any> };
+};
+
+/**
+ * Parse one transcript and insert every reminder it asks for, with the audio
+ * deferred to a background TTS job.
+ *
+ * Both fast paths land here: a voice take arrives after Whisper, the composer's
+ * typed sentence arrives with no STT at all (OLD-101). Same prompt, same plans,
+ * same TTS jobs — a typed reminder is a spoken one that skipped the microphone.
+ * `perf` is the caller's own timings object and is accumulated into.
+ */
+async function createTakeWithDeferredAudio(
+  ctx: FastTakeCtx,
+  args: {
+    deviceId: string;
+    transcript: string;
+    currentDate: string;
+    currentTime: string;
+    currentDayOfWeek: string;
+    timezone: string;
+  },
+  perf: Record<string, number>
+) {
+  const openrouter = new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: "https://openrouter.ai/api/v1",
+  });
+
+  const tGpt = Date.now();
+  const completion = await openrouter.chat.completions.create({
+    model: "google/gemini-3.1-flash-lite-preview",
+    response_format: { type: "json_object" },
+    max_tokens: 2000,
+    messages: [
+      {
+        role: "system",
+        content: buildSystemPrompt({
+          currentDate: args.currentDate,
+          currentDayOfWeek: args.currentDayOfWeek,
+          currentTime: args.currentTime,
+          timezone: args.timezone,
+        }),
+      },
+      {
+        role: "user",
+        content: args.transcript,
+      },
+    ],
+  });
+  perf.gptMs = Date.now() - tGpt;
+
+  const rawGptResponse = completion.choices[0].message.content || "{}";
+  // One take can hold several reminders (OLD-93). A single-reminder take is
+  // an array of one, so it takes exactly the path it always did.
+  const plans = planRemindersFromRawParse(rawGptResponse, {
+    transcript: args.transcript,
+    currentTime: args.currentTime,
+  });
+
+  // Create each reminder in DB immediately (audio pending) and enqueue its TTS.
+  // The stage timings accumulate over the take, so `perf` still reports the
+  // total spent in mutations and in scheduling.
+  perf.mutationMs = 0;
+  perf.scheduleMs = 0;
+  // Untyped so the pushed shape types the array (and the action return).
+  const created = [];
+
+  for (const plan of plans) {
+    const tMutation = Date.now();
+    const reminderId: Id<"reminders"> = await ctx.runMutation(
+      internal.reminders.create,
+      {
+        deviceId: args.deviceId,
+        title: plan.title,
+        description: plan.description,
+        ...scheduleColumnsFor(plan),
+        emoji: plan.emoji,
+        audioStorageId: undefined,
+        preReminderMinutes:
+          plan.preReminderMinutes > 0 ? plan.preReminderMinutes : undefined,
+        urgency: plan.urgency,
+        persistent: plan.persistent || undefined,
+        variants: plan.variants.length > 0 ? plan.variants : undefined,
+        audioStatus: "pending",
+        audioUpdatedAt: Date.now(),
+      }
+    );
+    perf.mutationMs += Date.now() - tMutation;
+
+    // Enqueue background TTS generation (persistent picks the dense wav
+    // shape). One job per reminder.
+    const tSchedule = Date.now();
+    await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
+      reminderId,
+      title: plan.title,
+      // The guard floors at the model's own line, so this is empty only when
+      // the parse returned neither a description nor a title.
+      ttsText: plan.description,
+      preTtsText: plan.preTtsText || undefined,
+      variantTexts: plan.variants.length > 0 ? plan.variants : undefined,
+      persistent: plan.persistent || undefined,
+    });
+    perf.scheduleMs += Date.now() - tSchedule;
+
+    created.push({
+      id: reminderId as string,
+      title: plan.title,
+      description: plan.description,
+      schedule: plan.schedule,
+      times: plan.times,
+      time: plan.time,
+      date: plan.date,
+      frequency: plan.frequency,
+      days: plan.days,
+      intervalDays: plan.intervalDays,
+      emoji: plan.emoji,
+      transcript: args.transcript,
+      audioStatus: "pending",
+      preReminderMinutes: plan.preReminderMinutes,
+      urgency: plan.urgency,
+      persistent: plan.persistent,
+      variants: plan.variants,
+      intervalMs: plan.intervalMs,
+      anchorAt: plan.anchorAt,
+      scheduleType: plan.scheduleType,
+      onceAt: plan.onceAt,
+      rrule: plan.rrule,
+      dtstart: plan.dtstart,
+      until: plan.until,
+      parseWarnings: plan.parseWarnings.length > 0 ? plan.parseWarnings : undefined,
+    });
+  }
+
+  return created;
+}
+
 export const processVoiceReminderFast = action({
   args: {
     // Owning install (OLD-74) — stamped on the reminder so only this device can read it back.
@@ -1058,16 +1210,10 @@ export const processVoiceReminderFast = action({
     deviceLocalDate: v.optional(v.string()),
     deviceLocalTime: v.optional(v.string()),
     deviceTimezone: v.optional(v.string()),
-    addressTerm: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
-    });
-
-    const openrouter = new OpenAI({
-      apiKey: process.env.OPENROUTER_API_KEY,
-      baseURL: "https://openrouter.ai/api/v1",
     });
 
     // 1. Load audio blob from storage
@@ -1109,106 +1255,20 @@ export const processVoiceReminderFast = action({
       const currentDayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
       const timezone = args.deviceTimezone || 'UTC';
 
-      const tGpt = Date.now();
-      const completion = await openrouter.chat.completions.create({
-        model: "google/gemini-3.1-flash-lite-preview",
-        response_format: { type: "json_object" },
-        max_tokens: 2000,
-        messages: [
-          {
-            role: "system",
-            content: buildSystemPrompt({ currentDate, currentDayOfWeek, currentTime, timezone, addressTerm: args.addressTerm }),
-          },
-          {
-            role: "user",
-            content: transcript,
-          },
-        ],
-      });
-      perf.gptMs = Date.now() - tGpt;
-
-      const rawGptResponse = completion.choices[0].message.content || "{}";
-      // One take can hold several reminders (OLD-93). A single-reminder take is
-      // an array of one, so it takes exactly the path it always did.
-      const plans = planRemindersFromRawParse(rawGptResponse, { transcript, currentTime });
-
-      // 4. Create each reminder in DB immediately (audio pending) and enqueue
-      // its TTS. The stage timings accumulate over the take, so `perf` still
-      // reports the total spent in mutations and in scheduling.
-      perf.mutationMs = 0;
-      perf.scheduleMs = 0;
-      // Untyped so the pushed shape types the array (and the action return).
-      const created = [];
-
-      for (const plan of plans) {
-        const tMutation = Date.now();
-        const reminderId: Id<"reminders"> = await ctx.runMutation(
-          internal.reminders.create,
-          {
-            deviceId: args.deviceId,
-            title: plan.title,
-            description: plan.description,
-            time: plan.time,
-            date: plan.date,
-            frequency: plan.frequency,
-            days: plan.days,
-            emoji: plan.emoji,
-            audioStorageId: undefined,
-            preReminderMinutes:
-              plan.preReminderMinutes > 0 ? plan.preReminderMinutes : undefined,
-            urgency: plan.urgency,
-            persistent: plan.persistent || undefined,
-            variants: plan.variants.length > 0 ? plan.variants : undefined,
-            audioStatus: "pending",
-            audioUpdatedAt: Date.now(),
-          }
-        );
-        perf.mutationMs += Date.now() - tMutation;
-
-        // 5. Enqueue background TTS generation (persistent picks the dense wav
-        // shape; deviceId + addressTerm are what the spoken catch is drawn from,
-        // and drawing it there keeps the rotation write off this critical path).
-        // One job per reminder, so each reminder draws its own catch.
-        const tSchedule = Date.now();
-        await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
-          reminderId,
-          title: plan.title,
-          // The guard floors at the model's own line, so this is empty only when
-          // the parse returned neither a description nor a title.
-          ttsText: plan.description,
-          preTtsText: plan.preTtsText || undefined,
-          variantTexts: plan.variants.length > 0 ? plan.variants : undefined,
-          persistent: plan.persistent || undefined,
+      // 4. Parse and create the take (audio deferred). Shared with the typed
+      // composer, so both inputs run the identical pipeline (OLD-101).
+      const created = await createTakeWithDeferredAudio(
+        ctx,
+        {
           deviceId: args.deviceId,
-          addressTerm: args.addressTerm,
-        });
-        perf.scheduleMs += Date.now() - tSchedule;
-
-        created.push({
-          id: reminderId as string,
-          title: plan.title,
-          description: plan.description,
-          time: plan.time,
-          date: plan.date,
-          frequency: plan.frequency,
-          days: plan.days,
-          emoji: plan.emoji,
           transcript,
-          audioStatus: "pending",
-          preReminderMinutes: plan.preReminderMinutes,
-          urgency: plan.urgency,
-          persistent: plan.persistent,
-          variants: plan.variants,
-          intervalMs: plan.intervalMs,
-          anchorAt: plan.anchorAt,
-          scheduleType: plan.scheduleType,
-          onceAt: plan.onceAt,
-          rrule: plan.rrule,
-          dtstart: plan.dtstart,
-          until: plan.until,
-          parseWarnings: plan.parseWarnings.length > 0 ? plan.parseWarnings : undefined,
-        });
-      }
+          currentDate,
+          currentTime,
+          currentDayOfWeek,
+          timezone,
+        },
+        perf
+      );
 
       perf.actionMs = Date.now() - tActionStart;
 
@@ -1241,6 +1301,71 @@ export const processVoiceReminderFast = action({
   },
 });
 
+// =================== TYPED REMINDER (composer — same parse, no STT) ===================
+
+/**
+ * One typed sentence from the composer (OLD-101).
+ *
+ * Deliberately thin: the sentence is the transcript, so this is the fast voice
+ * path with Whisper removed. Same prompt, same plans, same background TTS —
+ * a typed reminder speaks like a recorded one — and the result shape is the
+ * fast path's, so the app's take loop (lib/voiceTake.ts) cannot tell the two
+ * apart.
+ */
+export const processTypedReminder = action({
+  args: {
+    // Owning install (OLD-74) — stamped on the reminder so only this device can read it back.
+    deviceId: v.string(),
+    text: v.string(),
+    traceId: v.optional(v.string()),
+    deviceLocalDate: v.optional(v.string()),
+    deviceLocalTime: v.optional(v.string()),
+    deviceTimezone: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const transcript = args.text.trim();
+    if (!transcript) {
+      throw new Error("Nothing to parse");
+    }
+
+    const tActionStart = Date.now();
+    const perf: Record<string, number> = {};
+
+    // Device LOCAL time, same as the voice paths — relative phrasing ("in ten
+    // minutes", "tomorrow") is only parseable against the user's own clock.
+    const currentDate = args.deviceLocalDate || new Date().toISOString().split('T')[0];
+    const currentTime = args.deviceLocalTime || new Date().toLocaleTimeString('en-US', { hour12: false });
+    const now = new Date(`${currentDate}T${currentTime}`);
+    const currentDayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
+    const timezone = args.deviceTimezone || 'UTC';
+
+    console.log("[VR] === TYPED INPUT ===");
+    console.log("[VR] Text:", transcript);
+
+    const created = await createTakeWithDeferredAudio(
+      ctx,
+      {
+        deviceId: args.deviceId,
+        transcript,
+        currentDate,
+        currentTime,
+        currentDayOfWeek,
+        timezone,
+      },
+      perf
+    );
+
+    perf.actionMs = Date.now() - tActionStart;
+
+    return {
+      perf,
+      ...created[0],
+      reminders: created,
+      reminderCount: created.length,
+    };
+  },
+});
+
 export const generateReminderTtsForReminder = internalAction({
   args: {
     reminderId: v.id("reminders"),
@@ -1251,40 +1376,26 @@ export const generateReminderTtsForReminder = internalAction({
     // Optional so jobs enqueued by an older deploy still run (they get the
     // plain one-utterance shape).
     persistent: v.optional(v.boolean()),
-    // Spoken-catch context, also optional for in-flight older jobs: without a
-    // deviceId the catch is drawn without rotation state, without an address
-    // term the name-bearing catches are simply not eligible.
-    deviceId: v.optional(v.string()),
-    addressTerm: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     try {
       const dense = useDenseAlarmWav(normalizePersistent(args.persistent));
 
-      // First-firing lines get their catch here, off the create path.
-      const spoken = await speakFirstFiringLines(ctx, {
-        text: args.ttsText,
-        preText: args.preTtsText,
-        deviceId: args.deviceId,
-        addressTerm: args.addressTerm,
-      });
-
-      // 1. Generate + store TTS (mp3 + alarm-ready wav when available). The
-      // dense wav repeats what it holds, so it holds the catch-free payload.
+      // 1. Generate + store TTS (mp3 + alarm-ready wav when available). Both
+      // say the stored line verbatim — nothing is prepended (OLD-95).
       const { audioStorageId: newAudioStorageId, wavStorageId: newWavStorageId } =
         await synthesizeAndStoreLineTts(ctx, {
-          text: spoken.text,
-          wavText: dense ? args.ttsText : undefined,
+          text: args.ttsText,
           title: args.title,
           dense,
         });
 
       // 2b. Pre-alert line (optional); failure never blocks the main audio.
       let preAudioStorageId: Id<"_storage"> | undefined;
-      if (spoken.preText) {
+      if (args.preTtsText) {
         try {
           const preTtsBuffer = await synthesizeReminderTts({
-            text: spoken.preText,
+            text: args.preTtsText,
             title: `${args.title} (heads-up)`,
           });
           const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });

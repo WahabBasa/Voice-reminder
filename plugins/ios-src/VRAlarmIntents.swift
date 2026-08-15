@@ -15,10 +15,14 @@
 //    4. SnoozeIntent sleeps 1s before returning so AlarmKit registers the follow-up
 //    5. UUID rotation on reschedule (delegated to VRAlarmScheduler, AK-1)
 //
-//  CL-2 adds the cadence ladder (docs/cadence-ladder-prd.md): one occurrence is up
-//  to three real alarms ("rungs") staggered minutes apart. Acknowledging any rung
-//  must kill the remaining ones from here — the app may never be opened, so JS
-//  reconciliation would only notice after the user has already been re-reminded.
+//  OLD-96 replaces the old cadence ladder with the snooze-nag, and reuses its
+//  mechanism: one ring is registered together with the comebacks it may owe
+//  (+5/+10/+15 minutes, identical audio). It HAS to be pre-scheduled — no code of
+//  ours runs when an AlarmKit ring times out unattended, so a comeback that is not
+//  already on the daemon's books never happens on a locked phone
+//  (docs/alarmkit-focus-breakthrough.md §7). Answering any ring must therefore
+//  kill the rest of the chain from here: the app may never be opened, and JS
+//  reconciliation would only notice after the user has been nagged anyway.
 //
 
 import Foundation
@@ -35,19 +39,24 @@ enum VRAlarmIntentKeys {
     static let events = "vr_alarm_events"
     static let uuids = "vr_alarm_uuids"
     static let meta = "vr_alarm_meta"
+    static let fireDates = "vr_alarm_firedates"
     static let snoozeGuardPrefix = "snooze_until_"
 
-    /// Cadence-ladder metadata keys (docs/cadence-ladder-prd.md). JS puts them in
-    /// the same `metadata` dict the alarm already carries; AK-1's store persists
-    /// that dict verbatim per app key, so nothing has to be whitelisted here.
-    /// `siblings` is a comma-joined list of the OTHER rungs of this occurrence.
+    /// Nag-chain metadata keys (OLD-96). JS puts them in the same `metadata` dict
+    /// the alarm already carries; AK-1's store persists that dict verbatim per app
+    /// key, so nothing has to be whitelisted here. `siblings` is a comma-joined
+    /// list of the OTHER rings of this chain — the occurrence and its comebacks.
     static let siblingsMetadataKey = "siblings"
-    /// Read for diagnostics only — the intents never branch on which rung fired.
-    static let rungMetadataKey = "rung"
-    static let rungCountMetadataKey = "rungCount"
+    /// Which link of the chain this alarm is: "0" the occurrence, "1"…"3" a
+    /// comeback. This is the counter that caps the snooze button.
+    static let nagIndexMetadataKey = "nagIndex"
+    /// How many comebacks the chain is allowed in total.
+    static let nagMaxMetadataKey = "nagMax"
+    /// Fire time of the occurrence the chain belongs to (diagnostics + JS attribution).
+    static let nagForMetadataKey = "nagFor"
 
-    /// Event type appended once per rung killed by an acknowledgment, so the JS
-    /// drain can see what the intent did without opening the app first.
+    /// Event type appended once per chain member killed by an acknowledgment, so
+    /// the JS drain can see what the intent did without opening the app first.
     static let siblingCancelledEvent = "sibling_cancelled"
 
     /// Info.plist key holding an App Group id. Only needed if the intents end up
@@ -125,18 +134,29 @@ enum VRAlarmIntentGuards {
         return originalAppKey
     }
 
-    /// Every rung key follows the frozen app-key scheme `reminder_<id>_<timestamp>`.
+    /// An occurrence key follows the frozen scheme `reminder_<id>_<timestamp>`; a
+    /// pre-scheduled comeback follows `snooze_<id>_<timestamp>`. Both are real
+    /// alarms and both can appear in a sibling list.
     static let appKeyPrefix = "reminder_"
+    static let nagKeyPrefix = "snooze_"
 
-    /// Which rungs an acknowledgment on `selfKey` should cancel. Pure so the ugly
-    /// cases (blank entries, whitespace, duplicates, a key listing itself) are
-    /// decided here rather than inside the cancel loop.
+    /// The snooze GUARD shares the comeback prefix but is a plain UserDefaults
+    /// key, not an alarm. It must never reach cancel, which is why the prefix
+    /// test is a function rather than one `hasPrefix`.
+    static func isCancellableAlarmKey(_ key: String) -> Bool {
+        if key.hasPrefix(VRAlarmIntentKeys.snoozeGuardPrefix) { return false }
+        return key.hasPrefix(appKeyPrefix) || key.hasPrefix(nagKeyPrefix)
+    }
+
+    /// Which chain members an acknowledgment on `selfKey` should cancel. Pure so
+    /// the ugly cases (blank entries, whitespace, duplicates, a key listing
+    /// itself) are decided here rather than inside the cancel loop.
     ///
     /// Excluding `selfKey` is what keeps a snooze chain from cancelling itself:
-    /// `followUpAppKey` reuses the rung's own key, so the follow-up alarm IS
+    /// `followUpAppKey` reuses the ring's own key, so the follow-up alarm IS
     /// `selfKey` and must never be reachable through the sibling list. The prefix
-    /// check backs that up — nothing outside the reminder key space (a guard key,
-    /// a stray token) is ever handed to cancel.
+    /// check backs that up — nothing outside the alarm key space (a guard key, a
+    /// stray token) is ever handed to cancel.
     static func siblingKeys(rawSiblings: String?, excluding selfKey: String) -> [String] {
         guard let rawSiblings = rawSiblings, !rawSiblings.isEmpty else { return [] }
 
@@ -147,11 +167,42 @@ enum VRAlarmIntentGuards {
             guard !key.isEmpty else { continue }
             guard key != selfKey else { continue }
             guard key != followUpAppKey(originalAppKey: selfKey) else { continue }
-            guard key.hasPrefix(appKeyPrefix) else { continue }
+            guard isCancellableAlarmKey(key) else { continue }
             guard seen.insert(key).inserted else { continue }
             keys.append(key)
         }
         return keys
+    }
+
+    // MARK: Nag cap (OLD-96)
+    //
+    // Mirrors MAX_NAG_COMEBACKS in lib/notificationDecisions.ts. Without this the
+    // snooze button re-armed forever: every tap scheduled a fresh alarm on the
+    // same app key and nothing counted them.
+
+    static let defaultNagMax = 3
+
+    private static func metadataInt(_ metadata: [String: String], _ key: String) -> Int? {
+        guard let raw = metadata[key], let value = Int(raw) else { return nil }
+        return value
+    }
+
+    /// Comebacks already delivered for this ring. Absent/garbage reads as 0, so a
+    /// pre-OLD-96 alarm still gets the full allowance rather than none.
+    static func nagIndex(metadata: [String: String]) -> Int {
+        return max(0, metadataInt(metadata, VRAlarmIntentKeys.nagIndexMetadataKey) ?? 0)
+    }
+
+    /// The chain's allowance. Absent/absurd falls back to the shared default.
+    static func nagMax(metadata: [String: String]) -> Int {
+        guard let value = metadataInt(metadata, VRAlarmIntentKeys.nagMaxMetadataKey),
+              value >= 0 else { return defaultNagMax }
+        return min(value, defaultNagMax)
+    }
+
+    /// Whether comeback number `nagIndex + 1` is still allowed.
+    static func shouldNagAgain(nagIndex: Int, nagMax: Int) -> Bool {
+        return nagIndex < nagMax
     }
 }
 
@@ -242,6 +293,21 @@ enum VRAlarmIntentStore {
         store.synchronize()
     }
 
+    /// Fire time (epoch ms) the scheduler recorded alongside the UUID. Needed to
+    /// tell an owed comeback from one that already rang: the registry keeps both.
+    static func fireDateMillis(appKey: String) -> Int? {
+        guard !appKey.isEmpty else { return nil }
+        guard let map = VRAlarmIntentDefaults.store.dictionary(forKey: VRAlarmIntentKeys.fireDates) else {
+            return nil
+        }
+        switch map[appKey] {
+        case let value as Double: return Int(value)
+        case let value as Int: return value
+        case let value as NSNumber: return value.intValue
+        default: return nil
+        }
+    }
+
     /// Reverse lookup for the degraded case where an intent arrives without its app key.
     static func appKey(forUUID uuid: String) -> String? {
         guard !uuid.isEmpty else { return nil }
@@ -294,20 +360,43 @@ enum VRAlarmIntentStore {
     }
 }
 
-// MARK: - Cadence ladder (sibling rungs)
+// MARK: - Nag chain (pre-scheduled siblings)
 
-/// The ladder's whole native job: when one rung is acknowledged, the rest of the
-/// occurrence stops existing. Both intents go through here so Done and Later kill
-/// the same set in the same way.
+/// The chain's whole native job: when one ring is answered, the comebacks stop
+/// existing. Only Done goes through the cancel — "Later" deliberately leaves the
+/// chain alone, because the next pre-scheduled sibling IS the comeback the user
+/// just asked for.
 @available(iOS 26.0, *)
-enum VRAlarmLadder {
-    /// Cancels every OTHER rung of `resolvedKey`'s occurrence. Rotation awareness
+enum VRAlarmNagChain {
+    /// How many of `resolvedKey`'s siblings are still armed in the future — i.e.
+    /// how many comebacks this ring already owes without anyone scheduling
+    /// anything. Zero means the chain is spent or was never registered, which is
+    /// the only case where "Later" has to arm one itself.
+    static func owedComebackCount(of resolvedKey: String, afterMillis: Int) -> Int {
+        guard !resolvedKey.isEmpty else { return 0 }
+
+        let keys = VRAlarmIntentGuards.siblingKeys(
+            rawSiblings: VRAlarmIntentStore.storedSiblings(appKey: resolvedKey),
+            excluding: resolvedKey
+        )
+        guard !keys.isEmpty else { return 0 }
+
+        let registry = VRAlarmIntentStore.uuidRegistry()
+        return keys.reduce(0) { total, key in
+            guard registry[key] != nil,
+                  let fireDate = VRAlarmIntentStore.fireDateMillis(appKey: key),
+                  fireDate > afterMillis else { return total }
+            return total + 1
+        }
+    }
+
+    /// Cancels every OTHER member of `resolvedKey`'s chain. Rotation awareness
     /// (app key -> current UUID) belongs to the scheduler's cancel and is not
     /// re-implemented here; we only decide which keys it gets.
     ///
     /// Returns the keys that were actually still scheduled, so a second
-    /// acknowledgment on the same occurrence is silent rather than logging a
-    /// second round of cancels.
+    /// acknowledgment on the same ring is silent rather than logging a second
+    /// round of cancels.
     @discardableResult
     static func cancelSiblings(of resolvedKey: String, atMillis: Int) -> [String] {
         guard !resolvedKey.isEmpty else { return [] }
@@ -326,7 +415,7 @@ enum VRAlarmLadder {
             // Guard 5 lives in here: resolve the key's current UUID, cancel it,
             // drop the registry and meta entries.
             VRFollowUpScheduler.cancel(appKey: key)
-            // Belt and braces for a rung whose registry entry already rotated away:
+            // Belt and braces for a ring whose registry entry already rotated away:
             // the scheduler's cancel bails before its own eviction in that case.
             VRAlarmIntentStore.clearMeta(appKey: key)
             VRAlarmIntentStore.clearSnoozeGuard(appKey: key)
@@ -423,12 +512,19 @@ struct VRSnoozeIntent: LiveActivityIntent {
             snoozeUntilMillis: snoozeUntil
         )
 
-        // Ladder: Later supersedes the rest of the occurrence, so the remaining
-        // rungs die BEFORE the follow-up is registered — the user asked to be told
-        // again in five minutes, not in three.
-        VRAlarmLadder.cancelSiblings(of: resolvedKey, atMillis: nowMillis)
-
-        scheduleFollowUp(appKey: resolvedKey, fireAtMillis: snoozeUntil, snoozeMinutes: minutes)
+        // NAG (OLD-96): the comebacks for this ring were registered up front, so
+        // "Later" usually has nothing to schedule — the next pre-scheduled sibling
+        // IS the comeback, five minutes out with the identical audio. The chain is
+        // deliberately NOT cancelled here: cancelling it would collapse three owed
+        // comebacks into one and hand the counter back to zero, which is how the
+        // snooze button became unbounded in the first place.
+        //
+        // Only when nothing is owed (pre-scheduling failed, a legacy alarm, or the
+        // chain is spent) does Later arm a follow-up itself — and scheduleFollowUp
+        // then enforces the same cap the JS side uses.
+        if VRAlarmNagChain.owedComebackCount(of: resolvedKey, afterMillis: nowMillis) == 0 {
+            scheduleFollowUp(appKey: resolvedKey, fireAtMillis: snoozeUntil, snoozeMinutes: minutes)
+        }
 
         // GUARD 4 — hold the process alive so AlarmKit finishes registering the
         // follow-up. Returning immediately lets iOS suspend us mid-registration and
@@ -446,14 +542,24 @@ struct VRSnoozeIntent: LiveActivityIntent {
         guard !resolvedKey.isEmpty else { return }
 
         var metadata = VRAlarmIntentStore.storedMetadata(appKey: resolvedKey)
+
+        // THE CAP. The follow-up reuses the ring's own app key, so its metadata
+        // is what the next tap reads back — incrementing nagIndex here is what
+        // makes a chain of snoozes terminate at nagMax instead of running for
+        // ever. A missing counter reads as 0, so a legacy alarm still gets its
+        // full allowance rather than none.
+        let delivered = VRAlarmIntentGuards.nagIndex(metadata: metadata)
+        let allowance = VRAlarmIntentGuards.nagMax(metadata: metadata)
+        guard VRAlarmIntentGuards.shouldNagAgain(nagIndex: delivered, nagMax: allowance) else { return }
+
         metadata["snoozed"] = "1"
-        // The follow-up is a single alarm, never a rung: carrying the ladder keys
-        // forward would make Done on the follow-up re-cancel rungs this snooze
-        // already killed, and would let the follow-up's own key drift into a
-        // sibling list.
+        metadata[VRAlarmIntentKeys.nagIndexMetadataKey] = String(delivered + 1)
+        metadata[VRAlarmIntentKeys.nagMaxMetadataKey] = String(allowance)
+        // The follow-up is a single alarm, never a chain member: carrying the
+        // sibling list forward would make Done on the follow-up re-cancel keys
+        // this snooze already passed, and would let the follow-up's own key drift
+        // into a sibling list.
         metadata.removeValue(forKey: VRAlarmIntentKeys.siblingsMetadataKey)
-        metadata.removeValue(forKey: VRAlarmIntentKeys.rungMetadataKey)
-        metadata.removeValue(forKey: VRAlarmIntentKeys.rungCountMetadataKey)
 
         do {
             _ = try VRFollowUpScheduler.scheduleAlarm(
@@ -519,11 +625,11 @@ struct VRStopIntent: LiveActivityIntent {
             snoozeUntilMillis: nil
         )
 
-        // Ladder: the remaining rungs of this occurrence go away. Deliberately
-        // AFTER the GUARD 2 return above — a spurious stop fired alongside a Later
-        // tap must cancel nothing at all, or the snooze the user actually asked for
-        // loses its ladder before it starts.
-        VRAlarmLadder.cancelSiblings(of: resolvedKey, atMillis: nowMillis)
+        // Done ends the chain: every comeback still armed for this ring goes away.
+        // Deliberately AFTER the GUARD 2 return above — a spurious stop fired
+        // alongside a Later tap must cancel nothing at all, or the comebacks the
+        // user just asked for die before the first one rings.
+        VRAlarmNagChain.cancelSiblings(of: resolvedKey, atMillis: nowMillis)
 
         VRAlarmIntentStore.clearUUID(appKey: resolvedKey)
         // Spent guard from an earlier Later on this same occurrence — safe to drop
@@ -625,28 +731,51 @@ extension VRAlarmIntentGuards {
         expect(eventIdentifier(appKey: nil, alarmID: nil) == "unknown", "unknown fallback")
         expect(followUpAppKey(originalAppKey: "reminder_a_1") == "reminder_a_1", "follow-up reuses app key")
 
-        // Ladder sibling parsing
-        let rung0 = "reminder_a_1000"
-        let rung1 = "reminder_a_1180000"
-        let rung2 = "reminder_a_1420000"
-        expect(siblingKeys(rawSiblings: nil, excluding: rung0).isEmpty, "no siblings key => nothing to cancel")
-        expect(siblingKeys(rawSiblings: "", excluding: rung0).isEmpty, "empty siblings => nothing to cancel")
-        expect(siblingKeys(rawSiblings: rung1 + "," + rung2, excluding: rung0) == [rung1, rung2],
-               "both other rungs cancelled")
-        expect(siblingKeys(rawSiblings: " " + rung1 + " , " + rung2 + " ", excluding: rung0) == [rung1, rung2],
+        // Nag chain sibling parsing. One ring is `reminder_a_<T>` plus the three
+        // comebacks pre-scheduled with it: `snooze_a_<T+5m|+10m|+15m>`.
+        let occurrence = "reminder_a_1000"
+        let comeback1 = "snooze_a_301000"
+        let comeback2 = "snooze_a_601000"
+        let comeback3 = "snooze_a_901000"
+        expect(siblingKeys(rawSiblings: nil, excluding: occurrence).isEmpty, "no siblings key => nothing to cancel")
+        expect(siblingKeys(rawSiblings: "", excluding: occurrence).isEmpty, "empty siblings => nothing to cancel")
+        expect(siblingKeys(rawSiblings: comeback1 + "," + comeback2 + "," + comeback3, excluding: occurrence)
+                 == [comeback1, comeback2, comeback3],
+               "Done on the occurrence cancels all three comebacks")
+        expect(siblingKeys(rawSiblings: " " + comeback1 + " , " + comeback2 + " ", excluding: occurrence)
+                 == [comeback1, comeback2],
                "whitespace tolerated")
-        expect(siblingKeys(rawSiblings: rung1 + ",," + rung1, excluding: rung0) == [rung1],
+        expect(siblingKeys(rawSiblings: comeback1 + ",," + comeback1, excluding: occurrence) == [comeback1],
                "blanks dropped and keys de-duplicated")
-        expect(siblingKeys(rawSiblings: rung0 + "," + rung1, excluding: rung0) == [rung1],
+        expect(siblingKeys(rawSiblings: occurrence + "," + comeback1, excluding: occurrence) == [comeback1],
                "own key never cancelled")
-        expect(siblingKeys(rawSiblings: followUpAppKey(originalAppKey: rung0), excluding: rung0).isEmpty,
+        expect(siblingKeys(rawSiblings: followUpAppKey(originalAppKey: occurrence), excluding: occurrence).isEmpty,
                "follow-up key is never a sibling")
-        expect(siblingKeys(rawSiblings: "snooze_until_" + rung1 + "," + rung1, excluding: rung0) == [rung1],
-               "non-reminder keys never reach cancel")
+        expect(siblingKeys(rawSiblings: "snooze_until_" + occurrence + "," + comeback1, excluding: occurrence) == [comeback1],
+               "the snooze guard key never reaches cancel")
+        expect(isCancellableAlarmKey(occurrence) && isCancellableAlarmKey(comeback1),
+               "both alarm key families are cancellable")
+        expect(isCancellableAlarmKey("snooze_until_" + occurrence) == false,
+               "the guard key is not an alarm")
 
-        // Walkthrough: Done on rung 1 of an urgent ladder kills rungs 0 and 2 only.
-        expect(siblingKeys(rawSiblings: rung0 + "," + rung2, excluding: rung1) == [rung0, rung2],
-               "walkthrough: middle rung cancels the outer two")
+        // Walkthrough: Done on comeback 2 ends the chain — the occurrence's own
+        // key and every comeback still armed for that ring go away.
+        expect(siblingKeys(rawSiblings: occurrence + "," + comeback1 + "," + comeback3, excluding: comeback2)
+                 == [occurrence, comeback1, comeback3],
+               "walkthrough: Done on a comeback ends the whole chain")
+
+        // The cap that stops the snooze button re-arming for ever.
+        expect(nagIndex(metadata: [:]) == 0, "absent counter => nothing delivered yet")
+        expect(nagIndex(metadata: ["nagIndex": "junk"]) == 0, "garbage counter => nothing delivered yet")
+        expect(nagIndex(metadata: ["nagIndex": "-4"]) == 0, "negative counter floored")
+        expect(nagIndex(metadata: ["nagIndex": "2"]) == 2, "counter read back")
+        expect(nagMax(metadata: [:]) == defaultNagMax, "absent allowance => default")
+        expect(nagMax(metadata: ["nagMax": "99"]) == defaultNagMax, "allowance clamped to the default")
+        expect(nagMax(metadata: ["nagMax": "1"]) == 1, "smaller allowance honoured")
+        expect(shouldNagAgain(nagIndex: 0, nagMax: defaultNagMax), "first comeback allowed")
+        expect(shouldNagAgain(nagIndex: 2, nagMax: defaultNagMax), "third comeback allowed")
+        expect(shouldNagAgain(nagIndex: 3, nagMax: defaultNagMax) == false, "fourth comeback refused")
+        expect(shouldNagAgain(nagIndex: 9, nagMax: defaultNagMax) == false, "counter past the cap refused")
 
         // End-to-end guard 2 walkthrough: Later tap at T, spurious Stop at T+40ms,
         // follow-up rings at T+5m, real Done two seconds later.

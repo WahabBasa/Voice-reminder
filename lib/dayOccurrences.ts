@@ -1,3 +1,4 @@
+import { gridDayOccurrences } from "./schedule";
 import { type Reminder, type ReminderHistory } from "./store";
 import { getNextIntervalOccurrence, getNextTriggerTime, type ReminderSchedule } from "./time";
 
@@ -61,8 +62,30 @@ function createdDayStartMs(reminder: Reminder): number {
  * Same membership rules as the day list: one-offs on their date, repeats on
  * matching days (bounded by creation day), intervals on days a tick lands in.
  */
+/**
+ * Every ring a grid reminder produces on the given day, earliest first.
+ * Empty for a pre-grid reminder, or for a day the grid does not land on.
+ *
+ * One reminder can ring several times a day (OLD-98), so the day list needs the
+ * whole set, not just the first — the legacy `time` field is only ring one.
+ */
+export function dayOccurrenceTimes(reminder: Reminder, dateISO: string): number[] {
+  if (reminder.schedule?.type !== "grid") return [];
+  const { start, end } = dayBoundsMs(dateISO);
+  // Repeats never occur before the day they were created; a dated one-off is
+  // its own anchor and is exempt.
+  if (reminder.schedule.days.kind !== "date" && end <= createdDayStartMs(reminder)) return [];
+  return gridDayOccurrences(reminder.schedule, start);
+}
+
 export function occursOnDay(reminder: Reminder, dateISO: string): boolean {
   const { start, end } = dayBoundsMs(dateISO);
+
+  // The grid knows about multi-time days, windowed intervals and every-N-days;
+  // the legacy branches below only ever knew about one ring at one time.
+  if (reminder.schedule?.type === "grid") {
+    return dayOccurrenceTimes(reminder, dateISO).length > 0;
+  }
 
   // Bounded recurrences stop after `until`.
   if (reminder.until && start > reminder.until) return false;
@@ -128,6 +151,9 @@ function firstIntervalTickInDay(
 /** Sort key: when within the day this reminder first fires (ms timestamp). */
 export function occurrenceSortKey(reminder: Reminder, dateISO: string): number {
   const { start, end } = dayBoundsMs(dateISO);
+
+  const gridTimes = dayOccurrenceTimes(reminder, dateISO);
+  if (gridTimes.length > 0) return gridTimes[0];
 
   if (reminder.frequency === "interval" && reminder.anchorAt && reminder.intervalMs) {
     const first = firstIntervalTickInDay(reminder.anchorAt, reminder.intervalMs, start);

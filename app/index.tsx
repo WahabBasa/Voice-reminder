@@ -3,6 +3,7 @@ import {
   Alert,
   FlatList,
   InteractionManager,
+  Keyboard,
   LayoutAnimation,
   Platform,
   StyleSheet,
@@ -26,6 +27,7 @@ import { getDeviceId } from "../lib/deviceId";
 import { useReminderStore, Reminder } from "../lib/store";
 import { useSettingsStore } from "../lib/settingsStore";
 import RecordingOverlay from "../components/RecordingOverlay";
+import ComposerSheet from "../components/ComposerSheet";
 import EditReminderSheet from "../components/EditReminderSheet";
 import { useToast } from "../components/ToastProvider";
 import AiConsentCard from "../components/AiConsentCard";
@@ -44,9 +46,11 @@ import {
   describeTakeOutcome,
   extractTakeItems,
   intakeTakeReminders,
+  isPremiumTakeItem,
   planTakeAllowance,
   scheduleTakeReminders,
 } from "../lib/voiceTake";
+import { submitTypedTake } from "../lib/typedTake";
 import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, isCompletedOnDay, occurrencesForDay, todayISO } from "../lib/dayOccurrences";
@@ -69,6 +73,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const processVoiceReminder = useAction(api.actions.processVoiceReminder);
   const processVoiceReminderFast = useAction(api.actions.processVoiceReminderFast);
+  const processTypedReminder = useAction(api.actions.processTypedReminder);
   const generateAudioUploadUrl = useMutation(api.reminders.generateAudioUploadUrl);
   const removeConvexReminder = useMutation(api.reminders.remove);
   const toast = useToast();
@@ -91,11 +96,17 @@ export default function HomeScreen() {
   }, [reminders, history, nowMs]);
 
   const [showRecording, setShowRecording] = useState(false);
+  // Edit overlay - renders instantly without navigation
+  const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
   const [recordingTraceId, setRecordingTraceId] = useState<string | null>(null);
   const [canStartRecording, setCanStartRecording] = useState(false);
   const [gateStatusText, setGateStatusText] = useState<string | undefined>(undefined);
   const [showUpgradeCta, setShowUpgradeCta] = useState(false);
   const [showConsentCard, setShowConsentCard] = useState(false);
+  // Typed composer (OLD-101) — the keyboard beside the mic hero.
+  const [showComposer, setShowComposer] = useState(false);
+  const [composerTraceId, setComposerTraceId] = useState<string | null>(null);
+  const [isComposerSubmitting, setIsComposerSubmitting] = useState(false);
   const [page, setPage] = useState(PAGE_TODAY);
   const cancelledRef = useRef(false);
   const [isConnected, setIsConnected] = useState(true);
@@ -192,6 +203,12 @@ export default function HomeScreen() {
 
   const openPaywall = useCallback(() => {
     router.push("/paywall");
+  }, [router]);
+
+  // Interval mode is Pro (OLD-100). Everyone sent here by that gate gets the
+  // paywall's interval headline instead of the general pitch.
+  const openIntervalPaywall = useCallback(() => {
+    router.push({ pathname: "/paywall", params: { context: "interval" } });
   }, [router]);
 
   const lockRecordingForLimit = useCallback(
@@ -360,88 +377,30 @@ export default function HomeScreen() {
     cancelledRef.current = true;
   }, []);
 
-  const handleRecordingComplete = async (audioUri: string, traceId: string) => {
-    cancelledRef.current = false;
-    try {
-      perfLog(traceId, "device.processing", "handleRecordingComplete_start", { audioUri });
-
-      // Send device's LOCAL time (not UTC) so GPT can parse relative times correctly
-      const now = new Date();
-      const pad = (n: number) => n.toString().padStart(2, '0');
-      const deviceLocalDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-      const deviceLocalTime = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-      const deviceTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-      // Address term for the spoken description (empty = address-free urgency)
-      const settingsState = useSettingsStore.getState();
-      if (!settingsState.hasLoadedSettings) {
-        await settingsState.loadSettings();
+  /**
+   * What a parsed take becomes: re-gated against the free cap, stored, hydrated,
+   * scheduled, and then either opened in the edit sheet or summed up in a toast.
+   *
+   * Voice and the typed composer share every line of it — the only difference
+   * between them is which action produced `result` (OLD-101). Returns false when
+   * the free cap ate the whole take; a take that produced nothing for any other
+   * reason throws, and the caller owns the error surface.
+   */
+  const applyTakeResult = useCallback(
+    async (
+      result: any,
+      opts: {
+        traceId: string;
+        usedFastPath: boolean;
+        /** Nothing survived the free cap — the caller says so its own way. */
+        onCapBlocked: (activeCount: number, limit: number) => void;
+        /** Nothing survived the interval gate — the caller closes and upsells. */
+        onPremiumBlocked: () => void;
+        /** The take landed: close whatever surface the user came from. */
+        onCreated?: () => void;
       }
-      const addressTerm = useSettingsStore.getState().settings.addressTerm || undefined;
-
-      // Owning install for the reminder the backend is about to create (OLD-74).
-      const deviceId = await getDeviceId();
-
-      let result: any;
-      let usedFastPath = false;
-
-      // Try FAST PATH: binary upload + async TTS
-      try {
-        perfLog(traceId, "device.processing", "upload_start");
-        const { uploadUrl } = await generateAudioUploadUrl();
-        const { storageId } = await uploadRecordingToConvex(uploadUrl, audioUri);
-        perfLog(traceId, "device.processing", "upload_done", { storageId });
-
-        const tAction = Date.now();
-        result = await processVoiceReminderFast({
-          deviceId,
-          audioStorageId: storageId as any,
-          traceId,
-          deviceLocalDate,
-          deviceLocalTime,
-          deviceTimezone,
-          addressTerm,
-        });
-        perfLog(traceId, "device.processing", "processVoiceReminderFast_done", {
-          ms: Date.now() - tAction,
-        });
-        usedFastPath = true;
-      } catch (fastPathError) {
-        // FALLBACK: use base64 path
-        console.log("[VR] Fast path failed, falling back to base64:", fastPathError);
-        perfLog(traceId, "device.processing", "fallback_to_base64");
-
-        const tBase64 = Date.now();
-        const base64 = await readFileAsBase64(audioUri);
-        perfLog(traceId, "device.processing", "audio_base64_done", {
-          ms: Date.now() - tBase64,
-          base64Chars: base64.length,
-        });
-
-        const tAction = Date.now();
-        result = await processVoiceReminder({
-          deviceId,
-          audioBase64: base64,
-          traceId,
-          deviceLocalDate,
-          deviceLocalTime,
-          deviceTimezone,
-          addressTerm,
-        });
-        perfLog(traceId, "device.processing", "processVoiceReminder_done", {
-          ms: Date.now() - tAction,
-        });
-      }
-
-      // Check if cancelled while processing
-      if (cancelledRef.current) {
-        console.log("[VR] Processing cancelled by user");
-        return;
-      }
-
-      if ((result as any)?.perf) {
-        perfLog(traceId, "device.processing", "convex_perf", (result as any).perf);
-      }
+    ): Promise<boolean> => {
+      const { traceId, usedFastPath } = opts;
 
       // One take can hold several reminders (OLD-93). A result without the
       // array is the legacy single-reminder shape — a take of exactly one.
@@ -452,18 +411,22 @@ export default function HomeScreen() {
       };
 
       // The gate before recording only knew about one reminder, so the take is
-      // re-gated here, where its size is known.
+      // re-gated here, where its size — and its schedules — are known. Interval
+      // mode needs Pro whatever the count says (OLD-100).
       const limit = getFreeActiveLimit();
+      const premium = takeItems.map((item) => isPremiumTakeItem(item, draftContext.tzid));
       const allowance = await planTakeAllowance({
         takeCount: takeItems.length,
         activeCount: getActiveReminderCount(),
         limit,
         checkPro: checkProStatus,
+        premium,
       });
       perfLog(traceId, "device.processing", "take_gate", {
         takeCount: takeItems.length,
         allowed: allowance.allowed,
         dropped: allowance.dropped,
+        blockedPremium: allowance.blockedPremium,
         isPro: allowance.isPro,
         activeCount: allowance.activeCount,
         limit,
@@ -473,6 +436,7 @@ export default function HomeScreen() {
       const outcome = await intakeTakeReminders({
         items: takeItems,
         allowed: allowance.allowed,
+        decisions: allowance.decisions,
         context: draftContext,
         deps: {
           addReminder: storeAddReminder,
@@ -514,25 +478,32 @@ export default function HomeScreen() {
         created: outcome.created.length,
         failed: outcome.failed,
         dropped: outcome.dropped,
+        blockedPremium: outcome.blockedPremium,
       });
 
       if (outcome.created.length === 0) {
-        // Everything the take produced was over the free cap: back to the
-        // locked overlay rather than ending on nothing.
+        // Nothing survived a gate: land on the surface that explains why, not
+        // on nothing. The interval gate speaks first — it is the more specific
+        // "no" of the two.
+        if (outcome.blockedPremium > 0) {
+          opts.onPremiumBlocked();
+          return false;
+        }
         if (outcome.dropped > 0) {
-          showLimitLockedOverlay(traceId, allowance.activeCount, limit);
-          return;
+          opts.onCapBlocked(allowance.activeCount, limit);
+          return false;
         }
         throw new Error("Take produced no reminders");
       }
 
-      setShowRecording(false);
+      opts.onCreated?.();
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       // Store already updated - no need for setReminders
 
       const feedback = describeTakeOutcome({
         created: outcome.created.length,
         dropped: outcome.dropped,
+        blockedPremium: outcome.blockedPremium,
         failed: outcome.failed,
         total: outcome.total,
         limit,
@@ -545,7 +516,11 @@ export default function HomeScreen() {
           message: feedback.message,
           type: feedback.type,
           durationMs: feedback.upgrade ? 4000 : undefined,
-          onPress: feedback.upgrade ? openPaywall : undefined,
+          onPress: !feedback.upgrade
+            ? undefined
+            : feedback.upgradeContext === "interval"
+              ? openIntervalPaywall
+              : openPaywall,
         });
       } else {
         setEditingReminder(outcome.created[0]);
@@ -577,8 +552,6 @@ export default function HomeScreen() {
                 persistent: newReminder.persistent,
                 variants: newReminder.variants,
                 variantAudioUrls: newReminder.variantAudioUrls,
-                snoozeEnabled: newReminder.snoozeEnabled,
-                snoozeDuration: newReminder.snoozeDuration,
                 volume: newReminder.volume,
                 volumeStyle: newReminder.volumeStyle,
 
@@ -587,6 +560,7 @@ export default function HomeScreen() {
                 intervalDays: newReminder.intervalDays,
 
                 // New unified schedule fields
+                schedule: newReminder.schedule,
                 scheduleType: newReminder.scheduleType,
                 onceAt: newReminder.onceAt,
                 rrule: newReminder.rrule,
@@ -615,6 +589,251 @@ export default function HomeScreen() {
           }
         );
       });
+
+      return true;
+    },
+    [
+      storeAddReminder,
+      storeUpdateReminder,
+      removeConvexReminder,
+      toast,
+      openPaywall,
+      openIntervalPaywall,
+    ]
+  );
+
+  /**
+   * Open the typed composer (OLD-101).
+   *
+   * The same gates the mic runs, minus the ones that are about a microphone:
+   * notification/alarm permission still applies (a typed reminder has to ring),
+   * the AI consent card does not — it is written about a recording and chains
+   * straight into the system mic prompt.
+   */
+  const handleOpenComposer = useCallback(async () => {
+    if (showComposer || showRecording) return;
+    const traceId = createTraceId("cmp");
+    recordTap(traceId);
+    perfLog(traceId, "ui.composer", "open_tap");
+
+    if (!isConnected) {
+      perfLog(traceId, "ui.composer", "open_blocked_offline");
+      setShowOfflineMessage(true);
+      return;
+    }
+
+    const permsOk = await arePermissionsGranted();
+    if (!permsOk) {
+      perfLog(traceId, "ui.composer", "open_blocked_permissions");
+      showPermissionPrompt();
+      return;
+    }
+
+    // Free cap, counted exactly the way the mic counts it. The composer has no
+    // locked state of its own, so a blocked user gets the upgrade toast rather
+    // than an empty field they can't send.
+    if (!hasLoadedReminders) {
+      await loadReminders().catch(() => {});
+    }
+    const limit = getFreeActiveLimit();
+    const currentCount = getActiveReminderCount();
+    if (currentCount >= limit) {
+      const { canCreate } = await checkCanCreateWithCount(currentCount);
+      if (!canCreate) {
+        perfLog(traceId, "ui.composer", "gate_blocked_limit", { currentCount, limit });
+        toast.show({
+          title: `You've reached ${limit} active reminders`,
+          message: "Tap to upgrade for unlimited.",
+          type: "warning",
+          durationMs: 4000,
+          onPress: openPaywall,
+        });
+        return;
+      }
+    }
+
+    setComposerTraceId(traceId);
+    setShowComposer(true);
+  }, [
+    showComposer,
+    showRecording,
+    isConnected,
+    hasLoadedReminders,
+    loadReminders,
+    toast,
+    openPaywall,
+  ]);
+
+  const handleComposerDismiss = useCallback(() => {
+    setShowComposer(false);
+    setComposerTraceId(null);
+  }, []);
+
+  // Handoff: the typed sentence is dropped and the recorder takes over, running
+  // its own gates from scratch (consent included).
+  const handleComposerSpeak = useCallback(() => {
+    setShowComposer(false);
+    setComposerTraceId(null);
+    void handleOpenRecording();
+  }, [handleOpenRecording]);
+
+  /**
+   * One typed sentence through the same pipeline a recording takes: parse on
+   * the server, then the shared take loop — so the sheet opens pre-filled and
+   * the saved reminder speaks, exactly like a voice take.
+   */
+  const handleComposerSubmit = useCallback(
+    async (text: string) => {
+      const traceId = composerTraceId ?? createTraceId("cmp");
+      setIsComposerSubmitting(true);
+      // Typing is over: the keyboard would otherwise still be up when the edit
+      // sheet takes the screen.
+      Keyboard.dismiss();
+      try {
+        const tAction = Date.now();
+        perfLog(traceId, "device.processing", "typed_action_start", { chars: text.length });
+        const { result } = await submitTypedTake({
+          text,
+          deviceId: await getDeviceId(),
+          now: new Date(),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          traceId,
+          runAction: (actionArgs) => processTypedReminder(actionArgs),
+        });
+        perfLog(traceId, "device.processing", "typed_action_done", { ms: Date.now() - tAction });
+
+        if ((result as any)?.perf) {
+          perfLog(traceId, "device.processing", "convex_perf", (result as any).perf);
+        }
+
+        // Typed takes always come back with audio pending (the parse returns
+        // before TTS), so hydration runs for them just like the fast voice path.
+        await applyTakeResult(result, {
+          traceId,
+          usedFastPath: true,
+          onCapBlocked: (_activeCount, limit) => {
+            setShowComposer(false);
+            toast.show({
+              title: `You've reached ${limit} active reminders`,
+              message: "Tap to upgrade for unlimited.",
+              type: "warning",
+              durationMs: 4000,
+              onPress: openPaywall,
+            });
+          },
+          onPremiumBlocked: () => {
+            setShowComposer(false);
+            openIntervalPaywall();
+          },
+          onCreated: () => setShowComposer(false),
+        });
+      } catch (error: any) {
+        // The sheet stays open with the sentence still in it — retrying should
+        // not mean retyping.
+        console.log("[VR] Typed reminder failed:", error);
+        perfLog(traceId, "device.processing", "typed_action_error", { error: String(error) });
+        Alert.alert(
+          "Error",
+          "Failed to create your reminder. Check your internet connection and try again."
+        );
+      } finally {
+        setIsComposerSubmitting(false);
+      }
+    },
+    [
+      composerTraceId,
+      processTypedReminder,
+      applyTakeResult,
+      toast,
+      openPaywall,
+      openIntervalPaywall,
+    ]
+  );
+
+  const handleRecordingComplete = async (audioUri: string, traceId: string) => {
+    cancelledRef.current = false;
+    try {
+      perfLog(traceId, "device.processing", "handleRecordingComplete_start", { audioUri });
+
+      // Send device's LOCAL time (not UTC) so GPT can parse relative times correctly
+      const now = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const deviceLocalDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const deviceLocalTime = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      const deviceTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+      // Owning install for the reminder the backend is about to create (OLD-74).
+      const deviceId = await getDeviceId();
+
+      let result: any;
+      let usedFastPath = false;
+
+      // Try FAST PATH: binary upload + async TTS
+      try {
+        perfLog(traceId, "device.processing", "upload_start");
+        const { uploadUrl } = await generateAudioUploadUrl();
+        const { storageId } = await uploadRecordingToConvex(uploadUrl, audioUri);
+        perfLog(traceId, "device.processing", "upload_done", { storageId });
+
+        const tAction = Date.now();
+        result = await processVoiceReminderFast({
+          deviceId,
+          audioStorageId: storageId as any,
+          traceId,
+          deviceLocalDate,
+          deviceLocalTime,
+          deviceTimezone,
+        });
+        perfLog(traceId, "device.processing", "processVoiceReminderFast_done", {
+          ms: Date.now() - tAction,
+        });
+        usedFastPath = true;
+      } catch (fastPathError) {
+        // FALLBACK: use base64 path
+        console.log("[VR] Fast path failed, falling back to base64:", fastPathError);
+        perfLog(traceId, "device.processing", "fallback_to_base64");
+
+        const tBase64 = Date.now();
+        const base64 = await readFileAsBase64(audioUri);
+        perfLog(traceId, "device.processing", "audio_base64_done", {
+          ms: Date.now() - tBase64,
+          base64Chars: base64.length,
+        });
+
+        const tAction = Date.now();
+        result = await processVoiceReminder({
+          deviceId,
+          audioBase64: base64,
+          traceId,
+          deviceLocalDate,
+          deviceLocalTime,
+          deviceTimezone,
+        });
+        perfLog(traceId, "device.processing", "processVoiceReminder_done", {
+          ms: Date.now() - tAction,
+        });
+      }
+
+      // Check if cancelled while processing
+      if (cancelledRef.current) {
+        console.log("[VR] Processing cancelled by user");
+        return;
+      }
+
+      if ((result as any)?.perf) {
+        perfLog(traceId, "device.processing", "convex_perf", (result as any).perf);
+      }
+
+      await applyTakeResult(result, {
+        traceId,
+        usedFastPath,
+        onCapBlocked: (activeCount, limit) => showLimitLockedOverlay(traceId, activeCount, limit),
+        onPremiumBlocked: () => {
+          setShowRecording(false);
+          openIntervalPaywall();
+        },
+        onCreated: () => setShowRecording(false),
+      });
     } catch (error: any) {
       console.error("[VR] Processing error:", error);
 
@@ -634,9 +853,6 @@ export default function HomeScreen() {
       );
     }
   };
-
-  // State for edit overlay - renders instantly without navigation
-  const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
 
   const handleReminderPress = useCallback(
     (reminder: Reminder) => {
@@ -892,7 +1108,7 @@ export default function HomeScreen() {
 
       {/* Tiimo-style dock on every page, mic anchored bottom-right.
           Both yield the bottom edge while recording or editing. */}
-      {!showRecording && !editingReminder && (
+      {!showRecording && !showComposer && !editingReminder && (
         <>
           {showOfflineMessage && (
             <View style={[styles.offlineMessage, { bottom: (Platform.OS === "ios" ? 110 : 100) + insets.bottom }]}>
@@ -904,7 +1120,12 @@ export default function HomeScreen() {
             </View>
           )}
 
-          <BottomBar activeTab={activeTab} onTab={handleTab} onRecord={handleOpenRecording} />
+          <BottomBar
+            activeTab={activeTab}
+            onTab={handleTab}
+            onRecord={handleOpenRecording}
+            onCompose={() => void handleOpenComposer()}
+          />
         </>
       )}
 
@@ -919,6 +1140,15 @@ export default function HomeScreen() {
         onClose={handleCloseRecording}
         onRecordingComplete={handleRecordingComplete}
         onCancelProcessing={handleCancelProcessing}
+      />
+
+      {/* Typed composer — same parse, same sheet, no microphone (OLD-101) */}
+      <ComposerSheet
+        visible={showComposer}
+        submitting={isComposerSubmitting}
+        onSubmit={(text) => void handleComposerSubmit(text)}
+        onSpeak={handleComposerSpeak}
+        onDismiss={handleComposerDismiss}
       />
 
       {/* First-run AI disclosure — gates the very first recording */}

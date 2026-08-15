@@ -22,50 +22,21 @@ async function withFreshStore(
 // ─── loadSettings ───────────────────────────────────────────────────────────
 
 describe("loadSettings", () => {
-  it("defaults addressTerm to empty string when nothing is stored", async () => {
+  it("marks settings loaded when nothing is stored", async () => {
     await withFreshStore(null, async (useSettingsStore) => {
       await useSettingsStore.getState().loadSettings();
-      expect(useSettingsStore.getState().settings.addressTerm).toBe("");
       expect(useSettingsStore.getState().hasLoadedSettings).toBe(true);
     });
-  });
-
-  it("loads a stored addressTerm", async () => {
-    await withFreshStore(
-      JSON.stringify({ addressTerm: "Wahab" }),
-      async (useSettingsStore) => {
-        await useSettingsStore.getState().loadSettings();
-        expect(useSettingsStore.getState().settings.addressTerm).toBe("Wahab");
-      }
-    );
-  });
-
-  it("loads an Arabic addressTerm as-is", async () => {
-    await withFreshStore(
-      JSON.stringify({ addressTerm: "وهاب" }),
-      async (useSettingsStore) => {
-        await useSettingsStore.getState().loadSettings();
-        expect(useSettingsStore.getState().settings.addressTerm).toBe("وهاب");
-      }
-    );
   });
 
   it("falls back to defaults on malformed JSON", async () => {
     await withFreshStore("not json{", async (useSettingsStore) => {
       await useSettingsStore.getState().loadSettings();
-      expect(useSettingsStore.getState().settings.addressTerm).toBe("");
+      expect(useSettingsStore.getState().settings).toEqual({
+        aiConsentAcceptedAt: null,
+      });
       expect(useSettingsStore.getState().hasLoadedSettings).toBe(true);
     });
-  });
-
-  it("treats a non-string stored addressTerm as unset", async () => {
-    await withFreshStore(
-      JSON.stringify({ addressTerm: 42 }),
-      async (useSettingsStore) => {
-        await useSettingsStore.getState().loadSettings();
-        expect(useSettingsStore.getState().settings.addressTerm).toBe("");
-      }
-    );
   });
 
   it("defaults aiConsentAcceptedAt to null when nothing is stored", async () => {
@@ -77,7 +48,7 @@ describe("loadSettings", () => {
 
   it("treats settings written before consent existed as not consented", async () => {
     await withFreshStore(
-      JSON.stringify({ addressTerm: "Sir" }),
+      JSON.stringify({ aiConsentAcceptedAt: undefined }),
       async (useSettingsStore) => {
         await useSettingsStore.getState().loadSettings();
         expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
@@ -87,7 +58,7 @@ describe("loadSettings", () => {
 
   it("loads a stored aiConsentAcceptedAt timestamp", async () => {
     await withFreshStore(
-      JSON.stringify({ addressTerm: "", aiConsentAcceptedAt: 1700000000000 }),
+      JSON.stringify({ aiConsentAcceptedAt: 1700000000000 }),
       async (useSettingsStore) => {
         await useSettingsStore.getState().loadSettings();
         expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBe(
@@ -106,6 +77,20 @@ describe("loadSettings", () => {
       }
     );
   });
+
+  // The address term was removed (OLD-95): a spoken line never names the user,
+  // so a term left behind by an older install must not survive the load.
+  it("drops a legacy stored address term", async () => {
+    await withFreshStore(
+      JSON.stringify({ addressTerm: "Sir", aiConsentAcceptedAt: 1700000000000 }),
+      async (useSettingsStore) => {
+        await useSettingsStore.getState().loadSettings();
+        expect(useSettingsStore.getState().settings).toEqual({
+          aiConsentAcceptedAt: 1700000000000,
+        });
+      }
+    );
+  });
 });
 
 // ─── setAiConsent ───────────────────────────────────────────────────────────
@@ -120,7 +105,6 @@ describe("setAiConsent", () => {
       expect(typeof stamped).toBe("number");
       expect(stamped).toBeGreaterThanOrEqual(before);
       expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
-        addressTerm: "",
         aiConsentAcceptedAt: stamped,
       });
     });
@@ -128,26 +112,28 @@ describe("setAiConsent", () => {
 
   it("clears the timestamp when revoked", async () => {
     await withFreshStore(
-      JSON.stringify({ addressTerm: "Sir", aiConsentAcceptedAt: 1700000000000 }),
+      JSON.stringify({ aiConsentAcceptedAt: 1700000000000 }),
       async (useSettingsStore, AsyncStorage) => {
         await useSettingsStore.getState().loadSettings();
         await useSettingsStore.getState().setAiConsent(false);
         expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
         expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
-          addressTerm: "Sir",
           aiConsentAcceptedAt: null,
         });
       }
     );
   });
 
-  it("keeps the address term when consent changes", async () => {
+  // Consent is the only thing persisted now — writing it must not resurrect an
+  // address term that an older install left in the same blob.
+  it("does not write a legacy address term back out", async () => {
     await withFreshStore(
       JSON.stringify({ addressTerm: "Wahab" }),
-      async (useSettingsStore) => {
+      async (useSettingsStore, AsyncStorage) => {
         await useSettingsStore.getState().loadSettings();
         await useSettingsStore.getState().setAiConsent(true);
-        expect(useSettingsStore.getState().settings.addressTerm).toBe("Wahab");
+        const written = JSON.parse(AsyncStorage._store.get("@app_settings"));
+        expect(written.addressTerm).toBeUndefined();
       }
     );
   });
@@ -159,53 +145,6 @@ describe("setAiConsent", () => {
         useSettingsStore.getState().setAiConsent(true)
       ).rejects.toThrow("disk full");
       expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
-    });
-  });
-});
-
-// ─── setAddressTerm ─────────────────────────────────────────────────────────
-
-describe("setAddressTerm", () => {
-  it("persists the term to AsyncStorage", async () => {
-    await withFreshStore(null, async (useSettingsStore, AsyncStorage) => {
-      await useSettingsStore.getState().setAddressTerm("Sir");
-      expect(useSettingsStore.getState().settings.addressTerm).toBe("Sir");
-      expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
-        addressTerm: "Sir",
-        aiConsentAcceptedAt: null,
-      });
-    });
-  });
-
-  it("trims surrounding whitespace", async () => {
-    await withFreshStore(null, async (useSettingsStore) => {
-      await useSettingsStore.getState().setAddressTerm("  Wahab  ");
-      expect(useSettingsStore.getState().settings.addressTerm).toBe("Wahab");
-    });
-  });
-
-  it("clears the term with an empty string", async () => {
-    await withFreshStore(
-      JSON.stringify({ addressTerm: "Sir" }),
-      async (useSettingsStore, AsyncStorage) => {
-        await useSettingsStore.getState().loadSettings();
-        await useSettingsStore.getState().setAddressTerm("");
-        expect(useSettingsStore.getState().settings.addressTerm).toBe("");
-        expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
-          addressTerm: "",
-          aiConsentAcceptedAt: null,
-        });
-      }
-    );
-  });
-
-  it("rolls back state when persistence fails", async () => {
-    await withFreshStore(null, async (useSettingsStore, AsyncStorage) => {
-      AsyncStorage.setItem.mockRejectedValueOnce(new Error("disk full"));
-      await expect(
-        useSettingsStore.getState().setAddressTerm("Sir")
-      ).rejects.toThrow("disk full");
-      expect(useSettingsStore.getState().settings.addressTerm).toBe("");
     });
   });
 });

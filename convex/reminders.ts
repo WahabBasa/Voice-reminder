@@ -1,6 +1,6 @@
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
-import { selectCatchIds } from "./speechCatch";
+import { scheduleFields } from "./schema";
 
 async function resolveVariantAudioUrls(
   ctx: { storage: { getUrl: (id: any) => Promise<string | null> } },
@@ -94,10 +94,9 @@ export const create = internalMutation({
     deviceId: v.string(),
     title: v.string(),
     description: v.string(),
-    time: v.string(),
-    date: v.optional(v.string()),
-    frequency: v.string(),
-    days: v.optional(v.array(v.string())),
+    // Every schedule field, grid included (OLD-97) — one list, shared with the
+    // table so a new axis cannot land in storage and be dropped on the way in.
+    ...scheduleFields,
     // Card chip emoji picked by the parse (absent → neutral bell chip)
     emoji: v.optional(v.string()),
     audioStorageId: v.optional(v.id("_storage")),
@@ -152,10 +151,10 @@ export const update = mutation({
     deviceId: v.string(),
     title: v.string(),
     description: v.string(),
-    time: v.string(),
-    date: v.optional(v.string()),
-    frequency: v.string(),
-    days: v.optional(v.array(v.string())),
+    // The edit sheet may rewrite any axis of the grid, so the same field list
+    // the table holds goes back out through here — an edit that Convex cannot
+    // express is an edit the next device sync silently reverts.
+    ...scheduleFields,
     preReminderMinutes: v.optional(v.number()),
     persistent: v.optional(v.boolean()),
   },
@@ -187,43 +186,6 @@ export const updateAudio = internalMutation({
       audioStorageId: args.newStorageId,
       wavStorageId: args.newWavStorageId,
     });
-  },
-});
-
-/**
- * Draw this device's next spoken catches (convex/speechCatch.ts). The caller
- * sends its weighted preference order; the skip and the write happen together
- * here so two reminders created at once cannot both draw the same catch off a
- * stale read. Returns the chosen ids in speaking order and remembers the last.
- */
-export const claimSpeechCatches = internalMutation({
-  args: {
-    deviceId: v.string(),
-    candidateIds: v.array(v.string()),
-    count: v.number(),
-  },
-  handler: async (ctx, args) => {
-    // first(), not unique(): a duplicated row is a rotation glitch, not an error
-    // worth failing a TTS job over.
-    const state = await ctx.db
-      .query("speechCatchState")
-      .withIndex("by_device", (q) => q.eq("deviceId", args.deviceId))
-      .first();
-
-    const chosen = selectCatchIds(args.candidateIds, state?.lastCatchId, args.count);
-    const lastCatchId = chosen[chosen.length - 1];
-    if (lastCatchId) {
-      if (state) {
-        await ctx.db.patch(state._id, { lastCatchId, updatedAt: Date.now() });
-      } else {
-        await ctx.db.insert("speechCatchState", {
-          deviceId: args.deviceId,
-          lastCatchId,
-          updatedAt: Date.now(),
-        });
-      }
-    }
-    return chosen;
   },
 });
 

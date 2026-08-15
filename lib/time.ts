@@ -1,3 +1,5 @@
+import { nextGridOccurrence, type GridSchedule } from "../convex/scheduleShape";
+
 const DAY_MAP: Record<string, number> = {
   sun: 0,
   mon: 1,
@@ -14,11 +16,68 @@ export interface ReminderSchedule {
   frequency: string; // "once" | "daily" | "weekly" | "custom" | "interval"
   days?: string[]; // ["mon", "wed", "fri"]
 
+  /**
+   * The days × times grid (OLD-97). Authoritative when present — the fields
+   * above are only its first-ring projection, so a schedule that rings twice a
+   * day answers correctly here and nowhere else. Absent on pre-grid reminders,
+   * which keep the legacy branches below.
+   */
+  schedule?: GridSchedule;
+
   // Interval recurrence
   intervalMs?: number;
   anchorAt?: number;
   intervalDays?: number;
   scheduledFor?: number;
+}
+
+// ─── Occurrence planning (OLD-98) ───────────────────────────────────────────
+//
+// "The next trigger" stopped being one timestamp when a reminder gained the
+// right to ring several times a day. The execution layer holds a small SET of
+// live triggers per reminder and tops it back up as each one is delivered.
+
+/** How many of a reminder's upcoming rings hold a live trigger at once. */
+export const MAX_PENDING_OCCURRENCES = 4;
+
+/**
+ * How far past the FIRST planned ring we keep looking for more. Anchored on
+ * that ring rather than on "now" so a Thursday 08:00 + 21:00 reminder registers
+ * both on Monday instead of waiting for Thursday morning's delivery.
+ */
+export const OCCURRENCE_HORIZON_MS = 26 * 60 * 60 * 1000;
+
+/**
+ * The rings that should hold a live trigger right now, earliest first.
+ *
+ * Empty means the schedule has nothing left (a passed one-off, an expired
+ * `until`) — the caller decides whether that is an error or a quiet stop.
+ */
+export function planGridOccurrences(
+  schedule: GridSchedule,
+  referenceTime: number = Date.now(),
+  options: { max?: number; horizonMs?: number } = {}
+): number[] {
+  const max = Math.max(1, Math.floor(options.max ?? MAX_PENDING_OCCURRENCES));
+  const horizonMs = options.horizonMs ?? OCCURRENCE_HORIZON_MS;
+
+  const stamps: number[] = [];
+  let reference = referenceTime;
+  while (stamps.length < max) {
+    const next = nextGridOccurrence(schedule, reference);
+    if (next === null) break;
+    // The first ring is always taken, however far out it is; the horizon only
+    // decides how many of its followers ride along.
+    if (stamps.length > 0 && next - stamps[0] > horizonMs) break;
+    stamps.push(next);
+    reference = next;
+  }
+  return stamps;
+}
+
+/** The grid of a schedule, or null when this is a pre-grid reminder. */
+function gridOf(schedule: ReminderSchedule): GridSchedule | null {
+  return schedule.schedule?.type === "grid" ? schedule.schedule : null;
 }
 
 const DAY_KEYS: Array<keyof typeof DAY_MAP> = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -82,6 +141,16 @@ export function isOverdue(timestamp: number, now = Date.now()): boolean {
 }
 
 export function getDueTimestamp(schedule: ReminderSchedule, nowDate = new Date()): number {
+  // The grid answers for every shape it can express (multi-time days, windowed
+  // intervals, every N days), so it is consulted before any legacy branch.
+  const grid = gridOf(schedule);
+  if (grid) {
+    const next = nextGridOccurrence(grid, nowDate.getTime());
+    if (next !== null) return next;
+    // Nothing left (a passed one-off): fall through so the UI still has the
+    // original timestamp to render as overdue.
+  }
+
   // Interval reminders: compute next occurrence from cadence
   if (schedule.frequency === "interval") {
     if (!schedule.anchorAt || !schedule.intervalMs) {
@@ -231,6 +300,14 @@ export function getNextIntervalOccurrence(
 }
 
 export function getNextTriggerTime(schedule: ReminderSchedule, referenceTime?: number): number {
+  // Grid first (see getDueTimestamp): a passed one-off falls through to the
+  // legacy branches, which return its fixed timestamp instead of rolling it on.
+  const grid = gridOf(schedule);
+  if (grid) {
+    const next = nextGridOccurrence(grid, referenceTime ?? Date.now());
+    if (next !== null) return next;
+  }
+
   // Handle interval frequency
   if (schedule.frequency === "interval") {
     if (!schedule.anchorAt || !schedule.intervalMs) {

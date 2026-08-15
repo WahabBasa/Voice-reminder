@@ -71,8 +71,6 @@ export async function addReminder(reminder: Omit<Reminder, "id" | "createdAt">):
       ...reminder,
       id: Math.random().toString(36).substr(2, 9),
       createdAt: new Date().toISOString(),
-      snoozeEnabled: reminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled,
-      snoozeDuration: reminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
       volume: reminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
       volumeStyle: reminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
     };
@@ -92,8 +90,6 @@ export async function updateReminder(updatedReminder: Reminder): Promise<void> {
     if (index !== -1) {
       reminders[index] = {
         ...updatedReminder,
-        snoozeEnabled: updatedReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled,
-        snoozeDuration: updatedReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration,
         volume: updatedReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume,
         volumeStyle: updatedReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle,
       };

@@ -550,14 +550,21 @@ enum VRAlarmScheduler {
 //   VRStopIntent(alarmID: UUID, appKey: String)
 //   VRSnoozeIntent(alarmID: UUID, appKey: String, alarmTitle: String?, soundName: String?, snoozeMinutes: Int)
 //
-// Static members the real file conforms VRAlarmScheduler to (CL-2's cadence
-// ladder — renaming either breaks the intents, not this plugin):
+// Static members the real file conforms VRAlarmScheduler to (OLD-96's nag chain —
+// renaming either breaks the intents, not this plugin):
 //   VRAlarmScheduler.scheduleAlarm(appKey:fireDate:title:soundName:snoozeMinutes:metadata:)
 //   VRAlarmScheduler.cancel(appKey:)
 //
-// The ladder's `siblings` / `rung` / `rungCount` keys need no handling here: the
-// scheduler persists the whole metadata dict per app key (VRAlarmStore.setMeta),
-// and the intents read it back through that same record.
+// The chain's `siblings` / `nagIndex` / `nagMax` / `nagFor` keys need no handling
+// here: the scheduler persists the whole metadata dict per app key
+// (VRAlarmStore.setMeta) and the fire time alongside it (VRAlarmStore.setUUID),
+// and the intents read both back through those same records.
+//
+// Deliberately absent, and must stay absent: `countdownDuration` / `preAlert` /
+// `postAlert`, and `secondaryButtonBehavior: .countdown`. The system snooze is
+// wired to the SECONDARY button, so it cannot express "dismiss then come back",
+// and adopting it would cost a widget extension and displace VRSnoozeIntent
+// (docs/alarmkit-focus-breakthrough.md §7).
 // ---------------------------------------------------------------------------
 const INTENTS_SOURCE_PLACEHOLDER = `import AppIntents
 import Foundation

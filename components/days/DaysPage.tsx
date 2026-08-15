@@ -16,6 +16,8 @@ import {
   parseISODate,
   todayISO,
 } from "../../lib/dayOccurrences";
+import { describeGridSubtitle, formatEveryMinutes } from "../schedule/scheduleDraft";
+import { nextGridOccurrence } from "../../lib/schedule";
 import DayPager from "./DayPager";
 import MonthSheet from "./MonthSheet";
 import WeekStrip, { weekDatesFor } from "./WeekStrip";
@@ -47,8 +49,29 @@ function formatNextIn(targetMs: number, nowMs: number): string {
   return `Next in ${days} day${days !== 1 ? "s" : ""}`;
 }
 
-/** Card subtitle: "09:00 · Daily", "09:00 · Mon, Wed, Fri", "Every 2 hours" (+ next-in when today). */
+/**
+ * Card subtitle: "09:00 · Daily", "08:00, 21:00 · Mon, Thu",
+ * "Every 2 hr · 08:00–22:00" (+ next-in when today).
+ *
+ * The grid is read first because it is the only thing that can say a reminder
+ * rings twice a day — `reminder.time` is just its first ring. Reminders written
+ * before the grid existed (and any the store has not migrated yet) fall through
+ * to the legacy fields below.
+ */
 export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number): string {
+  const grid = reminder.schedule;
+  if (grid) {
+    // An interval trades its window for a countdown on today's card — the
+    // window is what it does every day, the countdown is what it does next.
+    if (grid.times.kind === "interval" && isToday) {
+      const next = nextGridOccurrence(grid, nowMs);
+      if (next !== null) {
+        return `Every ${formatEveryMinutes(grid.times.everyMinutes)} · ${formatNextIn(next, nowMs)}`;
+      }
+    }
+    return describeGridSubtitle(grid);
+  }
+
   if (reminder.frequency === "interval") {
     if (!reminder.intervalMs) return "";
     const every = formatIntervalDuration(reminder.intervalMs);

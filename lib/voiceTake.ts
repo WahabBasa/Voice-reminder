@@ -1,4 +1,7 @@
-import type { Reminder } from "./store";
+import { CURRENT_SCHEMA_VERSION, type Reminder } from "./store";
+import { buildGridSchedule, legacyFieldsFromGrid, type GridSchedule } from "./schedule";
+import { isPremiumSchedule } from "./usageGate";
+import type { PaywallContext } from "./paywallContent";
 
 /**
  * One voice take, several reminders (OLD-93).
@@ -33,13 +36,51 @@ export function extractTakeItems(result: any): TakeItem[] {
   return items.length > 0 ? items : [result];
 }
 
+/**
+ * The grid one take item means.
+ *
+ * The grid is what the action now sends (OLD-97). A result from an older deploy
+ * carries none, so it is rebuilt from the flat fields that result does have —
+ * the same builder the parse itself runs. Read before the reminder is stored
+ * too, because whether it needs Pro is a question about this grid (OLD-100).
+ */
+export function scheduleForItem(item: TakeItem, tzid?: string): GridSchedule {
+  if (isGridSchedule(item.schedule)) return item.schedule;
+
+  return buildGridSchedule(
+    {
+      frequency: item.frequency,
+      time: item.time,
+      times: item.times,
+      date: item.date,
+      days: item.days,
+      everyNDays: item.everyNDays ?? item.intervalDays,
+      intervalMs: item.intervalMs,
+      windowStart: item.windowStart,
+      windowEnd: item.windowEnd,
+      until: item.until,
+    },
+    { tzid }
+  );
+}
+
+/** Whether this item's schedule is one only a subscriber may keep. */
+export function isPremiumTakeItem(item: TakeItem, tzid?: string): boolean {
+  return isPremiumSchedule(scheduleForItem(item, tzid));
+}
+
 /** The local reminder one take item becomes. */
 export function buildReminderDraft(
   item: TakeItem,
   ctx: DraftContext
 ): Omit<Reminder, "id" | "createdAt"> {
-  const frequency = item.frequency === "weekly" ? "custom" : item.frequency;
-  const days = frequency === "custom" ? (item.days || []) : [];
+  const schedule = scheduleForItem(item, ctx.tzid);
+
+  // Legacy projection: `time`/`date`/`frequency`/`days` stay in lockstep with
+  // the grid so nothing that still reads them can disagree with it.
+  const legacy = legacyFieldsFromGrid(schedule);
+  const frequency = legacy.frequency;
+  const days = legacy.days;
 
   const intervalMs = Number(item.intervalMs);
   const anchorAt = Number(item.anchorAt);
@@ -60,10 +101,12 @@ export function buildReminderDraft(
     title: item.title,
     description: item.description,
     emoji,
-    time: item.time ?? "00:00",
-    date: item.date,
+    schedule,
+    time: legacy.time,
+    date: legacy.date,
     frequency,
     days,
+    intervalDays: legacy.intervalDays,
     audioUrl: item.audioUrl || "",
     audioStatus: ctx.usedFastPath ? "pending" : item.audioUrl ? "ready" : undefined,
     preReminderMinutes:
@@ -74,7 +117,7 @@ export function buildReminderDraft(
     variants: variants?.length ? variants : undefined,
     variantAudioUrls: variantAudioUrls?.length ? variantAudioUrls : undefined,
 
-    intervalMs: Number.isFinite(intervalMs) ? intervalMs : undefined,
+    intervalMs: Number.isFinite(intervalMs) ? intervalMs : legacy.intervalMs,
     anchorAt: Number.isFinite(anchorAt) ? anchorAt : undefined,
 
     // New unified schedule fields
@@ -83,59 +126,118 @@ export function buildReminderDraft(
     rrule: item.rrule,
     dtstart: item.dtstart,
     tzid: ctx.tzid,
-    until: item.until,
+    until: schedule.until ?? item.until,
     parseWarnings: item.parseWarnings,
 
-    schemaVersion: 4,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
   };
 }
+
+/** A `schedule` that survived the wire as an actual grid, not model junk. */
+function isGridSchedule(value: unknown): value is GridSchedule {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<GridSchedule>;
+  return (
+    candidate.type === "grid" &&
+    !!candidate.days &&
+    typeof candidate.days === "object" &&
+    !!candidate.times &&
+    typeof candidate.times === "object"
+  );
+}
+
+/** What the plan says about one reminder of the take. */
+export type TakeDecision = "keep" | "drop_cap" | "drop_premium";
 
 export type TakeAllowance = {
   /** How many of the take's reminders may be kept. */
   allowed: number;
   dropped: number;
+  /** Cut because their schedule needs Pro — interval mode (OLD-100). */
+  blockedPremium: number;
+  /** Index-aligned with the take: what happens to each reminder. */
+  decisions: TakeDecision[];
   isPro: boolean;
   limit: number;
   activeCount: number;
 };
 
 /**
- * How much of the take fits under the free cap.
+ * How much of the take a free plan may keep.
  *
- * The gate before recording only knew about one reminder, so a three-task take
- * from a user with two active reminders would land five active on a free plan.
- * Allowance is counted the way usageGate counts it — free plans keep `limit`
- * ACTIVE reminders — and, like usageGate, the entitlement is only consulted
- * once the take would actually go over. `isPro: false` on that fast path means
- * "not asked", not "not a subscriber".
+ * Two gates, one entitlement check. The cap: the gate before recording only
+ * knew about one reminder, so a three-task take from a user with two active
+ * reminders would land five active on a free plan — allowance is counted the
+ * way usageGate counts it, over ACTIVE reminders. The premium gate: an interval
+ * schedule is Pro-only whatever the count says (decision 6), so those reminders
+ * are cut first and the cap is spent on what is left.
+ *
+ * Like usageGate, the entitlement is only consulted once one of the two would
+ * actually bite. `isPro: false` on that fast path means "not asked", not "not a
+ * subscriber".
  */
 export async function planTakeAllowance(params: {
   takeCount: number;
   activeCount: number;
   limit: number;
   checkPro: () => Promise<boolean>;
+  /** Index-aligned with the take: which reminders need Pro to exist at all. */
+  premium?: boolean[];
 }): Promise<TakeAllowance> {
   const { takeCount, limit, checkPro } = params;
   const activeCount = Math.max(0, params.activeCount);
   const remaining = Math.max(0, limit - activeCount);
+  const premium = params.premium ?? [];
+  const premiumCount = premium.filter(Boolean).length;
 
-  if (takeCount <= remaining) {
-    return { allowed: takeCount, dropped: 0, isPro: false, limit, activeCount };
+  const keepAll = (isPro: boolean): TakeAllowance => ({
+    allowed: takeCount,
+    dropped: 0,
+    blockedPremium: 0,
+    decisions: Array<TakeDecision>(takeCount).fill("keep"),
+    isPro,
+    limit,
+    activeCount,
+  });
+
+  if (premiumCount === 0 && takeCount <= remaining) {
+    return keepAll(false);
   }
 
   const isPro = await checkPro().catch(() => false);
   if (isPro) {
-    return { allowed: takeCount, dropped: 0, isPro: true, limit, activeCount };
+    return keepAll(true);
   }
 
-  return { allowed: remaining, dropped: takeCount - remaining, isPro: false, limit, activeCount };
+  let free = remaining;
+  const decisions: TakeDecision[] = [];
+  for (let index = 0; index < takeCount; index++) {
+    if (premium[index]) {
+      decisions.push("drop_premium");
+    } else if (free > 0) {
+      free -= 1;
+      decisions.push("keep");
+    } else {
+      decisions.push("drop_cap");
+    }
+  }
+
+  return {
+    allowed: decisions.filter((d) => d === "keep").length,
+    dropped: decisions.filter((d) => d === "drop_cap").length,
+    blockedPremium: decisions.filter((d) => d === "drop_premium").length,
+    decisions,
+    isPro: false,
+    limit,
+    activeCount,
+  };
 }
 
 export type TakeIntakeDeps = {
   addReminder: (draft: Omit<Reminder, "id" | "createdAt">) => Promise<Reminder>;
   /** Fire-and-forget audio hydration for a fast-path reminder. */
   startHydration?: (reminder: Reminder, convexId: string) => void;
-  /** Server-side cleanup for a reminder the free cap won't let us keep. */
+  /** Server-side cleanup for a reminder the free plan won't let us keep. */
   discardOverflow: (item: TakeItem) => Promise<void>;
   onError?: (stage: "add" | "discard", error: unknown, index: number) => void;
 };
@@ -146,6 +248,8 @@ export type TakeIntakeOutcome = {
   failed: number;
   /** Items the free cap cut. */
   dropped: number;
+  /** Items cut because their schedule needs Pro. */
+  blockedPremium: number;
   total: number;
 };
 
@@ -154,23 +258,31 @@ export type TakeIntakeOutcome = {
  * not. Per-item failures are isolated — one reminder that won't save costs
  * only itself — but a take where nothing at all landed rethrows, so a
  * single-reminder take fails exactly the way it did before multi takes.
+ *
+ * `decisions` comes from planTakeAllowance and is per item, because the premium
+ * gate does not cut a suffix the way the cap does: the interval reminder can be
+ * the first of three. Without it, the old prefix rule still applies.
  */
 export async function intakeTakeReminders(params: {
   items: TakeItem[];
   allowed: number;
+  decisions?: TakeDecision[];
   context: DraftContext;
   deps: TakeIntakeDeps;
 }): Promise<TakeIntakeOutcome> {
-  const { items, allowed, context, deps } = params;
+  const { items, allowed, decisions, context, deps } = params;
 
   const created: Reminder[] = [];
   let failed = 0;
   let firstError: unknown;
 
+  const isKept = (index: number) =>
+    decisions ? decisions[index] === "keep" : index < allowed;
+
   for (let index = 0; index < items.length; index++) {
     const item = items[index];
 
-    if (index >= allowed) {
+    if (!isKept(index)) {
       // The row already exists on the server with its audio, so it leaves
       // through the same delete the rest of the app uses.
       await deps.discardOverflow(item).catch((e) => deps.onError?.("discard", e, index));
@@ -199,7 +311,10 @@ export async function intakeTakeReminders(params: {
   return {
     created,
     failed,
-    dropped: Math.max(0, items.length - allowed),
+    dropped: decisions
+      ? decisions.filter((d) => d === "drop_cap").length
+      : Math.max(0, items.length - allowed),
+    blockedPremium: decisions ? decisions.filter((d) => d === "drop_premium").length : 0,
     total: items.length,
   };
 }
@@ -228,6 +343,8 @@ export type TakeFeedback = {
   type: "success" | "warning";
   /** Tapping the toast should open the paywall. */
   upgrade: boolean;
+  /** Which pitch the paywall should lead with when it does. */
+  upgradeContext?: PaywallContext;
 };
 
 /**
@@ -237,12 +354,26 @@ export type TakeFeedback = {
 export function describeTakeOutcome(outcome: {
   created: number;
   dropped: number;
+  blockedPremium?: number;
   failed: number;
   total: number;
   limit: number;
 }): TakeFeedback | null {
   const { created, dropped, failed, total, limit } = outcome;
+  const blockedPremium = outcome.blockedPremium ?? 0;
   if (created === 0) return null;
+
+  // The premium cut is named first: it is the specific thing the user asked for
+  // and did not get, where the cap is a number they can also read off the list.
+  if (blockedPremium > 0) {
+    return {
+      title: `${created} of ${total} reminders created`,
+      message: "Repeating every few minutes is a Pro feature — tap to upgrade.",
+      type: "warning",
+      upgrade: true,
+      upgradeContext: "interval",
+    };
+  }
 
   if (dropped > 0) {
     return {

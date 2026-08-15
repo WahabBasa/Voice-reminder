@@ -78,13 +78,23 @@ export function shouldQueueInsteadOfActivate(
   return hasActiveAlarm && !isDuplicate;
 }
 
+/**
+ * The reminder's trigger ids that are NOT wanted any more.
+ *
+ * `exceptId` takes a list since OLD-98: a reminder can hold several pending
+ * occurrences at once (08:00 and 21:00 of the same day), so "keep this one,
+ * drop the rest" became "keep this SET, drop the rest".
+ */
 export function filterDuplicateTriggerIds(
   scheduledIds: string[],
   reminderId: string,
-  exceptId?: string
+  exceptId?: string | string[]
 ): string[] {
   const prefix = `reminder_${reminderId}_`;
-  return scheduledIds.filter((id) => id.startsWith(prefix) && id !== exceptId);
+  const keep = new Set(
+    exceptId === undefined ? [] : Array.isArray(exceptId) ? exceptId : [exceptId]
+  );
+  return scheduledIds.filter((id) => id.startsWith(prefix) && !keep.has(id));
 }
 
 // ─── Group 3: Timeout and pending-alarm state ───────────────────────────────
@@ -111,20 +121,8 @@ export function hasActivePendingAlarm(
   return Boolean(id) && !resolvedAt;
 }
 
-export function parseSnoozeEnabled(value: unknown): boolean {
-  return String(value ?? "true") !== "false";
-}
-
 export function parseAutoSnoozeCount(value: unknown): number {
   return Math.max(0, Number(value ?? "0") || 0);
-}
-
-export function canAutoSnooze(
-  snoozeEnabled: boolean,
-  autoSnoozeCount: number,
-  maxCount: number
-): boolean {
-  return snoozeEnabled && autoSnoozeCount < maxCount;
 }
 
 // ─── Group 4: Past-due handling ─────────────────────────────────────────────
@@ -228,15 +226,15 @@ export function buildPreAlertBody(
 ): string {
   const subject = (title ?? "").trim() || "your reminder";
   const unit = preReminderMinutes === 1 ? "minute" : "minutes";
-  return `Heads up — ${subject} in ${preReminderMinutes} ${unit}`;
+  // No lead-in. The voice rewrite (OLD-95) banned "Heads up" from spoken lines;
+  // visible notification copy follows the same rule — say the thing, nothing else.
+  return `${subject} in ${preReminderMinutes} ${unit}`;
 }
 
-// ─── Group 7: Assistant-style replays (escalation ladder + ring cadence) ────
+// ─── Group 7: Ring cadence (how the spoken lines play while ringing) ───────
 //
-// An ignored occurrence comes back as a follow-up occurrence (kind
-// "snooze_occurrence" with a followUpCount) carrying the NEXT variant line.
-// Non-persistent reminders stop after MAX_FOLLOW_UPS follow-ups and are
-// recorded missed; persistent reminders keep going until "Done".
+// This is what an alarm does WHILE it rings — one utterance, two, or a loop.
+// What happens after it is answered or ignored is the nag in group 8.
 
 export type UrgencyTier = "urgent" | "notice" | "routine";
 
@@ -246,31 +244,11 @@ export type RingCadenceMode = "alternate" | "speak_twice" | "loop";
 // must not import convex modules).
 export const MAX_REPLAY_VARIANTS = 3;
 
-// Non-persistent reminders get exactly this many follow-ups, then missed.
-export const MAX_FOLLOW_UPS = 2;
-
-export const FOLLOW_UP_DELAY_MINUTES = 5;
-
-// Persistent politeness: after this many follow-ups the interval grows...
-export const FOLLOW_UP_POLITE_AFTER = 3;
-// ...to this cap (and stays there).
-export const FOLLOW_UP_POLITE_DELAY_MINUTES = 10;
-
 // Gap between the two routine-tier utterances (speak twice, then go silent).
 export const ROUTINE_SECOND_UTTERANCE_GAP_MS = 20_000;
 
 // Gap between alternated lines while an urgent-tier alarm rings continuously.
 export const ALTERNATE_LINE_GAP_MS = 1_500;
-
-export function parsePersistentFlag(value: unknown): boolean {
-  if (value === true) return true;
-  const token = String(value ?? "").toLowerCase().trim();
-  return token === "true" || token === "1";
-}
-
-export function parseFollowUpCount(value: unknown): number {
-  return Math.max(0, Number(value ?? "0") || 0);
-}
 
 export function parseVariantCount(value: unknown): number {
   const count = Number(value ?? "0");
@@ -283,43 +261,6 @@ export function normalizeUrgencyTier(value: unknown): UrgencyTier {
   if (token === "urgent" || token === "routine") return token;
   // Unknown/absent (incl. legacy reminders) behaves like today: continuous ring.
   return "notice";
-}
-
-export function shouldContinueFollowUps(
-  persistent: boolean,
-  followUpCount: number,
-  maxFollowUps: number = MAX_FOLLOW_UPS
-): boolean {
-  if (persistent) return true;
-  return followUpCount < maxFollowUps;
-}
-
-export function followUpDelayMinutes(followUpNumber: number): number {
-  return followUpNumber > FOLLOW_UP_POLITE_AFTER
-    ? FOLLOW_UP_POLITE_DELAY_MINUTES
-    : FOLLOW_UP_DELAY_MINUTES;
-}
-
-/**
- * Variant index (into the variants array) spoken by follow-up number
- * `followUpNumber` (1-based). -1 means "use the base description".
- *
- * Ladder: walk the variants in order (they escalate in firmness), then cycle
- * the firmest two so no line ever repeats back-to-back verbatim. With a single
- * variant, alternate it with the base line for the same reason.
- */
-export function followUpVariantIndex(
-  followUpNumber: number,
-  variantCount: number
-): number {
-  if (variantCount <= 0) return -1;
-  if (followUpNumber <= variantCount) return followUpNumber - 1;
-  if (variantCount === 1) {
-    return followUpNumber % 2 === 1 ? 0 : -1;
-  }
-  return (followUpNumber - variantCount) % 2 === 1
-    ? variantCount - 2
-    : variantCount - 1;
 }
 
 /** Parse the JSON-encoded variants array carried in notification data. */
@@ -375,57 +316,95 @@ export function nextAlternateIndex(currentIndex: number, playlistLength: number)
   return (currentIndex + 1) % playlistLength;
 }
 
-// ─── Group 8: Cadence ladder (iOS AlarmKit sibling alarms) ──────────────────
+// ─── Group 8: The snooze-nag (OLD-96) ───────────────────────────────────────
 //
-// AlarmKit cannot ring once, and cannot pause between rings inside a single
-// alarm. So one occurrence becomes 1–3 real alarms staggered minutes apart,
-// each speaking a differently-worded line — perceived as one assistant coming
-// back rather than one alarm looping forever.
+// One ring per occurrence, then a fixed nag. A ring the user dismisses — or
+// never answers — comes back with the SAME audio NAG_DELAY_MINUTES later, at
+// most MAX_NAG_COMEBACKS times, then goes quiet. "Done" ends the chain and
+// resets the counter.
 //
-// Rung count mirrors `variantCountForTier` in convex/helpers.ts (client copy —
-// lib code must not import convex modules). The offsets below are the single
-// source of truth for rung timing; they get re-tuned after the device test
-// that measures how long iOS rings an unattended alarm. No magic numbers
-// anywhere else.
+// Deliberately fixed: no per-reminder tuning, no settings screen, no escalating
+// re-worded lines. This is the whole escalation policy — it replaces the
+// tier-dependent sibling ladder and the persistent-follow-up counters, which
+// were the wrong voice for the product.
 
-export const MAX_LADDER_RUNGS = MAX_REPLAY_VARIANTS;
+/** Minutes between a ring going unanswered and its comeback. */
+export const NAG_DELAY_MINUTES = 5;
 
-/** Rung offsets from the occurrence's fire time T — routine/notice/urgent. */
-export const LADDER_OFFSETS_MS = [0, 3 * 60_000, 7 * 60_000];
+/** Comebacks a single ring gets before the chain goes quiet. */
+export const MAX_NAG_COMEBACKS = 3;
 
-/** Persistent reminders come back sooner and keep the same rung count. */
-export const LADDER_OFFSETS_PERSISTENT_MS = [0, 2 * 60_000, 5 * 60_000];
-
-/** Alarms per occurrence for this tier (mirrors variantCountForTier exactly). */
-export function ladderRungCount(urgency: unknown, persistent: unknown): number {
-  if (parsePersistentFlag(persistent)) return MAX_LADDER_RUNGS;
-  const tier = normalizeUrgencyTier(urgency);
-  if (tier === "urgent") return MAX_LADDER_RUNGS;
-  if (tier === "routine") return 1;
-  return 2;
+/** Comebacks already delivered for this ring (notification data / alarm state). */
+export function parseNagCount(value: unknown): number {
+  return Math.max(0, Number(value ?? "0") || 0);
 }
 
-/** Offsets from T for this tier's rungs, in rung order. */
-export function ladderOffsetsMs(urgency: unknown, persistent: unknown): number[] {
-  const table = parsePersistentFlag(persistent)
-    ? LADDER_OFFSETS_PERSISTENT_MS
-    : LADDER_OFFSETS_MS;
-  return table.slice(0, ladderRungCount(urgency, persistent));
+/** Whether comeback number `nagCount + 1` is still owed. */
+export function shouldNagAgain(
+  nagCount: number,
+  maxComebacks: number = MAX_NAG_COMEBACKS
+): boolean {
+  return nagCount < maxComebacks;
 }
 
-/** Absolute fire times of every rung of the occurrence firing at `baseTimestamp`. */
-export function ladderRungTimes(
-  baseTimestamp: number,
-  urgency: unknown,
-  persistent: unknown
+// ─── Group 8b: the chain as a schedule, not a reaction ──────────────────────
+//
+// On iOS the comebacks CANNOT be scheduled when a ring goes unanswered: no app
+// code runs at that moment (docs/alarmkit-focus-breakthrough.md §7 — "unattended
+// timeout → comeback: must be pre-scheduled, not reactive"). A nag that is only
+// armed from the next foreground silently does nothing on a locked phone.
+//
+// So the whole chain is derived from the occurrence time up front and registered
+// as sibling alarms, then cancelled when the user finally answers. That only
+// works because the chain is deterministic: origin + 5/10/15 minutes, always,
+// recomputable from the occurrence timestamp alone with no stored counter.
+
+/**
+ * Absolute fire times of the comebacks a ring at `occurrenceAt` is owed.
+ * `[T+5m, T+10m, T+15m]` — the occurrence itself is not in the list.
+ */
+export function planNagChain(
+  occurrenceAt: number,
+  maxComebacks: number = MAX_NAG_COMEBACKS,
+  delayMinutes: number = NAG_DELAY_MINUTES
 ): number[] {
-  return ladderOffsetsMs(urgency, persistent).map((offset) => baseTimestamp + offset);
+  if (!Number.isFinite(occurrenceAt)) return [];
+  const step = Math.max(1, Math.round(delayMinutes)) * 60_000;
+  const count = Math.max(0, Math.floor(maxComebacks));
+  return Array.from({ length: count }, (_, index) => occurrenceAt + (index + 1) * step);
 }
 
 /**
- * Variant index (into `variants`) spoken by rung k. -1 means the base line.
- * PRD: rung 0 speaks the base description, rung k >= 1 speaks variant k-1.
+ * The links of that chain that have not happened yet.
+ *
+ * This is the one question both the scheduler and the reconciler ask: at
+ * registration time it says what to arm, and after a ring went unanswered it
+ * says whether anything is still owed (something armed → leave it alone;
+ * nothing owed → the chain is spent, record the miss).
  */
-export function ladderVariantIndex(rung: number): number {
-  return rung <= 0 ? -1 : rung - 1;
+export function remainingNagComebacks(
+  occurrenceAt: number,
+  now: number,
+  maxComebacks: number = MAX_NAG_COMEBACKS,
+  delayMinutes: number = NAG_DELAY_MINUTES
+): number[] {
+  return planNagChain(occurrenceAt, maxComebacks, delayMinutes).filter((ts) => ts > now);
+}
+
+/**
+ * Which link of the chain a ring at `fireAt` is: 0 = the occurrence itself,
+ * 1..maxComebacks = comebacks. Clamped at both ends so a few seconds of clock
+ * drift cannot push a ring off its own chain.
+ */
+export function nagIndexForFireTime(
+  originAt: number,
+  fireAt: number,
+  maxComebacks: number = MAX_NAG_COMEBACKS,
+  delayMinutes: number = NAG_DELAY_MINUTES
+): number {
+  if (!Number.isFinite(originAt) || !Number.isFinite(fireAt)) return 0;
+  const step = Math.max(1, Math.round(delayMinutes)) * 60_000;
+  const index = Math.round((fireAt - originAt) / step);
+  if (!Number.isFinite(index) || index <= 0) return 0;
+  return Math.min(index, Math.max(0, Math.floor(maxComebacks)));
 }

@@ -5,7 +5,7 @@ import {
   downloadAsync,
   getInfoAsync,
 } from "expo-file-system/legacy";
-import { MAX_LADDER_RUNGS } from "./notificationDecisions";
+import { MAX_REPLAY_VARIANTS } from "./notificationDecisions";
 
 /**
  * iOS AlarmKit sound placement (AK-3).
@@ -137,7 +137,7 @@ export async function ensureVariantAlarmSound(
   rung: number,
   wavUrl: string | null | undefined
 ): Promise<string | null> {
-  if (rung < 1 || rung > MAX_LADDER_RUNGS) return null;
+  if (rung < 1 || rung > MAX_REPLAY_VARIANTS) return null;
   return placeAlarmSoundFile(
     getVariantAlarmSoundFileName(reminderId, rung),
     getVariantAlarmSoundStagingPath(reminderId, rung),
@@ -154,7 +154,7 @@ export async function removeAlarmSound(reminderId: string): Promise<void> {
   if (Platform.OS !== "ios") return;
 
   const fileNames = [getAlarmSoundFileName(reminderId)];
-  for (let rung = 1; rung <= MAX_LADDER_RUNGS; rung++) {
+  for (let rung = 1; rung <= MAX_REPLAY_VARIANTS; rung++) {
     fileNames.push(getVariantAlarmSoundFileName(reminderId, rung));
   }
   for (const fileName of fileNames) {

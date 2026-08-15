@@ -1,5 +1,71 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import type { GridSchedule } from "./scheduleShape";
+
+// Validator half of the days × times grid (OLD-97). The TypeScript half lives in
+// ./scheduleShape.ts and is the one definition; `gridScheduleValidator satisfies`
+// below is what keeps the two from drifting.
+const weekdayValidator = v.union(
+  v.literal("sun"), v.literal("mon"), v.literal("tue"), v.literal("wed"),
+  v.literal("thu"), v.literal("fri"), v.literal("sat")
+);
+
+const daysRuleValidator = v.union(
+  v.object({ kind: v.literal("everyday") }),
+  v.object({ kind: v.literal("weekdays"), days: v.array(weekdayValidator) }),
+  v.object({ kind: v.literal("everyNDays"), interval: v.number(), startDate: v.string() }),
+  v.object({ kind: v.literal("date"), date: v.string() })
+);
+
+const timesRuleValidator = v.union(
+  v.object({ kind: v.literal("clock"), times: v.array(v.string()) }),
+  v.object({
+    kind: v.literal("interval"),
+    everyMinutes: v.number(),
+    windowStart: v.string(),
+    windowEnd: v.string(),
+  })
+);
+
+export const gridScheduleValidator = v.object({
+  type: v.literal("grid"),
+  days: daysRuleValidator,
+  times: timesRuleValidator,
+  until: v.optional(v.number()),
+  tzid: v.optional(v.string()),
+});
+
+/**
+ * Every schedule field a reminder can carry, shared verbatim by the table and by
+ * reminders.create / reminders.update. Before OLD-97 half of these lived only in
+ * AsyncStorage, so an edit round-tripped through Convex silently lost them.
+ */
+export const scheduleFields = {
+  time: v.string(),
+  date: v.optional(v.string()), // YYYY-MM-DD for one-time reminders on specific days
+  frequency: v.string(),
+  days: v.optional(v.array(v.string())),
+  // The grid itself — authoritative. The four fields above are its legacy
+  // projection (see legacyFieldsFromGrid) and are what pre-grid readers use.
+  schedule: v.optional(gridScheduleValidator),
+  scheduleType: v.optional(
+    v.union(v.literal("once"), v.literal("interval"), v.literal("rrule"), v.literal("grid"))
+  ),
+  onceAt: v.optional(v.number()),
+  rrule: v.optional(v.string()),
+  dtstart: v.optional(v.number()),
+  tzid: v.optional(v.string()),
+  until: v.optional(v.number()),
+  intervalMs: v.optional(v.number()),
+  anchorAt: v.optional(v.number()),
+  intervalDays: v.optional(v.number()),
+  parseWarnings: v.optional(v.array(v.string())),
+};
+
+// Drift guard: the validator and the hand-written type describe the same shape.
+export type GridScheduleDoc = typeof gridScheduleValidator.type;
+const _gridShapesAgree = (schedule: GridSchedule): GridScheduleDoc => schedule;
+void _gridShapesAgree;
 
 export default defineSchema({
   reminders: defineTable({
@@ -9,10 +75,7 @@ export default defineSchema({
     deviceId: v.optional(v.string()),
     title: v.string(),
     description: v.string(),
-    time: v.string(),
-    date: v.optional(v.string()), // YYYY-MM-DD for one-time reminders on specific days
-    frequency: v.string(),
-    days: v.optional(v.array(v.string())),
+    ...scheduleFields,
     // Card chip emoji picked by the parse (absent → neutral bell chip)
     emoji: v.optional(v.string()),
     audioStorageId: v.optional(v.id("_storage")),
@@ -42,16 +105,5 @@ export default defineSchema({
     // Alarm settings (optional for backward compatibility)
     soundRepeatCount: v.optional(v.number()),
     soundRepeatMode: v.optional(v.string()),
-  }).index("by_device", ["deviceId"]),
-
-  // Rotation state for the spoken catch (convex/speechCatch.ts): the last catch
-  // this install heard, so the next draw can skip it and nobody gets the same
-  // opener twice running. Per device for the same reason reminders are —
-  // there are no accounts (OLD-74). One row per device; losing it costs a
-  // possible repeat, nothing more.
-  speechCatchState: defineTable({
-    deviceId: v.string(),
-    lastCatchId: v.string(),
-    updatedAt: v.number(),
   }).index("by_device", ["deviceId"]),
 });

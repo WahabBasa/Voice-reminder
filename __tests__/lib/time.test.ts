@@ -1,3 +1,4 @@
+import { buildGridSchedule, type GridSchedule } from "../../convex/scheduleShape";
 import {
   getNextIntervalOccurrence,
   getNextTriggerTime,
@@ -5,6 +6,8 @@ import {
   isOverdue,
   formatReminderTime,
   formatIntervalDuration,
+  planGridOccurrences,
+  MAX_PENDING_OCCURRENCES,
   type ReminderSchedule,
 } from "../../lib/time";
 
@@ -402,5 +405,156 @@ describe("formatIntervalDuration", () => {
 
   it("formats 2 days", () => {
     expect(formatIntervalDuration(172800000)).toBe("Every 2 days");
+  });
+});
+
+// ─── planGridOccurrences (OLD-98) ───────────────────────────────────────────
+
+describe("planGridOccurrences", () => {
+  const MON = { year: 2026, month: 8, day: 17 }; // a Monday
+  const day1 = (hour: number, minute = 0) => utc(MON.year, MON.month, MON.day, hour, minute);
+  const day2 = (hour: number, minute = 0) => utc(MON.year, MON.month, MON.day + 1, hour, minute);
+
+  function grid(input: Parameters<typeof buildGridSchedule>[0]): GridSchedule {
+    return buildGridSchedule(input, { now: day1(6) });
+  }
+
+  it("plans every ring of a multi-time day, then rolls into the next", () => {
+    const schedule = grid({ frequency: "daily", times: ["08:00", "21:00"] });
+
+    // The 26h horizon reaches tomorrow morning but stops short of tomorrow night.
+    expect(planGridOccurrences(schedule, day1(6))).toEqual([
+      day1(8),
+      day1(21),
+      day2(8),
+    ]);
+  });
+
+  it("picks up the rest of today's rings mid-day", () => {
+    const schedule = grid({ frequency: "daily", times: ["08:00", "13:00", "21:00"] });
+
+    expect(planGridOccurrences(schedule, day1(14))).toEqual([
+      day1(21),
+      day2(8),
+      day2(13),
+      day2(21),
+    ]);
+  });
+
+  it("never plans an interval ring outside its window", () => {
+    const schedule = grid({
+      frequency: "interval",
+      intervalHours: 2,
+      windowStart: "08:00",
+      windowEnd: "22:00",
+    });
+
+    const overnight = planGridOccurrences(schedule, day1(23));
+    expect(overnight[0]).toBe(day2(8));
+
+    const lateEvening = planGridOccurrences(schedule, day1(21));
+    expect(lateEvening).toEqual([day1(22), day2(8), day2(10), day2(12)]);
+  });
+
+  it("defaults an unspoken interval window to 08:00–22:00", () => {
+    const schedule = grid({ frequency: "interval", intervalHours: 6 });
+
+    expect(planGridOccurrences(schedule, day1(3))).toEqual([
+      day1(8),
+      day1(14),
+      day1(20),
+      day2(8),
+    ]);
+  });
+
+  it("walks every N days from its anchor", () => {
+    const schedule = grid({
+      frequency: "daily",
+      time: "09:00",
+      everyNDays: 3,
+      date: "2026-08-17",
+    });
+
+    // Only one ring fits the horizon — the next is three days out.
+    expect(planGridOccurrences(schedule, day1(10))).toEqual([
+      utc(MON.year, MON.month, MON.day + 3, 9),
+    ]);
+  });
+
+  it("stops at the until boundary", () => {
+    const schedule = grid({
+      frequency: "daily",
+      time: "09:00",
+      until: "2026-08-17",
+    });
+
+    expect(planGridOccurrences(schedule, day1(6))).toEqual([day1(9)]);
+  });
+
+  it("returns nothing for a one-off whose day has passed", () => {
+    const schedule = grid({ frequency: "once", time: "09:00", date: "2026-08-17" });
+
+    expect(planGridOccurrences(schedule, day1(10))).toEqual([]);
+  });
+
+  it("honours an explicit max and never plans more than the default", () => {
+    const schedule = grid({
+      frequency: "interval",
+      intervalMinutes: 30,
+      windowStart: "08:00",
+      windowEnd: "22:00",
+    });
+
+    expect(planGridOccurrences(schedule, day1(9), { max: 2 })).toEqual([
+      day1(9, 30),
+      day1(10),
+    ]);
+    expect(planGridOccurrences(schedule, day1(9))).toHaveLength(MAX_PENDING_OCCURRENCES);
+  });
+
+  it("always takes the first ring however far out it is", () => {
+    const schedule = grid({ frequency: "custom", time: "08:00", days: ["thu"] });
+
+    const planned = planGridOccurrences(schedule, day1(6));
+    expect(planned).toHaveLength(1);
+    expect(new Date(planned[0]).getUTCDay()).toBe(4); // Thursday
+  });
+});
+
+// ─── Grid-first scheduling (OLD-98) ─────────────────────────────────────────
+
+describe("grid takes precedence over the legacy fields", () => {
+  const day1 = (hour: number) => utc(2026, 8, 17, hour);
+
+  const schedule: ReminderSchedule = {
+    // `time` is only ring one; the evening ring lives in the grid alone.
+    time: "08:00",
+    frequency: "daily",
+    schedule: buildGridSchedule(
+      { frequency: "daily", times: ["08:00", "21:00"] },
+      { now: day1(6) }
+    ),
+  };
+
+  it("getNextTriggerTime returns tonight's ring, not tomorrow morning's", () => {
+    expect(getNextTriggerTime(schedule, day1(9))).toBe(day1(21));
+  });
+
+  it("getDueTimestamp agrees", () => {
+    expect(getDueTimestamp(schedule, new Date(day1(9)))).toBe(day1(21));
+  });
+
+  it("falls back to the legacy fields once a one-off grid has run out", () => {
+    const passed: ReminderSchedule = {
+      time: "09:00",
+      date: "2026-08-17",
+      frequency: "once",
+      schedule: buildGridSchedule(
+        { frequency: "once", time: "09:00", date: "2026-08-17" },
+        { now: day1(6) }
+      ),
+    };
+
+    expect(getNextTriggerTime(passed, day1(12))).toBe(day1(9));
   });
 });

@@ -10,7 +10,6 @@
  * scheduling branch and the reconciliation bookkeeping.
  */
 import { NativeModules, Platform } from "react-native";
-import { ladderRungTimes, ladderVariantIndex } from "./notificationDecisions";
 import { vrLog } from "./vrLog";
 
 export type AlarmAuthorizationStatus = "authorized" | "denied" | "notDetermined";
@@ -33,9 +32,10 @@ export interface ScheduledAlarm {
 }
 
 /**
- * "cancelled" is a rung killed natively by a sibling's Done/Later (CL-2). It is
- * not an outcome the user produced on THAT key, so reconciliation must record
- * nothing for it and must not resurrect it.
+ * "cancelled" is an alarm the native side dropped on its own (the intents in
+ * plugins/ios-src cancel alarms they consider superseded). It is not an outcome
+ * the user produced on that key, so reconciliation must record nothing for it
+ * and must not resurrect it.
  */
 export type AlarmEventType = "stopped" | "snoozed" | "fired" | "cancelled";
 
@@ -71,7 +71,12 @@ export const ALARM_RING_TIMEOUT_MS = 180_000;
  */
 const SPURIOUS_STOP_TOLERANCE_MS = 2000;
 
-const APP_KEY_PATTERN = /^reminder_(.+)_(\d+)$/;
+// Two key families share the scheme: `reminder_<id>_<ts>` is a scheduled
+// occurrence, `snooze_<id>_<ts>` is a nag comeback (OLD-96). They are kept
+// apart on purpose — cancelling a reminder's stale occurrences must never take
+// the live nag with it, and vice versa.
+const APP_KEY_PATTERN = /^(?:reminder|snooze)_(.+)_(\d+)$/;
+const NAG_KEY_PREFIX = "snooze_";
 
 /** The native module is only linked on iOS builds carrying AK-1's plugin. */
 export function isAlarmKitLinked(): boolean {
@@ -80,6 +85,15 @@ export function isAlarmKitLinked(): boolean {
 
 export function alarmAppKey(reminderId: string, scheduledFor: number): string {
   return `reminder_${reminderId}_${scheduledFor}`;
+}
+
+/** App key of a nag comeback firing at `fireDate`. */
+export function nagAppKey(reminderId: string, fireDate: number): string {
+  return `${NAG_KEY_PREFIX}${reminderId}_${fireDate}`;
+}
+
+export function isNagAppKey(appKey: string): boolean {
+  return typeof appKey === "string" && appKey.startsWith(NAG_KEY_PREFIX);
 }
 
 export function parseAlarmAppKey(
@@ -93,64 +107,10 @@ export function parseAlarmAppKey(
   return { reminderId: match[1], scheduledFor };
 }
 
-// ─── Cadence ladder expansion ───────────────────────────────────────────────
-
-export interface AlarmLadderRung {
-  /** 0-based position in the ladder. */
-  rung: number;
-  /** Total rungs of this occurrence (1–3). */
-  rungCount: number;
-  fireDate: number;
-  /** `reminder_<id>_<rungFireTime>` — the appKey scheme is unchanged. */
-  appKey: string;
-  /** The OTHER rungs' appKeys. Never contains snooze follow-up keys. */
-  siblings: string[];
-  /** Index into `variants`; -1 = the base line (rung 0). */
-  variantIndex: number;
-}
-
-/**
- * Expand one occurrence into its ladder of sibling alarms.
- *
- * Each rung is a real AlarmKit alarm with its own fire timestamp, so each gets
- * its own appKey from the unchanged scheme — `parseAlarmAppKey` keeps working.
- */
-export function buildAlarmLadder(
-  reminderId: string,
-  baseTimestamp: number,
-  urgency: unknown,
-  persistent: unknown
-): AlarmLadderRung[] {
-  const times = ladderRungTimes(baseTimestamp, urgency, persistent);
-  const keys = times.map((fireDate) => alarmAppKey(reminderId, fireDate));
-  return times.map((fireDate, rung) => ({
-    rung,
-    rungCount: times.length,
-    fireDate,
-    appKey: keys[rung],
-    siblings: keys.filter((_, index) => index !== rung),
-    variantIndex: ladderVariantIndex(rung),
-  }));
-}
-
-/** The rung metadata CL-2's intents read back — string values only. */
-export function ladderMetadata(rung: {
-  rung: number;
-  rungCount: number;
-  siblings: string[];
-}): { rung: string; rungCount: string; siblings: string } {
-  return {
-    rung: String(rung.rung),
-    rungCount: String(rung.rungCount),
-    siblings: rung.siblings.join(","),
-  };
-}
-
 // ─── In-flight de-dup ───────────────────────────────────────────────────────
 
 // The 2026-08-07 devlog race: startup gap_resync and a fresh create land on the
-// same occurrence ~20ms apart and both register it. One occurrence is now up to
-// three alarms, so the duplicate registration triples with it.
+// same occurrence ~20ms apart and both register it.
 const inFlightByAppKey = new Map<string, Promise<unknown>>();
 
 /**
@@ -176,8 +136,8 @@ export function dedupeByAppKey<T>(appKey: string, work: () => Promise<T>): Promi
 /**
  * Resolve once every in-flight registration whose appKey starts with `prefix`
  * has settled. Hydration's sound refresh (lib/notifications.ts) serializes
- * behind a ladder that is still registering instead of reading the native
- * registry mid-flight and rewriting only the rungs that already landed.
+ * behind an occurrence set that is still registering instead of reading the
+ * native registry mid-flight and rewriting only the alarms that already landed.
  */
 export async function settleInFlightAppKeys(prefix: string): Promise<void> {
   const pending = [...inFlightByAppKey.entries()]
@@ -214,6 +174,17 @@ export async function requestAuthorization(): Promise<AlarmAuthorizationStatus> 
   }
 }
 
+/**
+ * AlarmKit refuses further registrations past an undocumented cap
+ * (`AlarmError.maximumLimitReached` — Apple publishes no number). We cannot
+ * budget against a limit we cannot read, so the handling is: recognise the
+ * throw, log it distinctly, and let the caller shed the droppable tier. Nag
+ * comebacks are droppable; the occurrence itself is not.
+ */
+export function isAlarmLimitError(error: unknown): boolean {
+  return /maximumlimitreached|maximum limit/i.test(String(error ?? ""));
+}
+
 /** Resolves the native alarm UUID, or null when the alarm could not be registered. */
 export async function scheduleAlarm(
   opts: AlarmKitScheduleOptions
@@ -222,7 +193,10 @@ export async function scheduleAlarm(
   try {
     return (await bridge!.scheduleAlarm(opts)) ?? null;
   } catch (e) {
-    vrLog("alarmkit", "schedule_failed", { appKey: opts.id, error: String(e) });
+    vrLog("alarmkit", isAlarmLimitError(e) ? "schedule_limit_reached" : "schedule_failed", {
+      appKey: opts.id,
+      error: String(e),
+    });
     return null;
   }
 }
@@ -266,9 +240,9 @@ export async function getAndClearEventLog(): Promise<AlarmEvent[]> {
   }
 }
 
-// The sibling-cancel entries CL-2 appends are the same event channel with a
-// different type token. Spelling is normalized here so an unexpected variant
-// lands as a known, inert event instead of being dropped as garbage.
+// The cancel entries the native intents append ride the same event channel
+// with a different type token. Spelling is normalized here so an unexpected
+// variant lands as a known, inert event instead of being dropped as garbage.
 const CANCELLED_EVENT_TYPES = new Set([
   "cancelled",
   "canceled",
@@ -333,7 +307,7 @@ export type AlarmOutcomeKind =
   | "snoozed"
   | "missed"
   | "pending"
-  /** A ladder rung the native intents killed because a sibling was answered. */
+  /** An alarm the native intents killed instead of the user answering it. */
   | "cancelled";
 
 export interface AlarmReconcileOutcome {
@@ -354,9 +328,9 @@ export interface AlarmReconcileOutcome {
  *  - guard 3: a snooze whose window is still open blocks rescheduling; the
  *    native side already registered the follow-up.
  *
- * A rung cancelled by a sibling's Done/Later collapses to "cancelled": the
- * answered sibling already recorded the outcome and drove the reschedule, so
- * this key must produce neither a history entry nor a new occurrence.
+ * A natively cancelled alarm collapses to "cancelled": whatever cancelled it
+ * already recorded the outcome and drove the reschedule, so this key must
+ * produce neither a history entry nor a new occurrence.
  */
 export function reconcileAlarmEvents(
   events: unknown[],
@@ -394,7 +368,7 @@ export function reconcileAlarmEvents(
     const firedAfterSnooze = lastFired && (!snooze || lastFired.at >= snooze.at);
 
     // A cancel that landed after the last ring wins over "it rang unanswered":
-    // the rung was killed on purpose, not ignored.
+    // the alarm was killed on purpose, not ignored.
     const lastCancelled = [...list].reverse().find((e) => e.type === "cancelled");
     const cancelledLast = lastCancelled && (!lastFired || lastCancelled.at >= lastFired.at);
 

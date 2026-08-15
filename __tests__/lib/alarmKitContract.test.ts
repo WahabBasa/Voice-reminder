@@ -337,7 +337,7 @@ describe("event-log reconciliation semantics (FamWake race guards)", () => {
     expect(reconcile(events, T + 500, 1000)[0].outcome).toBe("pending");
   });
 
-  it("a follow-up that fired after the snooze escapes the snooze verdict", () => {
+  it("a comeback that fired after the snooze escapes the snooze verdict", () => {
     const events: NativeAlarmEvent[] = [
       { type: "snoozed", id: KEY, at: T, snoozeUntil: T + 5 * MIN },
       { type: "fired", id: KEY, at: T + 5 * MIN },
@@ -347,7 +347,7 @@ describe("event-log reconciliation semantics (FamWake race guards)", () => {
     expect(result.allowReschedule).toBe(true);
   });
 
-  it("Later then Done on the follow-up ends the chain (guards 2 + 4)", () => {
+  it("Later then Done on the comeback ends the chain (guards 2 + 4)", () => {
     const events: NativeAlarmEvent[] = [
       { type: "snoozed", id: KEY, at: T, snoozeUntil: T + 5 * MIN },
       { type: "stopped", id: KEY, at: T + 50 },

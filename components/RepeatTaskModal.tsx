@@ -1,418 +1,297 @@
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Modal,
   StyleSheet,
-  Switch,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-import { PortalHost } from "@gorhom/portal";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import AppIcon from "./AppIcon";
-import { scaleFontSize } from "../lib/theme";
+import DaySelector from "./DaySelector";
+import {
+  EVERY_N_DAYS_MAX,
+  EVERY_N_DAYS_MIN,
+  type DaysMode,
+} from "./schedule/scheduleDraft";
+import { borderRadius, colors, scaleFontSize } from "../lib/theme";
 
-type Frequency = "minute" | "hour" | "days" | "weekly";
+/**
+ * The days axis of the schedule grid (OLD-99): every day | specific weekdays |
+ * every N days | one date.
+ *
+ * It used to be a frequency list that mixed both axes together — "Minute",
+ * "Hour", "Days", "Weekly" — so an hourly reminder could not also be a Thursday
+ * reminder. The times axis now lives in TimesEditor and this picker only answers
+ * "which days". Picking "On a date" just selects the mode; the sheet's own Date
+ * row is where the calendar opens.
+ */
+
+type DaysValue = {
+  mode: DaysMode;
+  weekdays: string[];
+  everyNDays: number;
+};
 
 type RepeatTaskModalProps = {
   visible: boolean;
-  initialRepeatEnabled: boolean;
-  initialFrequency: Frequency;
-  initialInterval: number;
-  initialDays?: string[];
-  initialEndDate?: string;
-  onConfirm: (data: {
-    enabled: boolean;
-    frequency: Frequency;
-    interval: number;
-    days?: string[];
-    endDate?: string;
-  }) => void;
+  mode: DaysMode;
+  weekdays: string[];
+  everyNDays: number;
+  onConfirm: (value: DaysValue) => void;
   onCancel: () => void;
 };
 
-const FREQUENCIES: { label: string; value: Frequency }[] = [
-  { label: "Minute", value: "minute" },
-  { label: "Hour", value: "hour" },
-  { label: "Days", value: "days" },
-  { label: "Weekly", value: "weekly" },
+const MODES: { label: string; value: DaysMode }[] = [
+  { label: "Every day", value: "everyday" },
+  { label: "Weekly", value: "weekdays" },
+  { label: "Every N days", value: "everyNDays" },
+  { label: "On a date", value: "date" },
 ];
-
-const WEEKDAYS = [
-  { label: "Sun", value: "sun" },
-  { label: "Mon", value: "mon" },
-  { label: "Tue", value: "tue" },
-  { label: "Wed", value: "wed" },
-  { label: "Thu", value: "thu" },
-  { label: "Fri", value: "fri" },
-  { label: "Sat", value: "sat" },
-];
-
-// No longer using INTERVAL_OPTIONS listed here
 
 export default function RepeatTaskModal({
   visible,
-  initialRepeatEnabled,
-  initialFrequency,
-  initialInterval,
-  initialDays = [],
-  initialEndDate = "Endlessly",
+  mode: initialMode,
+  weekdays: initialWeekdays,
+  everyNDays: initialEveryNDays,
   onConfirm,
   onCancel,
 }: RepeatTaskModalProps) {
-  const portalHostName = "repeatTaskModal";
+  const [mode, setMode] = useState<DaysMode>(initialMode);
+  const [weekdays, setWeekdays] = useState<string[]>(initialWeekdays);
+  const [everyNDays, setEveryNDays] = useState(initialEveryNDays);
 
-  const [enabled, setEnabled] = useState(initialRepeatEnabled);
-  const [frequency, setFrequency] = useState<Frequency>(
-    initialFrequency === ("daily" as any) ? "days" : initialFrequency
-  );
-  const [interval, setIntervalValue] = useState(String(initialInterval));
-  const [days, setDays] = useState<string[]>(initialDays);
-  const [endDate, setEndDate] = useState(initialEndDate);
-
-  const parsedInterval = parseInt(interval, 10) || 0;
-
-  const isValid = useMemo(() => {
-    if (!enabled) return true;
-    if (frequency === "minute") return parsedInterval >= 15 && parsedInterval <= 360;
-    if (frequency === "hour") return parsedInterval >= 1 && parsedInterval <= 168;
-    if (frequency === "days") return parsedInterval >= 1 && parsedInterval <= 30;
-    if (frequency === "weekly") return days.length > 0;
-    return true;
-  }, [enabled, frequency, parsedInterval, days]);
-
-  const handleConfirm = () => {
-    if (!isValid) return;
-    onConfirm({
-      enabled,
-      frequency,
-      interval: parsedInterval,
-      days: frequency === "weekly" ? days : undefined,
-      endDate,
-    });
-  };
+  // The sheet keeps this mounted only while open, but re-syncing on open keeps a
+  // cancelled edit from leaking into the next one.
+  useEffect(() => {
+    if (!visible) return;
+    setMode(initialMode);
+    setWeekdays(initialWeekdays);
+    setEveryNDays(initialEveryNDays);
+  }, [visible, initialMode, initialWeekdays, initialEveryNDays]);
 
   const toggleDay = (day: string) => {
-    setDays((prev) =>
-      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
+    setWeekdays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]));
+  };
+
+  const stepEveryNDays = (delta: number) => {
+    setEveryNDays((prev) =>
+      Math.max(EVERY_N_DAYS_MIN, Math.min(EVERY_N_DAYS_MAX, (prev || EVERY_N_DAYS_MIN) + delta))
     );
   };
 
-  // Format unit label
-  const unitLabel = useMemo(() => {
-    if (frequency === "days") return parsedInterval === 1 ? "Day" : "Days";
-    if (frequency === "weekly") return "";
-    const unit = frequency === "minute" ? "Minute" : "Hour";
-    return `${unit}${parsedInterval !== 1 ? "s" : ""}`;
-  }, [frequency, parsedInterval]);
-
-  // Whether interval input should be shown
-  const showIntervalInput = frequency !== "weekly";
+  const isValid = mode !== "weekdays" || weekdays.length > 0;
 
   return (
-    <>
-      <Modal
-        visible={visible}
-        transparent
-        animationType="fade"
-        onRequestClose={onCancel}
-      >
-        <GestureHandlerRootView style={{ flex: 1 }}>
-          <View style={styles.overlay}>
-            <View style={styles.modal}>
-              <View style={styles.header}>
-                <Text style={styles.title}>Set as Repeat Task</Text>
-                <Switch
-                  value={enabled}
-                  onValueChange={setEnabled}
-                  trackColor={{ false: "#e0e0e0", true: "#4285f4" }}
-                  thumbColor={enabled ? "#ffffff" : "#f5f5f5"}
-                />
-              </View>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <View style={styles.overlay}>
+          <View style={styles.modal}>
+            <Text style={styles.title}>Repeat</Text>
 
-              <View style={styles.frequencyContainer}>
-                {FREQUENCIES.map((freq) => (
+            <View style={styles.modeGrid}>
+              {MODES.map((option) => {
+                const selected = mode === option.value;
+                return (
                   <TouchableOpacity
-                    key={freq.value}
-                    style={[
-                      styles.freqChip,
-                      frequency === freq.value && styles.freqChipSelected,
-                    ]}
-                    onPress={() => {
-                      setFrequency(freq.value);
-                      if (freq.value === "days" || freq.value === "weekly") {
-                        setIntervalValue("1");
-                      }
-                    }}
+                    key={option.value}
+                    style={[styles.modeChip, selected && styles.modeChipSelected]}
+                    onPress={() => setMode(option.value)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.modeChipText, selected && styles.modeChipTextSelected]}>
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {mode === "everyday" ? (
+              <Text style={styles.hint}>Rings every day at the times you set.</Text>
+            ) : null}
+
+            {mode === "weekdays" ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionLabel}>Repeat on</Text>
+                <DaySelector selectedDays={weekdays} onToggle={toggleDay} />
+                {weekdays.length === 0 ? (
+                  <Text style={styles.hint}>Pick at least one day.</Text>
+                ) : null}
+              </View>
+            ) : null}
+
+            {mode === "everyNDays" ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionLabel}>Repeat every</Text>
+                <View style={styles.stepper}>
+                  <TouchableOpacity
+                    style={styles.stepperButton}
+                    onPress={() => stepEveryNDays(-1)}
+                    disabled={everyNDays <= EVERY_N_DAYS_MIN}
                     activeOpacity={0.7}
                   >
                     <Text
                       style={[
-                        styles.freqChipText,
-                        frequency === freq.value && styles.freqChipTextSelected,
+                        styles.stepperGlyph,
+                        everyNDays <= EVERY_N_DAYS_MIN && styles.stepperGlyphDisabled,
                       ]}
                     >
-                      {freq.label}
+                      −
                     </Text>
                   </TouchableOpacity>
-                ))}
-              </View>
-
-              <View style={styles.settingsSection}>
-                {showIntervalInput && (
-                  <View style={styles.settingsRow}>
-                    <Text style={styles.settingsLabel}>Repeat every</Text>
-                    <View style={styles.settingsValueContainer}>
-                      <TextInput
-                        style={styles.intervalInput}
-                        value={interval}
-                        onChangeText={setIntervalValue}
-                        keyboardType="number-pad"
-                        placeholder="1"
-                        placeholderTextColor="#bdbdbd"
-                      />
-                      <Text style={styles.unitText}>{unitLabel}</Text>
-                    </View>
-                  </View>
-                )}
-
-                {frequency === "minute" && (
-                  <Text style={styles.hintText}>
-                    {parsedInterval < 15 ? "Minimum 15 minutes" : parsedInterval > 360 ? "Maximum 360 minutes (6 hours)" : "15-360 minutes"}
-                  </Text>
-                )}
-
-                {frequency === "hour" && (
-                  <Text style={styles.hintText}>
-                    {parsedInterval < 1 ? "Minimum 1 hour" : parsedInterval > 168 ? "Maximum 168 hours (7 days)" : "1-168 hours"}
-                  </Text>
-                )}
-
-                {frequency === "days" && (
-                  <Text style={styles.hintText}>
-                    {parsedInterval < 1 || parsedInterval > 30 ? "Enter 1-30 days" : "Calendar-based, same time each occurrence"}
-                  </Text>
-                )}
-
-                {(frequency === "minute" || frequency === "hour") && (
-                  <Text style={styles.infoNote}>Note: Time setting is ignored for interval reminders</Text>
-                )}
-
-                {frequency === "weekly" && (
-                  <View style={styles.daysContainer}>
-                    <Text style={[styles.settingsLabel, { marginBottom: 12 }]}>Repeat on</Text>
-                    <View style={styles.weekdaysRow}>
-                      {WEEKDAYS.map((day) => {
-                        const isSelected = days.includes(day.value);
-                        return (
-                          <TouchableOpacity
-                            key={day.value}
-                            style={[
-                              styles.dayCircle,
-                              isSelected && styles.dayCircleSelected,
-                            ]}
-                            onPress={() => toggleDay(day.value)}
-                          >
-                            <Text
-                              style={[
-                                styles.dayCircleText,
-                                isSelected && styles.dayCircleTextSelected,
-                              ]}
-                            >
-                              {day.label[0]}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  </View>
-                )}
-
-                {/* Repeat ends at - disabled for v1 */}
-                <View style={[styles.settingsRow, styles.settingsRowDisabled]}>
-                  <Text style={styles.settingsLabel}>Repeat ends at</Text>
-                  <View style={styles.settingsValueContainer}>
-                    <Text style={styles.settingsValueDisabled}>{endDate}</Text>
-                  </View>
+                  <Text style={styles.stepperValue}>{everyNDays} days</Text>
+                  <TouchableOpacity
+                    style={styles.stepperButton}
+                    onPress={() => stepEveryNDays(1)}
+                    disabled={everyNDays >= EVERY_N_DAYS_MAX}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.stepperGlyph,
+                        everyNDays >= EVERY_N_DAYS_MAX && styles.stepperGlyphDisabled,
+                      ]}
+                    >
+                      +
+                    </Text>
+                  </TouchableOpacity>
                 </View>
+                <Text style={styles.hint}>Counts from the start date, same times each turn.</Text>
               </View>
+            ) : null}
 
-              <View style={styles.actions}>
-                <TouchableOpacity onPress={onCancel} style={styles.actionButton}>
-                  <Text style={styles.cancelText}>CANCEL</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={handleConfirm} style={[styles.actionButton, !isValid && { opacity: 0.5 }]} disabled={!isValid}>
-                  <Text style={styles.doneText}>DONE</Text>
-                </TouchableOpacity>
-              </View>
+            {mode === "date" ? (
+              <Text style={styles.hint}>Rings once, on the date you pick below.</Text>
+            ) : null}
+
+            <View style={styles.actions}>
+              <TouchableOpacity onPress={onCancel} style={styles.actionButton} activeOpacity={0.7}>
+                <Text style={styles.cancelText}>CANCEL</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => isValid && onConfirm({ mode, weekdays, everyNDays })}
+                style={[styles.actionButton, !isValid && styles.actionButtonDisabled]}
+                disabled={!isValid}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.doneText}>DONE</Text>
+              </TouchableOpacity>
             </View>
-
-            <PortalHost name={portalHostName} />
           </View>
-        </GestureHandlerRootView>
-      </Modal>
-    </>
+        </View>
+      </GestureHandlerRootView>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.25)",
+    backgroundColor: colors.overlay,
     justifyContent: "center",
     alignItems: "center",
     padding: 24,
   },
   modal: {
-    backgroundColor: "#ffffff",
-    borderRadius: 16,
-    paddingVertical: 24,
+    backgroundColor: colors.card,
+    borderRadius: borderRadius.card,
+    paddingVertical: 22,
     paddingHorizontal: 20,
     width: "100%",
     maxWidth: 360,
   },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 24,
-  },
   title: {
     fontSize: scaleFontSize(17),
     fontWeight: "700",
-    color: "#212121",
+    color: colors.textHeading,
+    marginBottom: 18,
   },
-  frequencyContainer: {
+  modeGrid: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 24,
-    gap: 4,
+    flexWrap: "wrap",
+    gap: 8,
   },
-  freqChip: {
-    flex: 1,
-    backgroundColor: "#f5f5f5",
-    borderRadius: 6,
-    paddingVertical: 10,
-    alignItems: "center",
+  modeChip: {
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: borderRadius.full,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
   },
-  freqChipSelected: {
-    backgroundColor: "#4285f4",
+  modeChipSelected: {
+    backgroundColor: colors.accent,
   },
-  freqChipText: {
+  modeChipText: {
     fontSize: scaleFontSize(13),
-    color: "#616161",
     fontWeight: "500",
+    color: colors.textSecondary,
   },
-  freqChipTextSelected: {
+  modeChipTextSelected: {
     color: "#ffffff",
   },
-  settingsSection: {
-    marginBottom: 16,
+  section: {
+    marginTop: 20,
+    gap: 12,
   },
-  settingsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-  },
-  settingsRowDisabled: {
-    opacity: 0.5,
-  },
-  settingsLabel: {
-    fontSize: scaleFontSize(15),
-    color: "#9e9e9e",
-    fontWeight: "500",
-  },
-  settingsValueContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  settingsValue: {
-    fontSize: scaleFontSize(14),
-    color: "#424242",
-  },
-  settingsValueDisabled: {
-    fontSize: scaleFontSize(14),
-    color: "#bdbdbd",
-    fontWeight: "500",
-  },
-  daysContainer: {
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-  },
-  weekdaysRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  dayCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "#f5f5f5",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  dayCircleSelected: {
-    backgroundColor: "#4285f4",
-  },
-  dayCircleText: {
-    fontSize: scaleFontSize(12),
-    color: "#616161",
+  sectionLabel: {
+    fontSize: scaleFontSize(13),
     fontWeight: "600",
+    color: colors.textLabel,
   },
-  dayCircleTextSelected: {
-    color: "#ffffff",
+  stepper: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+  },
+  stepperButton: {
+    width: 36,
+    height: 36,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.surfaceAlt,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepperGlyph: {
+    fontSize: scaleFontSize(20),
+    fontWeight: "600",
+    color: colors.textPrimary,
+    lineHeight: scaleFontSize(22),
+  },
+  stepperGlyphDisabled: {
+    color: colors.textTertiary,
+  },
+  stepperValue: {
+    fontSize: scaleFontSize(15),
+    fontWeight: "600",
+    color: colors.textPrimary,
+    minWidth: 78,
+    textAlign: "center",
+  },
+  hint: {
+    marginTop: 14,
+    fontSize: scaleFontSize(12),
+    color: colors.textSecondary,
   },
   actions: {
     flexDirection: "row",
     justifyContent: "flex-end",
-    marginTop: 8,
+    marginTop: 22,
     gap: 24,
   },
   actionButton: {
     paddingVertical: 8,
     paddingHorizontal: 4,
   },
+  actionButtonDisabled: {
+    opacity: 0.4,
+  },
   cancelText: {
     fontSize: scaleFontSize(14),
     fontWeight: "600",
-    color: "#4285f4",
+    color: colors.textSecondary,
   },
   doneText: {
     fontSize: scaleFontSize(14),
     fontWeight: "600",
-    color: "#4285f4",
-  },
-  intervalInput: {
-    fontSize: scaleFontSize(16),
-    color: "#424242",
-    fontWeight: "600",
-    borderBottomWidth: 1,
-    borderBottomColor: "#4285f4",
-    paddingHorizontal: 4,
-    minWidth: 40,
-    textAlign: "center",
-  },
-  unitText: {
-    fontSize: scaleFontSize(15),
-    color: "#424242",
-  },
-  hintText: {
-    fontSize: scaleFontSize(12),
-    color: "#9e9e9e",
-    marginTop: -8,
-    marginBottom: 16,
-    marginLeft: 4,
-  },
-  infoNote: {
-    fontSize: scaleFontSize(11),
-    color: "#f44336",
-    fontStyle: "italic",
-    marginTop: 8,
+    color: colors.accent,
   },
 });

@@ -14,6 +14,9 @@ const read = (relative: string) =>
   fs.readFileSync(path.resolve(__dirname, "../..", relative), "utf8");
 
 const paywall = read("app/paywall.tsx");
+// The purchase screen is two files since the paywall rebuild: the route owns the
+// browser hand-off, the closing block owns the two links App Review taps.
+const closingBlock = read("components/paywall/ClosingBlock.tsx");
 const settings = read("app/settings.tsx");
 const consentCard = read("components/AiConsentCard.tsx");
 const consentModule = read("lib/aiConsent.ts");
@@ -40,10 +43,10 @@ describe("legal link constants", () => {
 });
 
 describe("every legal link comes from lib/legalLinks", () => {
-  it("the paywall imports both constants", () => {
-    expect(paywall).toMatch(/from "\.\.\/lib\/legalLinks"/);
-    expect(paywall).toContain("PRIVACY_POLICY_URL");
-    expect(paywall).toContain("TERMS_OF_USE_URL");
+  it("the paywall's closing block imports both constants", () => {
+    expect(closingBlock).toMatch(/from "\.\.\/\.\.\/lib\/legalLinks"/);
+    expect(closingBlock).toContain("PRIVACY_POLICY_URL");
+    expect(closingBlock).toContain("TERMS_OF_USE_URL");
   });
 
   it("Settings imports both constants", () => {
@@ -58,7 +61,7 @@ describe("every legal link comes from lib/legalLinks", () => {
   });
 
   it("no screen hardcodes a URL", () => {
-    for (const source of [paywall, settings, consentCard]) {
+    for (const source of [paywall, closingBlock, settings, consentCard]) {
       expect(source).not.toMatch(/["'`]https?:\/\//);
     }
   });
@@ -70,6 +73,8 @@ describe("every legal link comes from lib/legalLinks", () => {
 
 describe("legal pages open in an in-app browser", () => {
   it("every screen goes through openInAppBrowser — no direct WebBrowser use or Safari hand-off", () => {
+    // ClosingBlock raises its taps through an `onOpenLink` prop rather than
+    // calling the helper itself, so it is checked separately below.
     for (const source of [paywall, settings, consentCard]) {
       expect(source).toContain("openInAppBrowser");
       // A top-level expo-web-browser import crashes any build that predates the
@@ -79,6 +84,9 @@ describe("legal pages open in an in-app browser", () => {
       expect(source).not.toMatch(/from ["']expo-web-browser["']/);
       expect(source).not.toContain("Linking.openURL");
     }
+    expect(closingBlock).toContain("onOpenLink");
+    expect(closingBlock).not.toMatch(/from ["']expo-web-browser["']/);
+    expect(closingBlock).not.toContain("Linking.openURL");
   });
 
   it("openInAppBrowser requires expo-web-browser lazily, with a system-browser fallback", () => {

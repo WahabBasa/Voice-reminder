@@ -39,7 +39,7 @@ async function runMigrationTest(
 // ─── Schema Migration ───────────────────────────────────────────────────────
 
 describe("loadReminders - schema migration", () => {
-  it("leaves v4 reminder unchanged", async () => {
+  it("keeps a v4 reminder's own fields and gives it a grid", async () => {
     await runMigrationTest(
       [
         {
@@ -47,6 +47,7 @@ describe("loadReminders - schema migration", () => {
           title: "V4",
           description: "",
           time: "09:00",
+          date: "2026-06-15",
           frequency: "once",
           days: [],
           createdAt: "2026-04-01T00:00:00.000Z",
@@ -58,9 +59,44 @@ describe("loadReminders - schema migration", () => {
       ],
       (reminders) => {
         expect(reminders).toHaveLength(1);
-        expect(reminders[0].schemaVersion).toBe(4);
+        expect(reminders[0].schemaVersion).toBe(5);
         expect(reminders[0].scheduleType).toBe("once");
         expect(reminders[0].tzid).toBe("UTC");
+        // v5 (OLD-97): the grid is derived, nothing the row already said is lost.
+        expect(reminders[0].schedule).toEqual({
+          type: "grid",
+          days: { kind: "date", date: "2026-06-15" },
+          times: { kind: "clock", times: ["09:00"] },
+          tzid: "UTC",
+        });
+      }
+    );
+  });
+
+  it("leaves an already-gridded v5 reminder untouched", async () => {
+    const schedule = {
+      type: "grid",
+      days: { kind: "weekdays", days: ["thu"] },
+      times: { kind: "clock", times: ["08:00", "21:00"] },
+    };
+    await runMigrationTest(
+      [
+        {
+          id: "r1b",
+          title: "V5",
+          description: "",
+          time: "08:00",
+          frequency: "custom",
+          days: ["thu"],
+          createdAt: "2026-04-01T00:00:00.000Z",
+          schemaVersion: 5,
+          tzid: "UTC",
+          schedule,
+        },
+      ],
+      (reminders) => {
+        expect(reminders[0].schedule).toEqual(schedule);
+        expect(reminders[0].schemaVersion).toBe(5);
       }
     );
   });
@@ -82,7 +118,7 @@ describe("loadReminders - schema migration", () => {
       ],
       (reminders) => {
         expect(reminders[0].tzid).toBeTruthy();
-        expect(reminders[0].schemaVersion).toBe(4);
+        expect(reminders[0].schemaVersion).toBe(5);
       }
     );
   });
@@ -103,9 +139,16 @@ describe("loadReminders - schema migration", () => {
         },
       ],
       (reminders) => {
-        expect(reminders[0].schemaVersion).toBe(4);
+        expect(reminders[0].schemaVersion).toBe(5);
         expect(reminders[0].scheduleType).toBe("interval");
         expect(reminders[0].tzid).toBeTruthy();
+        // 10-minute interval, now inside the default waking window.
+        expect(reminders[0].schedule.times).toEqual({
+          kind: "interval",
+          everyMinutes: 10,
+          windowStart: "08:00",
+          windowEnd: "22:00",
+        });
       }
     );
   });
@@ -125,7 +168,7 @@ describe("loadReminders - schema migration", () => {
         },
       ],
       (reminders) => {
-        expect(reminders[0].schemaVersion).toBe(4);
+        expect(reminders[0].schemaVersion).toBe(5);
         expect(reminders[0].scheduleType).toBe("once");
         expect(reminders[0].onceAt).toBe(utc(2026, 6, 15, 9, 0));
       }
@@ -147,7 +190,7 @@ describe("loadReminders - schema migration", () => {
         },
       ],
       (reminders) => {
-        expect(reminders[0].schemaVersion).toBe(4);
+        expect(reminders[0].schemaVersion).toBe(5);
         expect(reminders[0].scheduleType).toBe("once");
         expect(reminders[0].onceAt).toBe(5000);
       }
@@ -168,7 +211,7 @@ describe("loadReminders - schema migration", () => {
         },
       ],
       (reminders) => {
-        expect(reminders[0].schemaVersion).toBe(4);
+        expect(reminders[0].schemaVersion).toBe(5);
         expect(reminders[0].scheduleType).toBe("rrule");
         expect(reminders[0].rrule).toContain("FREQ=DAILY");
       }
@@ -189,9 +232,32 @@ describe("loadReminders - schema migration", () => {
         },
       ],
       (reminders) => {
-        expect(reminders[0].schemaVersion).toBe(4);
+        expect(reminders[0].schemaVersion).toBe(5);
         expect(reminders[0].scheduleType).toBe("rrule");
         expect(reminders[0].rrule).toContain("BYDAY=MO,FR");
+        expect(reminders[0].schedule.days).toEqual({ kind: "weekdays", days: ["mon", "fri"] });
+      }
+    );
+  });
+
+  it("migrates a legacy every-N-days reminder onto the days axis", async () => {
+    await runMigrationTest(
+      [
+        {
+          id: "r8",
+          title: "Plants",
+          description: "",
+          time: "07:30",
+          frequency: "daily",
+          days: [],
+          intervalDays: 3,
+          createdAt: "2026-04-01T00:00:00.000Z",
+        },
+      ],
+      (reminders) => {
+        expect(reminders[0].schemaVersion).toBe(5);
+        expect(reminders[0].schedule.days).toMatchObject({ kind: "everyNDays", interval: 3 });
+        expect(reminders[0].schedule.times).toEqual({ kind: "clock", times: ["07:30"] });
       }
     );
   });
@@ -231,11 +297,15 @@ describe("CRUD operations", () => {
 
     expect(result.id).toBeTruthy();
     expect(result.createdAt).toBeTruthy();
-    expect(result.snoozeEnabled).toBe(true);
-    expect(result.snoozeDuration).toBe(5);
     expect(result.volume).toBe(1);
     expect(result.volumeStyle).toBe("standard");
-    expect(result.schemaVersion).toBe(4);
+    expect(result.schemaVersion).toBe(5);
+    // A caller that speaks only legacy fields still gets a grid (OLD-97).
+    expect(result.schedule).toEqual({
+      type: "grid",
+      days: { kind: "date", date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) },
+      times: { kind: "clock", times: ["14:00"] },
+    });
     expect(useReminderStore.getState().reminders).toHaveLength(1);
   });
 

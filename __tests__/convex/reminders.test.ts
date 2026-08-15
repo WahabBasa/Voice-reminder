@@ -1,5 +1,4 @@
 import {
-  claimSpeechCatches,
   create,
   get,
   list,
@@ -349,94 +348,6 @@ describe("device scoping", () => {
       frequency: "daily",
     });
 
-    expect(patched).toEqual([]);
-  });
-});
-
-// ─── spoken-catch rotation (convex/speechCatch.ts) ──────────────────────────
-
-describe("claimSpeechCatches", () => {
-  // Rotation rows are keyed by device the same way reminders are; the fake ctx
-  // is table-agnostic, so a row here stands in for a speechCatchState document.
-  const catchState = (lastCatchId: string) => ({
-    _id: "catch_state_1",
-    deviceId: DEVICE,
-    lastCatchId,
-    updatedAt: 1,
-  });
-
-  it("skips the catch this device heard last", async () => {
-    const { ctx } = fakeCtx([catchState("en.heads-up")]);
-    const chosen = await handlerOf(claimSpeechCatches)(ctx, {
-      deviceId: DEVICE,
-      candidateIds: ["en.heads-up", "en.remember", "en.one-thing"],
-      count: 1,
-    });
-
-    expect(chosen).toEqual(["en.remember"]);
-  });
-
-  it("records the last catch it handed out", async () => {
-    const { ctx, patched } = fakeCtx([catchState("en.heads-up")]);
-    await handlerOf(claimSpeechCatches)(ctx, {
-      deviceId: DEVICE,
-      candidateIds: ["en.heads-up", "en.remember", "en.one-thing"],
-      count: 2,
-    });
-
-    expect(patched[0].id).toBe("catch_state_1");
-    expect(patched[0].updates.lastCatchId).toBe("en.one-thing");
-  });
-
-  it("gives the heads-up and the main line different catches", async () => {
-    const { ctx } = fakeCtx([catchState("ar.lahza")]);
-    const chosen = await handlerOf(claimSpeechCatches)(ctx, {
-      deviceId: DEVICE,
-      candidateIds: ["ar.lahza", "ar.intabih", "ar.tathakkar"],
-      count: 2,
-    });
-
-    expect(chosen).toEqual(["ar.intabih", "ar.tathakkar"]);
-    expect(new Set(chosen).size).toBe(2);
-  });
-
-  it("starts a rotation row for a device that has none", async () => {
-    const { ctx, inserted, patched } = fakeCtx([]);
-    const chosen = await handlerOf(claimSpeechCatches)(ctx, {
-      deviceId: DEVICE,
-      candidateIds: ["en.heads-up", "en.remember"],
-      count: 1,
-    });
-
-    expect(chosen).toEqual(["en.heads-up"]);
-    expect(patched).toEqual([]);
-    expect(inserted[0].table).toBe("speechCatchState");
-    expect(inserted[0].doc).toMatchObject({ deviceId: DEVICE, lastCatchId: "en.heads-up" });
-  });
-
-  it("reads only its own device's rotation state", async () => {
-    const { ctx } = fakeCtx([
-      { _id: "catch_state_2", deviceId: OTHER_DEVICE, lastCatchId: "en.heads-up", updatedAt: 1 },
-    ]);
-    const chosen = await handlerOf(claimSpeechCatches)(ctx, {
-      deviceId: DEVICE,
-      candidateIds: ["en.heads-up", "en.remember"],
-      count: 1,
-    });
-
-    expect(chosen).toEqual(["en.heads-up"]);
-  });
-
-  it("writes nothing when there is no catch to hand out", async () => {
-    const { ctx, inserted, patched } = fakeCtx([catchState("en.heads-up")]);
-    const chosen = await handlerOf(claimSpeechCatches)(ctx, {
-      deviceId: DEVICE,
-      candidateIds: [],
-      count: 2,
-    });
-
-    expect(chosen).toEqual([]);
-    expect(inserted).toEqual([]);
     expect(patched).toEqual([]);
   });
 });

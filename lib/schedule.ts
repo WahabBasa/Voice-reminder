@@ -1,11 +1,17 @@
 /**
  * Unified Scheduling Engine
- * 
- * Supports three canonical schedule types:
+ *
+ * Supports four canonical schedule types:
+ * - grid: the days × times model everything new is written in (OLD-97)
  * - once: one absolute timestamp
  * - interval: intervalMs + anchorAt (existing)
- * - rrule: RFC5545 RRULE string (new - covers weekly, monthly, yearly, etc.)
- * 
+ * - rrule: RFC5545 RRULE string (covers weekly, monthly, yearly, etc.)
+ *
+ * `grid` is the one users actually steer (decision 4): days (every day |
+ * weekdays | every N days | one date) crossed with times (1..N clock times |
+ * an interval inside a window). The other three stay because reminders created
+ * before it exist and still have to ring — nothing new produces them.
+ *
  * Product Constraints (Step 0):
  * - Minimum interval: 5 minutes (option B for battery sanity)
  * - Maximum interval: 365 days
@@ -14,13 +20,45 @@
 
 import { RRule, RRuleSet, rrulestr, Options as RRuleOptions } from 'rrule';
 import { getNextIntervalOccurrence } from './time';
+import {
+  buildGridSchedule,
+  gridFromLegacyReminder,
+  nextGridOccurrence,
+  describeGrid,
+  type GridSchedule,
+} from '../convex/scheduleShape';
+
+// The grid lives in convex/scheduleShape.ts so the parse and the client engine
+// share one definition; that module is import-pure, so nothing Convex-shaped
+// rides along into the app bundle. Re-exported here because lib/schedule is
+// where the rest of the app already looks for scheduling.
+export {
+  buildGridSchedule,
+  gridFromLegacyReminder,
+  gridDayOccurrences,
+  nextGridOccurrence,
+  matchesGridDay,
+  isIntervalGrid,
+  describeGrid,
+  legacyFieldsFromGrid,
+  normalizeClockTime,
+  normalizeClockTimes,
+  normalizeWeekdays,
+  minutesOfDay,
+  DEFAULT_WINDOW_START,
+  DEFAULT_WINDOW_END,
+  MIN_INTERVAL_MINUTES,
+  MAX_INTERVAL_MINUTES,
+  MAX_TIMES_PER_DAY,
+} from '../convex/scheduleShape';
+export type { GridSchedule, DaysRule, TimesRule, Weekday } from '../convex/scheduleShape';
 
 // Product constraint constants
 export const MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 export const MAX_INTERVAL_MS = 365 * 24 * 60 * 60 * 1000; // 365 days
 export const DEFAULT_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes fallback
 
-export type ScheduleType = 'once' | 'interval' | 'rrule';
+export type ScheduleType = 'once' | 'interval' | 'rrule' | 'grid';
 
 export interface OnceSchedule {
   type: 'once';
@@ -41,7 +79,7 @@ export interface RRuleSchedule {
   until?: number; // end date in ms (optional)
 }
 
-export type Schedule = OnceSchedule | IntervalSchedule | RRuleSchedule;
+export type Schedule = OnceSchedule | IntervalSchedule | RRuleSchedule | GridSchedule;
 
 export interface ScheduleWarning {
   code: string;
@@ -63,15 +101,18 @@ export function getNextOccurrence(
   referenceTime: number = Date.now()
 ): number | null {
   switch (schedule.type) {
+    case 'grid':
+      return nextGridOccurrence(schedule, referenceTime);
+
     case 'once':
       return getNextOnceOccurrence(schedule, referenceTime);
-    
+
     case 'interval':
       return getNextIntervalOccurrenceSafe(schedule, referenceTime);
-    
+
     case 'rrule':
       return getNextRRuleOccurrence(schedule, referenceTime);
-    
+
     default:
       console.warn('[Schedule] Unknown schedule type:', (schedule as any).type);
       return null;
@@ -158,6 +199,20 @@ export function normalizeSchedule(
   const tzid = context?.tzid ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   switch (raw.type) {
+    case 'grid': {
+      // The grid arrives already normalized (buildGridSchedule is the only way
+      // to make one), so this is a pass-through that fills in the timezone.
+      const partial = raw as Partial<GridSchedule>;
+      const schedule: GridSchedule = {
+        type: 'grid',
+        days: partial.days ?? { kind: 'everyday' },
+        times: partial.times ?? { kind: 'clock', times: ['09:00'] },
+        until: partial.until,
+        tzid: partial.tzid ?? tzid,
+      };
+      return { schedule, warnings, displayText: describeGrid(schedule) };
+    }
+
     case 'once': {
       const onceAt = raw.onceAt ?? refTime + 60 * 60 * 1000; // Default: 1 hour from now
       return {

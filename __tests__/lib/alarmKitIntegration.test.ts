@@ -170,8 +170,15 @@ describe("app key format", () => {
     });
   });
 
-  it("rejects a non-alarm key", () => {
-    expect(alarmKit.parseAlarmAppKey("snooze_abc123_1786000000000")).toBeNull();
+  it("also parses a nag comeback key back to its reminder (OLD-96)", () => {
+    expect(alarmKit.parseAlarmAppKey(alarmKit.nagAppKey("abc123", T))).toEqual({
+      reminderId: "abc123",
+      scheduledFor: T,
+    });
+  });
+
+  it("rejects a key from another family", () => {
+    expect(alarmKit.parseAlarmAppKey("prealert_abc123_1786000000000")).toBeNull();
   });
 
   it("rejects a key with no timestamp", () => {
@@ -318,7 +325,7 @@ describe("reconcileAlarmEvents branching", () => {
     expect(result.outcome).toBe("missed");
   });
 
-  it("Later then Done on the follow-up completes the chain", () => {
+  it("Later then Done on the comeback completes the chain", () => {
     const [result] = reconcileAlarmEvents(
       [
         { type: "snoozed", id: KEY, at: T, snoozeUntil: T + 5 * MIN },

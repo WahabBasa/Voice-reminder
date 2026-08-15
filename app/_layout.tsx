@@ -227,8 +227,6 @@ function AlarmOverlayFallback() {
         days: String(data?.days ?? ""),
         time: String(data?.time ?? ""),
         intervalDays: String(data?.intervalDays ?? ""),
-        snoozeEnabled: String(data?.snoozeEnabled ?? "true"),
-        snoozeDuration: String(data?.snoozeDuration ?? "5"),
         volume: String(data?.volume ?? "1"),
         volumeStyle: String(data?.volumeStyle ?? "standard"),
         scheduledFor: String(data?.scheduledFor ?? ""),

@@ -13,6 +13,7 @@ module.exports = {
     "lib/store.ts",
     "lib/notificationDecisions.ts",
     "convex/helpers.ts",
+    "convex/scheduleShape.ts",
   ],
   coverageThreshold: {
     "lib/time.ts": { lines: 85, branches: 70 },
@@ -22,5 +23,6 @@ module.exports = {
     "lib/store.ts": { lines: 65, branches: 60 },
     "lib/notificationDecisions.ts": { lines: 100, branches: 100 },
     "convex/helpers.ts": { lines: 100, branches: 100 },
+    "convex/scheduleShape.ts": { lines: 95, branches: 85 },
   },
 };

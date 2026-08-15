@@ -12,10 +12,9 @@ import {
 } from "react-native";
 import ActionSheet from "./ActionSheet";
 import * as FileSystem from "expo-file-system/legacy";
+import { useRouter } from "expo-router";
 import { useMutation } from "convex/react";
 import { useToast } from "./ToastProvider";
-import { LinearGradient } from "expo-linear-gradient";
-import { TimerPickerModal } from "react-native-timer-picker";
 import { previewAudioService } from "../lib/AudioService";
 import BottomSheet, {
     BottomSheetScrollView,
@@ -24,31 +23,29 @@ import BottomSheet, {
 } from "@gorhom/bottom-sheet";
 import { api } from "../convex/_generated/api";
 import AppIcon from "./AppIcon";
-import DaySelector from "./DaySelector";
 import RepeatTaskModal from "./RepeatTaskModal";
 import DatePickerModal from "./DatePickerModal";
+import TimesEditor from "./TimesEditor";
+import {
+    describeDraftDays,
+    describeDraftTimes,
+    draftFromReminder,
+    fromDateString,
+    saveShapeFromDraft,
+    toDateString,
+    type ScheduleDraft,
+} from "./schedule/scheduleDraft";
 import { cancelReminder, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
-import { migrateLegacySchedule } from "../lib/schedule";
 import { getDeviceId } from "../lib/deviceId";
 import { createTraceId, perfLog } from "../lib/perf";
 import { DEFAULT_ALARM_SETTINGS } from "../lib/storage";
-import { INTERVAL_MAX_MS, INTERVAL_MIN_MS, useReminderStore, Reminder } from "../lib/store";
+import { CURRENT_SCHEMA_VERSION, useReminderStore, Reminder } from "../lib/store";
+import { checkCanUsePremiumSchedule, isPremiumSchedule } from "../lib/usageGate";
 import { borderRadius, chipColors, colors, scaleFontSize, shadows } from "../lib/theme";
 import { FONT_DISPLAY } from "../lib/fonts";
-import { formatIntervalDuration } from "../lib/time";
-
-const FREQUENCIES = [
-    { value: "once", label: "Once" },
-    { value: "hour", label: "Hourly" },
-    { value: "daily", label: "Daily" },
-    { value: "custom", label: "Weekly" },
-    { value: "monthly", label: "Monthly" },
-    { value: "yearly", label: "Yearly" },
-];
 
 // Tap-to-cycle options
 const PRE_REMINDER_VALUES = [0, 5, 10, 15, 30];
-const SNOOZE_VALUES = [0, 5, 10, 15, 30]; // 0 = snooze off
 
 const EMOJI_CHOICES = [
     "💊", "🩺", "💉", "🦷", "❤️", "🧠",
@@ -68,6 +65,15 @@ function chipColorFor(id: string): string {
         hash = (hash * 31 + id.charCodeAt(i)) | 0;
     }
     return chipColors[Math.abs(hash) % chipColors.length];
+}
+
+/** A dated one-off whose day has passed can never ring, so it resets to today. */
+function isPastDate(date: string): boolean {
+    const parsed = fromDateString(date);
+    if (!parsed) return true;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return parsed.getTime() < today.getTime();
 }
 
 type SheetRowProps = {
@@ -98,14 +104,6 @@ const SheetRow = React.memo(function SheetRow({ icon, label, value, onPress }: S
     );
 });
 
-function formatTime(date: Date) {
-    return date.toLocaleTimeString("default", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-    });
-}
-
 type EditReminderSheetProps = {
     reminder: Reminder;
     onClose: () => void;
@@ -115,6 +113,7 @@ type EditReminderSheetProps = {
 
 export default function EditReminderSheet({ reminder: initialReminder, onClose, onSave, onDelete }: EditReminderSheetProps) {
     const traceId = useMemo(() => createTraceId("edit_sheet"), []);
+    const router = useRouter();
     const updateConvexReminder = useMutation(api.reminders.update);
     const removeConvexReminder = useMutation(api.reminders.remove);
 
@@ -131,44 +130,29 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const [emoji, setEmoji] = useState<string | undefined>(initialReminder.emoji);
     const description = initialReminder.description || "";
 
-    const [time, setTime] = useState(() => {
-        if (initialReminder.time) {
-            const [hours, minutes] = initialReminder.time.split(":").map(Number);
-            const date = new Date();
-            date.setHours(hours, minutes, 0, 0);
-            return date;
-        }
-        return new Date();
-    });
-
-    const [frequency, setFrequency] = useState(
-        initialReminder.frequency === "weekly" ? "custom" : (initialReminder.frequency || "once")
+    // The whole schedule is one draft (components/schedule/scheduleDraft.ts):
+    // both axes are always populated, so flipping between "weekly" and "every N
+    // days" — or between set times and an interval — never loses the other side.
+    const [draft, setDraft] = useState<ScheduleDraft>(() => draftFromReminder(initialReminder));
+    const patchDraft = useCallback(
+        (patch: Partial<ScheduleDraft>) => setDraft((prev) => ({ ...prev, ...patch })),
+        []
     );
-    const [days, setDays] = useState<string[]>(initialReminder.days || []);
 
-    const [intervalMs, setIntervalMs] = useState<number | undefined>(initialReminder.intervalMs);
-    const [anchorAt, setAnchorAt] = useState<number | undefined>(initialReminder.anchorAt);
-    const [intervalDays, setIntervalDays] = useState<number | undefined>(initialReminder.intervalDays);
-    const [selectedDate, setSelectedDate] = useState<Date | null>(() => {
-        if (initialReminder.date) {
-            const [year, month, day] = initialReminder.date.split("-").map(Number);
-            return new Date(year, month - 1, day);
-        }
-        return null;
-    });
+    // Interval mode is Pro (OLD-100). Only a switch INTO it is gated: a reminder
+    // that already runs on an interval keeps saving whatever the plan says.
+    const [startedOnInterval] = useState(() => draft.timesMode === "interval");
+
     const [showDatePicker, setShowDatePicker] = useState(false);
 
     const [preReminderMinutes, setPreReminderMinutes] = useState<number>(initialReminder.preReminderMinutes ?? 0);
     const [persistent, setPersistent] = useState<boolean>(initialReminder.persistent ?? false);
-    const [snoozeEnabled, setSnoozeEnabled] = useState(initialReminder.snoozeEnabled ?? DEFAULT_ALARM_SETTINGS.snoozeEnabled);
-    const [snoozeDuration, setSnoozeDuration] = useState(initialReminder.snoozeDuration ?? DEFAULT_ALARM_SETTINGS.snoozeDuration);
 
     // Volume control was cut from the sheet — values pass through unchanged.
     const volume = initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume;
     const volumeStyle = initialReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle;
 
-    const [showTimePicker, setShowTimePicker] = useState(false);
-    const [showDaysPicker, setShowDaysPicker] = useState(false);
+    const [showTimesEditor, setShowTimesEditor] = useState(false);
     const [showRepeatTaskModal, setShowRepeatTaskModal] = useState(false);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -190,6 +174,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         return date.toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" });
     }, []);
 
+    const selectedDate = useMemo(() => fromDateString(draft.date), [draft.date]);
     const dateLabel = useMemo(() => formatDateLabel(selectedDate), [formatDateLabel, selectedDate]);
     const [isPlaying, setIsPlaying] = useState(false);
     const toast = useToast();
@@ -205,37 +190,16 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         };
     }, [initialReminder.id, traceId]);
 
-    const handleDayToggle = (day: string) => {
-        setDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]));
-    };
+    const repeatLabel = useMemo(() => describeDraftDays(draft), [draft]);
+    const timesLabel = useMemo(() => describeDraftTimes(draft), [draft]);
 
-    const frequencyLabel = useMemo(() => {
-        if (frequency === "interval" && intervalMs) {
-            return formatIntervalDuration(intervalMs);
-        }
-        if (frequency === "daily" && intervalDays && intervalDays > 1) {
-            return `Every ${intervalDays} Days`;
-        }
-        return FREQUENCIES.find((f) => f.value === frequency)?.label ?? "Once";
-    }, [frequency, intervalMs, intervalDays]);
-
-    const daysLabel = useMemo(() => {
-        if (frequency !== "custom") return "";
-        if (!days.length) return "Select";
-        const ordered = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
-        const normalized = days.map((d) => d.toLowerCase());
-        const picked = ordered.filter((d) => normalized.includes(d));
-        return picked.map((d) => d.charAt(0).toUpperCase() + d.slice(1, 3)).join(", ");
-    }, [days, frequency]);
+    // Every-N-days counts from an anchor, so its start date is as editable as a
+    // one-off's date — same row, different word.
+    const showDateRow = draft.daysMode === "date" || draft.daysMode === "everyNDays";
 
     const preReminderLabel = useMemo(
         () => (preReminderMinutes > 0 ? `${preReminderMinutes} min before` : "None"),
         [preReminderMinutes]
-    );
-
-    const snoozeLabel = useMemo(
-        () => (snoozeEnabled ? `${snoozeDuration} min` : "Off"),
-        [snoozeEnabled, snoozeDuration]
     );
 
     const cyclePreReminder = useCallback(() => {
@@ -244,18 +208,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             return PRE_REMINDER_VALUES[(idx + 1) % PRE_REMINDER_VALUES.length] ?? 0;
         });
     }, []);
-
-    const cycleSnooze = useCallback(() => {
-        const current = snoozeEnabled ? snoozeDuration : 0;
-        const idx = SNOOZE_VALUES.indexOf(current);
-        const next = SNOOZE_VALUES[(idx + 1) % SNOOZE_VALUES.length] ?? 0;
-        if (next === 0) {
-            setSnoozeEnabled(false);
-        } else {
-            setSnoozeEnabled(true);
-            setSnoozeDuration(next);
-        }
-    }, [snoozeEnabled, snoozeDuration]);
 
     const handlePlayPreview = async () => {
         if (!reminder?.audioUrl) return;
@@ -296,48 +248,23 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         setIsPlaying(success);
     };
 
-    const openFrequencyPicker = () => {
-        setShowRepeatTaskModal(true);
-    };
-
-    const handleRepeatConfirm = (data: {
-        enabled: boolean;
-        frequency: any;
-        interval: number;
-        days?: string[];
-        endDate?: string;
-    }) => {
-        if (!data.enabled) {
-            setFrequency("once");
-            setIntervalMs(undefined);
-            setAnchorAt(undefined);
-        } else {
-            if (data.frequency === "hour" || data.frequency === "minute") {
-                setFrequency("interval");
-                const raw =
-                    data.frequency === "minute"
-                        ? data.interval * 60 * 1000
-                        : data.interval * 60 * 60 * 1000;
-                const clamped = Math.max(INTERVAL_MIN_MS, Math.min(INTERVAL_MAX_MS, raw));
-                setIntervalMs(clamped);
-                setAnchorAt(Date.now());
-                setDays([]);
-            } else if (data.frequency === "days") {
-                setFrequency("daily");
-                setIntervalDays(data.interval);
-                setIntervalMs(undefined);
-                setAnchorAt(undefined);
-                setDays([]);
-            } else {
-                setFrequency(data.frequency === "weekly" ? "custom" : data.frequency);
-                if (data.days) setDays(data.days);
-                setIntervalMs(undefined);
-                setAnchorAt(undefined);
-                setIntervalDays(undefined);
-            }
-        }
-        setShowRepeatTaskModal(false);
-    };
+    const handleRepeatConfirm = useCallback(
+        (value: { mode: ScheduleDraft["daysMode"]; weekdays: string[]; everyNDays: number }) => {
+            patchDraft({
+                daysMode: value.mode,
+                weekdays: value.weekdays,
+                everyNDays: value.everyNDays,
+                // Switching to a dated one-off with a date already in the past
+                // would save a reminder that can never ring.
+                date:
+                    value.mode === "date" && (!draft.date || isPastDate(draft.date))
+                        ? toDateString(new Date())
+                        : draft.date,
+            });
+            setShowRepeatTaskModal(false);
+        },
+        [draft.date, patchDraft]
+    );
 
     const handleSave = useCallback(async () => {
         if (!title.trim()) {
@@ -345,54 +272,48 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             return;
         }
 
-        const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time
-            .getMinutes()
-            .toString()
-            .padStart(2, "0")}`;
+        // One place turns the draft into a schedule: the grid plus the legacy
+        // columns that project out of it (never one without the other).
+        const save = saveShapeFromDraft(draft);
 
-        // Format date as YYYY-MM-DD for storage
-        const dateStr = selectedDate
-            ? `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`
-            : undefined;
-
-        // Derive canonical schedule fields from the edited legacy fields so
-        // startup sync (which trusts canonical fields) stays consistent.
-        const canonicalSchedule = migrateLegacySchedule({
-            frequency,
-            time: timeStr,
-            date: dateStr,
-            days: frequency === "custom" ? days : [],
-            intervalMs: frequency === "interval" ? intervalMs : undefined,
-            anchorAt: frequency === "interval" ? anchorAt : undefined,
-        });
+        // Turning a reminder into an interval one is a purchase, not an edit.
+        // The sheet stays open behind the paywall so the draft survives the trip.
+        if (!startedOnInterval && isPremiumSchedule(save.schedule)) {
+            const { allowed } = await checkCanUsePremiumSchedule();
+            if (!allowed) {
+                perfLog(traceId, "overlay.edit", "save_blocked_premium_schedule");
+                router.push({ pathname: "/paywall", params: { context: "interval" } });
+                return;
+            }
+        }
 
         const updatedReminder: Reminder = {
             ...reminder,
             title: title.trim(),
             emoji,
             description,
-            time: timeStr,
-            date: dateStr,
-            frequency,
-            days: frequency === "custom" ? days : [],
+            time: save.time,
+            date: save.date,
+            frequency: save.frequency,
+            days: save.days,
+            schedule: save.schedule,
             preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
             persistent: persistent || undefined,
-            snoozeEnabled,
-            snoozeDuration,
             volume,
             volumeStyle,
 
-            intervalMs: frequency === "interval" ? intervalMs : undefined,
-            anchorAt: frequency === "interval" ? anchorAt : undefined,
-            intervalDays: frequency === "daily" ? intervalDays : undefined,
-            schemaVersion: 4,
+            intervalMs: save.intervalMs,
+            anchorAt: save.anchorAt,
+            intervalDays: save.intervalDays,
+            schemaVersion: CURRENT_SCHEMA_VERSION,
 
             // Canonical schedule fields
-            scheduleType: canonicalSchedule.type,
-            onceAt: canonicalSchedule.type === 'once' ? canonicalSchedule.onceAt : undefined,
-            rrule: canonicalSchedule.type === 'rrule' ? canonicalSchedule.rrule : undefined,
-            dtstart: canonicalSchedule.type === 'rrule' ? canonicalSchedule.dtstart : undefined,
-            tzid: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            scheduleType: save.scheduleType,
+            onceAt: save.onceAt,
+            rrule: save.rrule,
+            dtstart: save.dtstart,
+            tzid: save.tzid,
+            until: save.until,
         };
 
         try {
@@ -402,7 +323,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             const reminderId = reminder.id;
             const convexId = reminder.convexId;
             const audioUrl = reminder.audioUrl;
-            const scheduleDays = frequency === "custom" ? days : [];
 
             // Cancel + reschedule BEFORE closing (onClose unmounts the component)
             if (audioUrl) {
@@ -412,10 +332,13 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         id: reminderId,
                         title: updatedReminder.title,
                         description,
-                        time: timeStr,
-                        date: dateStr,
-                        frequency,
-                        days: scheduleDays,
+                        time: save.time,
+                        date: save.date,
+                        frequency: save.frequency,
+                        days: save.days,
+                        // Authoritative: the execution layer plans every ring of
+                        // the day off this, not off `time` (OLD-98).
+                        schedule: save.schedule,
                         audioUrl,
                         preReminderMinutes,
                         preAudioUrl: reminder.preAudioUrl,
@@ -423,14 +346,18 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         persistent,
                         variants: reminder.variants,
                         variantAudioUrls: reminder.variantAudioUrls,
-                        snoozeEnabled,
-                        snoozeDuration,
                         volume,
                         volumeStyle,
 
-                        intervalMs: frequency === "interval" ? intervalMs : undefined,
-                        anchorAt: frequency === "interval" ? anchorAt : undefined,
-                        intervalDays: frequency === "daily" ? intervalDays : undefined,
+                        intervalMs: save.intervalMs,
+                        anchorAt: save.anchorAt,
+                        intervalDays: save.intervalDays,
+                        scheduleType: save.scheduleType,
+                        onceAt: save.onceAt,
+                        rrule: save.rrule,
+                        dtstart: save.dtstart,
+                        tzid: save.tzid,
+                        until: save.until,
                     });
 
                     const current = useReminderStore.getState().getReminderById(reminderId);
@@ -456,16 +383,29 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             onSave(updatedReminder);
             onClose();
 
-            // Convex sync can be deferred — it doesn't affect local scheduling
+            // Convex sync can be deferred — it doesn't affect local scheduling.
+            // Every schedule field goes back up (OLD-97 widened the mutation):
+            // an edit Convex cannot express is one the next sync silently reverts.
             if (convexId) {
                 updateConvexReminder({
                     id: convexId as any,
                     deviceId: await getDeviceId(),
                     title: updatedReminder.title,
                     description,
-                    time: timeStr,
-                    frequency,
-                    days: frequency === "custom" ? days : undefined,
+                    time: save.time,
+                    date: save.date,
+                    frequency: save.frequency,
+                    days: save.days,
+                    schedule: save.schedule,
+                    scheduleType: save.scheduleType,
+                    onceAt: save.onceAt,
+                    rrule: save.rrule,
+                    dtstart: save.dtstart,
+                    tzid: save.tzid,
+                    until: save.until,
+                    intervalMs: save.intervalMs,
+                    anchorAt: save.anchorAt,
+                    intervalDays: save.intervalDays,
                     preReminderMinutes,
                     persistent,
                 }).catch((e) => {
@@ -476,7 +416,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             console.error("[VR] Save error:", error);
             Alert.alert("Error", "Failed to save reminder");
         }
-    }, [reminder, title, emoji, time, description, frequency, days, selectedDate, storeUpdateReminder, updateConvexReminder, preReminderMinutes, persistent, snoozeEnabled, snoozeDuration, volume, volumeStyle, intervalMs, anchorAt, intervalDays, onSave, onClose]);
+    }, [reminder, title, emoji, description, draft, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
 
     const executeDelete = async () => {
         const reminderId = reminder.id;
@@ -586,21 +526,22 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         </TouchableOpacity>
                     </View>
 
-                    {/* Grouped rows card */}
+                    {/* Schedule grid: days axis (Repeat, + Date when it needs one)
+                        crossed with times axis (Times, expanding inline). */}
                     <View style={styles.rowCard}>
                         <SheetRow
-                            icon="clock"
-                            label="Time"
-                            value={formatTime(time).toLowerCase()}
-                            onPress={() => setShowTimePicker(true)}
+                            icon="refresh-cw"
+                            label="Repeat"
+                            value={repeatLabel}
+                            onPress={() => setShowRepeatTaskModal(true)}
                         />
 
-                        {frequency === "once" ? (
+                        {showDateRow ? (
                             <>
                                 <View style={styles.separator} />
                                 <SheetRow
                                     icon="calendar"
-                                    label="Date"
+                                    label={draft.daysMode === "date" ? "Date" : "Starts"}
                                     value={dateLabel}
                                     onPress={() => setShowDatePicker(true)}
                                 />
@@ -608,18 +549,21 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         ) : null}
 
                         <View style={styles.separator} />
-                        <SheetRow icon="refresh-cw" label="Repeat" value={frequencyLabel} onPress={openFrequencyPicker} />
-
-                        {frequency === "custom" ? (
-                            <>
-                                <View style={styles.separator} />
-                                <SheetRow icon="calendar" label="Days" value={daysLabel} onPress={() => setShowDaysPicker((v) => !v)} />
-                                {showDaysPicker ? (
-                                    <View style={styles.daysPicker}>
-                                        <DaySelector selectedDays={days} onToggle={handleDayToggle} />
-                                    </View>
-                                ) : null}
-                            </>
+                        <SheetRow
+                            icon="clock"
+                            label={draft.timesMode === "clock" && draft.times.length > 1 ? "Times" : "Time"}
+                            value={timesLabel}
+                            onPress={() => setShowTimesEditor((v) => !v)}
+                        />
+                        {showTimesEditor ? (
+                            <TimesEditor
+                                mode={draft.timesMode}
+                                times={draft.times}
+                                everyMinutes={draft.everyMinutes}
+                                windowStart={draft.windowStart}
+                                windowEnd={draft.windowEnd}
+                                onChange={patchDraft}
+                            />
                         ) : null}
 
                         <View style={styles.separator} />
@@ -641,9 +585,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
                         <View style={styles.separator} />
                         <SheetRow icon="bell" label="Heads-up" value={preReminderLabel} onPress={cyclePreReminder} />
-
-                        <View style={styles.separator} />
-                        <SheetRow icon="clock" label="Snooze" value={snoozeLabel} onPress={cycleSnooze} />
                     </View>
 
                     {/* Voice note card */}
@@ -667,44 +608,14 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         </View>
                     ) : null}
 
-                    {showTimePicker ? (
-                        <TimerPickerModal
-                            closeOnOverlayPress
-                            LinearGradient={LinearGradient}
-                            hideDays
-                            visible={showTimePicker}
-                            setIsVisible={setShowTimePicker}
-                            modalTitle="Select time"
-                            onCancel={() => setShowTimePicker(false)}
-                            amLabel="AM"
-                            initialValue={{
-                                hours: time.getHours(),
-                                minutes: time.getMinutes(),
-                            }}
-                            onConfirm={({ hours, minutes, seconds }) => {
-                                const isPm = (seconds ?? 0) >= 12;
-                                const hour24 = (hours % 12) + (isPm ? 12 : 0);
-                                const next = new Date(time);
-                                next.setHours(hour24, minutes, 0, 0);
-                                setTime(next);
-                                setShowTimePicker(false);
-                            }}
-                            pmLabel="PM"
-                            styles={{ theme: "light" }}
-                            useAmPmWheel
-                            use12HourPicker
-                        />
-                    ) : null}
-
                     {showDatePicker ? (
                         <DatePickerModal
                             visible={showDatePicker}
                             initialDate={selectedDate}
-                            initialTime={{ hours: time.getHours(), minutes: time.getMinutes() }}
                             dateOnly
                             onCancel={() => setShowDatePicker(false)}
                             onConfirm={({ date }) => {
-                                setSelectedDate(date);
+                                patchDraft({ date: date ? toDateString(date) : null });
                                 setShowDatePicker(false);
                             }}
                         />
@@ -713,24 +624,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     {showRepeatTaskModal && (
                         <RepeatTaskModal
                             visible={showRepeatTaskModal}
-                            initialRepeatEnabled={frequency !== "once"}
-                            initialFrequency={
-                                frequency === "interval"
-                                    ? ((intervalMs && intervalMs % (60 * 60 * 1000) !== 0) ? "minute" : "hour")
-                                    : (frequency === "custom"
-                                        ? "weekly"
-                                        : "days")
-                            }
-                            initialInterval={
-                                frequency === "interval" && intervalMs
-                                    ? (
-                                        intervalMs % (60 * 60 * 1000) !== 0
-                                            ? Math.max(Math.round(INTERVAL_MIN_MS / (60 * 1000)), Math.round(intervalMs / (60 * 1000)))
-                                            : Math.max(1, Math.round(intervalMs / (60 * 60 * 1000)))
-                                    )
-                                    : (frequency === "daily" ? (intervalDays || 1) : 1)
-                            }
-                            initialDays={days}
+                            mode={draft.daysMode}
+                            weekdays={draft.weekdays}
+                            everyNDays={draft.everyNDays}
                             onCancel={() => setShowRepeatTaskModal(false)}
                             onConfirm={handleRepeatConfirm}
                         />
@@ -931,12 +827,6 @@ const styles = StyleSheet.create({
         fontWeight: "500",
         color: colors.textSecondary,
     },
-    daysPicker: {
-        paddingLeft: 36,
-        paddingBottom: 12,
-        paddingTop: 4,
-    },
-
     // Voice note
     playCircle: {
         width: 32,

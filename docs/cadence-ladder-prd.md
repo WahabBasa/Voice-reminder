@@ -121,3 +121,18 @@ assistant never forgets), on the first firing + heads-up only. Ladder rungs stay
 payloads, and the model is still banned from writing any opener — the app owns those words
 now. Rationale: catches address the person; labels ("Quick reminder") describe the message.
 The first died for being robotic, the second stays dead.
+
+## Amendment (2026-08-15): catches removed, one direct line (OLD-95)
+
+**Reverses the amendment above.** Heard end to end, the two-beat shape read as small talk in
+front of the point, and the name made it worse. The catch pool, the rotation state
+(`convex/speechCatch.ts`, `speechCatchState`) and the TTS-time prepend are deleted: what is
+stored is exactly what is spoken.
+
+The voice is now ONE short present-tense sentence about the thing itself, in whichever
+register the content calls for — instruction ("Drink your water right now."), stated fact
+("Your son's game is starting this minute."), or polite request ("Please take your pills.").
+Openers, greetings, names and wellness commentary are all banned, in both languages
+(`SPOKEN_LINE_RULE`, convex/helpers.ts). The catch wordings ("Heads up", "By the way",
+"Don't forget") moved from exempt to banned — nothing prepends them any more, so the model
+may not write them either.

@@ -136,6 +136,27 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
     expect(plans[1].description).toBe("Your mother is waiting for a call.");
   });
 
+  // The catch feature used to prepend these at TTS time, so the model was free
+  // to write them too. Nothing prepends anything now (OLD-95) and a lead-in is
+  // as dead as a clock announcement — a stored line that opens with one loses
+  // its phrasing to the title, exactly like 'It is time' does above.
+  it("drops a conversational lead-in the same way it drops a clock opener", () => {
+    const raw = JSON.stringify({
+      reminders: [
+        reminder({ title: "Pills", description: "Heads up — your pills are waiting." }),
+        reminder({ title: "Water", description: "By the way, your glass is still full." }),
+        reminder({ title: "Game", description: "Your son's game is starting this minute." }),
+      ],
+    });
+
+    const plans = planRemindersFromRawParse(raw, CONTEXT);
+
+    expect(plans[0].description).toBe("Pills");
+    expect(plans[1].description).toBe("Water");
+    // A canon line survives untouched.
+    expect(plans[2].description).toBe("Your son's game is starting this minute.");
+  });
+
   it("coerces frequency and days per item", () => {
     const raw = JSON.stringify({
       reminders: [
@@ -209,12 +230,18 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
     expect(plans[1].time).toBe("20:00");
   });
 
-  it("applies transcript-wide coercion to every item (the transcript is one take)", () => {
-    // Known imprecision: coerceFrequency reads the whole transcript, so a
-    // 'weekdays' anywhere in the take pulls every item to custom MO-FR.
+  it("does not let one item's 'weekdays' drag its siblings (OLD-97)", () => {
+    // The transcript is the whole take, so transcript-wide rules used to rewrite
+    // every reminder in it: 'weekdays' anywhere pulled all of them to custom
+    // MO-FR. Each item is now coerced from its OWN fields.
     const raw = JSON.stringify({
       reminders: [
-        reminder({ title: "Standup", frequency: "daily", time: "09:00" }),
+        reminder({
+          title: "Standup",
+          frequency: "custom",
+          days: ["mon", "tue", "wed", "thu", "fri"],
+          time: "09:00",
+        }),
         reminder({ title: "Water", frequency: "daily", time: "20:00" }),
       ],
     });
@@ -224,7 +251,157 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
       withTranscript("Remind me about standup on weekdays at 9 and to drink water at 8pm")
     );
 
-    expect(plans.map((p) => p.frequency)).toEqual(["custom", "custom"]);
+    expect(plans.map((p) => p.frequency)).toEqual(["custom", "daily"]);
     expect(plans[0].days).toEqual(["mon", "tue", "wed", "thu", "fri"]);
+    // The sibling keeps the every-day schedule the model gave it.
+    expect(plans[1].days).toBeUndefined();
+    expect(plans[1].schedule.days).toEqual({ kind: "everyday" });
+  });
+
+  it("still reads the transcript when the take is one reminder", () => {
+    // A take of one is the case where the transcript is unambiguously about
+    // that reminder, so the hint rules stay on there.
+    const raw = JSON.stringify(reminder({ title: "Standup", frequency: "daily", time: "09:00" }));
+
+    const plans = planRemindersFromRawParse(
+      raw,
+      withTranscript("Remind me about standup on weekdays at 9")
+    );
+
+    expect(plans[0].frequency).toBe("custom");
+    expect(plans[0].days).toEqual(["mon", "tue", "wed", "thu", "fri"]);
+  });
+});
+
+// ─── The days × times grid (OLD-97) ─────────────────────────────────────────
+
+describe("planRemindersFromRawParse — schedule grid", () => {
+  it('makes "Thursday 8 and 9" ONE reminder with two rings', () => {
+    const raw = JSON.stringify({
+      reminders: [
+        reminder({
+          title: "Pills",
+          frequency: "custom",
+          days: ["thu"],
+          time: "08:00",
+          times: ["08:00", "21:00"],
+        }),
+      ],
+    });
+
+    const plans = planRemindersFromRawParse(
+      raw,
+      withTranscript("Remind me to take my pills on Thursday at 8 and 9")
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0].schedule).toEqual({
+      type: "grid",
+      days: { kind: "weekdays", days: ["thu"] },
+      times: { kind: "clock", times: ["08:00", "21:00"] },
+    });
+    expect(plans[0].times).toEqual(["08:00", "21:00"]);
+    // The legacy projection keeps the FIRST ring, so pre-grid readers still work.
+    expect(plans[0].time).toBe("08:00");
+    expect(plans[0].frequency).toBe("custom");
+  });
+
+  it("sorts and dedupes the times the model listed", () => {
+    const raw = JSON.stringify(
+      reminder({ frequency: "daily", times: ["21:00", "8:00", "08:00", "nonsense"] })
+    );
+
+    const plans = planRemindersFromRawParse(raw, CONTEXT);
+
+    expect(plans[0].schedule.times).toEqual({ kind: "clock", times: ["08:00", "21:00"] });
+  });
+
+  it("gives an interval a waking window, defaulting to 08:00–22:00", () => {
+    const raw = JSON.stringify({
+      reminders: [
+        reminder({ title: "Stretch", frequency: "interval", intervalMinutes: 90 }),
+        reminder({
+          title: "Water",
+          frequency: "interval",
+          intervalHours: 1,
+          windowStart: "9:00",
+          windowEnd: "17:00",
+        }),
+      ],
+    });
+
+    const plans = planRemindersFromRawParse(raw, CONTEXT);
+
+    expect(plans[0].schedule.times).toEqual({
+      kind: "interval",
+      everyMinutes: 90,
+      windowStart: "08:00",
+      windowEnd: "22:00",
+    });
+    expect(plans[1].schedule.times).toEqual({
+      kind: "interval",
+      everyMinutes: 60,
+      windowStart: "09:00",
+      windowEnd: "17:00",
+    });
+    // Interval reminders ring every day of the week unless days were named.
+    expect(plans[0].schedule.days).toEqual({ kind: "everyday" });
+  });
+
+  it("expresses every-N-days on the days axis", () => {
+    const raw = JSON.stringify(
+      reminder({ title: "Plants", frequency: "everyNDays", everyNDays: 3, time: "07:30" })
+    );
+
+    const plans = planRemindersFromRawParse(raw, CONTEXT);
+
+    const days = plans[0].schedule.days;
+    expect(days.kind).toBe("everyNDays");
+    expect(days).toMatchObject({ interval: 3 });
+    // Legacy projection: the pre-grid scheduler only knows daily + intervalDays.
+    expect(plans[0].frequency).toBe("daily");
+    expect(plans[0].intervalDays).toBe(3);
+  });
+
+  it("pins a one-off to a single date", () => {
+    const raw = JSON.stringify(
+      reminder({ title: "Trash", frequency: "once", date: "2026-08-20", time: "10:00" })
+    );
+
+    const plans = planRemindersFromRawParse(raw, CONTEXT);
+
+    expect(plans[0].schedule.days).toEqual({ kind: "date", date: "2026-08-20" });
+    expect(plans[0].date).toBe("2026-08-20");
+  });
+
+  it("dates a one-off the model left undated", () => {
+    const raw = JSON.stringify(reminder({ title: "Trash", frequency: "once", time: "10:00" }));
+
+    const plans = planRemindersFromRawParse(raw, CONTEXT);
+
+    const days = plans[0].schedule.days;
+    expect(days.kind).toBe("date");
+    expect(plans[0].date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(plans[0].onceAt).toBeGreaterThan(0);
+  });
+
+  it("carries an until bound onto the grid", () => {
+    const raw = JSON.stringify(
+      reminder({ frequency: "daily", time: "08:00", until: "2026-09-01" })
+    );
+
+    const plans = planRemindersFromRawParse(raw, CONTEXT);
+
+    expect(plans[0].schedule.until).toBe(new Date(2026, 8, 1, 23, 59, 59, 999).getTime());
+    expect(plans[0].until).toBe(plans[0].schedule.until);
+  });
+
+  it("keeps an unusable until out of the grid and says so", () => {
+    const raw = JSON.stringify(reminder({ frequency: "daily", until: "whenever" }));
+
+    const plans = planRemindersFromRawParse(raw, CONTEXT);
+
+    expect(plans[0].schedule.until).toBeUndefined();
+    expect(plans[0].parseWarnings).toEqual([expect.stringContaining("Invalid until date")]);
   });
 });

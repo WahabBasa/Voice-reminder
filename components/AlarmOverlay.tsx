@@ -29,11 +29,14 @@ import {
 } from "../lib/notifications";
 import {
   ALTERNATE_LINE_GAP_MS,
+  NAG_DELAY_MINUTES,
   ROUTINE_SECOND_UTTERANCE_GAP_MS,
   nextAlternateIndex,
+  parseNagCount,
   parseVariantCount,
   parseVariantList,
   ringCadenceMode,
+  shouldNagAgain,
   variantLineForIndex,
 } from "../lib/notificationDecisions";
 import { buildTraceId } from "../lib/vrLog";
@@ -60,8 +63,6 @@ export interface AlarmOverlayProps {
   days: string;
   time: string;
   intervalDays: string;
-  snoozeEnabled: string;
-  snoozeDuration: string;
   volume: string;
   volumeStyle: string;
   scheduledFor: string;
@@ -75,7 +76,8 @@ export interface AlarmOverlayProps {
   variants?: string; // JSON-encoded string[]
   variantAudioUrls?: string; // JSON-encoded string[]
   variantCount?: string;
-  followUpCount?: string;
+  /** Comebacks already delivered for this occurrence (OLD-96). */
+  nagCount?: string;
   variantIndex?: string;
   onDismiss: () => Promise<void>;
   onSnooze: () => Promise<void>;
@@ -92,8 +94,6 @@ export function AlarmOverlay({
   days,
   time,
   intervalDays,
-  snoozeEnabled: snoozeEnabledStr,
-  snoozeDuration: snoozeDurationStr,
   volume: volumeStr,
   volumeStyle: volumeStyleStr,
   scheduledFor,
@@ -106,7 +106,7 @@ export function AlarmOverlay({
   variants: variantsStr = "",
   variantAudioUrls: variantAudioUrlsStr = "",
   variantCount: variantCountStr = "0",
-  followUpCount = "0",
+  nagCount: nagCountStr = "0",
   variantIndex: variantIndexStr = "-1",
   onDismiss,
   onSnooze,
@@ -122,8 +122,6 @@ export function AlarmOverlay({
   const isMountedRef = useRef(true);
   const isExplicitDismissRef = useRef(false);
 
-  const snoozeEnabled = snoozeEnabledStr !== "false";
-  const snoozeDurationMinutes = Math.max(1, Math.min(60, Number(snoozeDurationStr) || 5));
   const targetVolume = Math.max(0, Math.min(1, Number(volumeStr) || 1));
 
   // The escalated spoken line for this occurrence (base description for the
@@ -446,7 +444,12 @@ export function AlarmOverlay({
       }
       await cancelDisplayedAlarmNotifications(notificationId);
 
-      if (!snoozeEnabled || !reminderId) {
+      // "Later" in the overlay is the same gesture as swiping the ring away, so
+      // it feeds the same nag chain (OLD-96): fixed NAG_DELAY_MINUTES, capped at
+      // MAX_NAG_COMEBACKS, with nothing per-reminder to turn it off. Once the
+      // chain is spent the alarm just goes quiet.
+      const nagCount = parseNagCount(nagCountStr);
+      if (!reminderId || !shouldNagAgain(nagCount)) {
         await onSnooze();
         maybeExitApp();
         return;
@@ -462,7 +465,7 @@ export function AlarmOverlay({
         (intervalDays ? Number(intervalDays) : undefined) ?? reminder?.intervalDays;
 
       const channelId = `reminder_${reminderId}`;
-      const triggerTimestamp = Date.now() + snoozeDurationMinutes * 60_000;
+      const triggerTimestamp = Date.now() + NAG_DELAY_MINUTES * 60_000;
       const trigger: TimestampTrigger = {
         type: TriggerType.TIMESTAMP,
         timestamp: triggerTimestamp,
@@ -501,8 +504,6 @@ export function AlarmOverlay({
             title,
             description,
             audioUrl: remAudioUrl,
-            snoozeEnabled: String(snoozeEnabled),
-            snoozeDuration: String(snoozeDurationMinutes),
             volume: String(targetVolume),
             volumeStyle: String(volumeStyleStr ?? "standard"),
             kind: "snooze_occurrence",
@@ -511,13 +512,15 @@ export function AlarmOverlay({
             anchorAt: anchorAt ?? "",
             scheduledFor: String(triggerTimestamp),
             autoSnoozeCount: String(autoSnoozeCount ?? "0"),
-            // Keep the escalation ladder state across a manual "Later".
+            // The comeback speaks the identical take — same audio, same line —
+            // and carries the incremented counter so the chain stays capped.
             urgency: urgency ?? "",
             persistent: persistent ?? "false",
             variants: variantsStr ?? "",
             variantAudioUrls: variantAudioUrlsStr ?? "",
             variantCount: variantCountStr ?? "0",
-            followUpCount: followUpCount ?? "0",
+            nagCount: String(nagCount + 1),
+            nagReason: "later_action",
             variantIndex: variantIndexStr ?? "-1",
           },
         },
@@ -584,21 +587,19 @@ export function AlarmOverlay({
                 title,
                 description,
                 audioUrl: remAudioUrl,
-                snoozeEnabled: String(snoozeEnabled),
-                snoozeDuration: String(snoozeDurationMinutes),
                 volume: String(targetVolume),
                 volumeStyle: String(volumeStyleStr ?? "standard"),
                 intervalMs: String(remIntervalMs),
                 anchorAt: String(remAnchorAt),
                 scheduledFor: String(nextTriggerSafe),
                 kind: "reminder_occurrence",
-                // Fresh occurrence: ladder restarts from the base line.
+                // Fresh occurrence: the nag chain starts over from zero.
                 urgency: urgency ?? "",
                 persistent: persistent ?? "false",
                 variants: variantsStr ?? "",
                 variantAudioUrls: variantAudioUrlsStr ?? "",
                 variantCount: variantCountStr ?? "0",
-                followUpCount: "0",
+                nagCount: "0",
                 variantIndex: "-1",
               },
             },
@@ -643,12 +644,10 @@ export function AlarmOverlay({
       </View>
 
       <View style={styles.actions}>
-        {snoozeEnabled ? (
-          <TouchableOpacity style={styles.snoozeButton} onPress={handleSnooze} activeOpacity={0.8}>
-            <AppIcon name="clock" size={24} color="white" />
-            <Text style={styles.snoozeText}>Later</Text>
-          </TouchableOpacity>
-        ) : null}
+        <TouchableOpacity style={styles.snoozeButton} onPress={handleSnooze} activeOpacity={0.8}>
+          <AppIcon name="clock" size={24} color="white" />
+          <Text style={styles.snoozeText}>Later</Text>
+        </TouchableOpacity>
 
         <TouchableOpacity style={styles.dismissButton} onPress={handleDismiss} activeOpacity={0.8}>
           <AppIcon name="check" size={24} color="white" />

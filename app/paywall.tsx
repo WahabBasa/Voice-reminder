@@ -1,15 +1,16 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-    View,
-    Text,
-    StyleSheet,
-    TouchableOpacity,
-    ScrollView,
     ActivityIndicator,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
-import { colors, scaleFontSize, shadows } from "../lib/theme";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { colors, scaleFontSize } from "../lib/theme";
+import { FONT_DISPLAY } from "../lib/fonts";
 import AppIcon from "../components/AppIcon";
 import { useToast } from "../components/ToastProvider";
 import Purchases, { PurchasesPackage } from "react-native-purchases";
@@ -21,99 +22,42 @@ import {
     type PurchaseErrorCategory,
 } from "../lib/purchases";
 // Schedule 2 §3.8(b): both links have to work from the purchase screen. Same
-// constants Settings and the consent card use.
-import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL, openInAppBrowser } from "../lib/legalLinks";
-import { getFreeActiveLimit } from "../lib/usageGate";
-
-// Pro gates exactly one thing today: the active-reminder limit in lib/usageGate.ts.
-// Everything listed here has to be true of the build that ships (App Review 3.1.1/3.1.2).
-const BENEFITS = [
-    `Unlimited active reminders (free stops at ${getFreeActiveLimit()})`,
-    "Voice capture that sets the time and repeat for you",
-    "Alarms that speak the reminder out loud",
-    "Supports a solo developer building this",
-];
+// constants Settings and the consent card use — opened from ClosingBlock.
+import { openInAppBrowser } from "../lib/legalLinks";
+import {
+    PAYWALL_COPY,
+    buildCtaLabel,
+    buildDisclosure,
+    buildHonestyCaption,
+    describePlan,
+    resolvePaywallContext,
+    selectPlanPair,
+    type PlanCopy,
+} from "../lib/paywallContent";
+import PaywallHero from "../components/paywall/PaywallHero";
+import PricingCards from "../components/paywall/PricingCards";
+import FeatureTable from "../components/paywall/FeatureTable";
+import ClosingBlock from "../components/paywall/ClosingBlock";
+import { AwardBadgeRow, ProofCarousel, TestimonialWall } from "../components/paywall/ProofSlots";
+import { PAYWALL_GUTTER, paywallColors } from "../components/paywall/paywallTheme";
 
 const ERROR_COPY: Record<Exclude<PurchaseErrorCategory, "cancelled">, string> = {
     network: "No connection to the App Store. Check your internet and try again.",
     not_allowed: "Purchases aren't allowed on this device. Check Screen Time restrictions.",
-    already_owned: "You already own this subscription — tap Restore Purchases.",
+    already_owned: "You already own this subscription — tap Restore purchase.",
     payment_pending: "Your purchase is awaiting approval. Pro unlocks once it goes through.",
     store_problem: "The App Store is having trouble right now. Please try again shortly.",
     unknown: "Something went wrong. Please try again.",
 };
 
-const PERIOD_UNIT_LABELS: Record<string, string> = { D: "day", W: "week", M: "month", Y: "year" };
-const PERIOD_UNIT_MONTHS: Record<string, number> = { D: 1 / 30, W: 1 / 4.345, M: 1, Y: 12 };
-
-const PACKAGE_TYPE_TERMS: Record<string, string> = {
-    WEEKLY: "week",
-    MONTHLY: "month",
-    TWO_MONTH: "2 months",
-    THREE_MONTH: "3 months",
-    SIX_MONTH: "6 months",
-    ANNUAL: "year",
-};
-
-/** Parses an ISO 8601 billing period ("P1M", "P6M") off the store product. */
-function parsePeriod(pkg: PurchasesPackage): { count: number; unit: string } | null {
-    const match = /^P(\d+)([DWMY])$/.exec(pkg.product.subscriptionPeriod ?? "");
-    if (!match) return null;
-    return { count: Number(match[1]), unit: match[2] };
-}
-
-/** Billing term as words: "month", "year", "6 months". Store data first, package type as fallback. */
-function getTermLabel(pkg: PurchasesPackage): string {
-    const parsed = parsePeriod(pkg);
-    const unit = parsed ? PERIOD_UNIT_LABELS[parsed.unit] : undefined;
-    if (parsed && unit) {
-        return parsed.count === 1 ? unit : `${parsed.count} ${unit}s`;
-    }
-    return PACKAGE_TYPE_TERMS[pkg.packageType] ?? "billing period";
-}
-
-/** Price normalised to one month, so plans on different terms can be compared. */
-function getMonthlyRate(pkg: PurchasesPackage): number | null {
-    const parsed = parsePeriod(pkg);
-    const months = parsed ? parsed.count * (PERIOD_UNIT_MONTHS[parsed.unit] ?? 0) : 0;
-    if (!months || !Number.isFinite(pkg.product.price) || pkg.product.price <= 0) return null;
-    return pkg.product.price / months;
-}
-
-/**
- * Real savings against the priciest plan on offer, rounded down to a whole percent.
- * Returns null when we can't prove a saving — we don't advertise numbers we can't back up.
- */
-function getSavingsPercent(pkg: PurchasesPackage, all: PurchasesPackage[]): number | null {
-    const rate = getMonthlyRate(pkg);
-    if (rate === null) return null;
-
-    const rates = all.map(getMonthlyRate).filter((r): r is number => r !== null);
-    const baseline = rates.length > 0 ? Math.max(...rates) : 0;
-    if (baseline <= 0) return null;
-
-    const percent = Math.floor((1 - rate / baseline) * 100);
-    return percent >= 5 ? percent : null;
-}
-
-/**
- * Auto-renewal disclosure required by Apple's Schedule 2 §3.8(b): product name,
- * price, term, when the account is charged, and how to cancel.
- */
-function buildDisclosure(pkg: PurchasesPackage | null): string {
-    if (!pkg) {
-        return `${PRO_PRODUCT_NAME} is an auto-renewing subscription. Payment is charged to your Apple Account at confirmation of purchase and renews automatically until canceled. Manage or cancel anytime in Settings > Apple Account > Subscriptions.`;
-    }
-
-    const term = getTermLabel(pkg);
-    const price = pkg.product.priceString;
-    return `${PRO_PRODUCT_NAME} is ${price} every ${term}. Payment is charged to your Apple Account at confirmation of purchase. It renews automatically for ${price} every ${term}, and your account is charged within 24 hours before each renewal, unless auto-renew is turned off at least 24 hours before the current period ends. Manage or cancel anytime in Settings > Apple Account > Subscriptions.`;
-}
-
 export default function PaywallScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const toast = useToast();
+    // Whoever opened this says why (`?context=interval` from the premium
+    // schedule gate); anything else falls back to the general hero.
+    const params = useLocalSearchParams<{ context?: string }>();
+    const paywallContext = resolvePaywallContext(params.context);
 
     // RevenueCat state
     const [packages, setPackages] = useState<PurchasesPackage[]>([]);
@@ -122,9 +66,9 @@ export default function PaywallScreen() {
     const [isPurchasing, setIsPurchasing] = useState(false);
     const [isRestoring, setIsRestoring] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
-    // Footer height drives scroll padding + banner offset, so the disclosure block
+    // Footer height drives scroll padding + banner offset, so the honesty caption
     // can grow without anything ending up underneath it.
-    const [footerHeight, setFooterHeight] = useState(240);
+    const [footerHeight, setFooterHeight] = useState(150);
     const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const showError = useCallback((message: string) => {
@@ -173,14 +117,13 @@ export default function PaywallScreen() {
                 console.log("[RevenueCat] Total packages found:", availablePackages.length);
                 setPackages(availablePackages);
 
-                // Auto-select first package (or monthly if available)
-                if (availablePackages.length > 0) {
-                    const monthlyPkg = availablePackages.find(
-                        pkg => pkg.packageType === "MONTHLY" || pkg.identifier.includes("monthly")
-                    );
-                    const selected = monthlyPkg ?? availablePackages[0];
-                    setSelectedPackage(selected);
-                    console.log("[RevenueCat] Selected package:", selected.identifier);
+                // Preselect the annual plan: it's the one carrying the trial, and the
+                // CTA promises a trial. Monthly is the anchor, not the default.
+                const { monthly, annual } = selectPlanPair(availablePackages);
+                const preselected = annual ?? monthly ?? availablePackages[0] ?? null;
+                if (preselected) {
+                    setSelectedPackage(preselected);
+                    console.log("[RevenueCat] Selected package:", preselected.identifier);
                 }
             } catch (error) {
                 // Log silently - the empty state UI will handle this gracefully
@@ -192,6 +135,22 @@ export default function PaywallScreen() {
 
         fetchOfferings();
     }, []);
+
+    const { monthlyPlan, annualPlan } = useMemo(() => {
+        const { monthly, annual } = selectPlanPair(packages);
+        return {
+            monthlyPlan: monthly ? describePlan(monthly) : null,
+            annualPlan: annual ? describePlan(annual) : null,
+        };
+    }, [packages]);
+
+    // What the sticky CTA is actually buying right now.
+    const selectedPlan: PlanCopy | null = useMemo(() => {
+        if (!selectedPackage) return null;
+        if (monthlyPlan?.pkg.identifier === selectedPackage.identifier) return monthlyPlan;
+        if (annualPlan?.pkg.identifier === selectedPackage.identifier) return annualPlan;
+        return describePlan(selectedPackage);
+    }, [selectedPackage, monthlyPlan, annualPlan]);
 
     const handleBack = () => {
         router.back();
@@ -287,142 +246,61 @@ export default function PaywallScreen() {
         }
     };
 
-    // Helper to get display info from package
-    const getPackageDisplayInfo = (pkg: PurchasesPackage) => {
-        const product = pkg.product;
-        const term = getTermLabel(pkg);
-        const savings = getSavingsPercent(pkg, packages);
-
-        // Clean up title - remove app name suffix
-        let title = product.title;
-        if (title.includes("(")) {
-            title = title.split("(")[0].trim();
-        }
-
-        return {
-            title,
-            price: product.priceString,
-            period: `/${term}`,
-            description: savings
-                ? `Billed every ${term} · save ${savings}%`
-                : `Billed every ${term}`,
-            tag: savings ? "Best Value" : (pkg.packageType === "MONTHLY" ? "Most Popular" : null),
-            isPopular: pkg.packageType === "MONTHLY",
-        };
-    };
+    const ctaDisabled = isPurchasing || isRestoring || !selectedPackage;
+    const captionLines = buildHonestyCaption(selectedPlan);
 
     return (
         <View style={styles.container}>
-            <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
-                <View style={styles.header}>
-                    <TouchableOpacity
-                        onPress={handleBack}
-                        style={styles.closeButton}
-                        activeOpacity={0.7}
-                    >
-                        <AppIcon name="x" size={24} color={colors.textPrimary} />
-                    </TouchableOpacity>
+            <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: footerHeight + 24 }}
+            >
+                <PaywallHero topInset={insets.top} context={paywallContext} />
+
+                {/* Proof slots (carousel, testimonials, badges) are flagged off
+                    until real proof exists — each renders null for now. */}
+                <ProofCarousel />
+
+                <PricingCards
+                    monthly={monthlyPlan}
+                    annual={annualPlan}
+                    selectedIdentifier={selectedPackage?.identifier ?? null}
+                    onSelect={setSelectedPackage}
+                    isLoading={isLoading}
+                />
+
+                <Text style={styles.affinityLine}>{PAYWALL_COPY.affinityLine}</Text>
+
+                <TestimonialWall />
+
+                <View style={styles.section}>
+                    <FeatureTable />
                 </View>
 
-                <ScrollView
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={[
-                        styles.scrollContent,
-                        { paddingBottom: footerHeight + 24 },
-                    ]}
-                >
-                    <View style={styles.heroSection}>
-                        <View style={styles.iconContainer}>
-                            <AppIcon name="crown" size={48} color={colors.accent} />
-                        </View>
-                        <Text style={styles.title}>Unlock Pro Access</Text>
-                        <Text style={styles.subtitle}>
-                            The free plan keeps {getFreeActiveLimit()} reminders active at a time. Pro lifts the
-                            cap so you can schedule as many as you need.
-                        </Text>
-                    </View>
+                <AwardBadgeRow />
 
-                    <View style={styles.benefitsSection}>
-                        {BENEFITS.map((benefit, index) => (
-                            <View key={index} style={styles.benefitItem}>
-                                <View style={styles.checkContainer}>
-                                    <AppIcon name="check" size={14} color="white" />
-                                </View>
-                                <Text style={styles.benefitText}>{benefit}</Text>
-                            </View>
-                        ))}
-                    </View>
+                <View style={styles.section}>
+                    <ClosingBlock
+                        onRestore={handleRestore}
+                        isRestoring={isRestoring}
+                        busy={isRestoring || isPurchasing}
+                        onOpenLink={handleOpenLink}
+                        disclosure={buildDisclosure(selectedPackage, PRO_PRODUCT_NAME)}
+                    />
+                </View>
+            </ScrollView>
 
-                    <View style={styles.plansSection}>
-                        {isLoading ? (
-                            <View style={styles.loadingContainer}>
-                                <ActivityIndicator size="large" color={colors.accent} />
-                                <Text style={styles.loadingText}>Loading plans...</Text>
-                            </View>
-                        ) : packages.length > 0 ? (
-                            packages.map((pkg) => {
-                                const plan = getPackageDisplayInfo(pkg);
-                                const isSelected = selectedPackage?.identifier === pkg.identifier;
-
-                                return (
-                                    <TouchableOpacity
-                                        key={pkg.identifier}
-                                        style={[
-                                            styles.planCard,
-                                            plan.isPopular && styles.planCardHighlighted,
-                                            isSelected && styles.planCardSelected,
-                                        ]}
-                                        onPress={() => {
-                                            console.log("[Paywall] Selected:", pkg.identifier);
-                                            setSelectedPackage(pkg);
-                                        }}
-                                        activeOpacity={0.8}
-                                    >
-                                        {plan.tag && (
-                                            <View
-                                                style={[
-                                                    styles.tag,
-                                                    plan.isPopular ? styles.tagActive : styles.tagInactive,
-                                                ]}
-                                            >
-                                                <Text
-                                                    style={[
-                                                        styles.tagText,
-                                                        plan.isPopular && styles.tagTextActive,
-                                                    ]}
-                                                >
-                                                    {plan.tag}
-                                                </Text>
-                                            </View>
-                                        )}
-                                        <View style={styles.planCardHeader}>
-                                            <View style={styles.planInfo}>
-                                                <Text style={styles.planTitle}>{plan.title}</Text>
-                                                <Text style={styles.planDescription}>{plan.description}</Text>
-                                            </View>
-                                            <View style={styles.priceContainer}>
-                                                <Text style={styles.planPrice}>{plan.price}</Text>
-                                                <Text style={styles.planPeriod}>{plan.period}</Text>
-                                            </View>
-                                        </View>
-                                        {isSelected && (
-                                            <View style={styles.selectedIndicator}>
-                                                <AppIcon name="check" size={16} color="white" />
-                                            </View>
-                                        )}
-                                    </TouchableOpacity>
-                                );
-                            })
-                        ) : (
-                            <View style={styles.errorContainer}>
-                                <AppIcon name="info" size={32} color={colors.textSecondary} />
-                                <Text style={styles.errorText}>No plans available</Text>
-                                <Text style={styles.errorSubtext}>Please check your connection and try again.</Text>
-                            </View>
-                        )}
-                    </View>
-                </ScrollView>
-            </SafeAreaView>
+            {/* Floating close — sits above the hero gradient at every scroll position. */}
+            <TouchableOpacity
+                onPress={handleBack}
+                style={[styles.closeButton, { top: insets.top + 8 }]}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+            >
+                <AppIcon name="x" size={20} color={paywallColors.textPrimary} />
+            </TouchableOpacity>
 
             {/* Error banner - appears above footer */}
             {errorMessage && (
@@ -430,63 +308,34 @@ export default function PaywallScreen() {
                     <AppIcon name="info" size={18} color={colors.destructive} />
                     <Text style={styles.errorBannerText}>{errorMessage}</Text>
                     <TouchableOpacity onPress={() => setErrorMessage(null)} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
-                        <AppIcon name="x" size={16} color={colors.textTertiary} />
+                        <AppIcon name="x" size={16} color={paywallColors.textTertiary} />
                     </TouchableOpacity>
                 </View>
             )}
 
             <View
-                style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}
+                style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}
                 onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
             >
                 <TouchableOpacity
-                    style={[
-                        styles.continueButton,
-                        (isPurchasing || isRestoring || !selectedPackage || packages.length === 0) &&
-                            styles.continueButtonDisabled,
-                    ]}
+                    style={[styles.cta, ctaDisabled && styles.ctaDisabled]}
                     onPress={handlePurchase}
-                    activeOpacity={0.8}
-                    disabled={isPurchasing || isRestoring || !selectedPackage || packages.length === 0}
+                    activeOpacity={0.85}
+                    disabled={ctaDisabled}
+                    accessibilityRole="button"
                 >
                     {isPurchasing ? (
                         <ActivityIndicator color="white" />
                     ) : (
-                        <Text style={styles.continueButtonText}>
-                            {selectedPackage
-                                ? `Subscribe for ${selectedPackage.product.priceString} / ${getTermLabel(selectedPackage)}`
-                                : "Select a plan"}
-                        </Text>
+                        <Text style={styles.ctaText}>{buildCtaLabel(selectedPlan)}</Text>
                     )}
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                    style={styles.restoreButton}
-                    onPress={handleRestore}
-                    activeOpacity={0.7}
-                    disabled={isRestoring || isPurchasing}
-                >
-                    {isRestoring ? (
-                        <View style={styles.restoreRow}>
-                            <ActivityIndicator size="small" color={colors.textSecondary} />
-                            <Text style={styles.restoreText}>Restoring…</Text>
-                        </View>
-                    ) : (
-                        <Text style={styles.restoreText}>Restore Purchases</Text>
-                    )}
-                </TouchableOpacity>
-
-                <Text style={styles.disclosureText}>{buildDisclosure(selectedPackage)}</Text>
-
-                <View style={styles.legalLinks}>
-                    <TouchableOpacity onPress={() => handleOpenLink(TERMS_OF_USE_URL)} activeOpacity={0.7}>
-                        <Text style={styles.legalLinkText}>Terms of Use</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.legalSeparator}>·</Text>
-                    <TouchableOpacity onPress={() => handleOpenLink(PRIVACY_POLICY_URL)} activeOpacity={0.7}>
-                        <Text style={styles.legalLinkText}>Privacy Policy</Text>
-                    </TouchableOpacity>
-                </View>
+                {captionLines.map((line) => (
+                    <Text key={line} style={styles.caption}>
+                        {line}
+                    </Text>
+                ))}
             </View>
         </View>
     );
@@ -495,258 +344,63 @@ export default function PaywallScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: colors.background,
-    },
-    header: {
-        height: 60,
-        justifyContent: "center",
-        paddingHorizontal: 20,
+        backgroundColor: paywallColors.surface,
     },
     closeButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: colors.surface,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    scrollContent: {
-        paddingHorizontal: 24,
-        paddingTop: 10,
-    },
-    heroSection: {
-        alignItems: "center",
-        marginBottom: 32,
-    },
-    iconContainer: {
-        width: 90,
-        height: 90,
-        borderRadius: 30,
-        backgroundColor: colors.accent + "15",
-        alignItems: "center",
-        justifyContent: "center",
-        marginBottom: 20,
-    },
-    title: {
-        fontSize: scaleFontSize(28),
-        fontWeight: "800",
-        color: colors.textHeading,
-        textAlign: "center",
-        marginBottom: 12,
-    },
-    subtitle: {
-        fontSize: scaleFontSize(16),
-        color: colors.textSecondary,
-        textAlign: "center",
-        lineHeight: 24,
-        paddingHorizontal: 10,
-    },
-    benefitsSection: {
-        backgroundColor: colors.surface,
-        borderRadius: 20,
-        padding: 20,
-        marginBottom: 32,
-    },
-    benefitItem: {
-        flexDirection: "row",
-        alignItems: "center",
-        marginBottom: 14,
-    },
-    checkContainer: {
-        width: 22,
-        height: 22,
-        borderRadius: 11,
-        backgroundColor: colors.accent,
-        alignItems: "center",
-        justifyContent: "center",
-        marginRight: 12,
-    },
-    benefitText: {
-        fontSize: scaleFontSize(15),
-        fontWeight: "600",
-        color: colors.textPrimary,
-    },
-    plansSection: {
-        gap: 16,
-    },
-    planCard: {
-        backgroundColor: colors.card,
+        position: "absolute",
+        right: PAYWALL_GUTTER,
+        width: 36,
+        height: 36,
         borderRadius: 18,
-        padding: 20,
-        borderWidth: 2,
-        borderColor: colors.border,
-        position: "relative",
-        ...shadows.card,
-    },
-    planCardHighlighted: {
-        borderColor: colors.accent,
-        backgroundColor: colors.accent + "08",
-    },
-    planCardSelected: {
-        borderColor: colors.accent,
-        backgroundColor: colors.accent + "10",
-    },
-    planCardHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-    },
-    planInfo: {
-        flex: 1,
-        marginRight: 12,
-    },
-    planTitle: {
-        fontSize: scaleFontSize(18),
-        fontWeight: "700",
-        color: colors.textHeading,
-        marginBottom: 4,
-    },
-    planDescription: {
-        fontSize: scaleFontSize(13),
-        color: colors.textSecondary,
-    },
-    priceContainer: {
-        alignItems: "flex-end",
-    },
-    planPrice: {
-        fontSize: scaleFontSize(20),
-        fontWeight: "800",
-        color: colors.textHeading,
-    },
-    planPeriod: {
-        fontSize: scaleFontSize(12),
-        color: colors.textTertiary,
-    },
-    tag: {
-        position: "absolute",
-        top: -12,
-        right: 20,
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        borderRadius: 999,
-    },
-    tagInactive: {
-        backgroundColor: colors.surfaceAlt,
-    },
-    tagActive: {
-        backgroundColor: colors.accent,
-    },
-    tagText: {
-        fontSize: scaleFontSize(11),
-        fontWeight: "800",
-        color: colors.textSecondary,
-        textTransform: "uppercase",
-    },
-    tagTextActive: {
-        color: "white",
-    },
-    selectedIndicator: {
-        position: "absolute",
-        bottom: -10,
-        right: -10,
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        backgroundColor: colors.accent,
+        backgroundColor: "rgba(255, 255, 255, 0.7)",
         alignItems: "center",
         justifyContent: "center",
-        borderWidth: 3,
-        borderColor: colors.background,
+    },
+    affinityLine: {
+        marginTop: 34,
+        marginBottom: 34,
+        paddingHorizontal: PAYWALL_GUTTER + 10,
+        fontFamily: FONT_DISPLAY,
+        fontSize: scaleFontSize(20),
+        lineHeight: scaleFontSize(29),
+        color: paywallColors.textHeading,
+        textAlign: "center",
+    },
+    section: {
+        marginTop: 8,
+        marginBottom: 34,
     },
     footer: {
         position: "absolute",
         bottom: 0,
         left: 0,
         right: 0,
-        paddingTop: 16,
-        paddingHorizontal: 24,
-        backgroundColor: colors.background,
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
+        paddingTop: 14,
+        paddingHorizontal: PAYWALL_GUTTER,
+        backgroundColor: paywallColors.surface,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: paywallColors.hairline,
     },
-    restoreButton: {
+    cta: {
+        height: 56,
+        borderRadius: 999,
+        backgroundColor: paywallColors.ink,
         alignItems: "center",
         justifyContent: "center",
-        paddingVertical: 12,
     },
-    restoreRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
+    ctaDisabled: {
+        opacity: 0.4,
     },
-    restoreText: {
-        fontSize: scaleFontSize(15),
-        fontWeight: "600",
-        color: colors.textSecondary,
-    },
-    disclosureText: {
-        fontSize: scaleFontSize(11),
-        lineHeight: 15,
-        color: colors.textTertiary,
-        textAlign: "center",
-    },
-    legalLinks: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 8,
-        marginTop: 10,
-    },
-    legalLinkText: {
-        fontSize: scaleFontSize(12),
-        fontWeight: "600",
-        color: colors.textSecondary,
-        textDecorationLine: "underline",
-    },
-    legalSeparator: {
-        fontSize: scaleFontSize(12),
-        color: colors.textTertiary,
-    },
-    continueButton: {
-        backgroundColor: colors.accent,
-        borderRadius: 16,
-        height: 60,
-        alignItems: "center",
-        justifyContent: "center",
-        shadowColor: colors.accent,
-        shadowOpacity: 0.3,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 6,
-    },
-    continueButtonDisabled: {
-        opacity: 0.6,
-    },
-    continueButtonText: {
-        fontSize: scaleFontSize(18),
+    ctaText: {
+        fontSize: scaleFontSize(16),
         fontWeight: "700",
         color: "white",
     },
-    loadingContainer: {
-        padding: 40,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    loadingText: {
-        marginTop: 12,
-        fontSize: scaleFontSize(14),
-        color: colors.textSecondary,
-    },
-    errorContainer: {
-        padding: 40,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    errorText: {
-        marginTop: 12,
-        fontSize: scaleFontSize(16),
-        fontWeight: "600",
-        color: colors.textSecondary,
-    },
-    errorSubtext: {
-        marginTop: 8,
-        fontSize: scaleFontSize(14),
-        color: colors.textTertiary,
+    caption: {
+        marginTop: 6,
+        fontSize: scaleFontSize(11),
+        lineHeight: scaleFontSize(15),
+        color: paywallColors.textSecondary,
         textAlign: "center",
     },
     errorBanner: {
@@ -766,7 +420,8 @@ const styles = StyleSheet.create({
         elevation: 4,
     },
     errorBannerText: {
-        fontSize: scaleFontSize(14),
+        flexShrink: 1,
+        fontSize: scaleFontSize(13),
         fontWeight: "500",
         color: colors.destructive,
     },
