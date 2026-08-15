@@ -17,7 +17,8 @@ import { useRouter } from "expo-router";
 import { useAction, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { convex } from "../lib/convexClient";
-import { colors, scaleFontSize } from "../lib/theme";
+import { colors, scaleFontSize, shadows } from "../lib/theme";
+import { Plus } from "lucide-react-native";
 import { FONT_DISPLAY } from "../lib/fonts";
 import { readFileAsBase64 } from "../lib/convex";
 import { uploadRecordingToConvex } from "../lib/convexUpload";
@@ -103,7 +104,7 @@ export default function HomeScreen() {
   const [gateStatusText, setGateStatusText] = useState<string | undefined>(undefined);
   const [showUpgradeCta, setShowUpgradeCta] = useState(false);
   const [showConsentCard, setShowConsentCard] = useState(false);
-  // Typed composer (OLD-101) — the keyboard beside the mic hero.
+  // Typed composer (OLD-101) — opened from the header's + button (Tiimo pattern).
   const [showComposer, setShowComposer] = useState(false);
   const [composerTraceId, setComposerTraceId] = useState<string | null>(null);
   const [isComposerSubmitting, setIsComposerSubmitting] = useState(false);
@@ -1061,6 +1062,15 @@ export default function HomeScreen() {
                     <Text style={styles.proPillText}>Get Pro</Text>
                   </TouchableOpacity>
                 )}
+                <TouchableOpacity
+                  style={styles.addButton}
+                  activeOpacity={0.85}
+                  onPress={() => void handleOpenComposer()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add a reminder by typing"
+                >
+                  <Plus size={20} color={colors.textHeading} strokeWidth={2} />
+                </TouchableOpacity>
               </View>
             </View>
           </View>
@@ -1124,7 +1134,6 @@ export default function HomeScreen() {
             activeTab={activeTab}
             onTab={handleTab}
             onRecord={handleOpenRecording}
-            onCompose={() => void handleOpenComposer()}
           />
         </>
       )}
@@ -1223,6 +1232,19 @@ const styles = StyleSheet.create({
   },
   proIcon: {
     marginRight: 6,
+  },
+  // Tiimo-style header +: quiet white circle, top-right. The composer's only door.
+  addButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+    ...shadows.card,
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
   },
   content: {
     flex: 1,

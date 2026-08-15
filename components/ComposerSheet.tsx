@@ -24,7 +24,7 @@ export type ComposerSheetProps = {
 };
 
 /**
- * Typed input (OLD-101). The mic stays the hero; this is the keyboard beside it.
+ * Typed input (OLD-101). The mic stays the hero; this opens from the header's +.
  *
  * One field and two ways out: send it to the same parse a recording goes
  * through, or hand the sentence over to the voice flow. There are no schedule
