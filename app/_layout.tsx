@@ -129,10 +129,12 @@ function StartupTasks() {
     });
   }, [reminders, history, router, toast]);
 
-  // Hydrate reminders with pending audio (max 2 concurrent)
+  // Hydrate reminders with missing audio (max 2 concurrent). Any status short
+  // of "failed" qualifies: reminders stranded without a URL (e.g. wiped by a
+  // stale-snapshot save) re-fill from their Convex row on the next pass.
   useEffect(() => {
     const pendingReminders = reminders.filter(
-      (r) => r.convexId && r.audioStatus === "pending" && !r.audioUrl
+      (r) => r.convexId && !r.audioUrl && r.audioStatus !== "failed"
     );
 
     if (pendingReminders.length === 0) return;

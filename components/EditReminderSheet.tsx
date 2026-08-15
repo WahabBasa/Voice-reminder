@@ -124,8 +124,12 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const bottomSheetRef = useRef<BottomSheet>(null);
     const snapPoints = useMemo(() => ["60%", "95%"], []);
 
-    // Initialize state directly from prop - no async loading needed!
-    const [reminder] = useState<Reminder>(initialReminder);
+    // Live store row, not a mount-time snapshot: audio hydration lands seconds
+    // after creation, and a frozen copy would hide the voice note, wipe the
+    // audio fields on save, and skip the reschedule (audioUrl reads as "").
+    const reminder =
+        useReminderStore((state) => state.reminders.find((r) => r.id === initialReminder.id)) ??
+        initialReminder;
     const [title, setTitle] = useState(initialReminder.title || "");
     const [emoji, setEmoji] = useState<string | undefined>(initialReminder.emoji);
     const description = initialReminder.description || "";
@@ -587,13 +591,16 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         <SheetRow icon="bell" label="Heads-up" value={preReminderLabel} onPress={cyclePreReminder} />
                     </View>
 
-                    {/* Voice note card */}
-                    {reminder.audioUrl ? (
+                    {/* Voice note card. While TTS is still generating the row stays
+                        visible but disabled, so it never just vanishes for the
+                        seconds between creation and hydration. */}
+                    {reminder.audioUrl || reminder.audioStatus === "pending" ? (
                         <View style={styles.rowCard}>
                             <TouchableOpacity
                                 style={styles.row}
                                 onPress={handlePlayPreview}
                                 activeOpacity={0.7}
+                                disabled={!reminder.audioUrl}
                             >
                                 <View style={styles.rowLeft}>
                                     <View style={styles.playCircle}>
@@ -602,7 +609,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                     <Text style={styles.rowLabel}>Voice note</Text>
                                 </View>
                                 <View style={styles.valuePill}>
-                                    <Text style={styles.valueText}>{isPlaying ? "Playing…" : "Play"}</Text>
+                                    <Text style={styles.valueText}>
+                                        {!reminder.audioUrl ? "Generating…" : isPlaying ? "Playing…" : "Play"}
+                                    </Text>
                                 </View>
                             </TouchableOpacity>
                         </View>
