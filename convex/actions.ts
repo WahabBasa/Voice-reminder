@@ -885,8 +885,11 @@ export const processVoiceReminder = action({
     console.log("[VR] Parsed as:", { currentDate, currentTime, currentDayOfWeek, timezone });
 
     const completion = await openrouter.chat.completions.create({
-      model: "google/gemini-3.1-flash-lite-preview",
+      model: "openai/gpt-5.6-luna",
       response_format: { type: "json_object" },
+      // Luna is a hybrid reasoner; "none" keeps it in the non-reasoning mode the
+      // parse path needs — thinking tokens would add seconds of dead air post-speech.
+      reasoning_effort: "none",
       // Without an explicit cap OpenRouter reserves credit for the model's full
       // 65k output allowance and 402s on low balances; the parse JSON is tiny.
       max_tokens: 2000,
@@ -1095,8 +1098,9 @@ async function createTakeWithDeferredAudio(
 
   const tGpt = Date.now();
   const completion = await openrouter.chat.completions.create({
-    model: "google/gemini-3.1-flash-lite-preview",
+    model: "openai/gpt-5.6-luna",
     response_format: { type: "json_object" },
+    reasoning_effort: "none",
     max_tokens: 2000,
     messages: [
       {
