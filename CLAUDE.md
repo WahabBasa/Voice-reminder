@@ -120,7 +120,12 @@ npx convex dev
 
 # TypeScript check
 npx tsc --noEmit
+
+# Full test suite — what CI runs (per-file coverage thresholds in jest.config.js)
+npm.cmd run test:coverage
 ```
+
+**Before any push:** run `npm.cmd run test:coverage`, not plain `npm test`. CI enforces per-file coverage thresholds that plain `npm test` skips — every historical CI failure was this step going red after a locally-green push.
 
 ### 📱 USB Development Workflow (Recommended)
 
