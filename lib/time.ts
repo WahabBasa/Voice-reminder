@@ -1,4 +1,4 @@
-import { nextGridOccurrence, type GridSchedule } from "../convex/scheduleShape";
+import { nextGridOccurrence, normalizeClockTime, type GridSchedule } from "../convex/scheduleShape";
 
 const DAY_MAP: Record<string, number> = {
   sun: 0,
@@ -134,6 +134,79 @@ function cachedShortDateString(date: Date): string {
 
 function isSameDay(a: Date, b: Date): boolean {
   return a.toDateString() === b.toDateString();
+}
+
+// ─── Clock formatting (OLD-105) ─────────────────────────────────────────────
+//
+// "7:15" on a card says nothing about morning or evening. Every surface that
+// prints a clock time goes through here, so the meridiem is the one thing that
+// can never be dropped — and a device set to 24-hour still reads the way it
+// expects.
+
+export interface ClockFormatOptions {
+  /** Force a dial instead of asking the device. Tests and pickers use this. */
+  hour12?: boolean;
+}
+
+/** Whether resolved Intl options describe a 12-hour dial. */
+export function usesHour12(
+  resolved: { hour12?: boolean; hourCycle?: string } | null | undefined
+): boolean {
+  if (typeof resolved?.hour12 === "boolean") return resolved.hour12;
+  // h11/h12 are the 12-hour cycles; h23/h24 are the 24-hour ones.
+  if (resolved?.hourCycle) return resolved.hourCycle === "h11" || resolved.hourCycle === "h12";
+  // Nothing resolved: 12-hour is the safe default — it always says am/pm.
+  return true;
+}
+
+// Resolved once. The locale carries the system 24-hour setting on both
+// platforms, and changing it restarts the app.
+let deviceHour12Cache: boolean | null = null;
+
+function deviceHour12(): boolean {
+  if (deviceHour12Cache === null) {
+    let resolved: { hour12?: boolean; hourCycle?: string } | null = null;
+    try {
+      resolved = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).resolvedOptions();
+    } catch {
+      // An engine without resolvable hour options takes the default above.
+      resolved = null;
+    }
+    deviceHour12Cache = usesHour12(resolved);
+  }
+  return deviceHour12Cache;
+}
+
+/** The dial a caller asked for, or the device's. */
+export function usesHour12Format(options: ClockFormatOptions = {}): boolean {
+  return options.hour12 ?? deviceHour12();
+}
+
+/**
+ * A clock time the way this device reads it: "7:15 pm", or "19:15" where the
+ * system is set to 24-hour. Anything that is not a clock time comes back
+ * untouched — better a raw string on the card than a confident wrong one.
+ */
+export function formatClockTime(time: string, options: ClockFormatOptions = {}): string {
+  const normalized = normalizeClockTime(time);
+  if (!normalized) return String(time ?? "").trim();
+  if (!usesHour12Format(options)) return normalized;
+
+  const [hours, minutes] = normalized.split(":").map(Number);
+  const suffix = hours >= 12 ? "pm" : "am";
+  const dial = hours % 12 === 0 ? 12 : hours % 12;
+  return `${dial}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+/** The wall-clock time of a moment, formatted by {@link formatClockTime}. */
+export function formatClockAt(
+  value: number | string | Date,
+  options: ClockFormatOptions = {}
+): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const time = `${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
+  return formatClockTime(time, options);
 }
 
 export function isOverdue(timestamp: number, now = Date.now()): boolean {

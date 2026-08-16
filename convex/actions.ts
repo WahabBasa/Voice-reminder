@@ -36,7 +36,7 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeVariants, normalizeParsedReminders, variantCountForTier, buildAlarmWav, alignVariantWavIds, useDenseAlarmWav, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, type Urgency } from "./helpers";
+import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeVariants, normalizeParsedReminders, variantCountForTier, buildAlarmWav, alignVariantWavIds, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, type Urgency } from "./helpers";
 import { buildGridSchedule, legacyFieldsFromGrid, type GridSchedule } from "./scheduleShape";
 
 function numberEnv(name: string, fallback: number): number {
@@ -461,11 +461,13 @@ ARABIC TIME EXPRESSIONS:
 
 INTENT + TONE RULES (the spoken voice — every spoken field obeys these):
 - Keep the exact intent (do not add meaning or extra context)
-- ONE short sentence, present tense, about the thing itself (aim for 4-9 words)
-- Pick the register the content calls for: instruction ("Drink your water right now."), stated fact ("Your son's game is starting this minute."), or polite request ("Please take your pills.")
+- ONE short sentence, present tense, about the thing itself (aim for 3-8 words)
+- The line takes ONE of exactly TWO shapes, picked by the content
+- Something the user DOES → a bare imperative and nothing else ("Drink your water.", "Take your pills.") — no "right now" on the end, no "please", no framing around the verb
+- Something that HAPPENS on its own → stated as happening now ("Your son's game is right now.", "Your flight is right now.") — never restate the clock time the reminder was set for
 - Never put anything in front of the substance: no greetings (English: "Hey", "Hi" / Arabic: "مرحبا", "أهلاً", "السلام عليكم"), no clock announcements ("It is time", "It's time", a bare "Time to ...", Arabic "حان وقت"/"حان الوقت"), no reminder labels ("Quick reminder", "Just a reminder", "Heads up", Arabic "تذكير سريع"), no conversational lead-ins ("By the way", "Just so you know", "Remember", "Don't forget", Arabic "على فكرة"/"لا تنسى")
 - Never address the user by name or title, and never add wellness, benefit or encouragement commentary — say the thing and stop
-- Arabic examples: "اشرب ماءك الآن." / "خذ حبوبك الآن." / "مباراة ابنك تبدأ الآن."
+- Arabic examples: "اشرب ماءك." / "خذ حبوبك." / "مباراة ابنك الآن." / "اجتماعك مع أحمد الآن."
 
 TIME PARSING (Speech-to-text quirks):
 - "10 4 p.m." = 22:04, "9 30 a.m." = 09:30
@@ -614,17 +616,17 @@ async function synthesizeReminderTts(args: { text: string; title?: string }): Pr
 
 /**
  * Alarm-ready WAV of one spoken line (iOS AlarmKit custom sound).
- * ElevenLabs only: PCM out, shaped for the tier and wrapped with a 44-byte WAV
- * header in-process. `dense` picks the persistent-tier in-file shape.
+ * ElevenLabs only: PCM out, shaped into repeated utterances and wrapped with a
+ * 44-byte WAV header in-process.
  * Failure returns null — the alarm degrades to the system default sound and
  * never blocks reminder creation.
  */
-async function synthesizeAlarmWav(text: string, dense: boolean): Promise<Uint8Array | null> {
+async function synthesizeAlarmWav(text: string): Promise<Uint8Array | null> {
   if (getTtsProvider() !== "elevenlabs") return null;
   const rate = parsePcmSampleRate(ALARM_PCM_OUTPUT_FORMAT);
   if (rate === null) return null;
   const pcm = await synthesizeWithElevenLabs({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT });
-  return buildAlarmWav(new Uint8Array(pcm), rate, { dense });
+  return buildAlarmWav(new Uint8Array(pcm), rate);
 }
 
 /**
@@ -634,11 +636,11 @@ async function synthesizeAlarmWav(text: string, dense: boolean): Promise<Uint8Ar
  */
 async function synthesizeAndStoreLineTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
-  args: { text: string; title?: string; dense: boolean }
+  args: { text: string; title?: string }
 ): Promise<{ audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> }> {
   const [ttsBuffer, wavBytes] = await Promise.all([
     synthesizeReminderTts(args),
-    synthesizeAlarmWav(args.text, args.dense).catch((e) => {
+    synthesizeAlarmWav(args.text).catch((e) => {
       console.error("[VR] Alarm WAV synthesis failed (system default alarm sound will be used):", e);
       return null;
     }),
@@ -663,8 +665,7 @@ async function synthesizeAndStoreLineTts(
 async function synthesizeVariantTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
   title: string,
-  variantTexts: string[],
-  dense: boolean
+  variantTexts: string[]
 ): Promise<{
   keptVariants: string[];
   variantAudioStorageIds: Id<"_storage">[];
@@ -678,7 +679,6 @@ async function synthesizeVariantTts(
       const { audioStorageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
         text: line,
         title: `${title} (replay ${keptVariants.length + 1})`,
-        dense,
       });
       keptVariants.push(line);
       variantAudioStorageIds.push(audioStorageId);
@@ -744,15 +744,11 @@ async function createReminderWithAudio(
   // only when the parse returned neither a description nor a title — the guard
   // can trade phrasing away, never the line itself.
   const ttsText = plan.description;
-  // Persistent reminders nag inside one ringing alarm; every other tier says
-  // its line once and comes back as a later ladder rung.
-  const dense = useDenseAlarmWav(plan.persistent);
   // Generate + store TTS (mp3 for playback + alarm-ready wav when available).
   // What was stored is what is spoken — no prefix goes on here (OLD-95).
   const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
     text: ttsText,
     title: plan.title,
-    dense,
   });
 
   // Second short line for the pre-alert; failure never blocks the reminder.
@@ -773,7 +769,7 @@ async function createReminderWithAudio(
   // Replay variant lines: kept in lockstep with their audios — a failed synth
   // drops that variant (fewer variants, never a blocked creation).
   const { keptVariants, variantAudioStorageIds, variantWavStorageIds } =
-    await synthesizeVariantTts(ctx, plan.title, plan.variants, dense);
+    await synthesizeVariantTts(ctx, plan.title, plan.variants);
 
   const reminderId: Id<"reminders"> = await ctx.runMutation(internal.reminders.create, {
     deviceId: args.deviceId,
@@ -967,11 +963,9 @@ export const processTextReminder = action({
     const ttsText = normalizedDescription || args.description;
     // The line is the user's own wording, so the opener guard (model output
     // only) stays out of it — and it is spoken exactly as typed.
-    // Typed reminders carry no tier yet, so they get the plain one-utterance shape.
     const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
       text: ttsText,
       title: args.title,
-      dense: false,
     });
 
     const reminderId: Id<"reminders"> = await ctx.runMutation(
@@ -1023,13 +1017,11 @@ export const regenerateReminderAudio = action({
       throw new Error("Reminder not found");
     }
 
-    // 2. Generate + store new TTS audio (mp3 + alarm-ready wav when available),
-    // reusing the reminder's own tier so the in-file shape does not change.
+    // 2. Generate + store new TTS audio (mp3 + alarm-ready wav when available).
     const { audioStorageId: newStorageId, wavStorageId: newWavStorageId } =
       await synthesizeAndStoreLineTts(ctx, {
         text: args.soundText,
         title: reminder.title,
-        dense: useDenseAlarmWav(normalizePersistent(reminder.persistent)),
       });
 
     // 4. Delete old audio and update reminder
@@ -1158,8 +1150,7 @@ async function createTakeWithDeferredAudio(
     );
     perf.mutationMs += Date.now() - tMutation;
 
-    // Enqueue background TTS generation (persistent picks the dense wav
-    // shape). One job per reminder.
+    // Enqueue background TTS generation. One job per reminder.
     const tSchedule = Date.now();
     await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
       reminderId,
@@ -1169,7 +1160,6 @@ async function createTakeWithDeferredAudio(
       ttsText: plan.description,
       preTtsText: plan.preTtsText || undefined,
       variantTexts: plan.variants.length > 0 ? plan.variants : undefined,
-      persistent: plan.persistent || undefined,
     });
     perf.scheduleMs += Date.now() - tSchedule;
 
@@ -1377,21 +1367,18 @@ export const generateReminderTtsForReminder = internalAction({
     ttsText: v.string(),
     preTtsText: v.optional(v.string()),
     variantTexts: v.optional(v.array(v.string())),
-    // Optional so jobs enqueued by an older deploy still run (they get the
-    // plain one-utterance shape).
+    // No longer read — the wav shape is the same for every tier now. Still
+    // accepted so a job enqueued by an older deploy passes validation.
     persistent: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     try {
-      const dense = useDenseAlarmWav(normalizePersistent(args.persistent));
-
       // 1. Generate + store TTS (mp3 + alarm-ready wav when available). Both
       // say the stored line verbatim — nothing is prepended (OLD-95).
       const { audioStorageId: newAudioStorageId, wavStorageId: newWavStorageId } =
         await synthesizeAndStoreLineTts(ctx, {
           text: args.ttsText,
           title: args.title,
-          dense,
         });
 
       // 2b. Pre-alert line (optional); failure never blocks the main audio.
@@ -1416,7 +1403,7 @@ export const generateReminderTtsForReminder = internalAction({
       let variantAudioStorageIds: Id<"_storage">[] | undefined;
       let variantWavStorageIds: Id<"_storage">[] | undefined;
       if (args.variantTexts?.length) {
-        const result = await synthesizeVariantTts(ctx, args.title, args.variantTexts, dense);
+        const result = await synthesizeVariantTts(ctx, args.title, args.variantTexts);
         keptVariants = result.keptVariants;
         variantAudioStorageIds = result.variantAudioStorageIds;
         variantWavStorageIds = result.variantWavStorageIds;

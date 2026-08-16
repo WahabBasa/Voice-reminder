@@ -6,12 +6,12 @@ import AppIcon from "./AppIcon";
 import {
   INTERVAL_PRESET_MINUTES,
   MAX_TIMES_PER_DAY,
-  formatClock12,
   formatEveryMinutes,
   type ScheduleDraft,
   type TimesMode,
 } from "./schedule/scheduleDraft";
 import { normalizeClockTimes } from "../lib/schedule";
+import { formatClockTime } from "../lib/time";
 import { borderRadius, colors, scaleFontSize } from "../lib/theme";
 
 /**
@@ -171,14 +171,14 @@ export default function TimesEditor({
                 onPress={() => setPicker({ kind: "time", index })}
                 activeOpacity={0.7}
               >
-                <Text style={styles.timeChipText}>{formatClock12(time)}</Text>
+                <Text style={styles.timeChipText}>{formatClockTime(time)}</Text>
               </TouchableOpacity>
               {times.length > 1 ? (
                 <TouchableOpacity
                   onPress={() => removeTime(index)}
                   hitSlop={8}
                   activeOpacity={0.7}
-                  accessibilityLabel={`Remove ${formatClock12(time)}`}
+                  accessibilityLabel={`Remove ${formatClockTime(time)}`}
                 >
                   <AppIcon name="x" size={13} color={colors.textSecondary} />
                 </TouchableOpacity>
@@ -237,7 +237,7 @@ export default function TimesEditor({
                 onPress={() => setPicker({ kind: "windowStart" })}
                 activeOpacity={0.7}
               >
-                <Text style={styles.windowPillText}>{formatClock12(windowStart)}</Text>
+                <Text style={styles.windowPillText}>{formatClockTime(windowStart)}</Text>
               </TouchableOpacity>
               <Text style={styles.windowDash}>–</Text>
               <TouchableOpacity
@@ -245,7 +245,7 @@ export default function TimesEditor({
                 onPress={() => setPicker({ kind: "windowEnd" })}
                 activeOpacity={0.7}
               >
-                <Text style={styles.windowPillText}>{formatClock12(windowEnd)}</Text>
+                <Text style={styles.windowPillText}>{formatClockTime(windowEnd)}</Text>
               </TouchableOpacity>
             </View>
           </View>

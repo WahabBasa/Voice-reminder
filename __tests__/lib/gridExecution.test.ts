@@ -136,7 +136,7 @@ function reminder(schedule: GridSchedule, overrides: Partial<ReminderNotificatio
   return {
     id: ID,
     title: "Take your pills",
-    description: "Take your pills right now.",
+    description: "Take your pills.",
     time: "08:00",
     frequency: "daily",
     urgency: "routine",
@@ -442,12 +442,12 @@ describe("DELIVERED — the delivered ring is replaced, its siblings are kept", 
         notification: {
           id: `reminder_${ID}_${scheduledFor}`,
           title: "Take your pills",
-          body: "Take your pills right now.",
+          body: "Take your pills.",
           data: {
             reminderId: ID,
             frequency: "daily",
             title: "Take your pills",
-            description: "Take your pills right now.",
+            description: "Take your pills.",
             kind: "reminder_occurrence",
             scheduledFor: String(scheduledFor),
             schedule: JSON.stringify(twoTimesADay),

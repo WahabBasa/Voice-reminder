@@ -136,12 +136,12 @@ function ring(dataOverrides: Record<string, string> = {}) {
   return {
     id: `reminder_${ID}_${ringAt}`,
     title: "Take your pills",
-    body: "Take your pills right now.",
+    body: "Take your pills.",
     data: {
       reminderId: ID,
       kind: "reminder_occurrence",
       title: "Take your pills",
-      description: "Take your pills right now.",
+      description: "Take your pills.",
       audioUrl: "https://cdn/take.mp3",
       scheduledFor: String(ringAt),
       frequency: "daily",
@@ -157,7 +157,7 @@ function storedReminder(overrides: Record<string, unknown> = {}) {
   return {
     id: ID,
     title: "Take your pills",
-    description: "Take your pills right now.",
+    description: "Take your pills.",
     time: "08:00",
     frequency: "daily",
     days: [],
@@ -219,7 +219,7 @@ describe("a dismissed ring comes back", () => {
     expect(nag).toBeDefined();
     expect(nag.timestamp).toBe(NOW + NAG_MS);
     expect(nag.data.audioUrl).toBe("https://cdn/take.mp3");
-    expect(nag.data.description).toBe("Take your pills right now.");
+    expect(nag.data.description).toBe("Take your pills.");
     expect(nag.data.kind).toBe("snooze_occurrence");
     expect(nag.data.nagCount).toBe("1");
     expect(nag.data.nagReason).toBe("dismissed");
@@ -382,7 +382,7 @@ describe("a nag never fights the schedule", () => {
     await scheduleReminder({
       id: ID,
       title: "Take your pills",
-      description: "Take your pills right now.",
+      description: "Take your pills.",
       time: "08:00",
       frequency: "daily",
       scheduleType: "once",
@@ -416,7 +416,7 @@ describe("AlarmKit — the comebacks are pre-scheduled, not reacted to", () => {
     await scheduleReminder({
       id: ID,
       title: "Take your pills",
-      description: "Take your pills right now.",
+      description: "Take your pills.",
       time: "08:00",
       frequency: "once",
       scheduleType: "once",
@@ -449,7 +449,7 @@ describe("AlarmKit — the comebacks are pre-scheduled, not reacted to", () => {
     await scheduleReminder({
       id: ID,
       title: "Take your pills",
-      description: "Take your pills right now.",
+      description: "Take your pills.",
       time: "08:00",
       frequency: "once",
       scheduleType: "once",

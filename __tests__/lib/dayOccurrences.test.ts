@@ -23,7 +23,7 @@ function reminder(schedule: GridSchedule, overrides: Partial<Reminder> = {}): Re
   return {
     id: "r1",
     title: "Take your pills",
-    description: "Take your pills right now.",
+    description: "Take your pills.",
     time: "08:00",
     frequency: "daily",
     days: [],

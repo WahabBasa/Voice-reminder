@@ -191,31 +191,35 @@ export function guardSpokenLine(line: unknown, fallback: unknown = ""): string {
   return normalized || standIn;
 }
 
-// The one voice rule (OLD-95), shared verbatim by every builder that describes
-// a spoken line.
+// The one voice rule (OLD-95, re-cut in OLD-104), shared verbatim by every
+// builder that describes a spoken line.
 //
 // History, so it is not re-litigated: the prompt used to offer a menu of canned
 // hooks, and every line came out stamped from it. Taking the menu away made the
 // model announce the clock instead ('It is time to ...'); banning the clock made
 // it reach for the reminder label ('Quick reminder —'); the app then prepended
 // its own attention catch ('Heads up —') and the whole voice read as small talk
-// in front of the point. All of it is gone. What is left is the point itself:
-// ONE short present-tense sentence about the thing, in one of three registers
-// the model picks from by content — instruction, stated fact, or polite request.
+// in front of the point. Naming three registers left the last of the padding
+// standing: every task came back as 'Drink your water right now', framing that
+// does no work an alarm going off does not already do. What is left is two
+// shapes and nothing else — a bare imperative for something the user does, and
+// '[the thing] is right now' for something that happens on its own. A reminder
+// sounds like a reminder, not like a sentence in a conversation.
 //
 // Single-quoted throughout — it is embedded inside a double-quoted JSON field
 // in the prompt. Instructing is not enforcing: what leaks through anyway is
 // caught by guardSpokenLine above.
-export const SPOKEN_LINE_RULE = `ONE short sentence, present tense, about the thing itself and nothing else. Pick the register the content calls for: a direct instruction ('Drink your water right now.'), a stated fact ('Your son's game is starting this minute.'), or a polite request ('Please take your pills.'). Start on the substance — the task, the object, the person, or the place — so the first two or three words already are the point. These are forbidden wordings, not merely discouraged: any opener or lead-in in front of the substance, whether a clock announcement ('It is time', 'It's time', a bare 'Time to ...', the Arabic 'حان وقت' / 'حان الوقت'), a reminder label ('Quick reminder', 'Just a reminder', 'Friendly reminder', 'Heads up', the Arabic 'تذكير سريع'), or a conversational lead-in ('By the way', 'Just so you know', 'Remember', 'Don't forget', the Arabic 'على فكرة' / 'لا تنسى'). Also forbidden: any greeting; addressing the user by name or title (no 'Sir', no invented names, no 'يا' + name); and wellness, benefit or encouragement commentary (never say why the task is good, how it will make the user feel, or add a sign-off). There is no approved replacement opener — the line never says that it is a reminder, it just says the thing.`;
+export const SPOKEN_LINE_RULE = `ONE short sentence, present tense, about the thing itself and nothing else. There are exactly TWO shapes and the content picks which one. Something the user DOES is a bare imperative and nothing else ('Drink your water.', 'Take your pills.', in Arabic 'اشرب ماءك.' / 'خذ حبوبك.') — no 'right now' on the end, no 'please', no softening, nothing wrapped around the verb. Something that HAPPENS on its own is stated as happening now, [the thing] is right now ('Your son's game is right now.', 'Your flight is right now.', in Arabic 'مباراة ابنك الآن.' / 'رحلتك الآن.') — and never restate the clock the reminder was set for. Start on the substance — the task, the object, the person, or the place — so the first two or three words already are the point. These are forbidden wordings, not merely discouraged: any opener or lead-in in front of the substance, whether a clock announcement ('It is time', 'It's time', a bare 'Time to ...', the Arabic 'حان وقت' / 'حان الوقت'), a reminder label ('Quick reminder', 'Just a reminder', 'Friendly reminder', 'Heads up', the Arabic 'تذكير سريع'), or a conversational lead-in ('By the way', 'Just so you know', 'Remember', 'Don't forget', the Arabic 'على فكرة' / 'لا تنسى'). Also forbidden: any greeting; addressing the user by name or title (no 'Sir', no invented names, no 'يا' + name); and wellness, benefit or encouragement commentary (never say why the task is good, how it will make the user feel, or add a sign-off). There is no approved replacement opener — the line never says that it is a reminder, it just says the thing.`;
 
 // Instruction text for the parse prompt's "description" field.
 // The word budget is deliberately tight — lines that escaped the opener ban did
 // it by padding instead ('Hydrate yourself with a fresh glass of water now').
-// The canon examples are the product decision made flesh (OLD-95): same task,
-// three registers, no name in any of them. Single-quoted throughout — this
-// string is embedded inside a double-quoted JSON field in the prompt.
+// The canon examples are the product decision made flesh (OLD-104): the same
+// task as a bare imperative, the same event as '[X] is right now', no name and
+// no framing in any of them. Single-quoted throughout — this string is embedded
+// inside a double-quoted JSON field in the prompt.
 export function buildDescriptionInstruction(): string {
-  return `the sentence spoken aloud when the reminder fires, in the input's language. ${SPOKEN_LINE_RULE} Roughly 4-9 words. Plain words only: no filler adjectives, no dressing up a simple task — every added word slows the line down. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: 'Drink your water right now.' / 'Take your pills right now.' / 'Please take your pills.' / 'Your son's game is starting this minute.' / 'Your son has a game right now.' The same in Arabic: 'اشرب ماءك الآن.' / 'خذ حبوبك الآن.' / 'من فضلك خذ حبوبك.' / 'مباراة ابنك تبدأ الآن.'`;
+  return `the sentence spoken aloud when the reminder fires, in the input's language. ${SPOKEN_LINE_RULE} Roughly 3-8 words, and shorter is better. Plain words only: no filler adjectives, no dressing up a simple task — every added word slows the line down. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: 'Drink your water.' / 'Take your pills.' / 'Call your mother.' / 'Your son's game is right now.' / 'Your meeting with Ahmed is right now.' The same in Arabic: 'اشرب ماءك.' / 'خذ حبوبك.' / 'اتصل بأمك.' / 'مباراة ابنك الآن.' / 'اجتماعك مع أحمد الآن.'`;
 }
 
 // Instruction block for the parse prompt's pre-reminder (heads-up) fields.
@@ -225,7 +229,7 @@ export function buildPreReminderInstruction(): string {
   return `PRE-REMINDER RULES (automatic heads-up before the event):
 - "preReminderMinutes": 10-15 for hard-start events the user must be somewhere for or start on time (meetings, appointments, flights, games, classes, calls). 0 for ambient/routine tasks (drink water, take medicine, generic todos).
 - If the user explicitly asks for a heads-up ("give me a 20 minute warning"), use that many minutes.
-- "preDescription": ONLY when preReminderMinutes > 0. The spoken advance-notice line, in the input's language (Arabic input gets an Arabic line), under 12 words: it states the event and how far off it is, which is the one place a time span belongs — 'Your flight leaves in 40 minutes.', 'اجتماعك يبدأ بعد ربع ساعة.'. ${SPOKEN_LINE_RULE} Omit the field entirely when preReminderMinutes is 0.`;
+- "preDescription": ONLY when preReminderMinutes > 0. The spoken advance-notice line, in the input's language (Arabic input gets an Arabic line), under 12 words: it states the event and how far off it is, which is the one place a time span belongs — 'Your flight leaves in 40 minutes.', 'اجتماعك يبدأ بعد ربع ساعة.'. ${SPOKEN_LINE_RULE} This one line is spoken BEFORE the thing instead of at it, so it names the lead span in place of saying the thing is right now — that is its only difference from the rule above. Omit the field entirely when preReminderMinutes is 0.`;
 }
 
 // ─── Assistant-style replays (OLD-53) ───────────────────────────────────────
@@ -274,16 +278,6 @@ export function variantCountForTier(urgency: Urgency, persistent: boolean): numb
 }
 
 /**
- * In-file audio shape for a tier (cadence-ladder PRD table). Only persistent
- * reminders get the dense utterance+gap wav that keeps nagging while a single
- * alarm rings; every other tier says its line once and goes quiet, and comes
- * back as a later rung instead.
- */
-export function useDenseAlarmWav(persistent: boolean): boolean {
-  return persistent;
-}
-
-/**
  * Sanitize the model's replay variants: normalize each line, drop empties and
  * banned openers (a rung has no deterministic stand-in — one fewer rung beats a
  * rung that announces itself), drop verbatim repeats of the base description or
@@ -323,7 +317,7 @@ export function buildVariantInstruction(): string {
   return `ASSISTANT REPLAY RULES (the follow-up lines an assistant would use when the first one is ignored):
 - "urgency": how hard the reminder has to push — "urgent" when the user must act right now (meeting starting, leaving the house), "notice" for advance warning of something coming up, "routine" for ordinary everyday tasks.
 - "persistent": true ONLY when missing the task would be harmful (medicine regimens, flights, picking up children). Otherwise false or omit.
-- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from gentle nudge to insistent, still true when heard minutes late (no countdowns). ${SPOKEN_LINE_RULE} Every variant must also start on a different word from the description and from the other variants, and the later ones lean harder — name the cost of ignoring it rather than raising the volume of the same sentence. Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
+- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from plain to insistent, still true when heard minutes late (no countdowns). ${SPOKEN_LINE_RULE} Every variant stays inside those two shapes, and must also start on a different word from the description and from the other variants, and the later ones lean harder — name the cost of ignoring it rather than raising the volume of the same sentence. Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
 }
 
 // Upper bound keeps a mis-parsed lead time from scheduling a heads-up hours early.
@@ -499,22 +493,25 @@ export function pcmToWav(
 // AlarmKit has no "ring once" and no "pause between rings": it loops the sound
 // file for as long as the alarm rings. So what a single ringing alarm sounds
 // like is decided entirely by what is inside the file. A bare 4s line loops
-// back-to-back forever; the same line padded out to ~28s of silence is heard as
-// one utterance followed by quiet, which is what a real assistant does.
+// back-to-back with no breath in it; the same line padded out to ~28s of
+// silence is spoken once and leaves the rest of the ring dead quiet. Neither is
+// how a person repeats themselves, so every wav is the line plus a short gap,
+// repeated out to the target: the reminder comes back every few seconds for as
+// long as the alarm rings.
 
-/** Shaped length of an alarm wav: the line, then silence out to here. */
+/** Shaped length of an alarm wav: whole `[line][gap]` passes out to here. */
 export const ALARM_WAV_TARGET_SECONDS = 28;
 
 /**
  * Ceiling the shaping math stays under. iOS rejects anything from 30s up, and
- * a padded file never needs to run that close to the edge. A line that is
+ * a shaped file never needs to run that close to the edge. A line that is
  * already longer than the target ships bare instead — `pcmToWav`'s existing
  * 30s guard is what catches a genuinely oversized utterance.
  */
 export const ALARM_WAV_MAX_SECONDS = 29;
 
-/** Breath between utterances inside a dense (persistent-tier) alarm wav. */
-export const ALARM_WAV_DENSE_GAP_SECONDS = 2;
+/** Breath between utterances inside an alarm wav. */
+export const ALARM_WAV_GAP_SECONDS = 2;
 
 /** Byte length of `seconds` of PCM, truncated to a whole 16-bit sample. */
 function pcmByteLength(seconds: number, sampleRate: number): number {
@@ -524,37 +521,30 @@ function pcmByteLength(seconds: number, sampleRate: number): number {
 }
 
 /**
- * Shape a spoken line into the alarm wav for its tier and wrap it as WAV.
- *
- * - normal: `[line][silence]` padded to ALARM_WAV_TARGET_SECONDS — one
- *   utterance per ring, then quiet.
- * - dense: `[line][2s gap]` repeated as many whole passes as fit in the target
- *   — insistent nagging for persistent reminders.
+ * Shape a spoken line into an alarm wav and wrap it as WAV: `[line][2s gap]`
+ * repeated as many whole passes as fit inside ALARM_WAV_TARGET_SECONDS, so a
+ * ringing alarm keeps saying the line instead of going quiet after one pass.
  *
  * Silence is zero bytes: that is the midpoint of signed 16-bit PCM, so a
- * zero-filled buffer is literal silence, not a click. A line that already
- * fills the target ships unpadded rather than being trimmed.
+ * zero-filled buffer is literal silence, not a click. A line too long for even
+ * one whole pass ships bare rather than being trimmed.
  */
-export function buildAlarmWav(
-  pcm: Uint8Array,
-  sampleRate: number,
-  opts: { dense: boolean }
-): Uint8Array {
+export function buildAlarmWav(pcm: Uint8Array, sampleRate: number): Uint8Array {
   // Unusable input takes the plain path so callers see pcmToWav's own errors.
   if (!Number.isFinite(sampleRate) || sampleRate <= 0 || pcm.length === 0) {
     return pcmToWav(pcm, sampleRate);
   }
 
   const targetBytes = pcmByteLength(ALARM_WAV_TARGET_SECONDS, sampleRate);
-  const passBytes = pcm.length + pcmByteLength(ALARM_WAV_DENSE_GAP_SECONDS, sampleRate);
-  // Dense stops before the pass that would overrun the target; normal is one
-  // pass by definition. Zero passes means the line alone fills the budget.
-  const passes = opts.dense ? Math.floor(targetBytes / passBytes) : 1;
-  if (pcm.length >= targetBytes || passes < 1) {
+  const passBytes = pcm.length + pcmByteLength(ALARM_WAV_GAP_SECONDS, sampleRate);
+  // Stop before the pass that would overrun the target. Zero whole passes means
+  // even one line-plus-gap is over budget, so the line ships alone.
+  const passes = Math.floor(targetBytes / passBytes);
+  if (passes < 1) {
     return pcmToWav(pcm, sampleRate);
   }
 
-  const body = new Uint8Array(opts.dense ? passes * passBytes : targetBytes);
+  const body = new Uint8Array(passes * passBytes);
   for (let pass = 0; pass < passes; pass++) {
     body.set(pcm, pass * passBytes);
   }

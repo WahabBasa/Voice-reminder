@@ -5,7 +5,12 @@ import CompletedSection from "../CompletedSection";
 import ReminderListItem, { chipColorForId } from "../ReminderListItem";
 import { borderRadius, colors, scaleFontSize, spacing } from "../../lib/theme";
 import { FONT_DISPLAY } from "../../lib/fonts";
-import { formatIntervalDuration, getNextIntervalOccurrence } from "../../lib/time";
+import {
+  formatClockAt,
+  formatClockTime,
+  formatIntervalDuration,
+  getNextIntervalOccurrence,
+} from "../../lib/time";
 import { type Reminder, type ReminderHistory } from "../../lib/store";
 import {
   activityDotCounts,
@@ -86,7 +91,8 @@ export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number)
     return every;
   }
 
-  const time = reminder.time ?? "";
+  // Pre-grid reminders keep a raw "HH:MM" — never shown as-is (OLD-105).
+  const time = formatClockTime(reminder.time ?? "");
   if (reminder.frequency === "daily") {
     const n = reminder.intervalDays && reminder.intervalDays > 1 ? reminder.intervalDays : 1;
     return `${time} · ${n === 1 ? "Daily" : `Every ${n} days`}`;
@@ -96,13 +102,6 @@ export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number)
     return days ? `${time} · ${days}` : `${time} · Weekly`;
   }
   return time;
-}
-
-function formatHistoryTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mm = String(date.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
 }
 
 export default function DaysPage({
@@ -173,7 +172,7 @@ export default function DaysPage({
         title: entry.reminderTitle,
         emoji: remindersById.get(entry.reminderId)?.emoji,
         chipColor: chipColorForId(entry.reminderId),
-        subtitle: formatHistoryTime(entry.timestamp),
+        subtitle: formatClockAt(entry.timestamp),
         missed: entry.status === "missed",
       }));
 

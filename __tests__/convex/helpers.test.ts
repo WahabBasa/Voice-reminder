@@ -22,11 +22,10 @@ import {
   MAX_REMINDERS_PER_TAKE,
   MULTI_REMINDER_INSTRUCTION,
   buildVariantInstruction,
-  useDenseAlarmWav,
   ALARM_PCM_OUTPUT_FORMAT,
   ALARM_WAV_BITS_PER_SAMPLE,
   ALARM_WAV_CHANNELS,
-  ALARM_WAV_DENSE_GAP_SECONDS,
+  ALARM_WAV_GAP_SECONDS,
   ALARM_WAV_MAX_SECONDS,
   ALARM_WAV_TARGET_SECONDS,
   DEFAULT_ALARM_WAV_SAMPLE_RATE,
@@ -173,30 +172,49 @@ describe("buildDescriptionInstruction", () => {
     const result = buildDescriptionInstruction();
     expect(result).toContain("in the input's language");
     expect(result).toContain("ONE short sentence, present tense");
-    expect(result).toContain("Roughly 4-9 words");
+    expect(result).toContain("Roughly 3-8 words");
     expect(result).toContain("Plain words only");
   });
 
-  it("carries the canon few-shots the voice was defined by (OLD-95)", () => {
+  it("carries the canon few-shots the voice was defined by (OLD-104)", () => {
     const result = buildDescriptionInstruction();
     for (const example of [
+      "'Drink your water.'",
+      "'Take your pills.'",
+      "'Call your mother.'",
+      "'Your son's game is right now.'",
+      "'Your meeting with Ahmed is right now.'",
+    ]) {
+      expect(result).toContain(example);
+    }
+  });
+
+  // The dead canon: framing on an action ('... right now', 'Please ...') and an
+  // event line that narrates the clock instead of saying it is happening.
+  it("carries none of the pre-OLD-104 framing examples", () => {
+    const result = buildDescriptionInstruction();
+    for (const dead of [
       "'Drink your water right now.'",
       "'Take your pills right now.'",
       "'Please take your pills.'",
       "'Your son's game is starting this minute.'",
-      "'Your son has a game right now.'",
+      "'اشرب ماءك الآن.'",
+      "'خذ حبوبك الآن.'",
+      "'من فضلك خذ حبوبك.'",
+      "'مباراة ابنك تبدأ الآن.'",
     ]) {
-      expect(result).toContain(example);
+      expect(result).not.toContain(dead);
     }
   });
 
   it("gives the same few-shots in Arabic so Arabic input gets an Arabic line", () => {
     const result = buildDescriptionInstruction();
     for (const example of [
-      "'اشرب ماءك الآن.'",
-      "'خذ حبوبك الآن.'",
-      "'من فضلك خذ حبوبك.'",
-      "'مباراة ابنك تبدأ الآن.'",
+      "'اشرب ماءك.'",
+      "'خذ حبوبك.'",
+      "'اتصل بأمك.'",
+      "'مباراة ابنك الآن.'",
+      "'اجتماعك مع أحمد الآن.'",
     ]) {
       expect(result).toContain(example);
     }
@@ -249,6 +267,14 @@ describe("buildPreReminderInstruction", () => {
   // because it may be heard late, the heads-up exists to name the lead time.
   it("keeps the lead time in the heads-up line", () => {
     expect(buildPreReminderInstruction()).toContain("the one place a time span belongs");
+  });
+
+  // The advance notice is the one line the '[X] is right now' shape does not
+  // apply to — it is spoken before the thing, so it names the span instead.
+  it("exempts itself from the right-now shape (OLD-104)", () => {
+    expect(buildPreReminderInstruction()).toContain(
+      "names the lead span in place of saying the thing is right now"
+    );
   });
 });
 
@@ -303,12 +329,35 @@ describe("SPOKEN_LINE_RULE", () => {
     expect(SPOKEN_LINE_RULE).toContain("about the thing itself and nothing else");
   });
 
-  it("offers the three registers the model may pick between", () => {
-    expect(SPOKEN_LINE_RULE).toContain("a direct instruction ('Drink your water right now.')");
+  it("names the two shapes and nothing beyond them (OLD-104)", () => {
+    expect(SPOKEN_LINE_RULE).toContain("exactly TWO shapes");
     expect(SPOKEN_LINE_RULE).toContain(
-      "a stated fact ('Your son's game is starting this minute.')"
+      "Something the user DOES is a bare imperative and nothing else"
     );
-    expect(SPOKEN_LINE_RULE).toContain("a polite request ('Please take your pills.')");
+    expect(SPOKEN_LINE_RULE).toContain("'Drink your water.'");
+    expect(SPOKEN_LINE_RULE).toContain("'Take your pills.'");
+    expect(SPOKEN_LINE_RULE).toContain(
+      "Something that HAPPENS on its own is stated as happening now"
+    );
+    expect(SPOKEN_LINE_RULE).toContain("'Your son's game is right now.'");
+  });
+
+  it("mirrors both shapes in Arabic", () => {
+    expect(SPOKEN_LINE_RULE).toContain("'اشرب ماءك.'");
+    expect(SPOKEN_LINE_RULE).toContain("'خذ حبوبك.'");
+    expect(SPOKEN_LINE_RULE).toContain("'مباراة ابنك الآن.'");
+    expect(SPOKEN_LINE_RULE).toContain("'رحلتك الآن.'");
+  });
+
+  // The framing the shapes replaced: an action padded with 'right now' or a
+  // 'please', and an event line that restates the clock it was set for.
+  it("kills the framing the old registers allowed", () => {
+    expect(SPOKEN_LINE_RULE).toContain("no 'right now' on the end");
+    expect(SPOKEN_LINE_RULE).toContain("no 'please'");
+    expect(SPOKEN_LINE_RULE).toContain("never restate the clock the reminder was set for");
+    expect(SPOKEN_LINE_RULE).not.toContain("a polite request");
+    expect(SPOKEN_LINE_RULE).not.toContain("Drink your water right now.");
+    expect(SPOKEN_LINE_RULE).not.toContain("is starting this minute");
   });
 
   it("forbids the clock, label and lead-in openers by name, in both languages", () => {
@@ -844,18 +893,6 @@ describe("buildVariantInstruction", () => {
   });
 });
 
-// ─── useDenseAlarmWav ───────────────────────────────────────────────────────
-
-describe("useDenseAlarmWav", () => {
-  it("gives persistent reminders the dense in-file shape", () => {
-    expect(useDenseAlarmWav(true)).toBe(true);
-  });
-
-  it("leaves every other tier with one utterance and a silence tail", () => {
-    expect(useDenseAlarmWav(false)).toBe(false);
-  });
-});
-
 // ─── Alarm WAV pipeline ─────────────────────────────────────────────────────
 
 const ascii = (bytes: Uint8Array, offset: number, length: number) =>
@@ -994,38 +1031,14 @@ describe("buildAlarmWav", () => {
   const matches = (actual: Uint8Array, expected: Uint8Array) =>
     actual.length === expected.length && actual.every((byte, i) => byte === expected[i]);
 
-  it("pads a normal line with silence out to the target length", () => {
+  it("repeats the line with a 2s gap between passes", () => {
     const pcm = line(4);
-    const wav = buildAlarmWav(pcm, RATE, { dense: false });
-
-    expect(seconds(wav)).toBe(ALARM_WAV_TARGET_SECONDS);
-    expect(matches(body(wav).slice(0, pcm.length), pcm)).toBe(true);
-    expect(isSilent(body(wav).slice(pcm.length))).toBe(true);
-  });
-
-  it("keeps the wav playable: header sizes match the padded body", () => {
-    const wav = buildAlarmWav(line(4), RATE, { dense: false });
-    expect(ascii(wav, 0, 4)).toBe("RIFF");
-    expect(u32(wav, 40)).toBe(wav.length - 44);
-    expect(u32(wav, 24)).toBe(RATE);
-  });
-
-  it("honours a non-default sample rate", () => {
-    const wav = buildAlarmWav(new Uint8Array(24000 * 2 * 4).fill(7), 24000, {
-      dense: false,
-    });
-    expect(pcmDurationSeconds(wav.length - 44, 24000)).toBe(ALARM_WAV_TARGET_SECONDS);
-    expect(u32(wav, 24)).toBe(24000);
-  });
-
-  it("repeats the line with a 2s gap in the dense shape", () => {
-    const pcm = line(4);
-    const passBytes = pcm.length + ALARM_WAV_DENSE_GAP_SECONDS * BYTES_PER_SECOND;
-    const wav = buildAlarmWav(pcm, RATE, { dense: true });
+    const passBytes = pcm.length + ALARM_WAV_GAP_SECONDS * BYTES_PER_SECOND;
+    const wav = buildAlarmWav(pcm, RATE);
 
     // 4s line + 2s gap = 6s per pass; four whole passes fit inside 28s.
     const passes = 4;
-    expect(seconds(wav)).toBe(passes * (4 + ALARM_WAV_DENSE_GAP_SECONDS));
+    expect(seconds(wav)).toBe(passes * (4 + ALARM_WAV_GAP_SECONDS));
     for (let pass = 0; pass < passes; pass++) {
       const offset = pass * passBytes;
       expect(matches(body(wav).slice(offset, offset + pcm.length), pcm)).toBe(true);
@@ -1035,56 +1048,72 @@ describe("buildAlarmWav", () => {
     }
   });
 
-  it("stops before the dense pass that would overrun the target", () => {
+  it("never goes quiet for longer than one gap", () => {
+    // The bug this replaced: one utterance, then ~24s of dead air per loop.
+    const wav = buildAlarmWav(line(4), RATE);
+    let run = 0;
+    let longestSilence = 0;
+    for (const byte of body(wav)) {
+      run = byte === 0 ? run + 1 : 0;
+      if (run > longestSilence) longestSilence = run;
+    }
+    expect(longestSilence).toBe(ALARM_WAV_GAP_SECONDS * BYTES_PER_SECOND);
+  });
+
+  it("keeps the wav playable: header sizes match the shaped body", () => {
+    const wav = buildAlarmWav(line(4), RATE);
+    expect(ascii(wav, 0, 4)).toBe("RIFF");
+    expect(u32(wav, 40)).toBe(wav.length - 44);
+    expect(u32(wav, 24)).toBe(RATE);
+  });
+
+  it("honours a non-default sample rate", () => {
+    // Same 4s line + 2s gap arithmetic, measured against 24kHz bytes.
+    const wav = buildAlarmWav(new Uint8Array(24000 * 2 * 4).fill(7), 24000);
+    expect(pcmDurationSeconds(wav.length - 44, 24000)).toBe(24);
+    expect(u32(wav, 24)).toBe(24000);
+  });
+
+  it("stops before the pass that would overrun the target", () => {
     // 10s line + 2s gap = 12s per pass: two fit, a third would be 36s.
-    const wav = buildAlarmWav(line(10), RATE, { dense: true });
+    const wav = buildAlarmWav(line(10), RATE);
     expect(seconds(wav)).toBe(24);
   });
 
-  it("ships a line that already fills the budget unpadded, in either shape", () => {
+  it("ships a line that already fills the budget unpadded", () => {
     const pcm = new Uint8Array(BYTES_PER_SECOND * 28.5).fill(7);
-    for (const dense of [false, true]) {
-      const wav = buildAlarmWav(pcm, RATE, { dense });
-      expect(wav.length).toBe(44 + pcm.length);
-      expect(seconds(wav)).toBeCloseTo(28.5, 5);
-    }
+    const wav = buildAlarmWav(pcm, RATE);
+    expect(wav.length).toBe(44 + pcm.length);
+    expect(seconds(wav)).toBeCloseTo(28.5, 5);
   });
 
-  it("drops the dense gap rather than exceed the target with one pass", () => {
+  it("drops the gap rather than exceed the target with one pass", () => {
     // 27s line + 2s gap = 29s, so not even one whole pass fits: line only.
     const pcm = line(27);
-    const wav = buildAlarmWav(pcm, RATE, { dense: true });
+    const wav = buildAlarmWav(pcm, RATE);
     expect(wav.length).toBe(44 + pcm.length);
   });
 
-  it("never emits a file at or past the 29s ceiling", () => {
+  it("stays inside the target, and never reaches the 29s ceiling", () => {
     for (const lineSeconds of [1, 3, 4.5, 9, 13, 27]) {
-      for (const dense of [false, true]) {
-        const pcm = new Uint8Array(Math.round(lineSeconds * BYTES_PER_SECOND)).fill(7);
-        const wav = buildAlarmWav(pcm, RATE, { dense });
-        expect(seconds(wav)).toBeLessThanOrEqual(ALARM_WAV_MAX_SECONDS);
-        expect(ALARM_WAV_MAX_SECONDS).toBeLessThan(MAX_ALARM_SOUND_SECONDS);
-      }
+      const pcm = new Uint8Array(Math.round(lineSeconds * BYTES_PER_SECOND)).fill(7);
+      const wav = buildAlarmWav(pcm, RATE);
+      // Whole passes only, so a shaped file never runs past the target.
+      expect(seconds(wav)).toBeLessThanOrEqual(ALARM_WAV_TARGET_SECONDS);
+      expect(seconds(wav)).toBeLessThanOrEqual(ALARM_WAV_MAX_SECONDS);
+      expect(ALARM_WAV_MAX_SECONDS).toBeLessThan(MAX_ALARM_SOUND_SECONDS);
     }
   });
 
   it("still rejects an utterance longer than iOS allows", () => {
     const pcm = new Uint8Array(BYTES_PER_SECOND * (MAX_ALARM_SOUND_SECONDS + 1));
-    expect(() => buildAlarmWav(pcm, RATE, { dense: false })).toThrow(
-      /over the 30s limit/
-    );
+    expect(() => buildAlarmWav(pcm, RATE)).toThrow(/over the 30s limit/);
   });
 
   it("rejects an empty body and an unusable rate the same way pcmToWav does", () => {
-    expect(() => buildAlarmWav(new Uint8Array(0), RATE, { dense: false })).toThrow(
-      /empty PCM buffer/
-    );
-    expect(() => buildAlarmWav(line(1), 0, { dense: false })).toThrow(
-      /Invalid PCM sample rate/
-    );
-    expect(() => buildAlarmWav(line(1), Number.NaN, { dense: true })).toThrow(
-      /Invalid PCM sample rate/
-    );
+    expect(() => buildAlarmWav(new Uint8Array(0), RATE)).toThrow(/empty PCM buffer/);
+    expect(() => buildAlarmWav(line(1), 0)).toThrow(/Invalid PCM sample rate/);
+    expect(() => buildAlarmWav(line(1), Number.NaN)).toThrow(/Invalid PCM sample rate/);
   });
 });
 

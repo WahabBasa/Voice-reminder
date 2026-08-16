@@ -12,8 +12,9 @@ for every tier except persistent — and even persistent needs breath between ut
 AlarmKit cannot do "ring once" or "pause between rings" inside a single alarm. We fake it
 from our side with two knobs we do control:
 
-1. **In-file audio shape** — what's inside the ≤30s wav (one utterance + silence tail, or
-   dense repeats) controls what one ringing alarm sounds like.
+1. **In-file audio shape** — what's inside the ≤30s wav controls what one ringing alarm sounds
+   like. (Amended by OLD-103: one shape for every tier — utterance + 2s gap, repeated. The
+   silence-tail shape shipped as ~25s of dead air per loop and is gone.)
 2. **Sibling alarms** — 1–3 real AlarmKit alarms per occurrence, staggered minutes apart,
    each with a differently-worded variant line, are perceived as one assistant coming back.
 
@@ -23,10 +24,13 @@ from our side with two knobs we do control:
 
 | Tier | Rungs (alarms per occurrence) | In-file shape | Rung offsets from fire time T |
 |------|------------------------------|---------------|-------------------------------|
-| routine | 1 | one utterance + silence tail | T |
-| notice | 2 | one utterance + silence tail | T, T+3min |
-| urgent | 3 | one utterance + silence tail | T, T+3min, T+7min |
-| persistent=true | 3 | **dense**: utterance + 2s gap, repeated | T, T+2min, T+5min |
+| routine | 1 | utterance + 2s gap, repeated | T |
+| notice | 2 | utterance + 2s gap, repeated | T, T+3min |
+| urgent | 3 | utterance + 2s gap, repeated | T, T+3min, T+7min |
+| persistent=true | 3 | utterance + 2s gap, repeated | T, T+2min, T+5min |
+
+The in-file shape stopped varying by tier in OLD-103: the tier decides how many times the phone
+comes back, not what one ring sounds like.
 
 Offsets are exported constants in `lib/notificationDecisions.ts` (`LADDER_OFFSETS_MS`,
 `LADDER_OFFSETS_PERSISTENT_MS`) — they will be re-tuned after the device test that measures
@@ -34,13 +38,13 @@ how long iOS rings an unattended AlarmKit alarm. Do not scatter magic numbers.
 
 ### WAV shaping (server)
 
-- `buildAlarmWav(pcm: Uint8Array, sampleRate: number, opts: { dense: boolean }): Uint8Array`
-  in `convex/helpers.ts`, composing on top of the existing `pcmToWav` wrapper.
-  - normal: `[line][zero-sample silence]` padded to `ALARM_WAV_TARGET_SECONDS = 28`.
-  - dense: `[line][2s silence]` repeated until adding another pass would exceed 28s.
+- `buildAlarmWav(pcm: Uint8Array, sampleRate: number): Uint8Array` in `convex/helpers.ts`,
+  composing on top of the existing `pcmToWav` wrapper.
+  - `[line][2s zero-sample silence]` repeated until adding another pass would exceed
+    `ALARM_WAV_TARGET_SECONDS = 28`.
   - Hard cap 29s (iOS rejects ≥30s; existing guard stays).
-  - Silence for 16-bit mono PCM is zero bytes, 2 bytes/sample. If the line alone exceeds
-    28s, ship it unpadded (existing length guard already throws over 30s).
+  - Silence for 16-bit mono PCM is zero bytes, 2 bytes/sample. If not even one line+gap pass
+    fits, ship the line bare (existing length guard already throws over 30s).
 
 ### Storage / schema (additive, optional — never break existing consumers)
 
@@ -129,9 +133,11 @@ front of the point, and the name made it worse. The catch pool, the rotation sta
 (`convex/speechCatch.ts`, `speechCatchState`) and the TTS-time prepend are deleted: what is
 stored is exactly what is spoken.
 
-The voice is now ONE short present-tense sentence about the thing itself, in whichever
-register the content calls for — instruction ("Drink your water right now."), stated fact
-("Your son's game is starting this minute."), or polite request ("Please take your pills.").
+The voice is now ONE short present-tense sentence about the thing itself. Amended by
+OLD-104 (2026-08-16): the three-register menu collapsed to exactly two shapes — actions are
+a bare imperative ("Drink your water."), events are "[X] is right now." ("Your son's game
+is right now."). No "right now" tail on actions, no polite requests, no clock times in the
+line.
 Openers, greetings, names and wellness commentary are all banned, in both languages
 (`SPOKEN_LINE_RULE`, convex/helpers.ts). The catch wordings ("Heads up", "By the way",
 "Don't forget") moved from exempt to banned — nothing prepends them any more, so the model

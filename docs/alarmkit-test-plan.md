@@ -285,9 +285,10 @@ confirming against the merged tree before it is filed.
 the same alarms, the same wav pipeline and the same event log, so a failure in steps 1-8
 invalidates everything here. Run this section only after step 3 passes.
 
-The ladder changes two things you can hear: **what one ringing alarm sounds like** (one utterance
-then silence, vs. dense repeats) and **how many times the phone comes back** (1-3 alarms staggered
-minutes apart). Both need ears on a real device — no test in the repo can hear a wav.
+The ladder changes two things you can hear: **what one ringing alarm sounds like** (the line, a 2s
+breath, the line again, for as long as it rings — the same shape on every tier since OLD-103) and
+**how many times the phone comes back** (1-3 alarms staggered minutes apart). Both need ears on a
+real device — no test in the repo can hear a wav.
 
 ## Extra prerequisites
 
@@ -301,7 +302,7 @@ minutes apart). Both need ears on a real device — no test in the repo can hear
     | R-routine | "remind me to water the plants at 4" | `routine` | 1 |
     | R-notice | "let me know my dentist appointment is coming up at 4" | `notice` | 2 |
     | R-urgent | "remind me I have to leave for the airport at 4" | `urgent` | 3 |
-    | R-persistent | "remind me to take my heart medicine at 4, don't let me miss it" | `persistent=true` | 3 (dense) |
+    | R-persistent | "remind me to take my heart medicine at 4, don't let me miss it" | `persistent=true` | 3 |
 
 11. Schedule each 3 minutes out, one at a time. Two ladders running at once makes the tape
     unreadable and the ears unreliable.
@@ -337,34 +338,34 @@ metadata was built); deltas that are not the PRD offsets (someone hard-coded a g
 importing `LADDER_OFFSETS_MS`); the same appKey scheduled twice ~20ms apart (the dedup fix
 regressed — that is the 2026-08-07 race).
 
-### 10. Once-then-silence audio shape (routine / notice / urgent)
+### 10. Repeating audio shape (routine / notice / urgent)
 
 Lock and mute the phone. Let **R-urgent** rung 0 ring and do nothing — hands off, phone face down.
 
 Listen to a single ring, start to finish:
 
-- **Pass:** the line is spoken **once**, then the alarm keeps ringing but is **silent** for the
-  rest of the ring, until iOS gives up. One utterance per ring is the whole north star.
-- **Fail:** the line repeats back-to-back with no gap. That is the old unshaped wav — the alarm is
-  playing a short file on loop, which means `buildAlarmWav` did not pad it.
+- **Pass:** the line is spoken, then roughly **2 seconds of quiet**, then spoken again, repeating
+  for the whole ring. Insistent, but with breath — not a wall of speech.
+- **Fail (too dense):** back-to-back with no gap. That is the old unshaped wav — the alarm is
+  playing a short file on loop, which means `buildAlarmWav` never ran on that path.
+- **Fail (too sparse):** spoken once, then silence for the rest of the ring. That is a wav stored
+  before OLD-103 — stored wavs are never rewritten, so re-create the reminder and listen again.
 
 There is no log line for this. The only tape-side hint is `soundName=reminder_<id>.wav` on the
 `scheduled` line, which proves *a* wav was used, not that it was shaped. Trust your ears.
 
-Repeat for **R-routine** and **R-notice** rung 0 — all three non-persistent tiers must sound the
-same way. If routine sounds right and urgent loops, the variant wav path is unshaped while the
-base one is fine (or the reverse) — note which.
+Repeat for **R-routine** and **R-notice** rung 0 — every tier must sound the same way. If routine
+sounds right and urgent loops, the variant wav path is unshaped while the base one is fine (or the
+reverse) — note which.
 
-### 11. Dense shape (persistent only)
+### 11. Same shape on persistent
 
 Same setup with **R-persistent** rung 0.
 
-- **Pass:** the line is spoken, then roughly **2 seconds of quiet**, then spoken again, repeating
-  for the whole ring. Insistent, but with breath — not a wall of speech.
-- **Fail (too dense):** back-to-back with no gap → the dense branch is emitting bare repeats.
-- **Fail (too sparse):** spoken once then silence → `useDenseAlarmWav` did not see `persistent`.
-  Confirm the reminder actually carries `persistent=true` in the app's reminder detail; the `tier=`
-  field on the scheduled line shows urgency, not persistence.
+- **Pass:** identical to step 10 — line, ~2s quiet, line again. The tier changes how many times the
+  phone comes back (step 9), never what one ring sounds like.
+- **Fail:** it sounds different from step 10 at all — the two paths have drifted, since one
+  `buildAlarmWav` shape now serves every tier.
 
 ### 12. Unattended ring duration — the measurement that tunes the offsets
 
@@ -540,8 +541,8 @@ Any `alarmkit` line on Android is a missing `Platform.OS === "ios"` gate and a h
 | # | Step | What it proves | Pass |
 |---|------|----------------|------|
 | 9 | Rung count and stagger per tier | `variantCountForTier` ↔ `LADDER_OFFSETS_MS` | ☐ |
-| 10 | Once-then-silence audio shape | `buildAlarmWav` normal padding | ☐ |
-| 11 | Dense shape on persistent | `buildAlarmWav` dense branch | ☐ |
+| 10 | Line repeats with a 2s breath | `buildAlarmWav` pass shaping | ☐ |
+| 11 | Persistent sounds the same as the rest | one wav shape for every tier | ☐ |
 | 12 | Unattended ring duration measured | the numbers that re-tune the offsets | ☐ |
 | 13 | Variants escalate, no canned openers, late-true | phrasing contract + variant wav staging | ☐ |
 | 14 | Done on a rung kills siblings (locked, killed) | native sibling cancel + event seam | ☐ |
@@ -561,8 +562,8 @@ ladder works at all.
 | One alarm where three were expected | `event=scheduled` count, `tier=` field | model assigned a lower tier, or ladder expansion was skipped |
 | Rungs at the wrong minutes | fire-date deltas on `scheduled` | offsets not read from `lib/notificationDecisions.ts` |
 | Same appKey scheduled twice ~20ms apart | two `event=scheduled` with one appKey | in-flight dedup regressed |
-| Line loops back-to-back inside one ring | none (ears only) | wav shipped unpadded — `buildAlarmWav` not applied on that path |
-| Persistent sounds like routine | reminder detail shows `persistent` | `useDenseAlarmWav` not fed the flag |
+| Line loops back-to-back inside one ring | none (ears only) | wav shipped unshaped — `buildAlarmWav` not applied on that path |
+| Line spoken once, then a long silence | `audioUpdatedAt` on the reminder | wav stored before OLD-103; stored wavs are never rewritten — re-create the reminder |
 | Every rung says the same sentence | `event=variant_sound_hydration_failed`, `soundName=` per rung | variant wavs never staged; base-wav fallback (correct, but wording is wrong) |
 | `soundName=system_default` on any rung | `event=scheduled` | fallback chain broke — never acceptable |
 | Siblings ring after Done | `siblings=` on the original `scheduled` lines | metadata never reached the native store, or the UUID rotated before cancel |

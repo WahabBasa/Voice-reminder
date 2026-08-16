@@ -157,14 +157,14 @@ Current pipeline, for reference:
 
 - `convex/actions.ts:288` `synthesizeWithElevenLabs({ text, outputFormat })` — one POST, raw binary body.
 - `convex/actions.ts:328` `synthesizeReminderTts` → mp3 for playback (all platforms).
-- `convex/actions.ts:343` `synthesizeAlarmWav(text, dense)` → second call with
+- `convex/actions.ts:343` `synthesizeAlarmWav(text)` → second call with
   `ALARM_PCM_OUTPUT_FORMAT = "pcm_22050"` (`convex/helpers.ts:215`), then `buildAlarmWav` shapes it
   and `pcmToWav` prepends a 44-byte RIFF header.
 - `convex/actions.ts:352` `synthesizeAndStoreLineTts` runs both in `Promise.all`, stores mp3 as
   `audio/mpeg` and wav as `audio/wav` in Convex storage.
 - `convex/helpers.ts:207-212` assumes **mono, signed 16-bit LE, 22050 Hz**; `pcmToWav` throws over
-  `MAX_ALARM_SOUND_SECONDS = 30`; `buildAlarmWav` pads to `ALARM_WAV_TARGET_SECONDS = 28` (normal)
-  or repeats `[line][2s gap]` (dense).
+  `MAX_ALARM_SOUND_SECONDS = 30`; `buildAlarmWav` repeats `[line][2s gap]` out to
+  `ALARM_WAV_TARGET_SECONDS = 28`.
 - `lib/alarmSounds.ts` downloads the wav, stages it in Documents, and the native bridge copies it
   into `Library/Sounds` as `reminder_<id>.wav` / `reminder_<id>_v<k>.wav`.
 

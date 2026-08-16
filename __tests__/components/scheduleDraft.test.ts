@@ -11,10 +11,10 @@ import {
   EVERY_N_DAYS_MIN,
   describeDraftDays,
   describeDraftTimes,
+  describeDraftWindow,
   describeGridSubtitle,
   draftFromGrid,
   draftFromReminder,
-  formatClock12,
   formatEveryMinutes,
   fromDateString,
   gridFromDraft,
@@ -280,14 +280,9 @@ describe('saveShapeFromDraft', () => {
   });
 });
 
+// Clock times are formatted by lib/time (see __tests__/lib/time.test.ts); the
+// dial is passed in here so these labels read the same on any device.
 describe('labels', () => {
-  it('formats a clock time in 12-hour', () => {
-    expect(formatClock12('08:00')).toBe('8:00 am');
-    expect(formatClock12('00:30')).toBe('12:30 am');
-    expect(formatClock12('12:00')).toBe('12:00 pm');
-    expect(formatClock12('21:05')).toBe('9:05 pm');
-  });
-
   it('formats an interval', () => {
     expect(formatEveryMinutes(45)).toBe('45 min');
     expect(formatEveryMinutes(120)).toBe('2 hr');
@@ -305,20 +300,36 @@ describe('labels', () => {
   });
 
   it('describes the times axis without running off the row', () => {
-    expect(describeDraftTimes(baseDraft({ times: ['08:00'] }))).toBe('8:00 am');
-    expect(describeDraftTimes(baseDraft({ times: ['08:00', '21:00'] }))).toBe('8:00 am, 9:00 pm');
-    expect(describeDraftTimes(baseDraft({ times: ['08:00', '13:00', '21:00'] }))).toBe('8:00 am +2');
-    expect(describeDraftTimes(baseDraft({ timesMode: 'interval', everyMinutes: 120 })))
+    const h12 = { hour12: true };
+    expect(describeDraftTimes(baseDraft({ times: ['08:00'] }), h12)).toBe('8:00 am');
+    expect(describeDraftTimes(baseDraft({ times: ['08:00', '21:00'] }), h12))
+      .toBe('8:00 am, 9:00 pm');
+    expect(describeDraftTimes(baseDraft({ times: ['08:00', '13:00', '21:00'] }), h12))
+      .toBe('8:00 am +2');
+    expect(describeDraftTimes(baseDraft({ timesMode: 'interval', everyMinutes: 120 }), h12))
       .toBe('Every 2 hr');
   });
 
-  it('describes a grid for the card subtitle', () => {
+  it('describes the times axis on a 24-hour device', () => {
+    expect(describeDraftTimes(baseDraft({ times: ['08:00', '21:00'] }), { hour12: false }))
+      .toBe('08:00, 21:00');
+  });
+
+  it('describes the interval window on either dial', () => {
+    const draft = baseDraft({ timesMode: 'interval' });
+    expect(describeDraftWindow(draft, { hour12: true })).toBe('8:00 am – 10:00 pm');
+    expect(describeDraftWindow(draft, { hour12: false })).toBe('08:00 – 22:00');
+  });
+
+  it('describes a grid for the card subtitle on a 24-hour device', () => {
+    const h24 = { hour12: false };
+
     expect(
       describeGridSubtitle({
         type: 'grid',
         days: { kind: 'weekdays', days: ['mon', 'thu'] },
         times: { kind: 'clock', times: ['08:00', '21:00'] },
-      })
+      }, h24)
     ).toBe('08:00, 21:00 · Mon, Thu');
 
     expect(
@@ -326,7 +337,7 @@ describe('labels', () => {
         type: 'grid',
         days: { kind: 'everyday' },
         times: { kind: 'clock', times: ['08:00', '12:00', '16:00', '20:00'] },
-      })
+      }, h24)
     ).toBe('08:00, 12:00 +2 · Daily');
 
     expect(
@@ -334,7 +345,7 @@ describe('labels', () => {
         type: 'grid',
         days: { kind: 'everyNDays', interval: 3, startDate: '2026-08-20' },
         times: { kind: 'clock', times: ['09:00'] },
-      })
+      }, h24)
     ).toBe('09:00 · Every 3 days');
 
     // A one-off says its time; the card is already filed under its day.
@@ -343,7 +354,7 @@ describe('labels', () => {
         type: 'grid',
         days: { kind: 'date', date: '2026-09-01' },
         times: { kind: 'clock', times: ['09:00'] },
-      })
+      }, h24)
     ).toBe('09:00');
 
     expect(
@@ -351,8 +362,37 @@ describe('labels', () => {
         type: 'grid',
         days: { kind: 'everyday' },
         times: { kind: 'interval', everyMinutes: 120, windowStart: '08:00', windowEnd: '22:00' },
-      })
+      }, h24)
     ).toBe('Every 2 hr · 08:00–22:00');
+  });
+
+  it('carries the meridiem onto a 12-hour card (OLD-105)', () => {
+    const h12 = { hour12: true };
+
+    expect(
+      describeGridSubtitle({
+        type: 'grid',
+        days: { kind: 'weekdays', days: ['mon', 'thu'] },
+        times: { kind: 'clock', times: ['07:15', '19:15'] },
+      }, h12)
+    ).toBe('7:15 am, 7:15 pm · Mon, Thu');
+
+    // One fewer time inline than the 24-hour card: "+N" keeps the row on one line.
+    expect(
+      describeGridSubtitle({
+        type: 'grid',
+        days: { kind: 'everyday' },
+        times: { kind: 'clock', times: ['08:00', '13:00', '21:00'] },
+      }, h12)
+    ).toBe('8:00 am +2 · Daily');
+
+    expect(
+      describeGridSubtitle({
+        type: 'grid',
+        days: { kind: 'everyday' },
+        times: { kind: 'interval', everyMinutes: 120, windowStart: '08:00', windowEnd: '22:00' },
+      }, h12)
+    ).toBe('Every 2 hr · 8:00 am–10:00 pm');
   });
 });
 

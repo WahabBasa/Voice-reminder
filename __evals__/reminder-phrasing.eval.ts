@@ -5,10 +5,12 @@
  * the model actually returns. It sends real transcripts through the exact
  * system prompt processVoiceReminderFast ships (buildSystemPrompt) to the same
  * model with the same call parameters, then checks the generated spoken lines
- * against the canon voice (OLD-95): ONE short present-tense sentence about the
- * thing itself — no openers or lead-ins, no greetings, no name, no wellness
- * commentary, no template echoes, inside the word budget, and variants that
- * each open differently.
+ * against the canon voice (OLD-95, re-cut in OLD-104): ONE short present-tense
+ * sentence in one of two shapes — a bare imperative for something the user does
+ * ("Drink your water."), "[the thing] is right now" for something that happens
+ * ("Your son's game is right now.") — with no openers or lead-ins, no greetings,
+ * no name, no politeness, no wellness commentary, no template echoes, inside the
+ * word budget, and variants that each open differently.
  *
  * Run:   npm run eval
  * Needs: OPENROUTER_API_KEY in the environment (Convex holds it:
@@ -65,9 +67,9 @@ const GREETINGS = ["hey", "hi ", "hello", "مرحبا", "أهلا", "أهلاً"
 const TEMPLATE_ECHOES = ["short title", "2-4 words", "HH:MM", "YYYY-MM-DD", "what to say when"];
 
 // Wellness/benefit commentary: the line says the thing and stops. "Drink your
-// water right now." passes; "Drink your water to stay hydrated and healthy."
-// is the failure mode this catches (the model's favourite way of padding a
-// four-word task into a sentence that sounds like an ad).
+// water." passes; "Drink your water to stay hydrated and healthy." is the
+// failure mode this catches (the model's favourite way of padding a
+// three-word task into a sentence that sounds like an ad).
 // Deliberately phrases, not single words: "healthy" alone would fail a
 // perfectly good "Cook a healthy dinner" the user asked for.
 const WELLNESS_COMMENTARY = [
@@ -88,6 +90,19 @@ const WELLNESS_COMMENTARY = [
 // Addressing the user at all is out (no address term reaches the prompt any
 // more), so an Arabic vocative or an English honorific is a violation.
 const ADDRESS_FORMS = [/\bsir\b/i, /\bma'?am\b/i, /\bmy friend\b/i, /(^|\s)يا\s/u];
+
+// Politeness (OLD-104): an action line is a bare imperative, so a request
+// wrapper anywhere in it is a violation — "Please take your pills." was canon
+// until the two shapes replaced the three registers.
+const POLITENESS = [/\bplease\b/i, /\bcould you\b/i, /\bwould you\b/i, /من فضلك/u, /لو سمحت/u, /رجاء/u];
+
+// Framing on an action line (OLD-104): "Take your pills right now." pads a bare
+// imperative with the tail that only the event shape is allowed to carry, which
+// is why the exemption is the literal "is right now".
+// English only — telling an Arabic imperative from an Arabic nominal sentence
+// needs a parse, so a padded "اشرب ماءك الآن." is caught by review, not here.
+const isPaddedAction = (line: string) =>
+  /\bright now\b/i.test(line) && !/\bis right now\b/i.test(line);
 
 const wordCount = (line: string) => line.trim().split(/\s+/).filter(Boolean).length;
 
@@ -138,6 +153,14 @@ function lintLine({ field, text }: SpokenLine, maxWords: number): string[] {
     if (form.test(text)) {
       problems.push(`${field} addresses the user: "${text}"`);
     }
+  }
+  for (const form of POLITENESS) {
+    if (form.test(text)) {
+      problems.push(`${field} asks politely instead of instructing: "${text}"`);
+    }
+  }
+  if (isPaddedAction(text)) {
+    problems.push(`${field} pads an action with right-now framing: "${text}"`);
   }
   if (sentenceCount(text) > 1) {
     problems.push(`${field} is more than one sentence: "${text}"`);
@@ -200,9 +223,9 @@ describeLive("reminder phrasing (live model)", () => {
           continue;
         }
 
-        // Budgets follow the prompt: 4-9 words for the line itself, under 12
+        // Budgets follow the prompt: 3-8 words for the line itself, under 12
         // for the heads-up (it has a time span to fit), 10 for a variant.
-        violations.push(...lintLine({ field: `${label} description`, text: description }, 9));
+        violations.push(...lintLine({ field: `${label} description`, text: description }, 8));
         if (preDescription) {
           violations.push(...lintLine({ field: `${label} preDescription`, text: preDescription }, 12));
         }

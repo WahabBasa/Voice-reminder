@@ -145,7 +145,7 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
       reminders: [
         reminder({ title: "Pills", description: "Heads up — your pills are waiting." }),
         reminder({ title: "Water", description: "By the way, your glass is still full." }),
-        reminder({ title: "Game", description: "Your son's game is starting this minute." }),
+        reminder({ title: "Game", description: "Your son's game is right now." }),
       ],
     });
 
@@ -154,7 +154,7 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
     expect(plans[0].description).toBe("Pills");
     expect(plans[1].description).toBe("Water");
     // A canon line survives untouched.
-    expect(plans[2].description).toBe("Your son's game is starting this minute.");
+    expect(plans[2].description).toBe("Your son's game is right now.");
   });
 
   it("coerces frequency and days per item", () => {

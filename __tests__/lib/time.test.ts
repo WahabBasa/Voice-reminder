@@ -5,7 +5,11 @@ import {
   getDueTimestamp,
   isOverdue,
   formatReminderTime,
+  formatClockAt,
+  formatClockTime,
   formatIntervalDuration,
+  usesHour12,
+  usesHour12Format,
   planGridOccurrences,
   MAX_PENDING_OCCURRENCES,
   type ReminderSchedule,
@@ -318,6 +322,78 @@ describe("isOverdue", () => {
 
   it("returns false when timestamp equals now", () => {
     expect(isOverdue(2000, 2000)).toBe(false);
+  });
+});
+
+// ─── Clock formatting (OLD-105) ─────────────────────────────────────────────
+
+describe("usesHour12", () => {
+  it("takes Intl's answer when it gives one", () => {
+    expect(usesHour12({ hour12: true })).toBe(true);
+    expect(usesHour12({ hour12: false })).toBe(false);
+  });
+
+  it("reads the hour cycle when hour12 is missing", () => {
+    expect(usesHour12({ hourCycle: "h11" })).toBe(true);
+    expect(usesHour12({ hourCycle: "h12" })).toBe(true);
+    expect(usesHour12({ hourCycle: "h23" })).toBe(false);
+    expect(usesHour12({ hourCycle: "h24" })).toBe(false);
+  });
+
+  it("defaults to 12-hour when the engine resolved nothing", () => {
+    expect(usesHour12({})).toBe(true);
+    expect(usesHour12(null)).toBe(true);
+    expect(usesHour12(undefined)).toBe(true);
+  });
+});
+
+describe("formatClockTime", () => {
+  it("says am/pm on a 12-hour dial", () => {
+    expect(formatClockTime("07:15", { hour12: true })).toBe("7:15 am");
+    expect(formatClockTime("19:15", { hour12: true })).toBe("7:15 pm");
+    expect(formatClockTime("00:30", { hour12: true })).toBe("12:30 am");
+    expect(formatClockTime("12:00", { hour12: true })).toBe("12:00 pm");
+  });
+
+  it("keeps a padded 24-hour clock where the device is", () => {
+    expect(formatClockTime("07:15", { hour12: false })).toBe("07:15");
+    expect(formatClockTime("19:15", { hour12: false })).toBe("19:15");
+  });
+
+  it("normalizes a sloppily stored time", () => {
+    expect(formatClockTime("7:15", { hour12: true })).toBe("7:15 am");
+    expect(formatClockTime("7:15", { hour12: false })).toBe("07:15");
+    expect(formatClockTime("0800", { hour12: false })).toBe("08:00");
+  });
+
+  it("leaves something that is not a clock time alone", () => {
+    expect(formatClockTime(" whenever ", { hour12: true })).toBe("whenever");
+    expect(formatClockTime("25:00", { hour12: true })).toBe("25:00");
+    expect(formatClockTime("", { hour12: true })).toBe("");
+  });
+
+  it("falls back to the device dial when the caller does not ask", () => {
+    const dials = [
+      formatClockTime("19:15", { hour12: true }),
+      formatClockTime("19:15", { hour12: false }),
+    ];
+    expect(dials).toContain(formatClockTime("19:15"));
+    expect(typeof usesHour12Format()).toBe("boolean");
+    expect(usesHour12Format({ hour12: false })).toBe(false);
+  });
+});
+
+describe("formatClockAt", () => {
+  // Tests run with TZ=UTC (jest.config.js), so wall clock == UTC here.
+  it("formats the wall clock of a moment", () => {
+    const ts = utc(2026, 8, 16, 19, 5);
+    expect(formatClockAt(ts, { hour12: true })).toBe("7:05 pm");
+    expect(formatClockAt(new Date(ts), { hour12: false })).toBe("19:05");
+    expect(formatClockAt("2026-08-16T07:05:00.000Z", { hour12: true })).toBe("7:05 am");
+  });
+
+  it("says nothing for a moment it cannot read", () => {
+    expect(formatClockAt("not a date")).toBe("");
   });
 });
 

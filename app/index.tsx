@@ -55,6 +55,7 @@ import { submitTypedTake } from "../lib/typedTake";
 import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, isCompletedOnDay, occurrencesForDay, todayISO } from "../lib/dayOccurrences";
+import { formatClockAt } from "../lib/time";
 import { checkProStatus, getCachedProStatus } from "../lib/purchases";
 import NetInfo from "@react-native-community/netinfo";
 
@@ -62,13 +63,6 @@ import NetInfo from "@react-native-community/netinfo";
 const PAGE_TODAY = 0;
 const PAGE_DAYS = 1;
 const PAGE_SETTINGS = 2;
-
-function formatHistoryTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mm = String(date.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -966,7 +960,7 @@ export default function HomeScreen() {
         title: entry.reminderTitle,
         emoji: reminder?.emoji,
         chipColor: chipColorForId(entry.reminderId),
-        subtitle: formatHistoryTime(entry.timestamp),
+        subtitle: formatClockAt(entry.timestamp),
         missed: entry.status === "missed",
         onPress: reminder ? () => handleReminderPress(reminder) : undefined,
       };

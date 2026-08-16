@@ -29,6 +29,7 @@ import {
   type TimesRule,
   type Weekday,
 } from '../../lib/schedule';
+import { formatClockTime, usesHour12Format, type ClockFormatOptions } from '../../lib/time';
 
 export type DaysMode = 'everyday' | 'weekdays' | 'everyNDays' | 'date';
 export type TimesMode = 'clock' | 'interval';
@@ -330,14 +331,9 @@ const WEEKDAY_LABELS: Record<string, string> = {
   sun: 'Sun', mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat',
 };
 
-/** "8:00 am" from "08:00". */
-export function formatClock12(time: string): string {
-  const normalized = normalizeClockTime(time) ?? '00:00';
-  const [hours, minutes] = normalized.split(':').map(Number);
-  const suffix = hours >= 12 ? 'pm' : 'am';
-  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
-  return `${hour12}:${String(minutes).padStart(2, '0')} ${suffix}`;
-}
+// Clock times are printed by lib/time's formatClockTime — one formatter for
+// every surface, so the card, the row and the picker never disagree about
+// whether a time needs an am/pm (OLD-105).
 
 /** "45 min", "2 hr", "1 hr 30 min". */
 export function formatEveryMinutes(everyMinutes: number): string {
@@ -370,33 +366,40 @@ export function describeDraftDays(draft: ScheduleDraft): string {
 }
 
 /** Times-axis row value: "8:00 am, 9:00 pm", "8:00 am +2", "Every 2 hr". */
-export function describeDraftTimes(draft: ScheduleDraft): string {
+export function describeDraftTimes(draft: ScheduleDraft, options: ClockFormatOptions = {}): string {
   if (draft.timesMode === 'interval') return `Every ${formatEveryMinutes(draft.everyMinutes)}`;
   const times = normalizeClockTimes(draft.times);
   if (times.length === 0) return 'Pick a time';
-  if (times.length <= 2) return times.map(formatClock12).join(', ');
-  return `${formatClock12(times[0])} +${times.length - 1}`;
+  if (times.length <= 2) return times.map((time) => formatClockTime(time, options)).join(', ');
+  return `${formatClockTime(times[0], options)} +${times.length - 1}`;
 }
 
 /** Interval window row value: "8:00 am – 10:00 pm". */
-export function describeDraftWindow(draft: ScheduleDraft): string {
-  return `${formatClock12(draft.windowStart)} – ${formatClock12(draft.windowEnd)}`;
+export function describeDraftWindow(draft: ScheduleDraft, options: ClockFormatOptions = {}): string {
+  return `${formatClockTime(draft.windowStart, options)} – ${formatClockTime(draft.windowEnd, options)}`;
 }
 
 /**
- * Card subtitle for a grid: "08:00, 21:00 · Mon, Thu", "Every 2 hr · 08:00–22:00".
- * 24-hour, because that is what the cards have always shown.
+ * Card subtitle for a grid: "8:00 am, 9:00 pm · Mon, Thu",
+ * "Every 2 hr · 8:00 am–10:00 pm" — 24-hour where the device is.
  */
-export function describeGridSubtitle(schedule: GridSchedule): string {
+export function describeGridSubtitle(
+  schedule: GridSchedule,
+  options: ClockFormatOptions = {}
+): string {
   const times = schedule.times;
+  const clock = (time: string) => formatClockTime(time, options);
   if (times.kind === 'interval') {
-    return `Every ${formatEveryMinutes(times.everyMinutes)} · ${times.windowStart}–${times.windowEnd}`;
+    return `Every ${formatEveryMinutes(times.everyMinutes)} · ${clock(times.windowStart)}–${clock(times.windowEnd)}`;
   }
 
+  // "8:00 am" is four characters wider than "08:00", so the 12-hour card lists
+  // one fewer time before collapsing to "+N" — the subtitle is a single line.
+  const inline = usesHour12Format(options) ? 2 : 3;
   const shown =
-    times.times.length <= 3
-      ? times.times.join(', ')
-      : `${times.times.slice(0, 2).join(', ')} +${times.times.length - 2}`;
+    times.times.length <= inline
+      ? times.times.map(clock).join(', ')
+      : `${times.times.slice(0, inline - 1).map(clock).join(', ')} +${times.times.length - inline + 1}`;
 
   switch (schedule.days.kind) {
     case 'weekdays':
