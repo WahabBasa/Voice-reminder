@@ -76,7 +76,6 @@ jest.mock("../../lib/store", () => {
 
 jest.mock("../../lib/alarmSounds", () => ({
   ensureAlarmSound: jest.fn(async (reminderId: string) => `reminder_${reminderId}.wav`),
-  ensureVariantAlarmSound: jest.fn(async () => null),
   removeAlarmSound: jest.fn(async () => undefined),
 }));
 

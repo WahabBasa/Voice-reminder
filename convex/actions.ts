@@ -21,6 +21,29 @@ type ResembleProjectsResponse = {
 
 type TtsProvider = "resemble" | "elevenlabs";
 
+/**
+ * Keep-warm no-op (OLD-106).
+ *
+ * Every action in this file runs in the `"use node"` runtime, which is a
+ * separate container from the default Convex runtime and is torn down when it
+ * goes idle. A cold container was the leading suspect behind the one 18.4s
+ * reminder we caught (wall 18426ms against actionMs 1508ms — 17s that the
+ * action itself never saw), so `convex/crons.ts` pokes this entry every 5
+ * minutes to keep the container resident.
+ *
+ * It must stay trivial: no external API calls, no database work, no imports it
+ * doesn't already share with the parse path. Merely being invoked in this
+ * module is the entire point — the runtime boot and this file's module-level
+ * initialization (the OpenAI SDK, the prompt strings) are what we are paying
+ * to keep alive.
+ */
+export const keepWarm = internalAction({
+  args: {},
+  handler: async () => {
+    return { ok: true, at: Date.now() };
+  },
+});
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -36,7 +59,7 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildVariantInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeVariants, normalizeParsedReminders, variantCountForTier, buildAlarmWav, alignVariantWavIds, parsePcmSampleRate, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, type Urgency } from "./helpers";
+import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, type Urgency } from "./helpers";
 import { buildGridSchedule, legacyFieldsFromGrid, type GridSchedule } from "./scheduleShape";
 
 function numberEnv(name: string, fallback: number): number {
@@ -146,7 +169,6 @@ type ReminderPlan = {
   preTtsText: string;
   urgency: Urgency;
   persistent: boolean;
-  variants: string[];
   parseWarnings: string[];
 };
 
@@ -306,14 +328,11 @@ export function buildReminderPlan(
     title: parsed.title,
   });
 
-  // Assistant replay fields (urgency tier, persistence, escalating variants)
+  // Ring tier. Only the tier survives (OLD-108) — the escalating variant lines
+  // that used to be parsed alongside it are gone, and `parsed.variants` is
+  // ignored outright if an older prompt's response still carries it.
   const urgency = normalizeUrgency(parsed.urgency);
   const persistent = normalizePersistent(parsed.persistent);
-  const variants = normalizeVariants(
-    parsed.variants,
-    variantCountForTier(urgency, persistent),
-    description
-  );
 
   return {
     title: parsed.title as string,
@@ -338,7 +357,6 @@ export function buildReminderPlan(
     preTtsText,
     urgency,
     persistent,
-    variants,
     parseWarnings,
   };
 }
@@ -368,8 +386,30 @@ export function planRemindersFromRawParse(
 //
 // The spoken line addresses nobody by name (OLD-95): there is no address term
 // anywhere in this signature, so none can reach the prompt.
+/**
+ * The parse prompt, shared by every path that turns a sentence into a reminder.
+ *
+ * Ordered for prompt caching (OLD-106). Everything from here down to
+ * CURRENT CONTEXT is byte-identical on every request, so the provider can serve
+ * the ~3.6k-token instruction block from cache instead of prefilling it each
+ * time; the volatile date/time/timezone sits alone at the very END, where it
+ * invalidates nothing behind it. This block used to open with the context,
+ * which meant ~70% of the prompt sat behind a string that changed every second
+ * and could never be cached.
+ *
+ * Two consequences worth keeping in mind when editing:
+ *   1. Nothing above the CURRENT CONTEXT block may interpolate anything that
+ *      varies per request. The RELATIVE TIME RULES point at the block by name
+ *      rather than inlining the clock for exactly this reason.
+ *   2. SPOKEN LINE RULES is stated once, near the top, and the spoken field
+ *      instructions refer to it by name — so it must stay above them. There are
+ *      two of those left since OLD-108 (description, preDescription); the
+ *      replay-variant field that was the third is gone.
+ */
 export function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string }): string {
   return `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
+
+${SPOKEN_LINE_RULES_SECTION}
 
 Return exactly this format:
 {
@@ -388,9 +428,8 @@ Return exactly this format:
   "until": "ISO date for bounded recurrences",
   "preReminderMinutes": number (heads-up lead time in minutes, see PRE-REMINDER RULES),
   "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
-  "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ASSISTANT REPLAY RULES),
-  "persistent": boolean (true only for critical tasks, see ASSISTANT REPLAY RULES),
-  "variants": ["escalating alternative spoken lines, see ASSISTANT REPLAY RULES"],
+  "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ${URGENCY_RULES_HEADING}),
+  "persistent": boolean (true only for critical tasks, see ${URGENCY_RULES_HEADING}),
   "emoji": "ONE emoji that best fits the reminder (see EMOJI RULES)"
 }
 
@@ -405,11 +444,6 @@ LANGUAGE RULES:
 - The JSON field names and "frequency"/"days" values always remain in English
 - For Arabic days: الأحد=sun, الاثنين=mon, الثلاثاء=tue, الأربعاء=wed, الخميس=thu, الجمعة=fri, السبت=sat
 
-CURRENT CONTEXT:
-- Current date: ${context.currentDate} (${context.currentDayOfWeek})
-- Current time: ${context.currentTime}
-- User's timezone: ${context.timezone}
-
 DATE PARSING RULES (English & Arabic):
 - "Sunday"/"يوم الأحد", "tomorrow"/"غداً", "today"/"اليوم" → calculate actual YYYY-MM-DD
 - "next Sunday"/"الأحد القادم" → find the NEXT occurrence
@@ -418,7 +452,7 @@ DATE PARSING RULES (English & Arabic):
 - Do NOT include "date" for recurring/daily reminders
 
 RELATIVE TIME RULES:
-- "in X minutes"/"بعد X دقائق" = add to current time (${context.currentTime}) → frequency="once"
+- "in X minutes"/"بعد X دقائق" = add to current time (the Current time in CURRENT CONTEXT at the end of this prompt) → frequency="once"
 - "in X hours"/"بعد X ساعات" = add hours to current time → frequency="once"
 - "every X minutes"/"كل X دقائق" = INTERVAL reminder (frequency="interval")
 - "every X hours"/"كل X ساعات" = INTERVAL reminder (frequency="interval")
@@ -475,10 +509,15 @@ TIME PARSING (Speech-to-text quirks):
 
 ${buildPreReminderInstruction()}
 
-${buildVariantInstruction()}
+${buildReplayTierInstruction()}
 
 If no time specified, use a reasonable default.
-If no frequency specified, assume "once".${MULTI_REMINDER_INSTRUCTION}`;
+If no frequency specified, assume "once".${MULTI_REMINDER_INSTRUCTION}
+
+CURRENT CONTEXT:
+- Current date: ${context.currentDate} (${context.currentDayOfWeek})
+- Current time: ${context.currentTime}
+- User's timezone: ${context.timezone}`;
 }
 
 let cachedResembleProjectUuid: string | null = null;
@@ -566,10 +605,79 @@ async function synthesizeWithResemble(args: {
   return Buffer.from(json.audio_content, "base64");
 }
 
+const ELEVENLABS_DEFAULT_MODEL_ID = "eleven_multilingual_v2";
+
+/**
+ * Retries on a 429, so a rate-limited line comes back instead of vanishing.
+ *
+ * This is not hypothetical: the account's ceiling is TWO concurrent requests
+ * (measured — `concurrent_limit_exceeded` names the number), and one line is
+ * already two calls. A multi-reminder take runs one TTS job per reminder, so
+ * any take of two or more reminders is over the cap by construction and was
+ * quietly losing variants to it before OLD-107.
+ */
+const TTS_MAX_ATTEMPTS = 3;
+const TTS_RETRY_MIN_MS = 400;
+const TTS_RETRY_MAX_MS = 3000;
+
+function elevenLabsModelId(): string {
+  return process.env.ELEVENLABS_MODEL_ID || ELEVENLABS_DEFAULT_MODEL_ID;
+}
+
+/**
+ * Speechify carries all narration (OLD-62/OLD-66): the same Beatrice voice on
+ * simba-3.2 for English and simba-multilingual for Arabic-script lines —
+ * simba-3.2 does not reject Arabic, it silently mangles it, so the model is
+ * picked from the text (containsArabicScript), never from a response. No key
+ * in the env means the whole pipeline falls back to ElevenLabs — that is the
+ * rollback switch.
+ */
+const SPEECHIFY_DEFAULT_MODEL = "simba-3.2";
+const SPEECHIFY_DEFAULT_MULTILINGUAL_MODEL = "simba-multilingual";
+const SPEECHIFY_DEFAULT_VOICE_ID = "beatrice_32";
+
+function speechifyModelFor(text: string): string {
+  if (containsArabicScript(text)) {
+    return process.env.SPEECHIFY_MULTILINGUAL_MODEL || SPEECHIFY_DEFAULT_MULTILINGUAL_MODEL;
+  }
+  return process.env.SPEECHIFY_MODEL || SPEECHIFY_DEFAULT_MODEL;
+}
+
+function speechifyVoiceId(): string {
+  return process.env.SPEECHIFY_VOICE_ID || SPEECHIFY_DEFAULT_VOICE_ID;
+}
+
+function routesToSpeechify(_text: string): boolean {
+  return Boolean(process.env.SPEECHIFY_API_KEY);
+}
+
+/**
+ * What every synthesis timing log is labeled with (OLD-107).
+ *
+ * `ELEVENLABS_MODEL_ID` is an env override — the dev deployment runs
+ * `eleven_v3`, the slowest tier, and nothing in the logs said so. Per-line
+ * numbers captured under one model were therefore not comparable with numbers
+ * captured under another, which is exactly the comparison OLD-62/OLD-67 need.
+ */
+function ttsModelLabel(text?: string): string {
+  if (getTtsProvider() !== "elevenlabs") return "resemble";
+  if (text !== undefined && routesToSpeechify(text)) {
+    return `speechify/${speechifyModelFor(text)}`;
+  }
+  return `elevenlabs/${elevenLabsModelId()}`;
+}
+
+/** `Retry-After` in ms, clamped — a provider asking us to wait a minute is not a reason to. */
+function retryAfterMs(header: string | null): number {
+  const seconds = Number(header);
+  if (!Number.isFinite(seconds) || seconds <= 0) return TTS_RETRY_MIN_MS;
+  return Math.min(Math.max(seconds * 1000, TTS_RETRY_MIN_MS), TTS_RETRY_MAX_MS);
+}
+
 async function synthesizeWithElevenLabs(args: { text: string; outputFormat?: string }): Promise<Buffer> {
   const apiKey = requireEnv("ELEVENLABS_API_KEY");
   const voiceId = requireEnv("ELEVENLABS_VOICE_ID");
-  const modelId = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
+  const modelId = elevenLabsModelId();
   const outputFormat = args.outputFormat || process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
 
   const url = new URL(
@@ -577,38 +685,116 @@ async function synthesizeWithElevenLabs(args: { text: string; outputFormat?: str
   );
   url.searchParams.set("output_format", outputFormat);
 
-  const response = await fetch(url.toString(), {
-    method: "POST",
-    headers: {
-      "xi-api-key": apiKey,
-      "Content-Type": "application/json",
-      // PCM responses are audio/pcm; a hard audio/mpeg Accept would refuse them.
-      ...(outputFormat.startsWith("pcm_") ? {} : { Accept: "audio/mpeg" }),
-    },
-    body: JSON.stringify({
-      text: args.text,
-      model_id: modelId,
-      voice_settings: {
-        stability: clamp(numberEnv("ELEVENLABS_STABILITY", 0.5), 0, 1),
-        similarity_boost: clamp(numberEnv("ELEVENLABS_SIMILARITY_BOOST", 0.75), 0, 1),
-        style: clamp(numberEnv("ELEVENLABS_STYLE", 0), 0, 1),
-        use_speaker_boost: booleanEnv("ELEVENLABS_USE_SPEAKER_BOOST", true),
+  for (let attempt = 1; ; attempt++) {
+    const started = Date.now();
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json",
+        // PCM responses are audio/pcm; a hard audio/mpeg Accept would refuse them.
+        ...(outputFormat.startsWith("pcm_") ? {} : { Accept: "audio/mpeg" }),
       },
-    }),
-  });
+      body: JSON.stringify({
+        text: args.text,
+        model_id: modelId,
+        voice_settings: {
+          stability: clamp(numberEnv("ELEVENLABS_STABILITY", 0.5), 0, 1),
+          similarity_boost: clamp(numberEnv("ELEVENLABS_SIMILARITY_BOOST", 0.75), 0, 1),
+          style: clamp(numberEnv("ELEVENLABS_STYLE", 0), 0, 1),
+          use_speaker_boost: booleanEnv("ELEVENLABS_USE_SPEAKER_BOOST", true),
+        },
+      }),
+    });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`ElevenLabs TTS failed (${response.status}): ${body.slice(0, 500)}`);
+    // Concurrency went up in OLD-107, so the one failure that increase can
+    // cause gets handled rather than dropped: a rate-limited variant used to
+    // just vanish from the ladder.
+    if (response.status === 429 && attempt < TTS_MAX_ATTEMPTS) {
+      // Backs off further each time: a concurrency 429 clears when whatever
+      // else is in flight finishes, and retrying into the same wall is free
+      // only in the sense that it fails just as fast.
+      const waitMs = retryAfterMs(response.headers.get("retry-after")) * attempt;
+      console.warn(
+        `[VR][tts] 429 model=${modelId} format=${outputFormat} attempt=${attempt} retryInMs=${waitMs}`
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      continue;
+    }
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`ElevenLabs TTS failed (${response.status}): ${body.slice(0, 500)}`);
+    }
+
+    const audio = await response.arrayBuffer();
+    console.log(
+      `[VR][tts] call model=elevenlabs/${modelId} format=${outputFormat} chars=${args.text.length} attempt=${attempt} ms=${Date.now() - started}`
+    );
+    return Buffer.from(audio);
   }
+}
 
-  const audio = await response.arrayBuffer();
-  return Buffer.from(audio);
+/**
+ * One JSON POST, audio comes back base64 in the body (both mp3 and raw PCM ride
+ * the same envelope). Same 429 retry contract as ElevenLabs — Speechify's
+ * concurrency ceiling is unpublished, so the survivability is kept, not tuned.
+ * `text_normalization` defaults to true server-side, which is what makes
+ * "7:30" read as "seven thirty" — do not turn it off.
+ */
+async function synthesizeWithSpeechify(args: { text: string; outputFormat?: string }): Promise<Buffer> {
+  const apiKey = requireEnv("SPEECHIFY_API_KEY");
+  const model = speechifyModelFor(args.text);
+  const formatLabel = args.outputFormat || "mp3";
+  const body: Record<string, unknown> = {
+    input: args.text,
+    voice_id: speechifyVoiceId(),
+    model,
+    ...(args.outputFormat ? { output_format: args.outputFormat } : { audio_format: "mp3" }),
+  };
+
+  for (let attempt = 1; ; attempt++) {
+    const started = Date.now();
+    const response = await fetch("https://api.speechify.ai/v1/audio/speech", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (response.status === 429 && attempt < TTS_MAX_ATTEMPTS) {
+      const waitMs = retryAfterMs(response.headers.get("retry-after")) * attempt;
+      console.warn(
+        `[VR][tts] 429 model=speechify/${model} format=${formatLabel} attempt=${attempt} retryInMs=${waitMs}`
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      continue;
+    }
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "");
+      throw new Error(`Speechify TTS failed (${response.status}): ${errBody.slice(0, 500)}`);
+    }
+
+    const json = (await response.json()) as { audio_data?: string };
+    if (!json.audio_data) {
+      throw new Error("Speechify TTS returned no audio_data");
+    }
+    console.log(
+      `[VR][tts] call model=speechify/${model} format=${formatLabel} chars=${args.text.length} attempt=${attempt} ms=${Date.now() - started}`
+    );
+    return Buffer.from(json.audio_data, "base64");
+  }
 }
 
 async function synthesizeReminderTts(args: { text: string; title?: string }): Promise<Buffer> {
   const provider = getTtsProvider();
   if (provider === "elevenlabs") {
+    if (routesToSpeechify(args.text)) {
+      return await synthesizeWithSpeechify({ text: args.text });
+    }
     return await synthesizeWithElevenLabs({ text: args.text });
   }
   return await synthesizeWithResemble(args);
@@ -616,8 +802,10 @@ async function synthesizeReminderTts(args: { text: string; title?: string }): Pr
 
 /**
  * Alarm-ready WAV of one spoken line (iOS AlarmKit custom sound).
- * ElevenLabs only: PCM out, shaped into repeated utterances and wrapped with a
- * 44-byte WAV header in-process.
+ * PCM out (Speechify — simba-3.2 or simba-multilingual per the line's script;
+ * ElevenLabs only as keyless fallback — same pcm_22050 byte layout from all),
+ * shaped into repeated utterances and wrapped with a 44-byte WAV header
+ * in-process.
  * Failure returns null — the alarm degrades to the system default sound and
  * never blocks reminder creation.
  */
@@ -625,7 +813,9 @@ async function synthesizeAlarmWav(text: string): Promise<Uint8Array | null> {
   if (getTtsProvider() !== "elevenlabs") return null;
   const rate = parsePcmSampleRate(ALARM_PCM_OUTPUT_FORMAT);
   if (rate === null) return null;
-  const pcm = await synthesizeWithElevenLabs({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT });
+  const pcm = routesToSpeechify(text)
+    ? await synthesizeWithSpeechify({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT })
+    : await synthesizeWithElevenLabs({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT });
   return buildAlarmWav(new Uint8Array(pcm), rate);
 }
 
@@ -638,6 +828,7 @@ async function synthesizeAndStoreLineTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
   args: { text: string; title?: string }
 ): Promise<{ audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> }> {
+  const started = Date.now();
   const [ttsBuffer, wavBytes] = await Promise.all([
     synthesizeReminderTts(args),
     synthesizeAlarmWav(args.text).catch((e) => {
@@ -645,53 +836,66 @@ async function synthesizeAndStoreLineTts(
       return null;
     }),
   ]);
-  const audioStorageId = await ctx.storage.store(
-    new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" })
+  const synthMs = Date.now() - started;
+
+  // Both blobs at once (OLD-107). The two synths were already parallel, then
+  // their stores queued one behind the other for no reason — they share
+  // nothing, and neither result is read here.
+  const tStore = Date.now();
+  const [audioStorageId, wavStorageId] = await Promise.all([
+    ctx.storage.store(new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" })),
+    wavBytes
+      ? ctx.storage.store(new Blob([new Uint8Array(wavBytes)], { type: "audio/wav" }))
+      : Promise.resolve(undefined),
+  ]);
+
+  console.log(
+    `[VR][tts] line model=${ttsModelLabel(args.text)} chars=${args.text.length} wav=${wavBytes ? 1 : 0} synthMs=${synthMs} storeMs=${Date.now() - tStore} totalMs=${Date.now() - started}`
   );
-  let wavStorageId: Id<"_storage"> | undefined;
-  if (wavBytes) {
-    wavStorageId = await ctx.storage.store(new Blob([new Uint8Array(wavBytes)], { type: "audio/wav" }));
-  }
   return { audioStorageId, wavStorageId };
 }
 
 /**
- * TTS each replay variant into its own stored mp3 plus its ladder-rung wav.
- * Lines and audios stay in lockstep: a variant whose synthesis fails is dropped
- * entirely (fewer variants), and failures never propagate — variant audio must
- * never block reminder creation. The wav list is a prefix of the kept variants
- * (see alignVariantWavIds); rungs past it fall back to the base wav.
+ * The one line a reminder speaks besides the line it rings: the pre-alert
+ * heads-up, minutes before the event.
+ *
+ * This was a bounded-concurrency pool over the pre-alert plus one to three
+ * replay variants (OLD-107). OLD-108 deleted the variants, which leaves exactly
+ * one optional job — so the pool, its index-alignment bookkeeping and its
+ * `TTS_LINE_CONCURRENCY` dial are gone with it. The reliability half of that
+ * work stays where it belongs: the 429 retry lives inside
+ * synthesizeWithElevenLabs, so this call is still rate-limit-survivable.
+ *
+ * Returns undefined rather than throwing when synthesis fails. A missing
+ * pre-alert audio is a heads-up that arrives as a silent notification, which is
+ * the pre-feature behavior; nothing about the ring itself depends on it.
+ *
+ * No alarm wav is synthesized here: the pre-alert arrives as a notification,
+ * never as a ring, so only the mp3 is ever played.
  */
-async function synthesizeVariantTts(
+async function synthesizeAndStorePreAlertTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
-  title: string,
-  variantTexts: string[]
-): Promise<{
-  keptVariants: string[];
-  variantAudioStorageIds: Id<"_storage">[];
-  variantWavStorageIds: Id<"_storage">[];
-}> {
-  const keptVariants: string[] = [];
-  const variantAudioStorageIds: Id<"_storage">[] = [];
-  const wavStorageIds: (Id<"_storage"> | undefined)[] = [];
-  for (const line of variantTexts) {
-    try {
-      const { audioStorageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
-        text: line,
-        title: `${title} (replay ${keptVariants.length + 1})`,
-      });
-      keptVariants.push(line);
-      variantAudioStorageIds.push(audioStorageId);
-      wavStorageIds.push(wavStorageId);
-    } catch (e) {
-      console.error("[VR] Variant TTS generation failed (variant dropped):", e);
-    }
+  args: { title: string; preTtsText: string }
+): Promise<Id<"_storage"> | undefined> {
+  const started = Date.now();
+  try {
+    const buffer = await synthesizeReminderTts({
+      text: args.preTtsText,
+      title: `${args.title} (heads-up)`,
+    });
+    const preAudioStorageId = await ctx.storage.store(
+      new Blob([new Uint8Array(buffer)], { type: "audio/mpeg" })
+    );
+    console.log(
+      `[VR][tts] pre-alert model=${ttsModelLabel(args.preTtsText)} chars=${args.preTtsText.length} ms=${
+        Date.now() - started
+      }`
+    );
+    return preAudioStorageId;
+  } catch (e) {
+    console.error("[VR] pre-alert TTS generation failed (dropped):", e);
+    return undefined;
   }
-  return {
-    keptVariants,
-    variantAudioStorageIds,
-    variantWavStorageIds: alignVariantWavIds(wavStorageIds),
-  };
 }
 
 /**
@@ -751,25 +955,15 @@ async function createReminderWithAudio(
     title: plan.title,
   });
 
-  // Second short line for the pre-alert; failure never blocks the reminder.
-  let preAudioStorageId: Id<"_storage"> | undefined;
-  if (plan.preTtsText) {
-    try {
-      const preTtsBuffer = await synthesizeReminderTts({
-        text: plan.preTtsText,
-        title: `${plan.title} (heads-up)`,
-      });
-      const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });
-      preAudioStorageId = await ctx.storage.store(preBlob);
-    } catch (e) {
-      console.error("[VR] Pre-alert TTS generation failed:", e);
-    }
-  }
-
-  // Replay variant lines: kept in lockstep with their audios — a failed synth
-  // drops that variant (fewer variants, never a blocked creation).
-  const { keptVariants, variantAudioStorageIds, variantWavStorageIds } =
-    await synthesizeVariantTts(ctx, plan.title, plan.variants);
+  // The pre-alert line, when this reminder has a lead time. This path returns
+  // only when everything is stored (it is the fallback the client takes when
+  // the fast path fails), and a failed heads-up never blocks the creation.
+  const preAudioStorageId = plan.preTtsText
+    ? await synthesizeAndStorePreAlertTts(ctx, {
+        title: plan.title,
+        preTtsText: plan.preTtsText,
+      })
+    : undefined;
 
   const reminderId: Id<"reminders"> = await ctx.runMutation(internal.reminders.create, {
     deviceId: args.deviceId,
@@ -783,22 +977,10 @@ async function createReminderWithAudio(
     preAudioStorageId,
     urgency: plan.urgency,
     persistent: plan.persistent || undefined,
-    variants: keptVariants.length > 0 ? keptVariants : undefined,
-    variantAudioStorageIds:
-      variantAudioStorageIds.length > 0 ? variantAudioStorageIds : undefined,
-    variantWavStorageIds:
-      variantWavStorageIds.length > 0 ? variantWavStorageIds : undefined,
   });
 
   const audioUrl = await ctx.storage.getUrl(storageId);
   const preAudioUrl = preAudioStorageId ? await ctx.storage.getUrl(preAudioStorageId) : null;
-  const variantAudioUrls = (
-    await Promise.all(variantAudioStorageIds.map((id) => ctx.storage.getUrl(id)))
-  ).filter((url): url is string => Boolean(url));
-  // Kept index-aligned with the rungs, so nulls stay in place.
-  const variantWavUrls = await Promise.all(
-    variantWavStorageIds.map((id) => ctx.storage.getUrl(id))
-  );
 
   return {
     id: reminderId as string,
@@ -818,9 +1000,6 @@ async function createReminderWithAudio(
     preAudioUrl,
     urgency: plan.urgency,
     persistent: plan.persistent,
-    variants: keptVariants,
-    variantAudioUrls,
-    variantWavUrls,
 
     intervalMs: plan.intervalMs,
     anchorAt: plan.anchorAt,
@@ -1143,8 +1322,10 @@ async function createTakeWithDeferredAudio(
           plan.preReminderMinutes > 0 ? plan.preReminderMinutes : undefined,
         urgency: plan.urgency,
         persistent: plan.persistent || undefined,
-        variants: plan.variants.length > 0 ? plan.variants : undefined,
         audioStatus: "pending",
+        // Set here rather than only in the TTS job, so there is no window where
+        // a row that will grow a pre-alert reads as one that never asked for one.
+        audioExtrasStatus: plan.preTtsText ? "pending" : undefined,
         audioUpdatedAt: Date.now(),
       }
     );
@@ -1159,7 +1340,6 @@ async function createTakeWithDeferredAudio(
       // the parse returned neither a description nor a title.
       ttsText: plan.description,
       preTtsText: plan.preTtsText || undefined,
-      variantTexts: plan.variants.length > 0 ? plan.variants : undefined,
     });
     perf.scheduleMs += Date.now() - tSchedule;
 
@@ -1180,7 +1360,6 @@ async function createTakeWithDeferredAudio(
       preReminderMinutes: plan.preReminderMinutes,
       urgency: plan.urgency,
       persistent: plan.persistent,
-      variants: plan.variants,
       intervalMs: plan.intervalMs,
       anchorAt: plan.anchorAt,
       scheduleType: plan.scheduleType,
@@ -1276,21 +1455,24 @@ export const processVoiceReminderFast = action({
         reminderCount: created.length,
       };
     } finally {
-      // 7. Delete uploaded recording audio (always cleanup).
+      // 7. Hand the uploaded recording to a cleanup job (always cleanup).
       //
-      // NOTE (OLD-82): this `finally` runs BEFORE the client receives the return
-      // value, so this round trip sits on the critical path between "reminder
-      // row exists" and "card appears". `perf` is the same object the return
+      // This is what OLD-82's note asked for: the `finally` runs BEFORE the
+      // client receives the return value, so deleting inline put a storage
+      // round trip between "reminder row exists" and "card appears" — latency
+      // spent on housekeeping the user has no stake in. Enqueueing is a local
+      // DB write instead, and it still runs on the throwing path, so a failed
+      // parse does not leak the blob. `perf` is the same object the return
       // statement referenced, so the timing below still reaches the client.
-      // If storageDeleteMs turns out to be material on device, move this to a
-      // scheduled cleanup step instead of deleting inline.
       const tDelete = Date.now();
       try {
-        await ctx.storage.delete(args.audioStorageId);
+        await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
+          storageId: args.audioStorageId,
+        });
       } catch (e) {
-        console.error("[VR] Failed to delete uploaded recording:", e);
+        console.error("[VR] Failed to enqueue recording cleanup:", e);
       }
-      perf.storageDeleteMs = Date.now() - tDelete;
+      perf.storageCleanupScheduleMs = Date.now() - tDelete;
     }
   },
 });
@@ -1366,63 +1548,35 @@ export const generateReminderTtsForReminder = internalAction({
     title: v.string(),
     ttsText: v.string(),
     preTtsText: v.optional(v.string()),
+    // Neither is read any more. `persistent` stopped mattering when the wav
+    // shape became the same for every tier; `variantTexts` stopped existing
+    // when the nag went back to repeating the base line (OLD-108). Both are
+    // still accepted so a job enqueued by an older deploy passes validation
+    // instead of dying in the scheduler.
     variantTexts: v.optional(v.array(v.string())),
-    // No longer read — the wav shape is the same for every tier now. Still
-    // accepted so a job enqueued by an older deploy passes validation.
     persistent: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    const hasPreAlert = Boolean(args.preTtsText);
+
+    // ── Phase 1: the base line, alone ─────────────────────────────────────
+    //
+    // This is the whole of what `audioStatus: "ready"` promises — a stored,
+    // playable line for this reminder to ring — so it is the whole of what the
+    // user waits on. Until OLD-107 the pre-alert was inside this wait too,
+    // which put a reminder with a heads-up at seconds of "pending" for audio
+    // that nothing plays until minutes later.
+    //
+    // It runs by itself rather than sharing the phase below, so the one line
+    // anyone is waiting for gets the provider's full attention.
+    let base: { audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> };
     try {
-      // 1. Generate + store TTS (mp3 + alarm-ready wav when available). Both
-      // say the stored line verbatim — nothing is prepended (OLD-95).
-      const { audioStorageId: newAudioStorageId, wavStorageId: newWavStorageId } =
-        await synthesizeAndStoreLineTts(ctx, {
-          text: args.ttsText,
-          title: args.title,
-        });
-
-      // 2b. Pre-alert line (optional); failure never blocks the main audio.
-      let preAudioStorageId: Id<"_storage"> | undefined;
-      if (args.preTtsText) {
-        try {
-          const preTtsBuffer = await synthesizeReminderTts({
-            text: args.preTtsText,
-            title: `${args.title} (heads-up)`,
-          });
-          const preBlob = new Blob([new Uint8Array(preTtsBuffer)], { type: "audio/mpeg" });
-          preAudioStorageId = await ctx.storage.store(preBlob);
-        } catch (e) {
-          console.error("[VR] Pre-alert TTS generation failed:", e);
-        }
-      }
-
-      // 2c. Replay variants (optional); each failure just drops that variant.
-      // The setAudio patch re-stores the kept lines so texts and audios stay
-      // in lockstep even when some synths fail.
-      let keptVariants: string[] | undefined;
-      let variantAudioStorageIds: Id<"_storage">[] | undefined;
-      let variantWavStorageIds: Id<"_storage">[] | undefined;
-      if (args.variantTexts?.length) {
-        const result = await synthesizeVariantTts(ctx, args.title, args.variantTexts);
-        keptVariants = result.keptVariants;
-        variantAudioStorageIds = result.variantAudioStorageIds;
-        variantWavStorageIds = result.variantWavStorageIds;
-      }
-
-      // 3. Update reminder with new audio
-      await ctx.runMutation(internal.reminders.setAudio, {
-        id: args.reminderId,
-        audioStorageId: newAudioStorageId,
-        wavStorageId: newWavStorageId,
-        preAudioStorageId,
-        variants: keptVariants,
-        variantAudioStorageIds,
-        variantWavStorageIds,
-        audioStatus: "ready",
-        audioUpdatedAt: Date.now(),
+      // Says the stored line verbatim — nothing is prepended (OLD-95).
+      base = await synthesizeAndStoreLineTts(ctx, {
+        text: args.ttsText,
+        title: args.title,
       });
     } catch (e) {
-      // 4. On failure, mark as failed
       console.error("[VR] TTS generation failed:", e);
       await ctx.runMutation(internal.reminders.setAudio, {
         id: args.reminderId,
@@ -1430,6 +1584,42 @@ export const generateReminderTtsForReminder = internalAction({
         audioError: String(e).slice(0, 500),
         audioUpdatedAt: Date.now(),
       });
+      return;
     }
+
+    await ctx.runMutation(internal.reminders.setAudio, {
+      id: args.reminderId,
+      audioStorageId: base.audioStorageId,
+      wavStorageId: base.wavStorageId,
+      audioStatus: "ready",
+      // Tells the device whether a second patch is coming (lib/audioHydration.ts
+      // keeps polling on "pending"). Without it the client would stop at the
+      // base line and the pre-alert would sit in Convex unclaimed.
+      audioExtrasStatus: hasPreAlert ? "pending" : "ready",
+      audioUpdatedAt: Date.now(),
+    });
+
+    if (!args.preTtsText) return;
+
+    // ── Phase 2: the pre-alert line ───────────────────────────────────────
+    //
+    // Nothing here can touch `audioStatus`. The base line is already stored,
+    // and a reminder that rings its base line is a working reminder — a
+    // heads-up with no audio still arrives as a notification, so a failed
+    // second phase is a quieter reminder, not a broken one.
+    const preAudioStorageId = await synthesizeAndStorePreAlertTts(ctx, {
+      title: args.title,
+      preTtsText: args.preTtsText,
+    });
+
+    // Only fields this phase actually produced go into the patch: a Convex
+    // patch treats an explicit `undefined` as "delete this field", and the
+    // base line's ids are already on the row.
+    await ctx.runMutation(internal.reminders.setAudio, {
+      id: args.reminderId,
+      ...(preAudioStorageId ? { preAudioStorageId } : {}),
+      audioExtrasStatus: preAudioStorageId ? "ready" : "failed",
+      audioUpdatedAt: Date.now(),
+    });
   },
 });

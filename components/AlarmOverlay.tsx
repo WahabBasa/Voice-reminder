@@ -24,20 +24,14 @@ import { useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import {
   cancelDisplayedAlarmNotifications,
-  getLocalVariantAudioPath,
   markPendingAlarmUiShown,
 } from "../lib/notifications";
 import {
-  ALTERNATE_LINE_GAP_MS,
   NAG_DELAY_MINUTES,
   ROUTINE_SECOND_UTTERANCE_GAP_MS,
-  nextAlternateIndex,
   parseNagCount,
-  parseVariantCount,
-  parseVariantList,
   ringCadenceMode,
   shouldNagAgain,
-  variantLineForIndex,
 } from "../lib/notificationDecisions";
 import { buildTraceId } from "../lib/vrLog";
 import AppIcon from "../components/AppIcon";
@@ -70,15 +64,13 @@ export interface AlarmOverlayProps {
   anchorAt: string;
   kind: string;
   autoSnoozeCount: string;
-  // Assistant-style replays (OLD-53); all optional stringly-typed data fields.
+  // Ring tier (OLD-53); optional stringly-typed data fields. The replay-variant
+  // fields that used to sit here went with the variants themselves (OLD-108) —
+  // an occurrence has one spoken line, so there is nothing to select between.
   urgency?: string;
   persistent?: string;
-  variants?: string; // JSON-encoded string[]
-  variantAudioUrls?: string; // JSON-encoded string[]
-  variantCount?: string;
   /** Comebacks already delivered for this occurrence (OLD-96). */
   nagCount?: string;
-  variantIndex?: string;
   onDismiss: () => Promise<void>;
   onSnooze: () => Promise<void>;
   shouldExitOnResolve?: boolean;
@@ -103,11 +95,7 @@ export function AlarmOverlay({
   autoSnoozeCount,
   urgency = "",
   persistent = "false",
-  variants: variantsStr = "",
-  variantAudioUrls: variantAudioUrlsStr = "",
-  variantCount: variantCountStr = "0",
   nagCount: nagCountStr = "0",
-  variantIndex: variantIndexStr = "-1",
   onDismiss,
   onSnooze,
   shouldExitOnResolve = false,
@@ -124,13 +112,10 @@ export function AlarmOverlay({
 
   const targetVolume = Math.max(0, Math.min(1, Number(volumeStr) || 1));
 
-  // The escalated spoken line for this occurrence (base description for the
-  // original ring, a firmer variant for follow-ups).
-  const variantList = useMemo(() => parseVariantList(variantsStr), [variantsStr]);
-  const displayLine = useMemo(
-    () => variantLineForIndex(variantList, Number(variantIndexStr), description),
-    [variantList, variantIndexStr, description]
-  );
+  // The spoken line for this occurrence. Every ring of a reminder — the
+  // occurrence and every nag comeback — says the same thing (OLD-96/OLD-108),
+  // so this is just the description.
+  const displayLine = description;
 
   useEffect(() => {
     // Enhanced mount logging (pastebin Step 4.4)
@@ -215,54 +200,25 @@ export function AlarmOverlay({
       }
     }
 
-    // Collect the playable spoken lines: base description first, then every
-    // replay variant whose TTS file is on disk.
-    const playableFiles: string[] = [];
-    if (fileInfo.exists && (fileInfo as any).size) {
-      playableFiles.push(audioPath);
-    }
-    const variantCount = parseVariantCount(variantCountStr);
-    for (let i = 0; i < variantCount; i++) {
-      const variantPath = getLocalVariantAudioPath(reminderId, i);
-      try {
-        const variantInfo = await FileSystem.getInfoAsync(variantPath);
-        if (variantInfo.exists && (variantInfo as any).size) {
-          playableFiles.push(variantPath);
-        }
-      } catch {
-        // skip unreadable variant
-      }
-    }
-
-    // Start at this occurrence's own line (a follow-up leads with its firmer
-    // variant); fall back to the base line.
-    const variantIndexNum = Number(variantIndexStr);
-    let startIndex = 0;
-    if (Number.isFinite(variantIndexNum) && variantIndexNum >= 0) {
-      const found = playableFiles.indexOf(getLocalVariantAudioPath(reminderId, variantIndexNum));
-      if (found >= 0) startIndex = found;
-    }
-    const primaryFile = playableFiles[startIndex] ?? audioPath;
+    // One reminder, one spoken line (OLD-108). The occurrence and every nag
+    // comeback ring this same file — there is no per-rung playlist any more.
+    const playableFileCount = fileInfo.exists && (fileInfo as any).size ? 1 : 0;
 
     // Cadence by tier — orchestrated here because this UI stays alive while
     // the alarm rings (headless JS does not; it only gets the degraded loop).
     const supportsOneShot =
       typeof alarmAudioService.supportsOneShotAlarmPlayback === "function" &&
       alarmAudioService.supportsOneShotAlarmPlayback();
-    const mode = ringCadenceMode(urgency, playableFiles.length, supportsOneShot);
+    const mode = ringCadenceMode(urgency, playableFileCount, supportsOneShot);
     console.log(
-      `[VR] Alarm cadence mode=${mode} files=${playableFiles.length} urgency=${urgency || "(none)"} oneShot=${supportsOneShot}`
+      `[VR] Alarm cadence mode=${mode} files=${playableFileCount} urgency=${urgency || "(none)"} oneShot=${supportsOneShot}`
     );
 
     cadenceStoppedRef.current = false;
-    let success: boolean;
-    if (mode === "alternate") {
-      success = await playAlternating(playableFiles, startIndex);
-    } else if (mode === "speak_twice") {
-      success = await playSpeakTwice(primaryFile, 1);
-    } else {
-      success = await playContinuousLoop(primaryFile);
-    }
+    const success =
+      mode === "speak_twice"
+        ? await playSpeakTwice(audioPath, 1)
+        : await playContinuousLoop(audioPath);
 
     if (isMountedRef.current) {
       setIsPlaying(success);
@@ -297,29 +253,6 @@ export function AlarmOverlay({
       streamType: "alarm",
       loop: true,
     });
-  };
-
-  // Urgent tier: continuous audio that alternates between the available
-  // spoken lines (v0, then v1, then v0…). Sequenced from this UI because the
-  // native module has no completion event chain of its own.
-  const playAlternating = async (files: string[], index: number): Promise<boolean> => {
-    if (cadenceStoppedRef.current || !isMountedRef.current) return false;
-    const ok = await alarmAudioService.play(
-      files[index],
-      { volume: targetVolume, streamType: "alarm", loop: false },
-      () => {
-        if (cadenceStoppedRef.current || !isMountedRef.current) return;
-        clearCadenceTimer();
-        cadenceTimerRef.current = setTimeout(() => {
-          void playAlternating(files, nextAlternateIndex(index, files.length));
-        }, ALTERNATE_LINE_GAP_MS);
-      }
-    );
-    if (!ok) {
-      // Any one-shot failure degrades to the reliable continuous loop.
-      return playContinuousLoop(files[0]);
-    }
-    return true;
   };
 
   // Routine tier: speak twice (~20s apart), then go silent. The notification
@@ -516,12 +449,8 @@ export function AlarmOverlay({
             // and carries the incremented counter so the chain stays capped.
             urgency: urgency ?? "",
             persistent: persistent ?? "false",
-            variants: variantsStr ?? "",
-            variantAudioUrls: variantAudioUrlsStr ?? "",
-            variantCount: variantCountStr ?? "0",
             nagCount: String(nagCount + 1),
             nagReason: "later_action",
-            variantIndex: variantIndexStr ?? "-1",
           },
         },
         trigger
@@ -596,11 +525,7 @@ export function AlarmOverlay({
                 // Fresh occurrence: the nag chain starts over from zero.
                 urgency: urgency ?? "",
                 persistent: persistent ?? "false",
-                variants: variantsStr ?? "",
-                variantAudioUrls: variantAudioUrlsStr ?? "",
-                variantCount: variantCountStr ?? "0",
                 nagCount: "0",
-                variantIndex: "-1",
               },
             },
             nextTriggerObj

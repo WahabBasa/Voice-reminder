@@ -59,6 +59,10 @@ interface RecordingOverlayProps {
   showUpgradeCta?: boolean;
   onUpgradePress?: () => void;
   onClose: () => void;
+  // Fired once the mic is cleared to start, before the recorder itself is up.
+  // Used to prefetch the Convex upload URL so the upload can begin the instant
+  // the recording stops (OLD-106).
+  onRecordingStart?: (traceId: string) => void;
   onRecordingComplete: (audioUri: string, traceId: string) => void;
   onCancelProcessing?: () => void;
 }
@@ -72,6 +76,7 @@ export default function RecordingOverlay({
   showUpgradeCta = false,
   onUpgradePress,
   onClose,
+  onRecordingStart,
   onRecordingComplete,
   onCancelProcessing,
 }: RecordingOverlayProps) {
@@ -268,6 +273,14 @@ export default function RecordingOverlay({
         return;
       }
       setPermissionDenied(false);
+
+      // Warm the upload path while the mic is still coming up (OLD-106). The
+      // Convex upload URL is a round trip that used to be spent *after* the
+      // user stopped talking, in the dead time between the mic releasing and
+      // the first byte going out. Fired here it overlaps recording entirely,
+      // and the owner treats it as optional — if it fails, the stop path just
+      // fetches one the old way.
+      onRecordingStart?.(traceId);
 
       const tStart = Date.now();
       await startRecording();

@@ -9,8 +9,13 @@
  * sentence in one of two shapes — a bare imperative for something the user does
  * ("Drink your water."), "[the thing] is right now" for something that happens
  * ("Your son's game is right now.") — with no openers or lead-ins, no greetings,
- * no name, no politeness, no wellness commentary, no template echoes, inside the
- * word budget, and variants that each open differently.
+ * no name, no politeness, no wellness commentary, no template echoes, and
+ * inside the word budget.
+ *
+ * There used to be one more check here: the replay variants had to each open on
+ * a different word, so the ladder read as a fresh attempt rather than the same
+ * sentence again. OLD-108 retired the ladder — the nag repeats the base line —
+ * so the check went with the behavior it policed.
  *
  * Run:   npm run eval
  * Needs: OPENROUTER_API_KEY in the environment (Convex holds it:
@@ -20,7 +25,7 @@
 import OpenAI from "openai";
 
 import { buildSystemPrompt } from "../convex/actions";
-import { BANNED_OPENERS } from "../convex/helpers";
+import { BANNED_OPENERS, normalizeParsedReminders } from "../convex/helpers";
 
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const describeLive = API_KEY ? describe : describe.skip;
@@ -31,7 +36,7 @@ if (!API_KEY) {
 }
 
 // Mirrors the processVoiceReminderFast call site (convex/actions.ts).
-const MODEL = "google/gemini-3.1-flash-lite-preview";
+const MODEL = "openai/gpt-5.6-luna";
 const SAMPLES_PER_TRANSCRIPT = 3;
 
 // Fixed context so runs are comparable day to day.
@@ -116,8 +121,6 @@ const normalize = (line: string) =>
     .replace(/^["'“”‘’—–\-\s]+/u, "")
     .toLowerCase();
 
-const firstWord = (line: string) => normalize(line).split(/\s+/)[0] ?? "";
-
 type SpokenLine = { field: string; text: string };
 
 // Every phrasing rule for one spoken line. Returns human-readable violations.
@@ -192,6 +195,8 @@ describeLive("reminder phrasing (live model)", () => {
         const completion = await openrouter().chat.completions.create({
           model: MODEL,
           response_format: { type: "json_object" },
+          // Luna is a hybrid reasoner; "none" matches the shipping parse call.
+          reasoning_effort: "none",
           max_tokens: 2000,
           messages: [
             { role: "system", content: buildSystemPrompt(PROMPT_CONTEXT) },
@@ -208,44 +213,55 @@ describeLive("reminder phrasing (live model)", () => {
           continue;
         }
 
-        const description = typeof parsed.description === "string" ? parsed.description : "";
-        const preDescription = typeof parsed.preDescription === "string" ? parsed.preDescription : "";
-        const variants = Array.isArray(parsed.variants)
-          ? (parsed.variants as unknown[]).filter((v): v is string => typeof v === "string")
-          : [];
+        // Unwrap the take the same way the server does (OLD-93). The model is
+        // free to answer with a bare reminder object or with {reminders:[...]},
+        // and it uses both for the same single-reminder input; production runs
+        // everything through normalizeParsedReminders, so an eval that read
+        // only the flat shape was scoring the envelope, not the phrasing. It
+        // reported "empty description" on perfectly good lines — on the old
+        // prompt as well as the new one (OLD-106).
+        const entries = normalizeParsedReminders(parsed);
 
-        generated.push(`${label} description: "${description}"`);
-        for (const v of variants) generated.push(`${label} variant:     "${v}"`);
-        if (preDescription) generated.push(`${label} pre:         "${preDescription}"`);
-
-        if (!description.trim()) {
-          violations.push(`${label} empty description`);
+        if (entries.length === 0) {
+          violations.push(`${label} no reminder in response: ${raw.slice(0, 200)}`);
           continue;
         }
 
-        // Budgets follow the prompt: 3-8 words for the line itself, under 12
-        // for the heads-up (it has a time span to fit), 10 for a variant.
-        violations.push(...lintLine({ field: `${label} description`, text: description }, 8));
-        if (preDescription) {
-          violations.push(...lintLine({ field: `${label} preDescription`, text: preDescription }, 12));
-        }
-        variants.forEach((variant, i) => {
-          violations.push(...lintLine({ field: `${label} variants[${i}]`, text: variant }, 10));
-        });
+        entries.forEach((entry, entryIndex) => {
+          // A take of one keeps the old label; only multi-reminder takes get an
+          // index, so the common case reads exactly as it always did.
+          const slot = entries.length > 1 ? `${label}[${entryIndex}]` : label;
 
-        // The ladder only reads as a new attempt when each rung opens fresh.
-        const openers = [description, ...variants].map(firstWord);
-        if (new Set(openers).size !== openers.length) {
-          violations.push(`${label} repeated opening word across ladder: ${openers.join(", ")}`);
-        }
+          const description = typeof entry.description === "string" ? entry.description : "";
+          const preDescription =
+            typeof entry.preDescription === "string" ? entry.preDescription : "";
 
-        // Countdowns go stale the moment a line is heard late (pre-reminder
-        // lines are exempt — theirs are required to name the lead time).
-        for (const [i, line] of [description, ...variants].entries()) {
-          if (/\bin \d+ (minutes?|mins?)\b/i.test(line) || /بعد \d+ دقيقة/u.test(line)) {
-            violations.push(`${label} countdown in ${i === 0 ? "description" : `variants[${i - 1}]`}: "${line}"`);
+          generated.push(`${slot} description: "${description}"`);
+          if (preDescription) generated.push(`${slot} pre:         "${preDescription}"`);
+
+          if (!description.trim()) {
+            violations.push(`${slot} empty description`);
+            return;
           }
-        }
+
+          // Budgets follow the prompt: 3-8 words for the line itself, under 12
+          // for the heads-up (it has a time span to fit).
+          violations.push(...lintLine({ field: `${slot} description`, text: description }, 8));
+          if (preDescription) {
+            violations.push(
+              ...lintLine({ field: `${slot} preDescription`, text: preDescription }, 12)
+            );
+          }
+
+          // Countdowns go stale the moment a line is heard late (pre-reminder
+          // lines are exempt — theirs are required to name the lead time).
+          if (
+            /\bin \d+ (minutes?|mins?)\b/i.test(description) ||
+            /بعد \d+ دقيقة/u.test(description)
+          ) {
+            violations.push(`${slot} countdown in description: "${description}"`);
+          }
+        });
       }
 
       // Print everything the model said so a pass is reviewable, not just green.

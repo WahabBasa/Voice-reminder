@@ -1,10 +1,86 @@
 import { Audio } from "expo-av";
+import * as Sentry from "@sentry/react-native";
 import { perfLog } from "./perf";
 
 export type PermissionStatus = "granted" | "denied" | "undetermined";
 
 let recording: Audio.Recording | null = null;
 let isRecordingPreparing = false;
+
+// ─── Audio-session restore after recording (OLD-106) ───────────────────────
+//
+// Recording puts the session in a record category; playback needs it back, and
+// `playsInSilentModeIOS: true` in particular — lose it and the whole app's
+// alarms play silently against a flipped mute switch. That made the switch look
+// un-skippable, so stopRecording awaited it and the voice pipeline paid for it
+// before the upload could even start.
+//
+// It is not skipped here. It is merely taken off the critical path: the switch
+// is fired immediately and runs to completion on its own, while the caller gets
+// its URI back and starts uploading. Two things make that safe rather than
+// hopeful — it retries once on failure, and every playback path awaits
+// ensurePlaybackAudioMode() below, so nothing can produce a sound while the
+// restore is still in flight.
+const PLAYBACK_AUDIO_MODE = {
+  allowsRecordingIOS: false,
+  playsInSilentModeIOS: true,
+};
+
+let pendingAudioModeRestore: Promise<void> | null = null;
+
+function restorePlaybackAudioMode(traceId?: string): Promise<void> {
+  const started = Date.now();
+
+  const attempt = (retriesLeft: number): Promise<void> =>
+    Audio.setAudioModeAsync(PLAYBACK_AUDIO_MODE).then(
+      () => {
+        if (traceId) {
+          perfLog(traceId, "device.recording", "audioMode_restored", {
+            ms: Date.now() - started,
+            retried: retriesLeft === 0,
+          });
+        }
+      },
+      (e: any) => {
+        if (retriesLeft > 0) return attempt(retriesLeft - 1);
+        // Terminal: the session may still be in record category, which means
+        // silent alarms. Loud enough to find in production — this is the exact
+        // failure the old inline await was protecting against.
+        console.error("[VR] Failed to restore playback audio mode:", e);
+        if (traceId) {
+          perfLog(traceId, "device.recording", "audioMode_restore_failed", {
+            ms: Date.now() - started,
+            reason: e?.message ?? String(e),
+          });
+        }
+        Sentry.captureException(e, {
+          tags: {
+            vr_event: "audio_mode_restore_failed",
+            vr_stage: "stopRecording",
+          },
+          extra: { traceId, ms: Date.now() - started },
+          level: "error",
+        });
+      }
+    );
+
+  const restore = attempt(1).finally(() => {
+    // Only clear if a newer restore hasn't already replaced this one.
+    if (pendingAudioModeRestore === restore) pendingAudioModeRestore = null;
+  });
+
+  pendingAudioModeRestore = restore;
+  return restore;
+}
+
+/**
+ * Resolves once any in-flight post-recording audio-session restore has landed.
+ * Playback awaits this so the mute-switch behaviour is settled before a sound
+ * starts; it is a no-op (already-resolved) at every other moment.
+ */
+export function ensurePlaybackAudioMode(): Promise<void> {
+  return pendingAudioModeRestore ?? Promise.resolve();
+}
 
 type MeteringListener = (db: number) => void;
 let meteringListener: MeteringListener | null = null;
@@ -84,24 +160,29 @@ export async function stopRecording(traceId?: string): Promise<string | null> {
   // Split timing (OLD-82): both halves of this function landed in the same
   // commit as Sentry (28bb2e0), so "the slowdown started with Sentry" could
   // just as easily be the audio-session change below. Measure, don't guess.
+  //
+  // OLD-106 answered it by removing the second half from the wait entirely.
+  // The URI is ready the moment expo-av finishes unloading; the session restore
+  // is fired here and completes on its own (see restorePlaybackAudioMode), so
+  // the upload no longer queues behind an AVAudioSession category switch.
   const tStart = Date.now();
   await recording.stopAndUnloadAsync();
   const tUnloaded = Date.now();
 
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: false,
-    // Omitting this lets it default to false, flipping the whole app's audio
-    // session back to mute-switch-obeying mode — alarms then play silently.
-    playsInSilentModeIOS: true,
-  });
-  const tModeSet = Date.now();
+  // Not awaited — deliberately. Guaranteed to run to completion, retried once
+  // on failure, reported to Sentry if it ever gives up, and awaited by every
+  // playback path via ensurePlaybackAudioMode().
+  void restorePlaybackAudioMode(traceId);
 
   if (traceId) {
     perfLog(traceId, "device.recording", "stopRecording_split", {
-      // expo-av teardown + file finalization
+      // expo-av teardown + file finalization — now the whole of the wait.
       unloadMs: tUnloaded - tStart,
-      // AVAudioSession category switch back to playback-in-silent-mode
-      audioModeMs: tModeSet - tUnloaded,
+      // Kept as a field so the shape of the log is stable across the change:
+      // the category switch is off the critical path, so it costs zero here.
+      // Its real duration lands separately as audioMode_restored.
+      audioModeMs: 0,
+      audioModeDeferred: 1,
     });
   }
 
@@ -163,6 +244,14 @@ class AudioServiceClass {
   async play(uri: string, options: PlayOptions = {}): Promise<void> {
     const { volume = 1, loop = false, useNativeSound = false, onFinish } = options;
     console.log("[AudioService] play()", { uri: uri.slice(0, 50), volume, loop, useNativeSound });
+
+    // The one place the deferred audio-session restore is collected (OLD-106).
+    // stopRecording no longer waits for the category switch back to
+    // playback-in-silent-mode, so playback does — otherwise a sound started in
+    // the seconds after a recording could inherit the record session and go out
+    // silent. Already resolved except in exactly that window, and the native
+    // sound path especially needs it: it sets no audio mode of its own.
+    await ensurePlaybackAudioMode();
 
     // Stop any current playback first
     await this.stop();

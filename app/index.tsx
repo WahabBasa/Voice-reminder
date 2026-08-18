@@ -58,6 +58,7 @@ import { historyOnDay, isCompletedOnDay, occurrencesForDay, todayISO } from "../
 import { formatClockAt } from "../lib/time";
 import { checkProStatus, getCachedProStatus } from "../lib/purchases";
 import NetInfo from "@react-native-community/netinfo";
+import * as Sentry from "@sentry/react-native";
 
 // Pager pages: 0 = Today, 1 = Days, 2 = Settings (see docs/ui-redesign.md gesture map).
 const PAGE_TODAY = 0;
@@ -91,6 +92,12 @@ export default function HomeScreen() {
   }, [reminders, history, nowMs]);
 
   const [showRecording, setShowRecording] = useState(false);
+  // Convex upload URL, fetched when recording STARTS rather than when it stops
+  // (OLD-106). Holds the in-flight promise, not the URL, so the stop path can
+  // await whatever progress the fetch made while the user was talking. A URL
+  // from generateUploadUrl is single-use, so a run that consumes it clears the
+  // ref; a run that never happens (user cancels) just lets it expire.
+  const uploadUrlRef = useRef<Promise<string | null> | null>(null);
   // Edit overlay - renders instantly without navigation
   const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
   const [recordingTraceId, setRecordingTraceId] = useState<string | null>(null);
@@ -545,8 +552,6 @@ export default function HomeScreen() {
                 preAudioUrl: newReminder.preAudioUrl,
                 urgency: newReminder.urgency,
                 persistent: newReminder.persistent,
-                variants: newReminder.variants,
-                variantAudioUrls: newReminder.variantAudioUrls,
                 volume: newReminder.volume,
                 volumeStyle: newReminder.volumeStyle,
 
@@ -745,6 +750,31 @@ export default function HomeScreen() {
     ]
   );
 
+  // Kicked off by RecordingOverlay the moment the mic is cleared to start, so
+  // the upload-URL round trip overlaps the user talking (OLD-106). Deliberately
+  // swallows its own failure: this is an optimization, and the stop path can
+  // always fetch a URL itself.
+  const handleRecordingStart = useCallback(
+    (traceId: string) => {
+      const tPrefetch = Date.now();
+      uploadUrlRef.current = generateAudioUploadUrl()
+        .then(({ uploadUrl }) => {
+          perfLog(traceId, "device.recording", "upload_url_prefetch_done", {
+            ms: Date.now() - tPrefetch,
+          });
+          return uploadUrl;
+        })
+        .catch((e: any) => {
+          perfLog(traceId, "device.recording", "upload_url_prefetch_failed", {
+            ms: Date.now() - tPrefetch,
+            reason: e?.message ?? String(e),
+          });
+          return null;
+        });
+    },
+    [generateAudioUploadUrl]
+  );
+
   const handleRecordingComplete = async (audioUri: string, traceId: string) => {
     cancelledRef.current = false;
     try {
@@ -766,7 +796,19 @@ export default function HomeScreen() {
       // Try FAST PATH: binary upload + async TTS
       try {
         perfLog(traceId, "device.processing", "upload_start");
-        const { uploadUrl } = await generateAudioUploadUrl();
+        // Claim the URL prefetched at record time (OLD-106). Single-use, so the
+        // ref is cleared whether or not the fetch succeeded; a null result (the
+        // prefetch failed, or recording started before this screen wired it up)
+        // falls back to fetching one here, exactly as it used to.
+        const prefetchedUploadUrl = uploadUrlRef.current;
+        uploadUrlRef.current = null;
+        let uploadUrl = prefetchedUploadUrl ? await prefetchedUploadUrl : null;
+        if (uploadUrl) {
+          perfLog(traceId, "device.processing", "upload_url_prefetch_hit");
+        } else {
+          perfLog(traceId, "device.processing", "upload_url_prefetch_miss");
+          uploadUrl = (await generateAudioUploadUrl()).uploadUrl;
+        }
         const { storageId } = await uploadRecordingToConvex(uploadUrl, audioUri);
         perfLog(traceId, "device.processing", "upload_done", { storageId });
 
@@ -784,9 +826,32 @@ export default function HomeScreen() {
         });
         usedFastPath = true;
       } catch (fastPathError) {
-        // FALLBACK: use base64 path
+        // FALLBACK: use base64 path.
+        //
+        // This is the most expensive branch in the app and until OLD-106 it was
+        // completely silent. processVoiceReminder blocks the reminder row on the
+        // full sequential TTS ladder (+4-10s) where the fast path defers it, so
+        // a user who lands here waits several times as long — and the only
+        // evidence was a console.log, which release builds do not ship (OLD-77
+        // turned off console streaming outside dev, and perfLog is __DEV__-gated
+        // too). Sentry is the one channel that survives to production, so the
+        // fallback reports itself as a real event.
+        //
+        // No transcript, no reminder text, no audio: the tags below are the
+        // shape of the failure, not its content (sendDefaultPii is off and this
+        // path must not become the exception).
         console.log("[VR] Fast path failed, falling back to base64:", fastPathError);
-        perfLog(traceId, "device.processing", "fallback_to_base64");
+        perfLog(traceId, "device.processing", "fallback_to_base64", {
+          reason: (fastPathError as any)?.message ?? String(fastPathError),
+        });
+        Sentry.captureException(fastPathError, {
+          tags: {
+            vr_event: "voice_fallback_base64",
+            vr_stage: "processVoiceReminderFast",
+          },
+          extra: { traceId },
+          level: "warning",
+        });
 
         const tBase64 = Date.now();
         const base64 = await readFileAsBase64(audioUri);
@@ -1141,6 +1206,7 @@ export default function HomeScreen() {
         showUpgradeCta={showUpgradeCta}
         onUpgradePress={openPaywall}
         onClose={handleCloseRecording}
+        onRecordingStart={handleRecordingStart}
         onRecordingComplete={handleRecordingComplete}
         onCancelProcessing={handleCancelProcessing}
       />

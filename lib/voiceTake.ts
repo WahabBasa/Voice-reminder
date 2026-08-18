@@ -89,12 +89,9 @@ export function buildReminderDraft(
   // Card-chip emoji from the parse (absent = neutral bell chip)
   const emoji = typeof item.emoji === "string" && item.emoji ? (item.emoji as string) : undefined;
 
-  // Assistant replay fields (OLD-53). Fast path returns urgency/persistent/
-  // variants at parse time; variantAudioUrls arrive via hydration.
-  const variants = Array.isArray(item.variants) ? (item.variants as string[]) : undefined;
-  const variantAudioUrls = Array.isArray(item.variantAudioUrls)
-    ? (item.variantAudioUrls as string[])
-    : undefined;
+  // Ring tier (OLD-53). Both paths return urgency/persistent at parse time.
+  // The replay-variant fields that used to be read here are gone (OLD-108) —
+  // the server stopped producing them, and the nag repeats the base line.
 
   return {
     convexId: item.id,
@@ -114,8 +111,6 @@ export function buildReminderDraft(
     preAudioUrl: item.preAudioUrl || undefined,
     urgency: item.urgency,
     persistent: item.persistent === true || undefined,
-    variants: variants?.length ? variants : undefined,
-    variantAudioUrls: variantAudioUrls?.length ? variantAudioUrls : undefined,
 
     intervalMs: Number.isFinite(intervalMs) ? intervalMs : legacy.intervalMs,
     anchorAt: Number.isFinite(anchorAt) ? anchorAt : undefined,

@@ -9,6 +9,7 @@
  */
 
 import type * as actions from "../actions.js";
+import type * as crons from "../crons.js";
 import type * as helpers from "../helpers.js";
 import type * as reminders from "../reminders.js";
 import type * as scheduleShape from "../scheduleShape.js";
@@ -21,6 +22,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   actions: typeof actions;
+  crons: typeof crons;
   helpers: typeof helpers;
   reminders: typeof reminders;
   scheduleShape: typeof scheduleShape;

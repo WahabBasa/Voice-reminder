@@ -50,14 +50,22 @@ export interface Reminder {
     audioUrl?: string;
     wavUrl?: string; // alarm-ready wav of the base spoken line (iOS AlarmKit sound)
     audioStatus?: 'pending' | 'ready' | 'failed';
+    /**
+     * The pre-alert line and replay variant lines, which arrive in a second
+     * server patch after the base line (OLD-107). "pending" here means the
+     * device has the base line but is still owed the rest — the startup sweep
+     * in app/_layout.tsx uses it to resume a hydration that a kill interrupted.
+     */
+    audioExtrasStatus?: 'pending' | 'ready' | 'failed';
     audioError?: string;
     preReminderMinutes?: number; // heads-up lead time in minutes (0/absent = none)
     preAudioUrl?: string; // spoken heads-up line for the pre-alert
-    // Assistant-style replays (OLD-53)
-    urgency?: 'urgent' | 'notice' | 'routine'; // hook tier the description uses
-    persistent?: boolean; // keep following up until "Done" (default: 2 follow-ups then missed)
-    variants?: string[]; // escalating alternative spoken lines
-    variantAudioUrls?: string[]; // TTS audio per variant (parallel to variants)
+    // Ring tier (OLD-53). The escalating replay lines that used to live beside
+    // these were removed in OLD-108 — the nag repeats the base line. Locally
+    // persisted reminders written before that still carry `variants` and
+    // `variantAudioUrls` in AsyncStorage; the extra keys are simply ignored.
+    urgency?: 'urgent' | 'notice' | 'routine'; // how hard the alarm pushes while it rings
+    persistent?: boolean; // keep following up until "Done"
     createdAt: string;
     volume?: number; // 0-1
     volumeStyle?: VolumeStyle;

@@ -2,28 +2,14 @@ import { query, mutation, internalMutation, internalQuery } from "./_generated/s
 import { v } from "convex/values";
 import { scheduleFields } from "./schema";
 
-async function resolveVariantAudioUrls(
-  ctx: { storage: { getUrl: (id: any) => Promise<string | null> } },
-  variantAudioStorageIds: any[] | undefined
-): Promise<string[]> {
-  if (!variantAudioStorageIds?.length) return [];
-  const urls = await Promise.all(
-    variantAudioStorageIds.map((id) => ctx.storage.getUrl(id))
-  );
-  return urls.filter((url): url is string => Boolean(url));
-}
-
-// Ladder rungs address variant wavs by index, so this list keeps its holes:
-// a null means "no wav for that variant" and the rung falls back to wavUrl.
-async function resolveVariantWavUrls(
-  ctx: { storage: { getUrl: (id: any) => Promise<string | null> } },
-  variantWavStorageIds: any[] | undefined
-): Promise<(string | null)[]> {
-  if (!variantWavStorageIds?.length) return [];
-  return await Promise.all(
-    variantWavStorageIds.map((id) => ctx.storage.getUrl(id))
-  );
-}
+/**
+ * Replay variants are gone (OLD-108): the nag repeats the base line, so no
+ * query resolves variant storage ids into urls any more and no mutation writes
+ * them. Rows created before the strip still carry `variants`,
+ * `variantAudioStorageIds` and `variantWavStorageIds` — they ride through the
+ * `...reminder` spread below untouched, nothing downstream reads them, and
+ * `remove` still deletes their blobs so an old reminder cleans up after itself.
+ */
 
 /**
  * Device scoping (OLD-74). There are no accounts, so a reminder belongs to the
@@ -59,8 +45,6 @@ export const list = query({
         audioUrl: reminder.audioStorageId ? await ctx.storage.getUrl(reminder.audioStorageId) : "",
         wavUrl: reminder.wavStorageId ? await ctx.storage.getUrl(reminder.wavStorageId) : "",
         preAudioUrl: reminder.preAudioStorageId ? await ctx.storage.getUrl(reminder.preAudioStorageId) : "",
-        variantAudioUrls: await resolveVariantAudioUrls(ctx, reminder.variantAudioStorageIds),
-        variantWavUrls: await resolveVariantWavUrls(ctx, reminder.variantWavStorageIds),
       }))
     );
   },
@@ -76,8 +60,6 @@ export const get = query({
       audioUrl: reminder.audioStorageId ? await ctx.storage.getUrl(reminder.audioStorageId) : "",
       wavUrl: reminder.wavStorageId ? await ctx.storage.getUrl(reminder.wavStorageId) : "",
       preAudioUrl: reminder.preAudioStorageId ? await ctx.storage.getUrl(reminder.preAudioStorageId) : "",
-      variantAudioUrls: await resolveVariantAudioUrls(ctx, reminder.variantAudioStorageIds),
-      variantWavUrls: await resolveVariantWavUrls(ctx, reminder.variantWavStorageIds),
     };
   },
 });
@@ -107,10 +89,12 @@ export const create = internalMutation({
       v.union(v.literal("urgent"), v.literal("notice"), v.literal("routine"))
     ),
     persistent: v.optional(v.boolean()),
-    variants: v.optional(v.array(v.string())),
-    variantAudioStorageIds: v.optional(v.array(v.id("_storage"))),
-    variantWavStorageIds: v.optional(v.array(v.id("_storage"))),
     audioStatus: v.optional(v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))),
+    // "pending" when this reminder asked for a pre-alert line, which lands in a
+    // second patch after the base line (OLD-107).
+    audioExtrasStatus: v.optional(
+      v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))
+    ),
     audioUpdatedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -135,6 +119,9 @@ export const remove = mutation({
     if (reminder.wavStorageId) {
       await ctx.storage.delete(reminder.wavStorageId);
     }
+    // Deprecated columns (OLD-108). Nothing writes these any more, but rows
+    // created before the strip still own the blobs, and dropping the loops
+    // would orphan them in storage forever.
     for (const variantId of reminder.variantAudioStorageIds ?? []) {
       await ctx.storage.delete(variantId);
     }
@@ -197,19 +184,40 @@ export const generateAudioUploadUrl = mutation({
   },
 });
 
+/**
+ * Drop an uploaded recording once the parse no longer needs it (OLD-106).
+ *
+ * processVoiceReminderFast used to delete the blob in a `finally`, which runs
+ * before the action's return value reaches the client — so a storage round trip
+ * sat between "the reminder row exists" and "the card appears", for work the
+ * user has no stake in. It is scheduled instead now. Deleting a blob that is
+ * already gone is not an error worth failing a job over, so this swallows.
+ */
+export const deleteUploadedAudio = internalMutation({
+  args: { storageId: v.id("_storage") },
+  handler: async (ctx, args) => {
+    try {
+      await ctx.storage.delete(args.storageId);
+    } catch (e) {
+      console.error("[VR] Failed to delete uploaded recording:", e);
+    }
+  },
+});
+
 export const setAudio = internalMutation({
   args: {
     id: v.id("reminders"),
     audioStorageId: v.optional(v.id("_storage")),
     wavStorageId: v.optional(v.id("_storage")),
     preAudioStorageId: v.optional(v.id("_storage")),
-    // Replay variants kept in lockstep: only lines whose TTS succeeded are
-    // stored, so variants[i] always pairs with variantAudioStorageIds[i].
-    variants: v.optional(v.array(v.string())),
-    variantAudioStorageIds: v.optional(v.array(v.id("_storage"))),
-    // Prefix of variantAudioStorageIds whose alarm wav also synthesized.
-    variantWavStorageIds: v.optional(v.array(v.id("_storage"))),
     audioStatus: v.optional(v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))),
+    // Settled independently of audioStatus (OLD-107): the base line patch flips
+    // audioStatus to "ready" and this to "pending", and the pre-alert patch
+    // that follows moves only this one. A failed pre-alert phase never
+    // un-readies a reminder whose base line is already stored.
+    audioExtrasStatus: v.optional(
+      v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))
+    ),
     audioError: v.optional(v.string()),
     audioUpdatedAt: v.optional(v.number()),
   },

@@ -42,15 +42,12 @@ function buildOverlayProps(pending: PendingAlarm): AlarmOverlayProps | null {
     anchorAt: String(data?.anchorAt ?? ""),
     kind: String(data?.kind ?? ""),
     autoSnoozeCount: String(data?.autoSnoozeCount ?? "0"),
-    // Assistant-style replays (OLD-53)
+    // Ring tier (OLD-53). Payloads scheduled before OLD-108 still carry the
+    // replay-variant fields; they are simply not read any more.
     urgency: String(data?.urgency ?? ""),
     persistent: String(data?.persistent ?? "false"),
-    variants: String(data?.variants ?? ""),
-    variantAudioUrls: String(data?.variantAudioUrls ?? ""),
-    variantCount: String(data?.variantCount ?? "0"),
     // Pre-OLD-96 payloads still in flight carry the counter under the old name.
     nagCount: String(data?.nagCount ?? data?.followUpCount ?? "0"),
-    variantIndex: String(data?.variantIndex ?? "-1"),
   };
 
   return {

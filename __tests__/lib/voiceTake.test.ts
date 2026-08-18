@@ -101,6 +101,8 @@ describe("buildReminderDraft", () => {
         emoji: "💧",
         urgency: "notice",
         persistent: true,
+        // Retired field (OLD-108): a server still sending it must not put it on
+        // the local reminder.
         variants: ["Still full."],
         preReminderMinutes: 10,
         scheduleType: "once",
@@ -115,7 +117,7 @@ describe("buildReminderDraft", () => {
     expect(draft.emoji).toBe("💧");
     expect(draft.urgency).toBe("notice");
     expect(draft.persistent).toBe(true);
-    expect(draft.variants).toEqual(["Still full."]);
+    expect(draft).not.toHaveProperty("variants");
     expect(draft.preReminderMinutes).toBe(10);
     expect(draft.scheduleType).toBe("once");
     expect(draft.onceAt).toBe(1234);
@@ -181,7 +183,6 @@ describe("buildReminderDraft", () => {
     expect(draft.intervalMs).toBeUndefined();
     expect(draft.anchorAt).toBeUndefined();
     expect(draft.preReminderMinutes).toBeUndefined();
-    expect(draft.variants).toBeUndefined();
     expect(draft.persistent).toBeUndefined();
     expect(draft.emoji).toBeUndefined();
   });

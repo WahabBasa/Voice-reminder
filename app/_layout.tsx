@@ -132,9 +132,17 @@ function StartupTasks() {
   // Hydrate reminders with missing audio (max 2 concurrent). Any status short
   // of "failed" qualifies: reminders stranded without a URL (e.g. wiped by a
   // stale-snapshot save) re-fill from their Convex row on the next pass.
+  //
+  // A reminder that has its base line but is still owed its pre-alert line
+  // qualifies too (OLD-107): that lands in a second server patch a few seconds
+  // later, so an app killed inside that window would otherwise keep the base
+  // line and silently lose its heads-up audio for good.
   useEffect(() => {
     const pendingReminders = reminders.filter(
-      (r) => r.convexId && !r.audioUrl && r.audioStatus !== "failed"
+      (r) =>
+        r.convexId &&
+        r.audioStatus !== "failed" &&
+        (!r.audioUrl || r.audioExtrasStatus === "pending")
     );
 
     if (pendingReminders.length === 0) return;

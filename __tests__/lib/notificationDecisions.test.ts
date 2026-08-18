@@ -27,13 +27,8 @@ import {
   filterPreAlertTriggerIds,
   buildPreAlertBody,
   PRE_ALERT_MIN_SLACK_MS,
-  parseVariantCount,
   normalizeUrgencyTier,
-  parseVariantList,
-  variantLineForIndex,
   ringCadenceMode,
-  nextAlternateIndex,
-  MAX_REPLAY_VARIANTS,
   parseNagCount,
   shouldNagAgain,
   planNagChain,
@@ -602,36 +597,6 @@ describe("buildPreAlertBody", () => {
 
 // ─── Group 7: Ring cadence ──────────────────────────────────────────────────
 
-describe("parseVariantCount", () => {
-  it("parses valid count", () => {
-    expect(parseVariantCount("2")).toBe(2);
-  });
-
-  it("caps at MAX_REPLAY_VARIANTS", () => {
-    expect(parseVariantCount("99")).toBe(MAX_REPLAY_VARIANTS);
-  });
-
-  it("floors fractional counts", () => {
-    expect(parseVariantCount("1.9")).toBe(1);
-  });
-
-  it("returns 0 for undefined", () => {
-    expect(parseVariantCount(undefined)).toBe(0);
-  });
-
-  it("returns 0 for negative", () => {
-    expect(parseVariantCount("-1")).toBe(0);
-  });
-
-  it("returns 0 for NaN string", () => {
-    expect(parseVariantCount("abc")).toBe(0);
-  });
-
-  it("returns 0 for Infinity", () => {
-    expect(parseVariantCount(Infinity)).toBe(0);
-  });
-});
-
 describe("normalizeUrgencyTier", () => {
   it("passes urgent through", () => {
     expect(normalizeUrgencyTier("urgent")).toBe("urgent");
@@ -658,73 +623,14 @@ describe("normalizeUrgencyTier", () => {
   });
 });
 
-describe("parseVariantList", () => {
-  it("parses a JSON array of lines", () => {
-    expect(parseVariantList('["a","b"]')).toEqual(["a", "b"]);
-  });
-
-  it("trims and drops empty entries", () => {
-    expect(parseVariantList('[" a ","","  "]')).toEqual(["a"]);
-  });
-
-  it("returns [] for a JSON non-array", () => {
-    expect(parseVariantList('{"a":1}')).toEqual([]);
-  });
-
-  it("returns [] for invalid JSON", () => {
-    expect(parseVariantList("not json")).toEqual([]);
-  });
-
-  it("returns [] for empty string", () => {
-    expect(parseVariantList("")).toEqual([]);
-  });
-
-  it("returns [] for non-string input", () => {
-    expect(parseVariantList(undefined)).toEqual([]);
-    expect(parseVariantList(42)).toEqual([]);
-  });
-
-  it("stringifies non-string entries", () => {
-    expect(parseVariantList("[1,null]")).toEqual(["1"]);
-  });
-});
-
-describe("variantLineForIndex", () => {
-  const variants = ["first", "second"];
-
-  it("returns the variant at a valid index", () => {
-    expect(variantLineForIndex(variants, 0, "base")).toBe("first");
-    expect(variantLineForIndex(variants, 1, "base")).toBe("second");
-  });
-
-  it("returns the base line for -1", () => {
-    expect(variantLineForIndex(variants, -1, "base")).toBe("base");
-  });
-
-  it("returns the base line for an out-of-range index", () => {
-    expect(variantLineForIndex(variants, 2, "base")).toBe("base");
-  });
-
-  it("returns the base line for NaN", () => {
-    expect(variantLineForIndex(variants, NaN, "base")).toBe("base");
-  });
-
-  it("returns the base line when the variant entry is empty", () => {
-    expect(variantLineForIndex(["", "second"], 0, "base")).toBe("base");
-  });
-});
-
 describe("ringCadenceMode", () => {
-  it("urgent with one-shot support and 2+ files alternates", () => {
-    expect(ringCadenceMode("urgent", 2, true)).toBe("alternate");
-    expect(ringCadenceMode("urgent", 4, true)).toBe("alternate");
-  });
-
-  it("urgent without one-shot support loops", () => {
+  // OLD-108: there is one spoken line per reminder, so urgent has nothing to
+  // alternate between and rings the same continuous loop it fell back to
+  // whenever a variant was missing. The "alternate" mode is gone entirely.
+  it("urgent loops however many files and whatever playback support it has", () => {
+    expect(ringCadenceMode("urgent", 2, true)).toBe("loop");
+    expect(ringCadenceMode("urgent", 4, true)).toBe("loop");
     expect(ringCadenceMode("urgent", 4, false)).toBe("loop");
-  });
-
-  it("urgent with a single file loops", () => {
     expect(ringCadenceMode("urgent", 1, true)).toBe("loop");
   });
 
@@ -746,21 +652,6 @@ describe("ringCadenceMode", () => {
 
   it("legacy/unknown urgency loops", () => {
     expect(ringCadenceMode(undefined, 4, true)).toBe("loop");
-  });
-});
-
-describe("nextAlternateIndex", () => {
-  it("advances through the playlist", () => {
-    expect(nextAlternateIndex(0, 3)).toBe(1);
-    expect(nextAlternateIndex(1, 3)).toBe(2);
-  });
-
-  it("wraps around at the end", () => {
-    expect(nextAlternateIndex(2, 3)).toBe(0);
-  });
-
-  it("returns 0 for an empty playlist", () => {
-    expect(nextAlternateIndex(5, 0)).toBe(0);
   });
 });
 

@@ -72,7 +72,6 @@ import {
   nagIndexForFireTime,
   NAG_DELAY_MINUTES,
   MAX_NAG_COMEBACKS,
-  MAX_REPLAY_VARIANTS,
 } from "./notificationDecisions";
 import {
   alarmAppKey,
@@ -364,9 +363,8 @@ async function startAlarmAudioFromNotification(notification?: PendingAlarmNotifi
   const targetVolume = Math.max(0, Math.min(1, Number.isFinite(rawVolume) ? rawVolume : 1));
   // Headless-safe cadence only (this path can run with a limited JS lifetime):
   // routine tier speaks the line once and goes quiet, everything else loops
-  // continuously as before. The richer cadences (alternating variants,
-  // speak-twice-with-gap) are orchestrated from the alarm UI surfaces, which
-  // stay alive while ringing.
+  // continuously as before. The richer cadence (speak-twice-with-gap) is
+  // orchestrated from the alarm UI surfaces, which stay alive while ringing.
   const tier = normalizeUrgencyTier(data.urgency);
   const ok = await alarmAudioService.ensurePlaying(localAudioPath, {
     volume: targetVolume,
@@ -1066,14 +1064,9 @@ export interface ReminderNotification {
   wavUrl?: string;
   preReminderMinutes?: number; // heads-up lead time in minutes (0/absent = none)
   preAudioUrl?: string;
-  // Ring cadence (how the spoken lines play while an alarm is ringing).
+  // Ring cadence (how the one spoken line plays while an alarm is ringing).
   urgency?: string; // "urgent" | "notice" | "routine"
   persistent?: boolean;
-  variants?: string[];
-  variantAudioUrls?: string[];
-  /** Unused since OLD-96 — every ring speaks the base wav. Kept so the store
-   *  and lib/audioHydration.ts round-trip unchanged. */
-  variantWavUrls?: (string | null)[];
   volume?: number; // 0-1
   volumeStyle?: "standard" | "progressive";
 
@@ -1152,10 +1145,6 @@ function getLocalPreAudioPath(reminderId: string): string {
   return `${documentDirectory}reminder_${reminderId}_pre.mp3`;
 }
 
-export function getLocalVariantAudioPath(reminderId: string, variantIndex: number): string {
-  return `${documentDirectory}reminder_${reminderId}_v${variantIndex}.mp3`;
-}
-
 export async function downloadReminderAudio(
   reminderId: string,
   audioUrl: string
@@ -1216,33 +1205,22 @@ export async function deleteLocalPreAudio(reminderId: string): Promise<void> {
 }
 
 /**
- * Best-effort download of the replay variant audios to their local slots.
- * A missing/failed variant download never throws — ringing falls back to the
- * base line when a variant file is absent.
+ * Sweep the replay variant mp3s a pre-OLD-108 build downloaded.
+ *
+ * Nothing writes these files any more — the nag repeats the base line, so there
+ * are no variant audios to fetch — but an install that hydrated before the
+ * strip has up to three of them per reminder sitting in Documents, and deleting
+ * the reminder is the only moment anything would ever go looking. Best-effort,
+ * like every other local cleanup here.
  */
-export async function downloadVariantAudios(
-  reminderId: string,
-  variantAudioUrls: string[]
-): Promise<void> {
-  const urls = variantAudioUrls.slice(0, MAX_REPLAY_VARIANTS);
-  for (let i = 0; i < urls.length; i++) {
-    const url = urls[i];
-    if (!url) continue;
-    const localPath = getLocalVariantAudioPath(reminderId, i);
-    try {
-      const existing = await getInfoAsync(localPath);
-      if (existing.exists && existing.size > 0) continue;
-      await downloadAsync(url, localPath);
-    } catch (e) {
-      console.log(`[VR] Failed to download variant audio ${i} for ${reminderId}:`, e);
-    }
-  }
-}
+const LEGACY_VARIANT_SLOTS = 3;
 
 export async function deleteLocalVariantAudios(reminderId: string): Promise<void> {
-  for (let i = 0; i < MAX_REPLAY_VARIANTS; i++) {
+  for (let i = 0; i < LEGACY_VARIANT_SLOTS; i++) {
     try {
-      await deleteAsync(getLocalVariantAudioPath(reminderId, i), { idempotent: true });
+      await deleteAsync(`${documentDirectory}reminder_${reminderId}_v${i}.mp3`, {
+        idempotent: true,
+      });
     } catch (e) {
       console.log("[VR] Failed to delete local variant audio:", e);
     }
@@ -2151,11 +2129,6 @@ export async function scheduleReminder(
     localAudioPath = await downloadReminderAudio(reminder.id, reminder.audioUrl);
   }
 
-  // Replay variant audios (best-effort; ringing falls back to the base line).
-  if (reminder.variantAudioUrls?.length) {
-    await downloadVariantAudios(reminder.id, reminder.variantAudioUrls);
-  }
-
   // Create channel (uses default sound if no custom audio)
   const channelId = await createReminderChannel(
     reminder.id,
@@ -2392,21 +2365,13 @@ export async function scheduleReminder(
           kind: "reminder_occurrence",
           autoSnoozeCount: "0",
 
-          // Ring cadence data (how the spoken lines play while ringing).
-          // variantIndex -1 = the base spoken line, which is what every ring
-          // and every nag comeback speaks (OLD-96).
+          // Ring cadence data (how the one spoken line plays while ringing).
+          // There is nothing to select between: this ring and every nag comeback
+          // speak the reminder's base line (OLD-96, variants stripped OLD-108).
           urgency: reminder.urgency ?? "",
           persistent: String(reminder.persistent ?? false),
-          variants: JSON.stringify((reminder.variants ?? []).slice(0, MAX_REPLAY_VARIANTS)),
-          variantAudioUrls: JSON.stringify(
-            (reminder.variantAudioUrls ?? []).slice(0, MAX_REPLAY_VARIANTS)
-          ),
-          variantCount: String(
-            Math.min(reminder.variants?.length ?? 0, MAX_REPLAY_VARIANTS)
-          ),
           // Comebacks delivered so far for this ring (OLD-96).
           nagCount: "0",
-          variantIndex: "-1",
 
           // The days × times grid (OLD-98) — what the delivery handler plans the
           // next rings from. `scheduleType` stays the legacy token so the
@@ -2516,17 +2481,7 @@ export async function deleteReminderWithAudio(reminderId: string): Promise<void>
 export async function refreshNotificationWithAudio(
   reminderId: string,
   audioUrl: string,
-  preAudioUrl?: string,
-  replay?: {
-    variants?: string[];
-    variantAudioUrls?: string[];
-    /**
-     * Ignored since OLD-96 — every ring speaks the base take, so there is no
-     * per-variant alarm sound to stage. Kept in the signature because
-     * lib/audioHydration.ts still passes it.
-     */
-    variantWavUrls?: (string | null)[];
-  }
+  preAudioUrl?: string
 ): Promise<void> {
   try {
     // AlarmKit occurrences carry their sound as a Library/Sounds filename, not
@@ -2537,20 +2492,6 @@ export async function refreshNotificationWithAudio(
 
     // Get all trigger notifications
     const allNotifications = await notifee.getTriggerNotifications();
-
-    // Replay variant payload (texts + audio urls arrive together post-TTS).
-    const variantsJson =
-      replay?.variants !== undefined
-        ? JSON.stringify(replay.variants.slice(0, MAX_REPLAY_VARIANTS))
-        : undefined;
-    const variantAudioUrlsJson =
-      replay?.variantAudioUrls !== undefined
-        ? JSON.stringify(replay.variantAudioUrls.slice(0, MAX_REPLAY_VARIANTS))
-        : undefined;
-    const variantCountStr =
-      replay?.variants !== undefined
-        ? String(Math.min(replay.variants.length, MAX_REPLAY_VARIANTS))
-        : undefined;
 
     for (const notification of allNotifications) {
       const id = notification.notification.id;
@@ -2567,19 +2508,11 @@ export async function refreshNotificationWithAudio(
         // Already carries this audio — nothing to do. Keeps repeat hydration a no-op.
         const mainCurrent = data.audioUrl === audioUrl;
         const preCurrent = preAudioUrl === undefined || data.preAudioUrl === preAudioUrl;
-        const variantsCurrent =
-          (variantsJson === undefined || data.variants === variantsJson) &&
-          (variantAudioUrlsJson === undefined || data.variantAudioUrls === variantAudioUrlsJson);
-        if (!mainCurrent || !preCurrent || !variantsCurrent) {
+        if (!mainCurrent || !preCurrent) {
           updatedData = {
             ...data,
             audioUrl,
             ...(preAudioUrl !== undefined ? { preAudioUrl } : {}),
-            ...(variantsJson !== undefined ? { variants: variantsJson } : {}),
-            ...(variantAudioUrlsJson !== undefined
-              ? { variantAudioUrls: variantAudioUrlsJson }
-              : {}),
-            ...(variantCountStr !== undefined ? { variantCount: variantCountStr } : {}),
           };
         }
       } else if (preAudioUrl !== undefined && data.preAudioUrl !== preAudioUrl) {
@@ -2628,10 +2561,6 @@ function toReminderNotification(reminder: Reminder): ReminderNotification {
     preAudioUrl: reminder.preAudioUrl,
     urgency: reminder.urgency,
     persistent: reminder.persistent,
-    variants: reminder.variants,
-    variantAudioUrls: reminder.variantAudioUrls,
-    variantWavUrls: (reminder as Reminder & { variantWavUrls?: (string | null)[] })
-      .variantWavUrls,
     volume: reminder.volume,
     volumeStyle: reminder.volumeStyle,
     intervalMs: reminder.intervalMs,
@@ -3434,7 +3363,6 @@ export async function handleNotificationEvent(event: Event): Promise<void> {
               kind: "reminder_occurrence",
               // Each fresh occurrence starts its nag chain from scratch.
               nagCount: "0",
-              variantIndex: "-1",
             },
           },
           trigger

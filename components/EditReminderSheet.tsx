@@ -348,8 +348,6 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         preAudioUrl: reminder.preAudioUrl,
                         urgency: reminder.urgency,
                         persistent,
-                        variants: reminder.variants,
-                        variantAudioUrls: reminder.variantAudioUrls,
                         volume,
                         volumeStyle,
 

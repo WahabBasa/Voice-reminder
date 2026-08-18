@@ -211,6 +211,31 @@ export function guardSpokenLine(line: unknown, fallback: unknown = ""): string {
 // caught by guardSpokenLine above.
 export const SPOKEN_LINE_RULE = `ONE short sentence, present tense, about the thing itself and nothing else. There are exactly TWO shapes and the content picks which one. Something the user DOES is a bare imperative and nothing else ('Drink your water.', 'Take your pills.', in Arabic 'اشرب ماءك.' / 'خذ حبوبك.') — no 'right now' on the end, no 'please', no softening, nothing wrapped around the verb. Something that HAPPENS on its own is stated as happening now, [the thing] is right now ('Your son's game is right now.', 'Your flight is right now.', in Arabic 'مباراة ابنك الآن.' / 'رحلتك الآن.') — and never restate the clock the reminder was set for. Start on the substance — the task, the object, the person, or the place — so the first two or three words already are the point. These are forbidden wordings, not merely discouraged: any opener or lead-in in front of the substance, whether a clock announcement ('It is time', 'It's time', a bare 'Time to ...', the Arabic 'حان وقت' / 'حان الوقت'), a reminder label ('Quick reminder', 'Just a reminder', 'Friendly reminder', 'Heads up', the Arabic 'تذكير سريع'), or a conversational lead-in ('By the way', 'Just so you know', 'Remember', 'Don't forget', the Arabic 'على فكرة' / 'لا تنسى'). Also forbidden: any greeting; addressing the user by name or title (no 'Sir', no invented names, no 'يا' + name); and wellness, benefit or encouragement commentary (never say why the task is good, how it will make the user feel, or add a sign-off). There is no approved replacement opener — the line never says that it is a reminder, it just says the thing.`;
 
+// ─── The rule ships once, by name (OLD-106) ────────────────────────────────
+//
+// SPOKEN_LINE_RULE used to be inlined by every builder below, which put three
+// verbatim copies (~3,400 duplicated characters) into the system prompt on
+// every single parse. It is now rendered ONCE by buildSystemPrompt, as a named
+// section near the top of the prompt, and the builders point back at it.
+//
+// The heading is a constant because the instruction strings and the prompt
+// itself have to agree on it — a reference to a section that got renamed is
+// worse than a duplicated rule.
+//
+// Two spoken fields are left (OLD-108): the description and the pre-alert line.
+// The third — the replay variants — is gone, and with it the third reference.
+export const SPOKEN_LINE_RULES_HEADING = "SPOKEN LINE RULES";
+
+// The named section, rendered once by buildSystemPrompt. Placed above the JSON
+// format block so that every "above" in the references below is truthful.
+export const SPOKEN_LINE_RULES_SECTION = `${SPOKEN_LINE_RULES_HEADING} (these govern every spoken line in the output — description and preDescription alike):
+${SPOKEN_LINE_RULE}`;
+
+// What the spoken-field builders say in place of their old inline copy. Single-
+// quoted and quote-free like the rule itself: buildDescriptionInstruction is
+// embedded inside a double-quoted JSON field in the prompt.
+export const SPOKEN_LINE_RULE_REFERENCE = `Obey the ${SPOKEN_LINE_RULES_HEADING} above in full — they apply to this line exactly as written.`;
+
 // Instruction text for the parse prompt's "description" field.
 // The word budget is deliberately tight — lines that escaped the opener ban did
 // it by padding instead ('Hydrate yourself with a fresh glass of water now').
@@ -219,7 +244,7 @@ export const SPOKEN_LINE_RULE = `ONE short sentence, present tense, about the th
 // no framing in any of them. Single-quoted throughout — this string is embedded
 // inside a double-quoted JSON field in the prompt.
 export function buildDescriptionInstruction(): string {
-  return `the sentence spoken aloud when the reminder fires, in the input's language. ${SPOKEN_LINE_RULE} Roughly 3-8 words, and shorter is better. Plain words only: no filler adjectives, no dressing up a simple task — every added word slows the line down. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: 'Drink your water.' / 'Take your pills.' / 'Call your mother.' / 'Your son's game is right now.' / 'Your meeting with Ahmed is right now.' The same in Arabic: 'اشرب ماءك.' / 'خذ حبوبك.' / 'اتصل بأمك.' / 'مباراة ابنك الآن.' / 'اجتماعك مع أحمد الآن.'`;
+  return `the sentence spoken aloud when the reminder fires, in the input's language. ${SPOKEN_LINE_RULE_REFERENCE} Roughly 3-8 words, and shorter is better. Plain words only: no filler adjectives, no dressing up a simple task — every added word slows the line down. The wording must still be true if it is heard a few minutes late, so avoid countdowns like 'in 10 minutes'. Examples: 'Drink your water.' / 'Take your pills.' / 'Call your mother.' / 'Your son's game is right now.' / 'Your meeting with Ahmed is right now.' The same in Arabic: 'اشرب ماءك.' / 'خذ حبوبك.' / 'اتصل بأمك.' / 'مباراة ابنك الآن.' / 'اجتماعك مع أحمد الآن.'`;
 }
 
 // Instruction block for the parse prompt's pre-reminder (heads-up) fields.
@@ -229,14 +254,21 @@ export function buildPreReminderInstruction(): string {
   return `PRE-REMINDER RULES (automatic heads-up before the event):
 - "preReminderMinutes": 10-15 for hard-start events the user must be somewhere for or start on time (meetings, appointments, flights, games, classes, calls). 0 for ambient/routine tasks (drink water, take medicine, generic todos).
 - If the user explicitly asks for a heads-up ("give me a 20 minute warning"), use that many minutes.
-- "preDescription": ONLY when preReminderMinutes > 0. The spoken advance-notice line, in the input's language (Arabic input gets an Arabic line), under 12 words: it states the event and how far off it is, which is the one place a time span belongs — 'Your flight leaves in 40 minutes.', 'اجتماعك يبدأ بعد ربع ساعة.'. ${SPOKEN_LINE_RULE} This one line is spoken BEFORE the thing instead of at it, so it names the lead span in place of saying the thing is right now — that is its only difference from the rule above. Omit the field entirely when preReminderMinutes is 0.`;
+- "preDescription": ONLY when preReminderMinutes > 0. The spoken advance-notice line, in the input's language (Arabic input gets an Arabic line), under 12 words: it states the event and how far off it is, which is the one place a time span belongs — 'Your flight leaves in 40 minutes.', 'اجتماعك يبدأ بعد ربع ساعة.'. ${SPOKEN_LINE_RULE_REFERENCE} This one line is spoken BEFORE the thing instead of at it, so it names the lead span in place of saying the thing is right now — that is its only difference from the rule above. Omit the field entirely when preReminderMinutes is 0.`;
 }
 
-// ─── Assistant-style replays (OLD-53) ───────────────────────────────────────
-
-// Hard cap on stored/TTS'd replay variants per reminder. Mirrored client-side
-// in lib/notificationDecisions.ts (MAX_REPLAY_VARIANTS).
-export const MAX_REPLAY_VARIANTS = 3;
+// ─── Urgency tier (OLD-53, cut back to the tier in OLD-108) ─────────────────
+//
+// This used to be the head of the replay ladder: the parse also produced one to
+// three reworded "variant" lines per reminder, and the nag chain spoke a
+// different one each time it came back. OLD-96 replaced the ladder with a fixed
+// snooze-nag, and OLD-108 made the nag repeat the SAME line — so the variants
+// are gone from the prompt, from synthesis and from playback.
+//
+// What survives is the tier itself, because it still decides something: how the
+// alarm rings while it rings (lib/notificationDecisions.ts ringCadenceMode —
+// routine speaks twice and stops, everything else loops), and `persistent` is
+// still stored and editable.
 
 export type Urgency = "urgent" | "notice" | "routine";
 
@@ -269,55 +301,23 @@ export function normalizeEmoji(value: unknown): string | undefined {
   return match ? match[0] : undefined;
 }
 
-// Economize policy: urgent-tier and persistent reminders get the full ladder,
-// notice gets a middle amount, routine gets a single extra variant.
-export function variantCountForTier(urgency: Urgency, persistent: boolean): number {
-  if (persistent || urgency === "urgent") return MAX_REPLAY_VARIANTS;
-  if (urgency === "notice") return 2;
-  return 1;
-}
+/**
+ * The heading the urgency/persistent block ships under. A constant because the
+ * JSON format template points at the section by name.
+ */
+export const URGENCY_RULES_HEADING = "URGENCY RULES";
 
 /**
- * Sanitize the model's replay variants: normalize each line, drop empties and
- * banned openers (a rung has no deterministic stand-in — one fewer rung beats a
- * rung that announces itself), drop verbatim repeats of the base description or
- * of earlier variants (no spoken line may repeat back-to-back), cap at maxCount.
+ * Instruction block for the parse prompt's two tier fields.
  *
- * Deliberately not guardSpokenLine: that guard floors at the original line
- * rather than lose it, which is right where losing the line empties the
- * reminder. A dropped rung empties nothing, so a banned rung is dropped here.
+ * No spoken line is described here any more (OLD-108), which is why there is no
+ * SPOKEN_LINE_RULE_REFERENCE in it: both fields are classifications, and the
+ * only line this reminder ever speaks is `description`.
  */
-export function normalizeVariants(
-  raw: unknown,
-  maxCount: number,
-  baseDescription: string
-): string[] {
-  if (!Array.isArray(raw) || maxCount <= 0) return [];
-  const baseKey = normalizeReminderDescription(baseDescription).toLowerCase();
-  const seen = new Set<string>();
-  const variants: string[] = [];
-  for (const item of raw) {
-    if (variants.length >= maxCount) break;
-    const line = normalizeReminderDescription(item);
-    if (!line || hasBannedOpener(line)) continue;
-    const key = line.toLowerCase();
-    if (key === baseKey || seen.has(key)) continue;
-    seen.add(key);
-    variants.push(line);
-  }
-  return variants;
-}
-
-// Instruction block for the parse prompt's replay fields (urgency, persistent,
-// variants). Variants are spoken minutes after the description was ignored, so
-// they must stay true when heard late. Each variant is its own attempt, so each
-// one opens differently — a line that starts like the one before it stops being
-// heard as a new attempt.
-export function buildVariantInstruction(): string {
-  return `ASSISTANT REPLAY RULES (the follow-up lines an assistant would use when the first one is ignored):
+export function buildReplayTierInstruction(): string {
+  return `${URGENCY_RULES_HEADING} (how hard the reminder pushes when it rings — it always speaks the SAME line, so these change the ring, never the wording):
 - "urgency": how hard the reminder has to push — "urgent" when the user must act right now (meeting starting, leaving the house), "notice" for advance warning of something coming up, "routine" for ordinary everyday tasks.
-- "persistent": true ONLY when missing the task would be harmful (medicine regimens, flights, picking up children). Otherwise false or omit.
-- "variants": the follow-up spoken lines, in the input's language, said several minutes after the description went unanswered. Each one rewords the task differently — never repeat the description or another variant verbatim — and they escalate in firmness from plain to insistent, still true when heard minutes late (no countdowns). ${SPOKEN_LINE_RULE} Every variant stays inside those two shapes, and must also start on a different word from the description and from the other variants, and the later ones lean harder — name the cost of ignoring it rather than raising the volume of the same sentence. Provide ${MAX_REPLAY_VARIANTS} variants when urgency is "urgent" or persistent is true, 2 when urgency is "notice", otherwise 1.`;
+- "persistent": true ONLY when missing the task would be harmful (medicine regimens, flights, picking up children). Otherwise false or omit.`;
 }
 
 // Upper bound keeps a mis-parsed lead time from scheduling a heads-up hours early.
@@ -414,6 +414,22 @@ export function parsePcmSampleRate(outputFormat: unknown): number | null {
   if (!match) return null;
   const rate = Number(match[1]);
   return rate > 0 ? rate : null;
+}
+
+/**
+ * TTS model selection (OLD-62/OLD-66): all narration speaks through
+ * Speechify's Beatrice — simba-3.2 for English, simba-multilingual for a line
+ * carrying Arabic script. The model must be picked from the text itself —
+ * simba-3.2 does not reject Arabic, it returns 200 and mangles it (measured:
+ * the Arabic word alone stretched 4.2×), so there is no error to branch on
+ * after the call.
+ */
+export function containsArabicScript(text: unknown): boolean {
+  // Arabic, Arabic Supplement, Arabic Extended-A, and the two presentation-forms blocks.
+  const arabic = new RegExp(
+    "[\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF]"
+  );
+  return arabic.test(String(text ?? ""));
 }
 
 /** Playback length of a headerless PCM buffer, in seconds. */
@@ -551,17 +567,10 @@ export function buildAlarmWav(pcm: Uint8Array, sampleRate: number): Uint8Array {
   return pcmToWav(body, sampleRate);
 }
 
-/**
- * Variant wav storage ids ride index-aligned with `variants`, and a Convex
- * `v.array(v.id("_storage"))` cannot hold holes. So the first variant whose wav
- * failed to synthesize ends the array: every later rung falls back to the base
- * wav rather than to some other variant's line.
- */
-export function alignVariantWavIds<T>(wavIds: (T | null | undefined)[]): T[] {
-  const aligned: T[] = [];
-  for (const id of wavIds) {
-    if (id === null || id === undefined) break;
-    aligned.push(id);
-  }
-  return aligned;
-}
+// A reminder speaks exactly two lines now (OLD-108): the base line it rings
+// with, and — when it has a lead time — the pre-alert heads-up minutes before.
+// The bounded-concurrency pool that used to fan the replay variants out over
+// the provider account's two-request ceiling (mapWithConcurrency, OLD-107) went
+// with them: one optional extra line is not a pool, and the 429 retry that made
+// the fan-out survivable now lives where it always mattered, around the
+// synthesis call itself (convex/actions.ts synthesizeWithElevenLabs).

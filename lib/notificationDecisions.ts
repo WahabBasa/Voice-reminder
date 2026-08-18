@@ -238,23 +238,10 @@ export function buildPreAlertBody(
 
 export type UrgencyTier = "urgent" | "notice" | "routine";
 
-export type RingCadenceMode = "alternate" | "speak_twice" | "loop";
-
-// Mirrors MAX_REPLAY_VARIANTS in convex/helpers.ts (client copy — lib code
-// must not import convex modules).
-export const MAX_REPLAY_VARIANTS = 3;
+export type RingCadenceMode = "speak_twice" | "loop";
 
 // Gap between the two routine-tier utterances (speak twice, then go silent).
 export const ROUTINE_SECOND_UTTERANCE_GAP_MS = 20_000;
-
-// Gap between alternated lines while an urgent-tier alarm rings continuously.
-export const ALTERNATE_LINE_GAP_MS = 1_500;
-
-export function parseVariantCount(value: unknown): number {
-  const count = Number(value ?? "0");
-  if (!Number.isFinite(count) || count <= 0) return 0;
-  return Math.min(MAX_REPLAY_VARIANTS, Math.floor(count));
-}
 
 export function normalizeUrgencyTier(value: unknown): UrgencyTier {
   const token = String(value ?? "").toLowerCase().trim();
@@ -263,57 +250,27 @@ export function normalizeUrgencyTier(value: unknown): UrgencyTier {
   return "notice";
 }
 
-/** Parse the JSON-encoded variants array carried in notification data. */
-export function parseVariantList(value: unknown): string[] {
-  if (typeof value !== "string" || !value) return [];
-  try {
-    const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => String(item ?? "").trim())
-      .filter((item) => item.length > 0);
-  } catch {
-    return [];
-  }
-}
-
-export function variantLineForIndex(
-  variants: string[],
-  index: number,
-  baseDescription: string
-): string {
-  if (Number.isFinite(index) && index >= 0 && index < variants.length && variants[index]) {
-    return variants[index];
-  }
-  return baseDescription;
-}
-
 /**
  * Ring cadence while the alarm UI is alive.
- * - urgent: alternate the available spoken lines continuously (needs one-shot
- *   native playback and at least two local files, else loop one file).
- * - routine: speak twice (~20s gap) then go silent (needs one-shot playback,
- *   else loop as today).
- * - notice/legacy: continuous loop, exactly today's behavior.
+ * - routine: speak twice (~20s gap) then go silent (needs one-shot playback and
+ *   a playable file, else loop as today).
+ * - urgent / notice / legacy: continuous loop of the one spoken line.
+ *
+ * There used to be a third mode, "alternate": an urgent alarm cycled through
+ * the reminder's replay variants while it rang. OLD-108 removed the variants,
+ * which leaves every reminder with exactly one spoken line — and alternating
+ * one file with itself is a loop with extra steps, so the mode is gone rather
+ * than left permanently unreachable.
  */
 export function ringCadenceMode(
   urgency: unknown,
   playableFileCount: number,
   supportsOneShotPlayback: boolean
 ): RingCadenceMode {
-  const tier = normalizeUrgencyTier(urgency);
-  if (tier === "urgent") {
-    return supportsOneShotPlayback && playableFileCount >= 2 ? "alternate" : "loop";
-  }
-  if (tier === "routine") {
+  if (normalizeUrgencyTier(urgency) === "routine") {
     return supportsOneShotPlayback && playableFileCount >= 1 ? "speak_twice" : "loop";
   }
   return "loop";
-}
-
-export function nextAlternateIndex(currentIndex: number, playlistLength: number): number {
-  if (playlistLength <= 0) return 0;
-  return (currentIndex + 1) % playlistLength;
 }
 
 // ─── Group 8: The snooze-nag (OLD-96) ───────────────────────────────────────

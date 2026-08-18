@@ -11,18 +11,20 @@ import {
   normalizePreReminder,
   buildHeadsUpTtsText,
   MAX_PRE_REMINDER_MINUTES,
-  MAX_REPLAY_VARIANTS,
   SPOKEN_LINE_RULE,
+  SPOKEN_LINE_RULES_HEADING,
+  SPOKEN_LINE_RULES_SECTION,
+  SPOKEN_LINE_RULE_REFERENCE,
   normalizeUrgency,
   normalizePersistent,
-  variantCountForTier,
-  normalizeVariants,
   normalizeEmoji,
   normalizeParsedReminders,
   MAX_REMINDERS_PER_TAKE,
   MULTI_REMINDER_INSTRUCTION,
-  buildVariantInstruction,
+  buildReplayTierInstruction,
+  URGENCY_RULES_HEADING,
   ALARM_PCM_OUTPUT_FORMAT,
+  containsArabicScript,
   ALARM_WAV_BITS_PER_SAMPLE,
   ALARM_WAV_CHANNELS,
   ALARM_WAV_GAP_SECONDS,
@@ -30,7 +32,6 @@ import {
   ALARM_WAV_TARGET_SECONDS,
   DEFAULT_ALARM_WAV_SAMPLE_RATE,
   MAX_ALARM_SOUND_SECONDS,
-  alignVariantWavIds,
   buildAlarmWav,
   buildWavHeader,
   parsePcmSampleRate,
@@ -171,7 +172,10 @@ describe("buildDescriptionInstruction", () => {
   it("asks for one short spoken sentence in the input's language", () => {
     const result = buildDescriptionInstruction();
     expect(result).toContain("in the input's language");
-    expect(result).toContain("ONE short sentence, present tense");
+    // "ONE short sentence, present tense" now lives in the SPOKEN LINE RULES
+    // section this points at (OLD-106), not in a third copy of the rule.
+    expect(result).toContain(SPOKEN_LINE_RULE_REFERENCE);
+    expect(SPOKEN_LINE_RULES_SECTION).toContain("ONE short sentence, present tense");
     expect(result).toContain("Roughly 3-8 words");
     expect(result).toContain("Plain words only");
   });
@@ -222,8 +226,10 @@ describe("buildDescriptionInstruction", () => {
 
   it("forbids any name or title — the line addresses nobody", () => {
     const result = buildDescriptionInstruction();
-    expect(result).toContain("addressing the user by name or title");
-    expect(result).toContain("no 'Sir'");
+    // Carried by the section the instruction defers to (OLD-106).
+    expect(result).toContain(SPOKEN_LINE_RULE_REFERENCE);
+    expect(SPOKEN_LINE_RULES_SECTION).toContain("addressing the user by name or title");
+    expect(SPOKEN_LINE_RULES_SECTION).toContain("no 'Sir'");
     expect(result).not.toContain("address term");
   });
 
@@ -258,7 +264,7 @@ describe("buildPreReminderInstruction", () => {
 
   it("keeps the advance notice factual but opener-free, with an Arabic example", () => {
     const result = buildPreReminderInstruction();
-    expect(result).toContain(SPOKEN_LINE_RULE);
+    expect(result).toContain(SPOKEN_LINE_RULE_REFERENCE);
     expect(result).toContain("'Your flight leaves in 40 minutes.'");
     expect(result).toContain("'اجتماعك يبدأ بعد ربع ساعة.'");
   });
@@ -309,7 +315,7 @@ describe("instruction phrasing", () => {
     [
       buildDescriptionInstruction(),
       buildPreReminderInstruction(),
-      buildVariantInstruction(),
+      buildReplayTierInstruction(),
     ].map(withoutLineRule);
 
   for (const opener of CANNED_OPENERS) {
@@ -398,21 +404,37 @@ describe("SPOKEN_LINE_RULE", () => {
     expect(SPOKEN_LINE_RULE).not.toContain('"');
   });
 
-  it("ships in every builder that describes a spoken line", () => {
+  // OLD-106: the rule is stated once, as a named section in the prompt, and
+  // each spoken-line builder points at it. Inlining it three times put ~3,400
+  // duplicated characters into every parse request and cost prefill on each.
+  it("is referenced by every builder that describes a spoken line", () => {
     for (const instruction of [
       buildDescriptionInstruction(),
       buildPreReminderInstruction(),
-      buildVariantInstruction(),
     ]) {
-      expect(instruction).toContain(SPOKEN_LINE_RULE);
+      expect(instruction).toContain(SPOKEN_LINE_RULE_REFERENCE);
+      // The reference replaces the copy — it does not sit next to one.
+      expect(instruction).not.toContain(SPOKEN_LINE_RULE);
     }
   });
 
-  it("keeps each replay line opening on a different word", () => {
-    expect(buildVariantInstruction()).toContain(
-      "start on a different word from the description and from the other variants"
-    );
+  // Two builders describe a spoken line, and only those two (OLD-108). The
+  // urgency block classifies the ring, so pointing it at the voice canon would
+  // be noise in a prompt whose whole shape is about not shipping noise.
+  it("is not referenced by the block that describes no line at all", () => {
+    expect(buildReplayTierInstruction()).not.toContain(SPOKEN_LINE_RULE_REFERENCE);
+    expect(buildReplayTierInstruction()).not.toContain(SPOKEN_LINE_RULES_HEADING);
   });
+
+  it("names the section the builders point at, and carries the rule verbatim", () => {
+    expect(SPOKEN_LINE_RULES_SECTION).toContain(SPOKEN_LINE_RULES_HEADING);
+    // The canon itself is untouched by the dedupe — same bytes, one copy.
+    expect(SPOKEN_LINE_RULES_SECTION).toContain(SPOKEN_LINE_RULE);
+    expect(SPOKEN_LINE_RULE_REFERENCE).toContain(SPOKEN_LINE_RULES_HEADING);
+    // Embedded inside a double-quoted JSON field, like the rule it stands in for.
+    expect(SPOKEN_LINE_RULE_REFERENCE).not.toContain('"');
+  });
+
 });
 
 // ─── BANNED_OPENERS / hasBannedOpener / guardSpokenLine ─────────────────────
@@ -778,118 +800,31 @@ describe("normalizePersistent", () => {
   });
 });
 
-// ─── variantCountForTier ────────────────────────────────────────────────────
+// ─── buildReplayTierInstruction (OLD-108) ───────────────────────────────────
 
-describe("variantCountForTier", () => {
-  it("gives urgent the full ladder", () => {
-    expect(variantCountForTier("urgent", false)).toBe(MAX_REPLAY_VARIANTS);
-  });
-
-  it("gives persistent reminders the full ladder regardless of tier", () => {
-    expect(variantCountForTier("routine", true)).toBe(MAX_REPLAY_VARIANTS);
-  });
-
-  it("gives notice two variants", () => {
-    expect(variantCountForTier("notice", false)).toBe(2);
-  });
-
-  it("gives routine a single extra variant", () => {
-    expect(variantCountForTier("routine", false)).toBe(1);
-  });
-});
-
-// ─── normalizeVariants ──────────────────────────────────────────────────────
-
-describe("normalizeVariants", () => {
-  it("keeps clean escalating lines", () => {
-    expect(
-      normalizeVariants(["Please take your medicine", "You must take it now"], 3, "Time for medicine")
-    ).toEqual(["Please take your medicine", "You must take it now"]);
-  });
-
-  it("caps at maxCount", () => {
-    expect(normalizeVariants(["a", "b", "c", "d"], 2, "base")).toEqual(["a", "b"]);
-  });
-
-  it("drops verbatim repeats of the base description", () => {
-    expect(normalizeVariants(["Take your medicine", "another line"], 3, "Take your medicine")).toEqual([
-      "another line",
-    ]);
-  });
-
-  it("compares to the base case-insensitively", () => {
-    expect(normalizeVariants(["TAKE YOUR MEDICINE"], 3, "take your medicine")).toEqual([]);
-  });
-
-  it("drops duplicate variants", () => {
-    expect(normalizeVariants(["same line", "Same line", "other"], 3, "base")).toEqual([
-      "same line",
-      "other",
-    ]);
-  });
-
-  it("drops empty and whitespace entries", () => {
-    expect(normalizeVariants(["", "   ", "real line"], 3, "base")).toEqual(["real line"]);
-  });
-
-  it("strips greetings from variants", () => {
-    expect(normalizeVariants(["Hey! Take your medicine now"], 3, "base")).toEqual([
-      "Take your medicine now",
-    ]);
-  });
-
-  // A rung has no deterministic stand-in, so a leaked opener costs the rung.
-  it("drops a variant that opens with a banned opener", () => {
-    expect(
-      normalizeVariants(["حان وقت شرب كوب من الماء.", "كوب الماء ما زال ينتظرك."], 3, "base")
-    ).toEqual(["كوب الماء ما زال ينتظرك."]);
-  });
-
-  it("drops every variant when the model leaks openers into all of them", () => {
-    expect(
-      normalizeVariants(["It is time to drink water", "Time to hydrate"], 3, "base")
-    ).toEqual([]);
-  });
-
-  it("returns [] for non-array input", () => {
-    expect(normalizeVariants("not an array", 3, "base")).toEqual([]);
-    expect(normalizeVariants(undefined, 3, "base")).toEqual([]);
-  });
-
-  it("returns [] when maxCount is zero", () => {
-    expect(normalizeVariants(["a"], 0, "base")).toEqual([]);
-  });
-});
-
-// ─── buildVariantInstruction ────────────────────────────────────────────────
-
-describe("buildVariantInstruction", () => {
-  it("holds replay lines to the same voice as the description", () => {
-    const result = buildVariantInstruction();
-    expect(result).toContain(SPOKEN_LINE_RULE);
-    // Names went with the catches (OLD-95): no variant addresses the user.
-    expect(result).not.toContain("address term");
-  });
-
-  it("documents all three replay fields and the economize policy", () => {
-    const result = buildVariantInstruction();
+describe("buildReplayTierInstruction", () => {
+  it("documents the two tier fields and nothing else", () => {
+    const result = buildReplayTierInstruction();
+    expect(result).toContain(URGENCY_RULES_HEADING);
     expect(result).toContain('"urgency"');
     expect(result).toContain('"persistent"');
-    expect(result).toContain('"variants"');
-    expect(result).toContain(`${MAX_REPLAY_VARIANTS} variants`);
   });
 
   it("describes urgency by how hard the reminder pushes, not by opener", () => {
-    const result = buildVariantInstruction();
+    const result = buildReplayTierInstruction();
     expect(result).toContain("how hard the reminder has to push");
     expect(result).toContain('"urgent" when the user must act right now');
   });
 
-  it("keeps the escalation and the late-delivery rule", () => {
-    const result = buildVariantInstruction();
-    expect(result).toContain("escalate in firmness");
-    expect(result).toContain("never repeat the description or another variant verbatim");
-    expect(result).toContain("still true when heard minutes late (no countdowns)");
+  // The whole point of OLD-108: the parse no longer produces alternative
+  // wordings, and the block says so rather than leaving it implied. A prompt
+  // that still asked for a "variants" array would get one back, and it would
+  // be synthesized, stored and never played.
+  it("asks for no replay lines at all", () => {
+    const result = buildReplayTierInstruction();
+    expect(result).not.toContain('"variants"');
+    expect(result).not.toContain("escalate");
+    expect(result).toContain("it always speaks the SAME line");
   });
 });
 
@@ -930,6 +865,36 @@ describe("parsePcmSampleRate", () => {
     expect(parsePcmSampleRate(null)).toBeNull();
     expect(parsePcmSampleRate("pcm_")).toBeNull();
     expect(parsePcmSampleRate("pcm_0")).toBeNull();
+  });
+});
+
+describe("containsArabicScript", () => {
+  it("routes plain English to false", () => {
+    expect(containsArabicScript("Drink your water.")).toBe(false);
+    expect(containsArabicScript("Your meeting is at 7:30.")).toBe(false);
+  });
+
+  it("detects a fully Arabic line", () => {
+    expect(containsArabicScript("خذ حبوبك.")).toBe(true);
+  });
+
+  it("detects an Arabic address term inside an English line", () => {
+    expect(containsArabicScript("Call ماما now.")).toBe(true);
+  });
+
+  it("detects Arabic presentation forms", () => {
+    // U+FEFB (LAM-ALEF ligature) sits in the FE70-FEFF block, not the base block.
+    expect(containsArabicScript("ﻻ")).toBe(true);
+  });
+
+  it("stays false for empty and non-string input", () => {
+    expect(containsArabicScript("")).toBe(false);
+    expect(containsArabicScript(undefined)).toBe(false);
+    expect(containsArabicScript(null)).toBe(false);
+  });
+
+  it("stays false for other non-Latin scripts", () => {
+    expect(containsArabicScript("水を飲む")).toBe(false);
   });
 });
 
@@ -1114,22 +1079,6 @@ describe("buildAlarmWav", () => {
     expect(() => buildAlarmWav(new Uint8Array(0), RATE)).toThrow(/empty PCM buffer/);
     expect(() => buildAlarmWav(line(1), 0)).toThrow(/Invalid PCM sample rate/);
     expect(() => buildAlarmWav(line(1), Number.NaN)).toThrow(/Invalid PCM sample rate/);
-  });
-});
-
-describe("alignVariantWavIds", () => {
-  it("keeps a fully synthesized list intact", () => {
-    expect(alignVariantWavIds(["a", "b", "c"])).toEqual(["a", "b", "c"]);
-  });
-
-  it("truncates at the first missing wav so indexes stay honest", () => {
-    expect(alignVariantWavIds(["a", undefined, "c"])).toEqual(["a"]);
-    expect(alignVariantWavIds(["a", null, "c"])).toEqual(["a"]);
-  });
-
-  it("returns nothing when the first variant has no wav", () => {
-    expect(alignVariantWavIds([undefined, "b"])).toEqual([]);
-    expect(alignVariantWavIds([])).toEqual([]);
   });
 });
 

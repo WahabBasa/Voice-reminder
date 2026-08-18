@@ -195,7 +195,7 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
     expect(plans[1].anchorAt).toBeGreaterThan(0);
   });
 
-  it("gives each item its own replay tier and variants", () => {
+  it("gives each item its own ring tier", () => {
     const raw = JSON.stringify({
       reminders: [
         reminder({
@@ -203,6 +203,9 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
           description: "Your evening pills are still on the counter.",
           urgency: "urgent",
           persistent: true,
+          // A model still answering with the retired field (an older prompt in
+          // flight, or the model padding the schema out of habit) must not put
+          // anything on the plan — OLD-108 dropped the field entirely.
           variants: ["The pills are still waiting.", "You have not taken the pills yet."],
         }),
         reminder({ title: "Water", variants: ["Your glass is still full."] }),
@@ -213,10 +216,11 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
 
     expect(plans[0].urgency).toBe("urgent");
     expect(plans[0].persistent).toBe(true);
-    expect(plans[0].variants).toHaveLength(2);
     expect(plans[1].urgency).toBe("routine");
     expect(plans[1].persistent).toBe(false);
-    expect(plans[1].variants).toEqual(["Your glass is still full."]);
+    for (const plan of plans) {
+      expect(plan).not.toHaveProperty("variants");
+    }
   });
 
   it("falls back to the current time per item when one has no time", () => {

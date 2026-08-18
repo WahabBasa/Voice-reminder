@@ -5,8 +5,6 @@ import {
   downloadAsync,
   getInfoAsync,
 } from "expo-file-system/legacy";
-import { MAX_REPLAY_VARIANTS } from "./notificationDecisions";
-
 /**
  * iOS AlarmKit sound placement (AK-3).
  *
@@ -17,9 +15,12 @@ import { MAX_REPLAY_VARIANTS } from "./notificationDecisions";
  * So the wav is staged into Documents and the AlarmKitBridge native method
  * copies it into Library/Sounds via FileManager.
  *
- * The cadence ladder adds one wav per rung above the base: rung k >= 1 rings
- * `reminder_<id>_v<k>.wav`, which holds variant k-1 (PRD contract — the file
- * suffix is the RUNG number, not the variant index).
+ * There is exactly ONE alarm sound per reminder (OLD-108). The cadence ladder
+ * used to stage one wav per rung above the base — `reminder_<id>_v<k>.wav`,
+ * holding replay variant k-1 — but the nag repeats the base line now, so
+ * nothing places those files any longer. `removeAlarmSound` still sweeps them
+ * by name, because installs that rang before the strip have them sitting in
+ * Library/Sounds and nothing else would ever take them out.
  *
  * Everything here is a no-op off iOS — Android keeps its mp3 + notifee path
  * untouched — and nothing throws: a missing alarm sound must degrade to the
@@ -37,8 +38,15 @@ export function getAlarmSoundFileName(reminderId: string): string {
   return `reminder_${sanitizeId(reminderId)}.wav`;
 }
 
-/** Bare filename for ladder rung `rung` (>= 1), holding variant `rung - 1`. */
-export function getVariantAlarmSoundFileName(reminderId: string, rung: number): string {
+/**
+ * Rungs the retired cadence ladder could have staged (OLD-108). Only
+ * `removeAlarmSound` reads this, to sweep files left behind by an install that
+ * rang before the strip.
+ */
+const LEGACY_LADDER_RUNGS = 3;
+
+/** Bare filename a retired ladder rung was placed under. Cleanup only. */
+function legacyVariantAlarmSoundFileName(reminderId: string, rung: number): string {
   return `reminder_${sanitizeId(reminderId)}_v${rung}.wav`;
 }
 
@@ -47,16 +55,6 @@ export function getAlarmSoundStagingPath(reminderId: string): string | null {
   if (Platform.OS !== "ios") return null;
   if (!documentDirectory) return null;
   return `${documentDirectory}alarm_staging_${sanitizeId(reminderId)}.wav`;
-}
-
-/** Staging path for a rung's variant wav (kept distinct from the base's). */
-export function getVariantAlarmSoundStagingPath(
-  reminderId: string,
-  rung: number
-): string | null {
-  if (Platform.OS !== "ios") return null;
-  if (!documentDirectory) return null;
-  return `${documentDirectory}alarm_staging_${sanitizeId(reminderId)}_v${rung}.wav`;
 }
 
 // Files already copied into Library/Sounds this session — skips repeat
@@ -129,33 +127,16 @@ export async function ensureAlarmSound(
 }
 
 /**
- * Same, for ladder rung `rung` (>= 1). Returns null when the variant wav is
- * missing — the caller falls back to the base wav, never to the system default.
- */
-export async function ensureVariantAlarmSound(
-  reminderId: string,
-  rung: number,
-  wavUrl: string | null | undefined
-): Promise<string | null> {
-  if (rung < 1 || rung > MAX_REPLAY_VARIANTS) return null;
-  return placeAlarmSoundFile(
-    getVariantAlarmSoundFileName(reminderId, rung),
-    getVariantAlarmSoundStagingPath(reminderId, rung),
-    wavUrl,
-    `${reminderId} rung ${rung}`
-  );
-}
-
-/**
- * Drop a reminder's alarm sounds — the base wav and every ladder rung's variant
- * wav (deletion / re-record flows). No-op off iOS.
+ * Drop a reminder's alarm sounds — its one wav, plus any retired ladder rung
+ * wav an older build left in Library/Sounds (deletion / re-record flows).
+ * No-op off iOS.
  */
 export async function removeAlarmSound(reminderId: string): Promise<void> {
   if (Platform.OS !== "ios") return;
 
   const fileNames = [getAlarmSoundFileName(reminderId)];
-  for (let rung = 1; rung <= MAX_REPLAY_VARIANTS; rung++) {
-    fileNames.push(getVariantAlarmSoundFileName(reminderId, rung));
+  for (let rung = 1; rung <= LEGACY_LADDER_RUNGS; rung++) {
+    fileNames.push(legacyVariantAlarmSoundFileName(reminderId, rung));
   }
   for (const fileName of fileNames) {
     placedThisSession.delete(fileName);

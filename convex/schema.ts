@@ -84,22 +84,46 @@ export default defineSchema({
     // Smart pre-reminder (heads-up before the event); 0/absent = none
     preReminderMinutes: v.optional(v.number()),
     preAudioStorageId: v.optional(v.id("_storage")),
-    // Assistant-style replays (OLD-53): hook tier of the description,
-    // "keep reminding until Done" flag, and escalating alternative spoken
-    // lines with their TTS audios (parallel arrays).
+    // Ring tier (OLD-53): how hard the alarm pushes while it rings, plus the
+    // "keep reminding until Done" flag. Both still written and read.
     urgency: v.optional(
       v.union(v.literal("urgent"), v.literal("notice"), v.literal("routine"))
     ),
     persistent: v.optional(v.boolean()),
+    // DEPRECATED (OLD-108) — never written on new rows, never read anywhere.
+    //
+    // These held the escalating replay lines and their audios: the parse
+    // produced one to three rewordings per urgent/persistent reminder, and the
+    // nag chain spoke a different one each time it came back. The product
+    // decision is that the nag repeats the SAME line, so the whole pipeline
+    // (prompt field, synthesis, download, playback) is gone.
+    //
+    // The columns stay because the rows do: reminders created before the strip
+    // still carry these values and their stored blobs, and a Convex schema that
+    // stopped declaring them would reject every one of those documents on the
+    // next write. `reminders.remove` is the only code left that touches them —
+    // it deletes the blobs so an old reminder still cleans up after itself.
+    // Safe to drop for good once no row carries them.
     variants: v.optional(v.array(v.string())),
     variantAudioStorageIds: v.optional(v.array(v.id("_storage"))),
-    // Alarm-ready WAVs of the variant lines, index-aligned with `variants`
-    // (ladder rung k>=1 rings variant k-1; a missing entry falls back to
-    // wavStorageId). Optional and possibly shorter than `variants`.
     variantWavStorageIds: v.optional(v.array(v.id("_storage"))),
     createdAt: v.number(),
-    // Audio status for background TTS generation
+    // Audio status for background TTS generation. Covers the BASE spoken line
+    // only — "ready" means the line this reminder rings is stored and playable.
     audioStatus: v.optional(v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))),
+    // The other line: the pre-alert heads-up (OLD-107, narrowed in OLD-108).
+    //
+    // Split out of audioStatus because it is not needed to ring — the pre-alert
+    // fires minutes BEFORE the event — and holding "pending" until it landed
+    // cost the reminder seconds of waiting for audio nothing was about to play.
+    // It covered the replay variant lines too until OLD-108 removed them; the
+    // field is KEPT rather than folded into the base patch, because folding it
+    // would put the pre-alert synth back inside the wait OLD-107 took it out
+    // of. Absent means "this reminder has no pre-alert", which is the legacy
+    // row and the no-lead-time reminder alike.
+    audioExtrasStatus: v.optional(
+      v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))
+    ),
     audioError: v.optional(v.string()),
     audioUpdatedAt: v.optional(v.number()),
     // Alarm settings (optional for backward compatibility)
