@@ -5,7 +5,9 @@ import BottomSheet, {
     BottomSheetTextInput,
     BottomSheetView,
 } from "@gorhom/bottom-sheet";
+import { runOnJS, useAnimatedReaction, useSharedValue } from "react-native-reanimated";
 import { Portal } from "@gorhom/portal";
+import { crossedIntoClosed } from "../lib/sheetClose";
 import { ArrowUp, AudioLines } from "lucide-react-native";
 import { borderRadius, colors, scaleFontSize } from "../lib/theme";
 import { MAX_COMPOSER_CHARS, canSubmitComposerText, normalizeComposerText } from "../lib/typedTake";
@@ -86,6 +88,20 @@ export default function ComposerSheet({
         [onDismiss]
     );
 
+    // Authoritative close signal. A pan that parks the sheet at the closed
+    // position emits no onChange at all (lib/sheetClose.ts) — without this net
+    // the parent's showComposer never clears and the dock stays unmounted.
+    const animatedIndex = useSharedValue(-1);
+    useAnimatedReaction(
+        () => animatedIndex.value,
+        (curr, prev) => {
+            if (crossedIntoClosed(prev, curr)) {
+                runOnJS(onDismiss)();
+            }
+        },
+        [onDismiss]
+    );
+
     const handleSubmit = useCallback(() => {
         if (submitting || !canSubmitComposerText(draft)) return;
         onSubmit(normalizeComposerText(draft));
@@ -107,6 +123,7 @@ export default function ComposerSheet({
             <BottomSheet
                 ref={bottomSheetRef}
                 index={0}
+                animatedIndex={animatedIndex}
                 enablePanDownToClose
                 enableDynamicSizing
                 animationConfigs={{ duration: ANIMATION_DURATION }}

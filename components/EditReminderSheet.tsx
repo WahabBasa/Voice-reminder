@@ -21,6 +21,8 @@ import BottomSheet, {
     BottomSheetBackdrop,
     TouchableOpacity,
 } from "@gorhom/bottom-sheet";
+import { runOnJS, useAnimatedReaction, useSharedValue } from "react-native-reanimated";
+import { crossedIntoClosed } from "../lib/sheetClose";
 import { api } from "../convex/_generated/api";
 import AppIcon from "./AppIcon";
 import RepeatTaskModal from "./RepeatTaskModal";
@@ -472,6 +474,25 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         [traceId]
     );
 
+    // Authoritative close signal. onAnimate/onChange can both be skipped: a
+    // pan that ends with the sheet already at the closed position early-returns
+    // before any callback (lib/sheetClose.ts). Without this net the parent's
+    // editingReminder never clears and the dock stays unmounted until restart.
+    const animatedIndex = useSharedValue(-1);
+    const notifyClosed = useCallback(() => {
+        perfLog(traceId, "overlay.edit", "close_from_index_stream", { t: Date.now() });
+        onClose();
+    }, [onClose, traceId]);
+    useAnimatedReaction(
+        () => animatedIndex.value,
+        (curr, prev) => {
+            if (crossedIntoClosed(prev, curr)) {
+                runOnJS(notifyClosed)();
+            }
+        },
+        [notifyClosed]
+    );
+
     const expandSheet = useCallback(() => {
         bottomSheetRef.current?.snapToIndex(1);
     }, []);
@@ -482,6 +503,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                 ref={bottomSheetRef}
                 snapPoints={snapPoints}
                 index={0}
+                animatedIndex={animatedIndex}
                 enablePanDownToClose
                 animateOnMount
                 enableDynamicSizing={false}
