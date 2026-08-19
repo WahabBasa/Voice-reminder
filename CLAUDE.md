@@ -20,6 +20,8 @@
 | **Project Root** | `C:\Dev\VR` |
 | **Project Plan** | `plan.md` (architecture, phases, tech stack) |
 | **Devlogs** | `updates/YYYY-MM-DD_devlog.md` |
+| **ASO transcripts** | `docs/aso/transcripts/` — user-shared ASO/Apple Search Ads reference (distilled playbook + cleaned transcript per file, indexed in its `README.md`). When the user shares a new ASO transcript, save it there in the same structure. |
+| **ASC screenshot renders** | GPT renders and phone captures arrive in `C:\Users\AtheA\Downloads\LANDrop`. Approved store screenshots get copied to `marketing/renders/` named by slot (`01-lockscreen.png`, `02-recording.png`, …). When the set is complete, `python marketing/upscale_to_asc.py` emits exact 6.7" (1290x2796) + 6.5" (1242x2688) PNGs to `marketing/out/asc/` for App Store Connect upload. |
 | **Convex Dashboard** | https://dashboard.convex.dev/d/proper-stoat-767 |
 | **GitHub Repo** | https://github.com/WahabBasa/Voice-reminder |
 
