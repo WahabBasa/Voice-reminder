@@ -505,6 +505,19 @@ struct VRSnoozeIntent: LiveActivityIntent {
         // disk when that happens or GUARD 2 has nothing to read.
         VRAlarmIntentStore.writeSnoozeGuard(appKey: resolvedKey, snoozeUntilMillis: snoozeUntil)
 
+        // The ring itself. Nothing else silences it any more: rotation's cancel
+        // used to cut the audio as a side effect of Later always rescheduling
+        // its own key, and the pre-scheduled chain removed that reschedule for
+        // the common path — `.custom` leaves silencing entirely to us. Stop,
+        // never cancel: the registry entry must survive for the sibling
+        // bookkeeping Done relies on, and "Later" is not an acknowledgment.
+        if let ringing = UUID(uuidString: alarmID) {
+            VRFollowUpScheduler.stopRinging(uuid: ringing)
+        } else if let stored = VRAlarmIntentStore.uuidRegistry()[resolvedKey],
+                  let ringing = UUID(uuidString: stored) {
+            VRFollowUpScheduler.stopRinging(uuid: ringing)
+        }
+
         VRAlarmIntentStore.appendEvent(
             type: "snoozed",
             id: VRAlarmIntentGuards.eventIdentifier(appKey: resolvedKey, alarmID: alarmID),
@@ -588,8 +601,12 @@ struct VRSnoozeIntent: LiveActivityIntent {
 @available(iOS 26.0, *)
 struct VRStopIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Done"
-    /// Foregrounding the app is what lets JS reconciliation drain the event log.
-    static var openAppWhenRun: Bool = true
+    /// Answering an alarm must not demand an unlock: on the lock screen,
+    /// openAppWhenRun means a Face ID prompt and an app launch on every
+    /// slide-to-stop. The event log sits in UserDefaults until the next natural
+    /// foreground, whose reconciliation pass was built for exactly that (its
+    /// completed branch is the documented backstop for intents that never ran).
+    static var openAppWhenRun: Bool = false
     static var isDiscoverable: Bool = false
 
     @Parameter(title: "Alarm ID")
@@ -636,8 +653,10 @@ struct VRStopIntent: LiveActivityIntent {
         // now that the chain has ended.
         VRAlarmIntentStore.clearSnoozeGuard(appKey: resolvedKey)
 
-        // No completion recording here. openAppWhenRun brings the app up and AK-4's
-        // reconciliation owns the Convex/store writes.
+        // No completion recording here. The "stopped" event waits in UserDefaults
+        // for the next foreground, where AK-4's reconciliation owns the
+        // Convex/store writes — deliberately deferred, so answering an alarm
+        // never costs the user an unlock.
         return .result()
     }
 }
@@ -678,6 +697,11 @@ protocol VRAlarmFollowUpScheduling {
     /// meta entries — and a silent no-op for a key that is not scheduled. Same
     /// off-main-actor requirement as above.
     static func cancel(appKey: String)
+
+    /// Silences an actively alerting alarm and does nothing else — no registry
+    /// or meta eviction. Must be a silent no-op for an alarm that is not
+    /// alerting. Same off-main-actor requirement as above.
+    static func stopRinging(uuid: UUID)
 }
 
 @available(iOS 26.0, *)

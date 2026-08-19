@@ -515,6 +515,15 @@ enum VRAlarmScheduler {
     return alarmID
   }
 
+  /// VRAlarmFollowUpScheduling.stopRinging: "Later" silences the alerting alarm
+  /// through here. Stop is not cancel — the alarm's registry and meta records
+  /// survive, because the ring stays part of its chain's bookkeeping until Done
+  /// ends it. AlarmKit's stop throws for an alarm that is not alerting; that is
+  /// the no-op case, not an error.
+  static func stopRinging(uuid: UUID) {
+    try? AlarmManager.shared.stop(id: uuid)
+  }
+
   /// Also the CL-2 seam (VRAlarmFollowUpScheduling.cancel): the intents cancel a
   /// ladder's remaining rungs through here so rotation stays in exactly one place.
   /// Must stay a silent no-op for an unknown key — a rung that already rotated
@@ -568,7 +577,7 @@ import Foundation
 @available(iOS 26.0, *)
 struct VRStopIntent: LiveActivityIntent {
   static var title: LocalizedStringResource { "Done" }
-  static var openAppWhenRun: Bool { true }
+  static var openAppWhenRun: Bool { false }
   static var isDiscoverable: Bool { false }
 
   @Parameter(title: "Alarm ID")

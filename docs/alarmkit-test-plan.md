@@ -111,7 +111,9 @@ a sound file the OS will not accept).
 
 ### 4. Done records completion on next open
 
-On the alarm from step 3, tap **Done**. The app foregrounds (`openAppWhenRun=true`).
+On the alarm from step 3, answer **Done** (slide-to-stop on iOS 26.1+). The phone must stay on
+the lock screen — no unlock prompt, no app launch (`openAppWhenRun=false` on both intents). Then
+open the app by hand.
 
 Expect: the reminder shows as completed in history.
 

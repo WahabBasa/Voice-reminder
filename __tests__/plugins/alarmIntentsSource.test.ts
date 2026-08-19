@@ -152,6 +152,15 @@ describe("VRStopIntent ends the chain", () => {
     expect(stopIntent).not.toContain("scheduleAlarm(");
     expect(stopIntent).not.toContain("scheduleFollowUp");
   });
+
+  it("never opens the app — slide-to-stop on the lock screen must not demand an unlock", () => {
+    // Foregrounding was only ever about draining the event log immediately, and
+    // reconciliation runs on every foreground anyway (its completed branch is
+    // documented as the backstop for intents that never ran at all). Both
+    // intents stay lock-screen silent.
+    expect(stopIntent).toContain("static var openAppWhenRun: Bool = false");
+    expect(snoozeIntent).toContain("static var openAppWhenRun: Bool = false");
+  });
 });
 
 // ─── Group 5: Later — leaves the pre-scheduled chain standing ───────────────
@@ -185,6 +194,45 @@ describe("VRSnoozeIntent rides the pre-scheduled chain", () => {
   it("keeps guard 4's 1s sleep last", () => {
     const scheduleCall = at(snoozePerform, "scheduleFollowUp(appKey: resolvedKey");
     expect(scheduleCall).toBeLessThan(at(snoozePerform, "Task.sleep(nanoseconds: 1_000_000_000)"));
+  });
+});
+
+// ─── Group 5b: Later silences the ring it belongs to ────────────────────────
+//
+// The ring's audio used to die as a SIDE EFFECT: Later always rescheduled its
+// own app key, and guard-5 rotation cancelled the alerting UUID on the way.
+// The pre-scheduled chain removed that reschedule for the common path, and
+// `.custom` leaves silencing entirely to the intent — so the stop must be
+// explicit or the alarm rings until its timeout however many times Later is
+// tapped.
+
+describe("VRSnoozeIntent silences the ringing alarm", () => {
+  it("stops the alerting UUID unconditionally — after guard 1, before the owed-comeback branch", () => {
+    const guardWrite = at(snoozePerform, "writeSnoozeGuard(");
+    const stop = at(snoozePerform, "stopRinging(");
+    expect(guardWrite).toBeLessThan(stop);
+    expect(stop).toBeLessThan(at(snoozePerform, "owedComebackCount("));
+  });
+
+  it("falls back to the registry when the intent lost its UUID parameter", () => {
+    expect(snoozePerform).toContain("UUID(uuidString: alarmID)");
+    expect(snoozePerform).toContain("VRAlarmIntentStore.uuidRegistry()[resolvedKey]");
+  });
+
+  it("stops — never cancels — so the registry survives for Done's sibling bookkeeping", () => {
+    expect(snoozePerform).not.toContain("cancel(");
+    expect(snoozePerform).not.toContain("clearUUID");
+  });
+
+  it("declares stopRinging on the AK-1 integration seam", () => {
+    const seam = intents.slice(intents.indexOf("protocol VRAlarmFollowUpScheduling"));
+    expect(seam).toContain("static func stopRinging(uuid: UUID)");
+  });
+
+  it("the scheduler's stopRinging maps to AlarmManager.stop and touches no records", () => {
+    const stopFn = slice(scheduler, "static func stopRinging", "static func cancel(");
+    expect(stopFn).toContain("AlarmManager.shared.stop(id: uuid)");
+    expect(stopFn).not.toContain("VRAlarmStore");
   });
 });
 
