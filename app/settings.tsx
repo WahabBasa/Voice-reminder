@@ -168,7 +168,7 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
       </View>
 
       {/* Version footer */}
-      <Text style={styles.versionFooter}>Voice Reminder {versionLabel}</Text>
+      <Text style={styles.versionFooter}>Remi {versionLabel}</Text>
     </ScrollView>
   );
 }

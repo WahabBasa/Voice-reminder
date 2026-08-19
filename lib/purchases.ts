@@ -17,7 +17,7 @@ const REVENUECAT_IOS_KEY: string | null = 'appl_wKXHGzcWRaiqcfwGyWzBjnAwPxc';
 export const PRO_ENTITLEMENT_ID = 'Pro';
 
 /** Product name shown to users. Must match the App Store subscription display name. */
-export const PRO_PRODUCT_NAME = 'Voice Reminder Pro';
+export const PRO_PRODUCT_NAME = 'Remi Pro';
 
 // The Terms of Use and Privacy Policy URLs live in lib/legalLinks.ts — the
 // paywall, Settings and the AI consent card all read them from there.

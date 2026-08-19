@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "VoiceReminder",
+    "name": "Remi",
     "slug": "VoiceReminder",
     "scheme": "voicereminder",
     "version": "1.0.0",
@@ -93,7 +93,7 @@
       [
         "expo-av",
         {
-          "microphonePermission": "VoiceReminder records your voice so you can create reminders by speaking. Your recording leaves your device and is processed by secure AI services to transcribe it and speak your reminders back to you."
+          "microphonePermission": "Remi records your voice so you can create reminders by speaking. Your recording leaves your device and is processed by secure AI services to transcribe it and speak your reminders back to you."
         }
       ],
       "./plugins/withNotifeeAndroidMaven",

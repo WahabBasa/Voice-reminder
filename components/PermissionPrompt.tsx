@@ -213,7 +213,7 @@ export default function PermissionPrompt() {
 
           <Text style={styles.title}>Enable Permissions</Text>
           <Text style={styles.subtitle}>
-            Voice Reminder needs these permissions to alert you on time, even when your phone is locked.
+            Remi needs these permissions to alert you on time, even when your phone is locked.
           </Text>
 
           {/* Notification permission */}
