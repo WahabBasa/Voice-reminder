@@ -42,7 +42,7 @@ import DaysPage, { subtitleFor } from "../components/days/DaysPage";
 import BottomBar, { BottomBarTab } from "../components/BottomBar";
 import { SettingsContent } from "./settings";
 import { createTraceId, perfLog, recordTap, startStallMonitor } from "../lib/perf";
-import { checkCanCreateWithCount, getActiveReminderCount, getFreeActiveLimit } from "../lib/usage";
+import { getActiveReminderCount, getFreeActiveLimit } from "../lib/usage";
 import {
   describeTakeOutcome,
   extractTakeItems,
@@ -56,7 +56,7 @@ import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, isCompletedOnDay, occurrencesForDay, todayISO } from "../lib/dayOccurrences";
 import { formatClockAt } from "../lib/time";
-import { checkProStatus, getCachedProStatus } from "../lib/purchases";
+import { checkProStatus, getCachedProStatus, refreshProStatus } from "../lib/purchases";
 import NetInfo from "@react-native-community/netinfo";
 import * as Sentry from "@sentry/react-native";
 
@@ -195,7 +195,13 @@ export default function HomeScreen() {
     }, [])
   );
 
+  // The gate decision currently on screen. A background entitlement refresh
+  // resolves after the fact, so it checks this before touching the overlay —
+  // the one it was fired for may already be closed or replaced.
+  const gateTraceRef = useRef<string | null>(null);
+
   const handleCloseRecording = () => {
+    gateTraceRef.current = null;
     setShowRecording(false);
     setRecordingTraceId(null);
     setCanStartRecording(false);
@@ -257,90 +263,65 @@ export default function HomeScreen() {
     }
 
     perfLog(traceId, "ui.recording", "show_overlay");
+    gateTraceRef.current = traceId;
     setShowRecording(true);
-
-    // Gate recording start without blocking the overlay from rendering.
-    setCanStartRecording(false);
-    setGateStatusText("Checking your plan...");
     setShowUpgradeCta(false);
 
+    // The plan is known before the tap: RevenueCat's entitlement is primed at
+    // launch and its update listener keeps it current, so the gate is a
+    // synchronous cache read and the mic opens in the same render as the
+    // overlay. An unresolved cache counts as free — that only ever costs a
+    // capped user the lock below, which the refresh behind it corrects.
     const limit = getFreeActiveLimit();
-    const currentCount = activeReminders.length;
-    perfLog(traceId, "ui.recording", "gate_snapshot", { currentCount, limit, hasLoadedReminders });
+    const cachedPro = getCachedProStatus().isPro === true;
+    let currentCount = getActiveReminderCount();
 
-    if (!hasLoadedReminders) {
+    // Reminders load at startup, so an unloaded store here is the rare
+    // cold-tap. Pro skips the wait outright — there is no cap to count against.
+    if (!hasLoadedReminders && !cachedPro) {
       perfLog(traceId, "ui.recording", "gate_requested_while_not_loaded");
-      setGateStatusText("Loading reminders...");
-      setShowUpgradeCta(false);
       setCanStartRecording(false);
+      setGateStatusText("Loading reminders...");
 
       await loadReminders().catch(() => {});
-      const state = useReminderStore.getState();
-      const afterLoadCount = state.reminders.filter((r) => isReminderActive(r, state.history, Date.now())).length;
-      perfLog(traceId, "ui.recording", "gate_after_load", { currentCount: afterLoadCount, limit });
-
-      if (afterLoadCount < limit) {
-        setCanStartRecording(true);
-        setGateStatusText(undefined);
-        setShowUpgradeCta(false);
-        perfLog(traceId, "ui.recording", "gate_allowed_fast");
-        return;
-      }
-
-      const tCheck = Date.now();
-      perfLog(traceId, "ui.recording", "checkCanCreate_start", { currentCount: afterLoadCount, limit });
-      const { canCreate, isPro } = await checkCanCreateWithCount(afterLoadCount);
-      perfLog(traceId, "ui.recording", "checkCanCreate_done", {
-        ms: Date.now() - tCheck,
-        canCreate,
-        isPro,
-        currentCount: afterLoadCount,
-        limit,
-      });
-
-      if (!canCreate) {
-        lockRecordingForLimit(traceId, afterLoadCount, limit);
-        return;
-      }
-
-      setCanStartRecording(true);
-      setGateStatusText(undefined);
-      setShowUpgradeCta(false);
-      perfLog(traceId, "ui.recording", "gate_allowed");
-      return;
+      if (gateTraceRef.current !== traceId) return;
+      currentCount = getActiveReminderCount();
+      perfLog(traceId, "ui.recording", "gate_after_load", { currentCount, limit });
     }
 
-    // Fast path: under the free limit, allow immediately.
-    if (currentCount < limit) {
-      setCanStartRecording(true);
-      setGateStatusText(undefined);
-      setShowUpgradeCta(false);
-      perfLog(traceId, "ui.recording", "gate_allowed_fast");
-      return;
-    }
-
-    // Slow path: only now do we consult RevenueCat.
-    const tCheck = Date.now();
-    perfLog(traceId, "ui.recording", "checkCanCreate_start", { currentCount, limit });
-    const { canCreate, isPro } = await checkCanCreateWithCount(currentCount);
-    perfLog(traceId, "ui.recording", "checkCanCreate_done", {
-      ms: Date.now() - tCheck,
-      canCreate,
-      isPro,
+    perfLog(traceId, "ui.recording", "gate_snapshot", {
       currentCount,
       limit,
+      cachedPro,
+      hasLoadedReminders,
     });
 
-    if (!canCreate) {
-      lockRecordingForLimit(traceId, currentCount, limit);
+    if (cachedPro || currentCount < limit) {
+      setCanStartRecording(true);
+      setGateStatusText(undefined);
+      perfLog(traceId, "ui.recording", "gate_allowed_cached", { cachedPro });
       return;
     }
 
-    setCanStartRecording(true);
-    setGateStatusText(undefined);
-    setShowUpgradeCta(false);
-    perfLog(traceId, "ui.recording", "gate_allowed");
-  }, [showRecording, isConnected, activeReminders.length, hasLoadedReminders, loadReminders, lockRecordingForLimit]);
+    // At the cap on a free plan. The only way the cache is wrong here is a
+    // subscription bought on another device, so the store gets asked behind
+    // the lock rather than in front of it.
+    lockRecordingForLimit(traceId, currentCount, limit);
+
+    const tRefresh = Date.now();
+    void refreshProStatus().then((isProNow) => {
+      perfLog(traceId, "ui.recording", "gate_refresh_done", {
+        ms: Date.now() - tRefresh,
+        isPro: isProNow,
+      });
+      if (!isProNow || gateTraceRef.current !== traceId) return;
+      setIsPro(true);
+      setCanStartRecording(true);
+      setGateStatusText(undefined);
+      setShowUpgradeCta(false);
+      perfLog(traceId, "ui.recording", "gate_unlocked_after_refresh", { currentCount, limit });
+    });
+  }, [showRecording, isConnected, hasLoadedReminders, loadReminders, lockRecordingForLimit]);
 
   // Both card buttons land here. "Allow" persists consent, chains straight into
   // the system mic prompt and then continues into the recording the user
@@ -367,6 +348,7 @@ export default function HomeScreen() {
     (traceId: string, currentCount: number, limit: number) => {
       setShowRecording(false);
       setTimeout(() => {
+        gateTraceRef.current = traceId;
         setRecordingTraceId(traceId);
         setShowRecording(true);
         lockRecordingForLimit(traceId, currentCount, limit);
@@ -629,29 +611,44 @@ export default function HomeScreen() {
       return;
     }
 
-    // Free cap, counted exactly the way the mic counts it. The composer has no
-    // locked state of its own, so a blocked user gets the upgrade toast rather
-    // than an empty field they can't send.
-    if (!hasLoadedReminders) {
+    // Free cap, counted exactly the way the mic counts it — and read the same
+    // synchronous way, off the entitlement cache instead of a round trip.
+    const limit = getFreeActiveLimit();
+    const cachedPro = getCachedProStatus().isPro === true;
+    if (!hasLoadedReminders && !cachedPro) {
       await loadReminders().catch(() => {});
     }
-    const limit = getFreeActiveLimit();
     const currentCount = getActiveReminderCount();
-    if (currentCount >= limit) {
-      const { canCreate } = await checkCanCreateWithCount(currentCount);
-      if (!canCreate) {
-        perfLog(traceId, "ui.composer", "gate_blocked_limit", { currentCount, limit });
-        toast.show({
-          title: `You've reached ${limit} active reminders`,
-          message: "Tap to upgrade for unlimited.",
-          type: "warning",
-          durationMs: 4000,
-          onPress: openPaywall,
+
+    if (!cachedPro && currentCount >= limit) {
+      // The composer has no locked state of its own, so a blocked user gets the
+      // upgrade toast rather than an empty field they can't send. That also
+      // means there is no open surface for a late refresh to unlock the way the
+      // mic's overlay gets unlocked — and the toast it would have to talk over
+      // routes to the paywall, which is the wrong place to send a subscriber.
+      // So the refresh here only heals the cache: a stale-free subscriber (one
+      // who bought on another device) gets through on their next tap.
+      perfLog(traceId, "ui.composer", "gate_blocked_limit", { currentCount, limit });
+      toast.show({
+        title: `You've reached ${limit} active reminders`,
+        message: "Tap to upgrade for unlimited.",
+        type: "warning",
+        durationMs: 4000,
+        onPress: openPaywall,
+      });
+
+      const tRefresh = Date.now();
+      void refreshProStatus().then((isProNow) => {
+        perfLog(traceId, "ui.composer", "gate_refresh_done", {
+          ms: Date.now() - tRefresh,
+          isPro: isProNow,
         });
-        return;
-      }
+        if (isProNow) setIsPro(true);
+      });
+      return;
     }
 
+    perfLog(traceId, "ui.composer", "gate_allowed_cached", { currentCount, limit, cachedPro });
     setComposerTraceId(traceId);
     setShowComposer(true);
   }, [

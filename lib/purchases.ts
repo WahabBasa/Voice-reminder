@@ -128,6 +128,28 @@ export async function checkProStatus(): Promise<boolean> {
 }
 
 /**
+ * Ask the store again, ignoring the cached answer.
+ *
+ * `checkProStatus` answers from cache the moment it has one — that is what lets
+ * the tap gates be synchronous — but it also means a subscription bought on
+ * another device would never be noticed by a cache that already read `false`.
+ * This is the escape hatch for that case: callers fire it *behind* a decision
+ * they already made, never in front of one. Falls back to the cached answer
+ * (free, if there isn't one) so an unreachable store never grants Pro.
+ */
+export async function refreshProStatus(): Promise<boolean> {
+  try {
+    if (!configured) return cachedIsPro ?? false;
+    const customerInfo = await Purchases.getCustomerInfo();
+    updateCache(customerInfo);
+    return cachedIsPro ?? false;
+  } catch (error) {
+    console.log('[RevenueCat] refreshProStatus failed (silent):', error);
+    return cachedIsPro ?? false;
+  }
+}
+
+/**
  * Categories a store error can fall into, so the UI can say something useful
  * instead of "Something went wrong".
  */

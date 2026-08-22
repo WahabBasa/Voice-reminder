@@ -360,7 +360,10 @@ export default function RecordingOverlay({
     if (state === "paused") return "Paused";
     if (state === "recording") return "Listening...";
     if (!canStartRecording) {
-      return gateStatusText ?? (showUpgradeCta ? "Upgrade to continue" : "Checking your plan...");
+      // The screen owns the gate copy and supplies it with the lock. This
+      // fallback only covers a lock that arrived without any — nothing in the
+      // gate consults the network, so it must not read like a wait on one.
+      return gateStatusText ?? (showUpgradeCta ? "Upgrade to continue" : "Getting ready...");
     }
     return "Tap the mic to start";
   };
