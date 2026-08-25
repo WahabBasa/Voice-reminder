@@ -111,6 +111,11 @@ a sound file the OS will not accept).
 
 ### 4. Done records completion on next open
 
+> ✅ **Verified on device 2026-08-25** (iPhone 12, iOS 26.6): USB syslog shows
+> `VRStopIntent.perform()` running in the Remi process while locked, no unlock, no
+> app launch; History shows the completion. Same run verified step 3's Later
+> (silenced in 60ms). Tape capture: `pymobiledevice3 syslog live` on Windows.
+
 On the alarm from step 3, answer **Done** (slide-to-stop on iOS 26.1+). The phone must stay on
 the lock screen — no unlock prompt, no app launch (`openAppWhenRun=false` on both intents). Then
 open the app by hand.
