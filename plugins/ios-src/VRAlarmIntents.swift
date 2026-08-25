@@ -27,6 +27,20 @@
 
 import Foundation
 import AppIntents
+import os
+
+// MARK: - Diagnostics
+
+/// Unified-log tape for the two alert intents. Everything is `.public` on purpose:
+/// the lines must be readable off a plain `syslog` stream (pymobiledevice3 on
+/// Windows, Console.app on a Mac) with no logging profile installed, and nothing
+/// here is personal — alarm IDs, app keys and the wall clock. Notice level so the
+/// default log config keeps them. Subsystem = bundle id so a single filter catches
+/// both intents.
+@available(iOS 26.0, *)
+enum VRAlarmIntentLog {
+    static let logger = Logger(subsystem: "com.wahabbasa.VoiceReminder", category: "VRAlarmIntents")
+}
 
 #if canImport(AlarmKit)
 import AlarmKit
@@ -465,6 +479,13 @@ struct VRSnoozeIntent: LiveActivityIntent {
     /// Snoozing must not yank the user into the app.
     static var openAppWhenRun: Bool = false
     static var isDiscoverable: Bool = false
+    /// iOS 26 deprecates openAppWhenRun in favour of supportedModes. Build 2's
+    /// compiled Metadata.appintents already carried supportedModes=1 (background —
+    /// proven against the 08-15 build where openAppWhenRun=true compiled to 2), so
+    /// this declaration changes nothing in the metadata; it is here so the
+    /// lock-screen diagnostic run exercises the explicit form the reviewer asked
+    /// for. openAppWhenRun stays for the deprecated-API path.
+    static var supportedModes: IntentModes = [.background]
 
     @Parameter(title: "Alarm ID")
     var alarmID: String
@@ -495,6 +516,9 @@ struct VRSnoozeIntent: LiveActivityIntent {
         let now = Date()
         let nowMillis = VRAlarmIntentGuards.epochMillis(now)
         let resolvedKey = VRAlarmIntentResolution.appKey(appKey: appKey, alarmID: alarmID)
+        // First line of perform(): its timestamp against SpringBoard's unlock/biometric
+        // lines in the same syslog answers whether the intent ran before any prompt.
+        VRAlarmIntentLog.logger.notice("VRSnoozeIntent perform start alarmID=\(alarmID, privacy: .public) appKey=\(resolvedKey, privacy: .public) tsMillis=\(nowMillis, privacy: .public)")
         let minutes = VRAlarmIntentGuards.normalizedSnoozeMinutes(
             snoozeMinutes ?? VRAlarmIntentStore.storedSnoozeMinutes(appKey: resolvedKey)
         )
@@ -513,9 +537,13 @@ struct VRSnoozeIntent: LiveActivityIntent {
         // bookkeeping Done relies on, and "Later" is not an acknowledgment.
         if let ringing = UUID(uuidString: alarmID) {
             VRFollowUpScheduler.stopRinging(uuid: ringing)
+            VRAlarmIntentLog.logger.notice("VRSnoozeIntent stopRinging uuid=\(ringing.uuidString, privacy: .public) source=param")
         } else if let stored = VRAlarmIntentStore.uuidRegistry()[resolvedKey],
                   let ringing = UUID(uuidString: stored) {
             VRFollowUpScheduler.stopRinging(uuid: ringing)
+            VRAlarmIntentLog.logger.notice("VRSnoozeIntent stopRinging uuid=\(ringing.uuidString, privacy: .public) source=registry")
+        } else {
+            VRAlarmIntentLog.logger.error("VRSnoozeIntent stopRinging skipped: no uuid for appKey=\(resolvedKey, privacy: .public)")
         }
 
         VRAlarmIntentStore.appendEvent(
@@ -545,6 +573,7 @@ struct VRSnoozeIntent: LiveActivityIntent {
         // error worth failing the intent over.
         try? await Task.sleep(nanoseconds: 1_000_000_000)
 
+        VRAlarmIntentLog.logger.notice("VRSnoozeIntent perform end appKey=\(resolvedKey, privacy: .public) snoozeUntilMillis=\(snoozeUntil, privacy: .public)")
         return .result()
     }
 
@@ -608,6 +637,8 @@ struct VRStopIntent: LiveActivityIntent {
     /// completed branch is the documented backstop for intents that never ran).
     static var openAppWhenRun: Bool = false
     static var isDiscoverable: Bool = false
+    /// See VRSnoozeIntent.supportedModes — same reasoning, same diagnostic.
+    static var supportedModes: IntentModes = [.background]
 
     @Parameter(title: "Alarm ID")
     var alarmID: String
@@ -626,11 +657,16 @@ struct VRStopIntent: LiveActivityIntent {
         let nowMillis = VRAlarmIntentGuards.epochMillis(Date())
         let resolvedKey = VRAlarmIntentResolution.appKey(appKey: appKey, alarmID: alarmID)
         let snoozeUntil = VRAlarmIntentStore.readSnoozeGuard(appKey: resolvedKey)
+        // First line of perform() — see VRSnoozeIntent for why the timestamp matters.
+        VRAlarmIntentLog.logger.notice("VRStopIntent perform start alarmID=\(alarmID, privacy: .public) appKey=\(resolvedKey, privacy: .public) tsMillis=\(nowMillis, privacy: .public) snoozeGuardMillis=\(snoozeUntil ?? -1, privacy: .public)")
 
         // GUARD 2 — iOS runs the stop intent even when the user tapped Later. If a
         // snooze is in flight this invocation is spurious: log nothing, cancel
         // nothing, clear nothing. Recording a "stopped" here would tell JS the
         // reminder was completed and kill the snooze chain the user just asked for.
+        if !VRAlarmIntentGuards.shouldRecordStop(snoozeUntilMillis: snoozeUntil, nowMillis: nowMillis) {
+            VRAlarmIntentLog.logger.notice("VRStopIntent skipped: snooze guard active appKey=\(resolvedKey, privacy: .public)")
+        }
         guard VRAlarmIntentGuards.shouldRecordStop(snoozeUntilMillis: snoozeUntil, nowMillis: nowMillis) else {
             return .result()
         }
@@ -657,6 +693,7 @@ struct VRStopIntent: LiveActivityIntent {
         // for the next foreground, where AK-4's reconciliation owns the
         // Convex/store writes — deliberately deferred, so answering an alarm
         // never costs the user an unlock.
+        VRAlarmIntentLog.logger.notice("VRStopIntent perform end appKey=\(resolvedKey, privacy: .public) recorded=stopped")
         return .result()
     }
 }

@@ -1921,6 +1921,12 @@ export async function reconcileAlarmKitEvents(): Promise<{
   if (!(await alarmKitEnabled())) return summary;
 
   const events = await drainNativeAlarmEvents();
+  // Always log the drain result, zero included: an empty drain after a lock-screen
+  // answer is indistinguishable from "reconciliation never ran" without this line.
+  vrLog("alarmkit", "drained_events", {
+    count: events.length,
+    ids: events.map((e) => `${e.type}:${e.id}`).slice(0, 8).join("|"),
+  });
   if (events.length === 0) return summary;
 
   const now = Date.now();
