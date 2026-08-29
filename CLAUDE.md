@@ -22,7 +22,7 @@
 | **Devlogs** | `updates/YYYY-MM-DD_devlog.md` |
 | **ASO transcripts** | `docs/aso/transcripts/` — user-shared ASO/Apple Search Ads reference (distilled playbook + cleaned transcript per file, indexed in its `README.md`). When the user shares a new ASO transcript, save it there in the same structure. |
 | **ASC screenshot renders** | GPT renders and phone captures arrive in `C:\Users\AtheA\Downloads\LANDrop`. Approved store screenshots get copied to `marketing/renders/` named by slot (`01-lockscreen.png`, `02-recording.png`, …). When the set is complete, `python marketing/upscale_to_asc.py` emits exact 6.7" (1290x2796) + 6.5" (1242x2688) PNGs to `marketing/out/asc/` for App Store Connect upload. |
-| **Convex Dashboard** | https://dashboard.convex.dev/d/proper-stoat-767 |
+| **Convex — LIVE deployment** | `dev:proper-stoat-767` — https://dashboard.convex.dev/d/proper-stoat-767. **This is what every shipped build reads** (TestFlight and App Store included: the EAS env `EXPO_PUBLIC_CONVEX_URL` carries the dev URL for all three build environments). The prod deployment exists but nothing reads it until OLD-126. See "Convex deployments" under Development Commands before any deploy. |
 | **GitHub Repo** | https://github.com/WahabBasa/Voice-reminder |
 
 ---
@@ -117,7 +117,7 @@ Running on Samsung SM_G955F. Two tabs, both working.
 ## 🔧 Development Commands
 
 ```bash
-# Start Convex dev server (run in separate terminal)
+# Start Convex dev server (run in separate terminal) — pushes convex/ to dev:proper-stoat-767, which is LIVE (see below)
 npx convex dev
 
 # TypeScript check
@@ -126,6 +126,22 @@ npx tsc --noEmit
 # Full test suite — what CI runs (per-file coverage thresholds in jest.config.js)
 npm.cmd run test:coverage
 ```
+
+### ☁️ Convex deployments — read before any deploy
+
+| Deployment | Who reads it | How code gets there |
+|---|---|---|
+| **`dev:proper-stoat-767` — LIVE** | Every shipped build (TestFlight build 2, and the App Store build until OLD-126) **and** Metro dev clients. `.env.local` and the EAS env `EXPO_PUBLIC_CONVEX_URL` (all three build environments) both point here. | `npx convex dev` (continuous sync) or `npx.cmd convex dev --once` (single push) |
+| prod: `content-quail-685` (https://content-quail-685.convex.cloud) | **Nothing.** It exists and is empty of traffic. | `npx convex deploy` — answer **No** to its prompt unless OLD-126 is being executed; never reaches a phone today |
+
+Consequence: any `npx convex dev` session — human or agent — pushes straight into what users hit. Push `convex/` only when it is tested and meant to go live.
+
+**Publish routine for JS-only changes (the coupled pair):**
+1. `npx.cmd convex dev --once` — backend first.
+2. `eas update --branch production --platform ios --clear-cache` from a directly-opened terminal (agent shells hit the Metro SHA-1 error). Production builds are on channel `production`, runtime policy `appVersion`.
+3. Force-quit the app twice: first launch downloads, second applies.
+
+Native changes (`app.json`, `plugins/`, native deps) need a new EAS build, not an OTA. Switching to prod is OLD-126 and needs the EAS env flipped plus a new build — an OTA cannot change the URL.
 
 **Before any push:** run `npm.cmd run test:coverage`, not plain `npm test`. CI enforces per-file coverage thresholds that plain `npm test` skips — every historical CI failure was this step going red after a locally-green push.
 
@@ -235,4 +251,4 @@ User Voice → Expo App → Convex Backend → OpenAI (Whisper/GPT/TTS) → Noti
 
 ---
 
-*Last Updated: 2025-12-28*
+*Last Updated: 2026-08-29*
