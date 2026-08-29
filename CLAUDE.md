@@ -141,7 +141,9 @@ Consequence: any `npx convex dev` session — human or agent — pushes straight
 2. `eas update --branch production --platform ios --clear-cache` from a directly-opened terminal (agent shells hit the Metro SHA-1 error). Production builds are on channel `production`, runtime policy `appVersion`.
 3. Force-quit the app twice: first launch downloads, second applies.
 
-Native changes (`app.json`, `plugins/`, native deps) need a new EAS build, not an OTA. Switching to prod is OLD-126 and needs the EAS env flipped plus a new build — an OTA cannot change the URL.
+Native changes (`app.json`, `plugins/`, native deps, Swift under `plugins/ios-src/`) need a new EAS build, not an OTA.
+
+**The Convex URL rides in the JS bundle, not the native shell.** `EXPO_PUBLIC_CONVEX_URL` is inlined by Metro at export time: an EAS build takes it from the EAS env, an `eas update` takes it from this machine's `.env.local`. Today both say `proper-stoat-767`. Never run `eas update` from an environment whose `.env.local` points elsewhere — it would silently repoint every installed app. Switching to prod (OLD-126) therefore means flipping the EAS env, `.env.local`, and shipping a build + OTA together.
 
 **Before any push:** run `npm.cmd run test:coverage`, not plain `npm test`. CI enforces per-file coverage thresholds that plain `npm test` skips — every historical CI failure was this step going red after a locally-green push.
 
