@@ -152,6 +152,96 @@ export function fromDateString(value: unknown): Date | null {
   return new Date(year, month - 1, day, 0, 0, 0, 0);
 }
 
+// ─── Wall clock in a named zone ─────────────────────────────────────────────
+
+/**
+ * The instant a wall-clock date + time names in an IANA zone (OLD-120).
+ *
+ * Every other date helper in this file reads the HOST's clock. On the device
+ * that IS the user's clock, so they are right there; inside a Convex action the
+ * host clock is UTC, and a Dubai user's 15:42 was being stamped as 15:42Z —
+ * four hours after the ring. This is the one helper that can answer "what
+ * instant is 15:42 in Asia/Dubai", and it needs no dependency to do it: format
+ * a UTC guess AS the zone reads it, and the gap between what comes back and
+ * what went in is the zone's offset at that instant.
+ *
+ * Null for a malformed date/time or a zone the runtime does not know, so a
+ * caller can fall back deliberately instead of storing a wrong number.
+ */
+export function zonedTimeToUtcMs(date: unknown, time: unknown, tzid: unknown): number | null {
+  const day = normalizeDateString(date);
+  const clock = normalizeClockTime(time);
+  const zone = typeof tzid === "string" ? tzid.trim() : "";
+  if (!day || !clock || !zone) return null;
+
+  const formatter = zoneFormatter(zone);
+  if (!formatter) return null;
+
+  const [year, month, dayOfMonth] = day.split("-").map(Number);
+  const [hours, minutes] = clock.split(":").map(Number);
+  // The wall clock read as if it were already UTC — the starting point every
+  // pass below corrects by an offset.
+  const wallAsUtc = Date.UTC(year, month - 1, dayOfMonth, hours, minutes, 0, 0);
+
+  // Measured twice, because a DST boundary can sit between the guess and the
+  // answer: subtract the offset that applies at the guess, then re-measure at
+  // the result. Agreement means the offset holds at its own instant, which is
+  // the whole test for a wall time that really exists.
+  const guessOffset = zoneOffsetMs(formatter, wallAsUtc);
+  const firstPass = wallAsUtc - guessOffset;
+  const settledOffset = zoneOffsetMs(formatter, firstPass);
+  if (settledOffset === guessOffset) return firstPass;
+
+  const secondPass = wallAsUtc - settledOffset;
+  const checkOffset = zoneOffsetMs(formatter, secondPass);
+  if (checkOffset === settledOffset) return secondPass;
+
+  // Neither offset holds at its own instant, so the wall time is inside a
+  // spring-forward gap and never happened. The pre-jump offset is the smaller
+  // one, and using it lands just past the gap — the same skip-forward every
+  // calendar app does with an alarm set for an hour that got deleted.
+  return wallAsUtc - Math.min(settledOffset, checkOffset);
+}
+
+/** The formatter that reads an instant in `zone`, or null if the zone is unknown. */
+function zoneFormatter(zone: string): Intl.DateTimeFormat | null {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    // Intl throws RangeError on an unrecognized timeZone — a typo'd or
+    // renamed-away zone id is a fallback, not a crash.
+    return null;
+  }
+}
+
+/** How far ahead of UTC the formatter's zone runs at `utcMs`, in ms. */
+function zoneOffsetMs(formatter: Intl.DateTimeFormat, utcMs: number): number {
+  const fields: Record<string, number> = {};
+  for (const part of formatter.formatToParts(new Date(utcMs))) {
+    fields[part.type] = Number(part.value);
+  }
+  // Some ICU builds report midnight as hour 24 under hour12:false.
+  return (
+    Date.UTC(
+      fields.year,
+      fields.month - 1,
+      fields.day,
+      fields.hour % 24,
+      fields.minute,
+      fields.second
+    ) - utcMs
+  );
+}
+
 function addLocalDays(day: Date, count: number): Date {
   const next = new Date(day);
   next.setDate(next.getDate() + count);

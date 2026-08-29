@@ -6,9 +6,11 @@
  * degrades to a safe no-op when `NativeModules.AlarmKitBridge` is undefined —
  * that covers Android, iOS < 26, Expo Go, and Jest.
  *
- * Nothing here touches notifee or app state: lib/notifications.ts owns the
- * scheduling branch and the reconciliation bookkeeping.
+ * Nothing here touches notifee, and the persisted guard state is read-only from
+ * this side: lib/notifications.ts owns the scheduling branch, the
+ * reconciliation bookkeeping and every write.
  */
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { NativeModules, Platform } from "react-native";
 import { vrLog } from "./vrLog";
 
@@ -298,6 +300,86 @@ export function useAlarmKit(): Promise<boolean> {
 /** Test seam — drops the cached session decision. */
 export function resetAlarmKitDecision(): void {
   gateDecision = null;
+}
+
+// ─── Snooze windows (OLD-119) ───────────────────────────────────────────────
+
+/**
+ * Per-reminder AlarmKit guard state, written by lib/notifications.ts when a
+ * ring is answered with "Later" and cleared when the reminder completes or is
+ * rescheduled. The key literal is repeated here instead of imported so a card
+ * can read the snooze window without dragging the notification layer (and
+ * notifee with it) into a render path. This module only ever reads it.
+ */
+const ALARMKIT_STATE_KEY = "@alarmkit_state";
+
+/** reminderId -> snoozeUntil (epoch ms). In-memory mirror of the stored state. */
+let snoozeWindows = new Map<string, number>();
+let snoozeRefresh: Promise<void> | null = null;
+
+function parseSnoozeWindows(raw: string | null): Map<string, number> {
+  const windows = new Map<string, number>();
+  if (!raw) return windows;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return windows;
+  }
+  if (!parsed || typeof parsed !== "object") return windows;
+  for (const [reminderId, state] of Object.entries(parsed as Record<string, unknown>)) {
+    const until = Number((state as { snoozeUntil?: unknown } | null)?.snoozeUntil ?? 0);
+    // 0 is how a cleared window is stored — the reminder is back on schedule.
+    if (Number.isFinite(until) && until > 0) windows.set(reminderId, until);
+  }
+  return windows;
+}
+
+/**
+ * Reload the mirror from storage so {@link getSnoozeUntil} can answer
+ * synchronously. Callers await this before a re-render; the mirror is replaced
+ * wholesale, so a window that was cleared disappears with the same read.
+ *
+ * Concurrent calls share one read, and a failed read keeps the previous mirror
+ * rather than blanking every card.
+ */
+export function refreshSnoozeWindows(): Promise<void> {
+  if (snoozeRefresh) return snoozeRefresh;
+  const task = (async () => {
+    // Only the AlarmKit path ever writes this state; elsewhere the read is
+    // guaranteed empty, so skip the storage hop entirely.
+    if (!isAlarmKitLinked()) {
+      snoozeWindows = new Map();
+      return;
+    }
+    try {
+      snoozeWindows = parseSnoozeWindows(await AsyncStorage.getItem(ALARMKIT_STATE_KEY));
+    } catch (e) {
+      vrLog("alarmkit", "snooze_read_failed", { error: String(e) });
+    }
+  })().finally(() => {
+    if (snoozeRefresh === task) snoozeRefresh = null;
+  });
+  snoozeRefresh = task;
+  return task;
+}
+
+/**
+ * When a snooze comeback — not the schedule — owns this reminder's next ring.
+ *
+ * Synchronous because it is read while a card renders. Undefined when the
+ * reminder is not snoozed, or when the comeback is already in the past: it has
+ * rung, and the schedule owns the reminder again.
+ */
+export function getSnoozeUntil(reminderId: string, nowMs: number): number | undefined {
+  const until = snoozeWindows.get(reminderId);
+  return until !== undefined && until > nowMs ? until : undefined;
+}
+
+/** Test seam — empties the mirror and drops any in-flight reload. */
+export function resetSnoozeWindows(): void {
+  snoozeWindows = new Map();
+  snoozeRefresh = null;
 }
 
 // ─── Event-log reconciliation (pure) ────────────────────────────────────────

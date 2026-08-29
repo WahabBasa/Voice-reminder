@@ -17,6 +17,8 @@ export interface ReminderListItemProps {
   subtitle: string;
   completed?: boolean;
   missed?: boolean;
+  /** Owed from a ring that already passed — red subtitle, red ring, still tickable. */
+  overdue?: boolean;
   onPress?: () => void;
   onToggleComplete?: () => void;
   onDelete?: () => void;
@@ -43,6 +45,7 @@ export default function ReminderListItem({
   subtitle,
   completed = false,
   missed = false,
+  overdue = false,
   onPress,
   onToggleComplete,
   onDelete,
@@ -115,7 +118,11 @@ export default function ReminderListItem({
                 {title}
               </Text>
               <Text
-                style={[styles.subtitle, missed && styles.subtitleMissed]}
+                style={[
+                  styles.subtitle,
+                  missed && styles.subtitleMissed,
+                  overdue && styles.subtitleOverdue,
+                ]}
                 numberOfLines={1}
               >
                 {subtitle}
@@ -139,7 +146,7 @@ export default function ReminderListItem({
                   <AppIcon name="x" size={14} color={colors.statusOverdue} strokeWidth={3} />
                 </View>
               ) : (
-                <View style={styles.circle} />
+                <View style={[styles.circle, overdue && styles.circleOverdue]} />
               )}
             </Pressable>
           </Pressable>
@@ -220,6 +227,11 @@ const styles = StyleSheet.create({
   subtitleMissed: {
     color: colors.statusOverdue,
   },
+  // Overdue is still owed, so only the time turns red — the title stays live.
+  subtitleOverdue: {
+    color: colors.statusOverdue,
+    fontWeight: "600",
+  },
   completeTap: {
     marginLeft: spacing.sm,
   },
@@ -229,6 +241,10 @@ const styles = StyleSheet.create({
     borderRadius: CIRCLE_SIZE / 2,
     borderWidth: 1.5,
     borderColor: colors.borderSubtle,
+  },
+  circleOverdue: {
+    borderColor: colors.statusOverdue,
+    borderWidth: 2,
   },
   circleDone: {
     width: CIRCLE_SIZE,

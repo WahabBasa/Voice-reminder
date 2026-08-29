@@ -180,13 +180,24 @@ describe("shouldCleanupGhostOnceReminder", () => {
     expect(shouldCleanupGhostOnceReminder(r, h, now)).toBe(true);
   });
 
-  it("returns false for completed once with future date", () => {
+  // Ticked early is still ticked — OLD-117 dropped the past-due guard.
+  it("returns true for completed once with future date", () => {
     const r = makeReminder({
       frequency: "once",
       date: "2026-12-25",
       time: "09:00",
     });
     const h = [makeHistory("rem_abc123", "completed", "2026-04-06T10:00:00.000Z")];
+    expect(shouldCleanupGhostOnceReminder(r, h, now)).toBe(true);
+  });
+
+  it("returns false for a past-due once that only rang out", () => {
+    const r = makeReminder({
+      frequency: "once",
+      date: "2026-01-15",
+      time: "09:00",
+    });
+    const h = [makeHistory("rem_abc123", "missed", "2026-01-15T09:05:00.000Z")];
     expect(shouldCleanupGhostOnceReminder(r, h, now)).toBe(false);
   });
 

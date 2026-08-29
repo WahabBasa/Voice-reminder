@@ -1,4 +1,6 @@
-import { type Reminder, type ReminderHistory } from "./store";
+// Type-only: store.ts imports `isReminderActive` from here at runtime, so this
+// side must never pull store in as a value.
+import type { Reminder, ReminderHistory } from "./store";
 import {
   getDueTimestamp,
   getNextIntervalOccurrence,
@@ -51,21 +53,42 @@ function getOnceTargetTimestamp(reminder: Reminder, nowMs: number): number {
   return getNextTriggerTime(schedule, nowMs);
 }
 
+/**
+ * Where a reminder is in its life — computed every time it is asked, never
+ * stored (decision 2026-08-29).
+ *
+ * - "done":      a one-off the user ticked — any `completed` ledger entry.
+ *                Repeaters and intervals are never done as a whole; "done for
+ *                today" is `isCompletedOnDay` in dayOccurrences.
+ * - "overdue":   a one-off that is not done and whose ring time has passed.
+ *                Ringing out ends nothing: a `missed` ledger entry records that
+ *                it rang unanswered, and the reminder stays owed until it is
+ *                ticked or deleted.
+ * - "scheduled": everything else.
+ *
+ * The ring time is recomputed from `date` + `time` on the device rather than
+ * read from `onceAt`: rows stored before OLD-120 carry a UTC-skewed `onceAt`,
+ * and the wall-clock pair is right on every row.
+ */
+export type ReminderStatus = "done" | "overdue" | "scheduled";
+
+export function statusOf(
+  reminder: Reminder,
+  history: ReminderHistory[],
+  nowMs: number = Date.now()
+): ReminderStatus {
+  if (reminder.frequency !== "once") return "scheduled";
+  if (hasCompletedEntry(history, reminder.id)) return "done";
+  return getOnceTargetTimestamp(reminder, nowMs) <= nowMs ? "overdue" : "scheduled";
+}
+
+/** Owed to the user — anything not done. This is what the free cap counts. */
 export function isReminderActive(
   reminder: Reminder,
   history: ReminderHistory[],
   nowMs: number = Date.now()
 ): boolean {
-  // Interval reminders always recur.
-  if (reminder.frequency === "interval") return true;
-
-  // One-time reminders stay visible (including overdue/missed) until explicitly completed.
-  if (reminder.frequency === "once") {
-    return !hasCompletedEntry(history, reminder.id);
-  }
-
-  // Recurring reminders remain active.
-  return true;
+  return statusOf(reminder, history, nowMs) !== "done";
 }
 
 export function getReminderNextDueTimestamp(
@@ -100,17 +123,15 @@ export function getReminderNextDueTimestamp(
   return getDueTimestamp(schedule, new Date(nowMs));
 }
 
+/**
+ * Whether the launch sweep should drop this one-off from the list. Same rule as
+ * the cap: a ticked one-off is finished and has no reason to stay, whatever its
+ * date said. Anything still owed — including one that rang out — is kept.
+ */
 export function shouldCleanupGhostOnceReminder(
   reminder: Reminder,
   history: ReminderHistory[],
   nowMs: number = Date.now()
 ): boolean {
-  if (reminder.frequency !== "once") return false;
-  // Only cleanup if the reminder was explicitly completed.
-  if (!hasCompletedEntry(history, reminder.id)) return false;
-  // Past-due guard for dated one-time reminders.
-  if (reminder.date) {
-    return getOnceTargetTimestamp(reminder, nowMs) <= nowMs;
-  }
-  return true;
+  return statusOf(reminder, history, nowMs) === "done";
 }

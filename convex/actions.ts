@@ -60,7 +60,7 @@ function getTtsProvider(): TtsProvider {
 }
 
 import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, type Urgency } from "./helpers";
-import { buildGridSchedule, legacyFieldsFromGrid, type GridSchedule } from "./scheduleShape";
+import { buildGridSchedule, legacyFieldsFromGrid, normalizeClockTimes, zonedTimeToUtcMs, type GridSchedule } from "./scheduleShape";
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -172,9 +172,74 @@ type ReminderPlan = {
   parseWarnings: string[];
 };
 
+/**
+ * What a plan knows about the user's clock (OLD-120).
+ *
+ * All three come off the device — `deviceLocalDate` / `deviceLocalTime` /
+ * `deviceTimezone` on every parse action. The server's own clock is UTC and
+ * says nothing about when the user meant, so anything that turns a wall clock
+ * into an instant reads these and never `Date.now()`'s calendar.
+ */
+export type PlanContext = {
+  transcript: string;
+  currentTime: string;
+  /** Device-local "YYYY-MM-DD". */
+  currentDate?: string;
+  /** IANA zone the parsed wall-clock times are meant in. */
+  timezone?: string;
+};
+
+/** Today-or-tomorrow for a bare "HH:MM", decided on the USER's clock. */
+function nextLocalDateFor(time: string, context: PlanContext): string {
+  const today =
+    context.currentDate && /^\d{4}-\d{2}-\d{2}$/.test(context.currentDate)
+      ? context.currentDate
+      : new Date().toISOString().slice(0, 10);
+  // "HH:MM" strings compare in clock order, so no Date is needed to ask
+  // whether the ring is still ahead today.
+  if (time > getCurrentTimeHM(context.currentTime)) return today;
+  const [year, month, day] = today.split("-").map(Number);
+  // UTC arithmetic purely as calendar math — no zone is implied by it.
+  return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * The instant a one-off rings (OLD-120).
+ *
+ * This used to be `new Date(y, m - 1, d, h, min).getTime()`, which reads the
+ * HOST's zone — and a Convex action's host zone is UTC. A Dubai user's 15:42
+ * was therefore stored as 15:42Z, four hours after the ring, and the app's
+ * launch pass trusts `onceAt` for one-offs: missed-marking ran four hours late
+ * and a reminder opened inside that window looked still due.
+ *
+ * The wall clock only means something in the user's zone, so that is where it
+ * is resolved. A missing or unknown zone falls back to the old host-local math
+ * AND says so in parseWarnings — a silently wrong one-off is the exact failure
+ * being replaced here, so it does not get to fail silently again.
+ */
+function computeOnceAt(
+  args: { date: string | undefined; time: string; warnings: string[] },
+  context: PlanContext
+): number {
+  // A parsed one-off always carries a date (the grid dates it); the
+  // fall-through is defensive, and decides today-or-tomorrow on the user's own
+  // clock rather than the server's.
+  const date = args.date ?? nextLocalDateFor(args.time, context);
+
+  const zoned = zonedTimeToUtcMs(date, args.time, context.timezone);
+  if (zoned !== null) return zoned;
+
+  args.warnings.push(
+    `Could not place ${date} ${args.time} in timezone "${context.timezone ?? "unknown"}". Used the server clock, so this one-off may be off by the zone's offset.`
+  );
+  const [year, month, dayNum] = date.split("-").map(Number);
+  const [hours, minutes] = args.time.split(":").map(Number);
+  return new Date(year, month - 1, dayNum, hours, minutes).getTime();
+}
+
 export function buildReminderPlan(
   parsed: Record<string, unknown>,
-  context: { transcript: string; currentTime: string; takeSize?: number }
+  context: PlanContext & { takeSize?: number }
 ): ReminderPlan {
   // A leaked banned opener costs the model's phrasing, not the reminder: the
   // title is the stand-in, on the card and aloud. Titles like 'Time to Sleep'
@@ -216,6 +281,17 @@ export function buildReminderPlan(
   days = coercionResult.days;
   parseWarnings = coercionResult.warnings;
 
+  // A one-off the model did not date. Left to itself the grid dates it from
+  // the SERVER's calendar day (scheduleShape.firstDateFor reads the host
+  // clock, which is UTC inside an action), so it lands a day out for anyone
+  // whose local date has already turned over. Decided on the user's clock
+  // instead (OLD-120); the earliest ring is what "today or tomorrow" is about,
+  // matching what firstDateFor would have asked.
+  const undatedOnceDate =
+    !date && frequency === "once"
+      ? nextLocalDateFor(normalizeClockTimes(parsed.times, time)[0] ?? time, context)
+      : undefined;
+
   // The days × times grid (OLD-97). Everything above says at most one time a
   // day; this is what lets "Thursday 8 and 9" be one reminder with two rings,
   // and what gives an interval its waking window.
@@ -224,7 +300,7 @@ export function buildReminderPlan(
       frequency,
       time,
       times: parsed.times,
-      date,
+      date: date ?? undatedOnceDate,
       days,
       everyNDays: parsed.everyNDays,
       intervalHours: parsed.intervalHours,
@@ -233,7 +309,9 @@ export function buildReminderPlan(
       windowEnd: parsed.windowEnd,
       until: parsed.until,
     },
-    { fallbackTime: time, warnings: parseWarnings }
+    // The zone is stamped on the grid so a stored schedule records which clock
+    // its times were meant on — the same zone `onceAt` is resolved in below.
+    { fallbackTime: time, tzid: context.timezone, warnings: parseWarnings }
   );
 
   // Legacy projection of the grid: the four columns every pre-grid reader still
@@ -266,21 +344,11 @@ export function buildReminderPlan(
     scheduleType = "rrule";
   } else if (frequency === "once") {
     scheduleType = "once";
-    // Calculate onceAt timestamp
-    if (scheduleDate) {
-      const [year, month, dayNum] = scheduleDate.split("-").map(Number);
-      const [hours, minutes] = primaryTime.split(":").map(Number);
-      onceAt = new Date(year, month - 1, dayNum, hours, minutes).getTime();
-    } else {
-      const [hours, minutes] = primaryTime.split(":").map(Number);
-      const target = new Date();
-      target.setHours(hours, minutes, 0, 0);
-      // Interpret "at HH:MM" as the next occurrence (today or tomorrow).
-      if (target.getTime() <= Date.now()) {
-        target.setDate(target.getDate() + 1);
-      }
-      onceAt = target.getTime();
-    }
+    // The wall clock the user said, resolved in the zone they said it in.
+    onceAt = computeOnceAt(
+      { date: scheduleDate, time: primaryTime, warnings: parseWarnings },
+      context
+    );
   } else {
     // Daily/weekly/custom → can be represented as rrule or legacy
     scheduleType = "rrule";
@@ -372,7 +440,7 @@ export function buildReminderPlan(
  */
 export function planRemindersFromRawParse(
   rawGptResponse: string,
-  context: { transcript: string; currentTime: string }
+  context: PlanContext
 ): ReminderPlan[] {
   const parsed = JSON.parse(rawGptResponse);
   const items = normalizeParsedReminders(parsed);
@@ -1089,7 +1157,14 @@ export const processVoiceReminder = action({
 
     // One take can hold several reminders (OLD-93). A single-reminder take is
     // an array of one, so it takes exactly the path it always did.
-    const plans = planRemindersFromRawParse(rawGptResponse, { transcript, currentTime });
+    // currentDate/timezone are what make a one-off's `onceAt` land on the
+    // user's clock instead of the server's UTC one (OLD-120).
+    const plans = planRemindersFromRawParse(rawGptResponse, {
+      transcript,
+      currentTime,
+      currentDate,
+      timezone,
+    });
     console.log("[VR] Reminders in this take:", plans.length);
 
     const created: Awaited<ReturnType<typeof createReminderWithAudio>>[] = [];
@@ -1297,6 +1372,10 @@ async function createTakeWithDeferredAudio(
   const plans = planRemindersFromRawParse(rawGptResponse, {
     transcript: args.transcript,
     currentTime: args.currentTime,
+    // The user's own calendar day and zone — a one-off's `onceAt` is resolved
+    // against these, never the action container's UTC clock (OLD-120).
+    currentDate: args.currentDate,
+    timezone: args.timezone,
   });
 
   // Create each reminder in DB immediately (audio pending) and enqueue its TTS.

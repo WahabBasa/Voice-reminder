@@ -15,7 +15,8 @@ first device test — supersedes the original swipe-chain navigation):
    dock + mic on ALL three pages
 ```
 
-- **Today** — "what I want to remember today." Date-pure daily list.
+- **Today** — "what I want to remember today." Today's list, with anything still owed from
+  an earlier ring in an Overdue group above it (see Today page).
 - **Days** — "what I've set up." Browse any calendar day with a week strip. Horizontal swipe
   here flips **days** only. Leaving this page resets it: re-entering always lands on today.
 - **Settings** — restyled current settings.
@@ -54,13 +55,27 @@ Tuesday, Aug 11
   unchanged (RecordingOverlay / VoiceMeter / drawer are OUT OF SCOPE — do not touch); its
   entry button lives bottom-right beside the dock.
 
-**Membership rule (date-pure):**
+**Membership rule (today's date, plus what is still owed):**
 - One-offs dated today: in.
 - Daily / weekly / custom-days repeats that hit today: in.
 - Interval reminders ("every 2h"): in, as ONE card, subtitle "Every 2h · Next in 25 min"
   (reuse existing `formatIntervalNextIn` / next-due helpers).
 - One-offs on other dates: out (that's the Days page).
-- Missed items from previous days: out. No guilt surface; the follow-up ladder chases those.
+- Un-ticked one-offs whose ring already passed: in, but in their OWN **Overdue** group
+  (see below) rather than the day's list.
+
+**Overdue group (amended 2026-08-29, OLD-118).** The date-pure rule was pure and wrong: a
+one-off stays owed until the user ticks or deletes it — ringing out ends nothing — and it
+keeps counting against the free cap of 5 the whole time. Showing only today's date made
+those invisible, so people hit "You've reached 5 active reminders" over an apparently empty
+screen. Today now opens with a non-collapsing **OVERDUE (n)** section above the day's list
+holding every one-off whose local ring time has passed and that has no `completed` ledger
+entry — from any date, today's own past-time one-offs included. Rows use the normal card in
+the overdue-red treatment (red ring, red subtitle) with the original date and time as the
+subtitle ("Aug 25 · 3:42 pm"); ticking one files it under COMPLETE through the ledger,
+swiping deletes it. A reminder is never in both groups. The split lives in
+`lib/todayMembership.ts` (`groupTodayReminders`), the status rule in `lib/reminderActive.ts`
+(`statusOf`). The Days page is unchanged — it stays strictly date-pure.
 
 **Sorting:** by next fire time ascending; fired-but-unhandled (overdue today) pinned at top.
 
@@ -252,7 +267,8 @@ tracing. Run `npx.cmd tsc --noEmit` and fix errors across the repo.
 
 ### Acceptance (whole redesign)
 - Swipe chain + gesture map behave exactly as the table above.
-- Today shows only today (rule above), flat, COMPLETE collapsed below, mic untouched.
+- Today shows OVERDUE (if any) above today's list (rule above), flat, COMPLETE collapsed
+  below, mic untouched.
 - Days flips days with strip + dots + month jump; any day inspectable.
 - Cards/edit sheet/settings/bar match specs; serif only at display sizes.
 - `npx.cmd tsc --noEmit` clean; app runs OTA-safe (no native config diffs).

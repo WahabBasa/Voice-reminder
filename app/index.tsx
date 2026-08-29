@@ -38,6 +38,7 @@ import SwipePager from "../components/SwipePager";
 import AppIcon from "../components/AppIcon";
 import ReminderListItem, { chipColorForId } from "../components/ReminderListItem";
 import CompletedSection from "../components/CompletedSection";
+import OverdueSection from "../components/OverdueSection";
 import DaysPage, { subtitleFor } from "../components/days/DaysPage";
 import BottomBar, { BottomBarTab } from "../components/BottomBar";
 import { SettingsContent } from "./settings";
@@ -54,7 +55,8 @@ import {
 import { submitTypedTake } from "../lib/typedTake";
 import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
-import { historyOnDay, isCompletedOnDay, occurrencesForDay, todayISO } from "../lib/dayOccurrences";
+import { historyOnDay, todayISO } from "../lib/dayOccurrences";
+import { groupTodayReminders, overdueSubtitle } from "../lib/todayMembership";
 import { formatClockAt } from "../lib/time";
 import { checkProStatus, getCachedProStatus, refreshProStatus } from "../lib/purchases";
 import NetInfo from "@react-native-community/netinfo";
@@ -1001,14 +1003,14 @@ export default function HomeScreen() {
     [removeConvexReminder]
   );
 
-  // ---- Today page membership (date-pure, see docs/ui-redesign.md) ----
+  // ---- Today page membership (see docs/ui-redesign.md) ----
+  // Today's own date, plus everything still owed from a ring that already
+  // passed — a one-off stays owed until it is ticked (OLD-118).
   const todayDate = todayISO(nowMs);
 
-  const todayReminders = useMemo(() => {
-    return occurrencesForDay(activeReminders, todayDate).filter(
-      (r) => !isCompletedOnDay(r, history, todayDate)
-    );
-  }, [activeReminders, history, todayDate]);
+  const { overdue: overdueReminders, today: todayReminders } = useMemo(() => {
+    return groupTodayReminders(activeReminders, history, todayDate, nowMs);
+  }, [activeReminders, history, todayDate, nowMs]);
 
   const remindersById = useMemo(() => {
     return new Map(reminders.map((reminder) => [reminder.id, reminder]));
@@ -1084,6 +1086,38 @@ export default function HomeScreen() {
     ]
   );
 
+  // Overdue rows carry the date they were meant to ring, not "9:00 am" — the
+  // whole point of the group is that the ring is behind the user, not ahead.
+  const overdueItems = useMemo(() => {
+    return overdueReminders.map((item) => ({
+      id: item.id,
+      title: item.title,
+      emoji: item.emoji,
+      chipColor: chipColorForId(item.id),
+      subtitle: overdueSubtitle(item, history, nowMs),
+      completed: exitingIds.has(item.id),
+      onPress: () => {
+        recordReminderPressIn(item.id);
+        handleReminderPress(item);
+      },
+      onToggleComplete: () => {
+        if (!exitingIds.has(item.id)) {
+          handleMarkDone(item.id, item.title);
+        }
+      },
+      onDelete: () => handleDelete(item),
+    }));
+  }, [
+    overdueReminders,
+    history,
+    nowMs,
+    exitingIds,
+    recordReminderPressIn,
+    handleReminderPress,
+    handleMarkDone,
+    handleDelete,
+  ]);
+
   const activeTab: BottomBarTab =
     page === PAGE_TODAY ? "today" : page === PAGE_DAYS ? "days" : "settings";
 
@@ -1146,6 +1180,7 @@ export default function HomeScreen() {
             maxToRenderPerBatch={12}
             windowSize={7}
             updateCellsBatchingPeriod={16}
+            ListHeaderComponent={<OverdueSection items={overdueItems} />}
             ListFooterComponent={
               <CompletedSection items={todayCompletedItems} initiallyCollapsed />
             }

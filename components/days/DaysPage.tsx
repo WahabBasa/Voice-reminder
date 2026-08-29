@@ -22,6 +22,7 @@ import {
   todayISO,
 } from "../../lib/dayOccurrences";
 import { describeGridSubtitle, formatEveryMinutes } from "../schedule/scheduleDraft";
+import { getSnoozeUntil, refreshSnoozeWindows } from "../../lib/alarmKit";
 import { nextGridOccurrence } from "../../lib/schedule";
 import DayPager from "./DayPager";
 import MonthSheet from "./MonthSheet";
@@ -56,14 +57,24 @@ function formatNextIn(targetMs: number, nowMs: number): string {
 
 /**
  * Card subtitle: "09:00 · Daily", "08:00, 21:00 · Mon, Thu",
- * "Every 2 hr · 08:00–22:00" (+ next-in when today).
+ * "Every 2 hr · 08:00–22:00" (+ next-in when today), or "Rings again 3:52 pm"
+ * while today's ring is snoozed.
  *
- * The grid is read first because it is the only thing that can say a reminder
- * rings twice a day — `reminder.time` is just its first ring. Reminders written
- * before the grid existed (and any the store has not migrated yet) fall through
- * to the legacy fields below.
+ * Below the snooze, the grid is read first because it is the only thing that
+ * can say a reminder rings twice a day — `reminder.time` is just its first
+ * ring. Reminders written before the grid existed (and any the store has not
+ * migrated yet) fall through to the legacy fields below.
  */
 export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number): string {
+  // A live snooze outranks everything below: after "Later" the schedule text
+  // names a time the phone is no longer going to ring at (OLD-119). Once the
+  // comeback rings — or the reminder is completed or rescheduled — the window
+  // is gone and the schedule text comes back.
+  if (isToday) {
+    const snoozeUntil = getSnoozeUntil(reminder.id, nowMs);
+    if (snoozeUntil !== undefined) return `Rings again ${formatClockAt(snoozeUntil)}`;
+  }
+
   const grid = reminder.schedule;
   if (grid) {
     // An interval trades its window for a countdown on today's card — the
@@ -118,10 +129,22 @@ export default function DaysPage({
 
   const today = todayISO(nowMs);
 
-  // Keep the interval "Next in X" subtitle fresh while today is on screen.
+  // Keep the interval "Next in X" subtitle fresh while today is on screen, and
+  // pick up any snooze window written since the last tick before re-rendering.
+  // This page stays mounted behind the pager, so the Today list — which reads
+  // the same mirror on its own tick — rides along.
   useEffect(() => {
-    const timer = setInterval(() => setNowMs(Date.now()), NOW_TICK_MS);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    const tick = async () => {
+      await refreshSnoozeWindows();
+      if (!cancelled) setNowMs(Date.now());
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), NOW_TICK_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   // Coming back to this page always lands on today. Reset happens on LEAVE,
