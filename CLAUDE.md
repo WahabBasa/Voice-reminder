@@ -48,6 +48,16 @@
 - PowerShell blocks `npm` / `npx` `.ps1` shims. Use `npm.cmd` / `npx.cmd`
 - Windows file locking can cause `kill EPERM` errors during builds - just retry
 - `eas update` needs `--platform ios` (no react-native-web installed) and often `--clear-cache` — Metro dies with "Failed to get the SHA-1 for ... require.js" on a warm cache. Run from `C:\Dev\VR` (uppercase drive letter)
+- The uppercase drive letter can't be reached by a plain `cd /d C:\Dev\VR` when the shell already inherits the lowercase path — it's a no-op that keeps `c:\Dev\VR` and Metro throws the SHA-1 error anyway. Bounce first: `cd /d C:\Windows` then `cd /d C:\Dev\VR` (verified 2026-08-31)
+- `npm.cmd run test:coverage` **always exits 1 on Windows** even when every suite and threshold passes — the per-file `coverageThreshold` keys resolve to backslash paths that never match the coverage map. Judge the run by the printed suite/test results, not the exit code; Linux CI is the authoritative threshold gate (verified 2026-08-31, pre-existing)
+
+## 🤖 Delegation Policy
+
+**Claude orchestrates; subagents do the grunt work.** Standing instruction from the user:
+
+- Implementation, research, test runs, builds, publishes, installs — anything mechanical — goes to subagents: **Opus 4.8 at high reasoning effort**, one per well-scoped task, dispatched in parallel when tasks are disjoint.
+- The orchestrator's job is to frame each task with full context (files, gotchas, quality gates), dispatch, then **review the agent's report or diff** and relay the outcome. Inspect the diff directly when a change is risky or touches shipped behavior.
+- The orchestrator works directly only on: small reads/greps needed to frame a task, quick verifications of agent output, CLAUDE.md/devlog/memory edits, and conversation with the user (decisions, grilling).
 
 ## 📝 Devlog Writing Guidelines
 
