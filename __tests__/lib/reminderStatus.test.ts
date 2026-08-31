@@ -7,13 +7,11 @@
 // what has to be mocked (same shape as usageGate.test.ts).
 const mockCheckProStatus = jest.fn<Promise<boolean>, unknown[]>();
 const mockGetCachedProStatus = jest.fn<{ isPro: boolean | null; updatedAtMs: number }, unknown[]>();
-const mockRefreshProStatus = jest.fn<Promise<boolean>, unknown[]>();
 
 jest.mock("../../lib/purchases", () => ({
   __esModule: true,
   checkProStatus: (...args: unknown[]) => mockCheckProStatus(...args),
   getCachedProStatus: (...args: unknown[]) => mockGetCachedProStatus(...args),
-  refreshProStatus: (...args: unknown[]) => mockRefreshProStatus(...args),
 }));
 
 // Must import AFTER jest.mock
@@ -75,8 +73,6 @@ beforeEach(() => {
   mockCheckProStatus.mockResolvedValue(false);
   mockGetCachedProStatus.mockReset();
   mockGetCachedProStatus.mockReturnValue({ isPro: null, updatedAtMs: 0 });
-  mockRefreshProStatus.mockReset();
-  mockRefreshProStatus.mockResolvedValue(false);
 });
 
 // ─── statusOf ───────────────────────────────────────────────────────────────

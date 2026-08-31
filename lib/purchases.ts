@@ -22,15 +22,67 @@ export const PRO_PRODUCT_NAME = 'Remi Pro';
 // The Terms of Use and Privacy Policy URLs live in lib/legalLinks.ts — the
 // paywall, Settings and the AI consent card all read them from there.
 
+/**
+ * What we know about the entitlement right now.
+ *
+ * `unknown` is the state that used to be spelled `false`: the SDK hasn't
+ * configured yet, or the store couldn't be reached. Collapsing it into "free"
+ * is safe for a *gate* (nobody gets Pro they haven't paid for) but wrong for
+ * *copy* — it turns "we couldn't check" into "you don't have a subscription"
+ * and pitches an upgrade to someone who may already be paying.
+ */
+export type ProStatus = 'pro' | 'free' | 'unknown';
+
 let cachedCustomerInfo: CustomerInfo | null = null;
 let cachedIsPro: boolean | null = null;
 let cachedAtMs = 0;
 let listenerRegistered = false;
 let configured = false;
 
+type ProStatusListener = (status: ProStatus) => void;
+const proStatusListeners = new Set<ProStatusListener>();
+
 /** A key we can actually hand to the SDK — not missing, not a leftover placeholder. */
 function isUsableKey(key: string | null): key is string {
   return key !== null && key.length > 0 && !key.startsWith('PLACEHOLDER');
+}
+
+/** The cached answer as a status. No network, no throwing — safe during render. */
+export function getProStatusSnapshot(): ProStatus {
+  if (cachedIsPro === null) return 'unknown';
+  return cachedIsPro ? 'pro' : 'free';
+}
+
+/**
+ * Watch the entitlement instead of sampling it.
+ *
+ * Screens that stay mounted (Settings lives inside the home pager and is never
+ * unmounted) can't rely on a focus effect to notice a change: the SDK finishes
+ * configuring long after they first rendered, and RevenueCat's own
+ * `customerInfoUpdateListener` only refreshes this module's cache. This is how
+ * that reaches the UI — including the unknown → pro/free transition at startup.
+ *
+ * Returns the unsubscribe function; fires immediately with nothing (callers
+ * seed themselves from `getProStatusSnapshot`).
+ */
+export function subscribeToProStatus(listener: ProStatusListener): () => void {
+  proStatusListeners.add(listener);
+  return () => {
+    proStatusListeners.delete(listener);
+  };
+}
+
+function notifyProStatus(): void {
+  const status = getProStatusSnapshot();
+  // Copy first: a listener that unsubscribes itself must not mutate the set
+  // we're walking.
+  for (const listener of [...proStatusListeners]) {
+    try {
+      listener(status);
+    } catch (error) {
+      console.log('[RevenueCat] pro status listener threw (silent):', error);
+    }
+  }
 }
 
 /**
@@ -46,6 +98,7 @@ function updateCache(customerInfo: CustomerInfo): void {
   cachedCustomerInfo = customerInfo;
   cachedIsPro = customerInfo.entitlements.active[PRO_ENTITLEMENT_ID] !== undefined;
   cachedAtMs = Date.now();
+  notifyProStatus();
 }
 
 export function getCachedProStatus(): { isPro: boolean | null; updatedAtMs: number } {
@@ -85,6 +138,10 @@ export async function initializePurchases(): Promise<void> {
     await Purchases.configure({ apiKey });
     configured = true;
 
+    // Registered at configure time, before the first fetch: every later change
+    // the SDK learns about (renewal, expiry, a purchase on another device,
+    // a refund) lands in the cache here and is pushed to subscribers by
+    // updateCache. This is the only thing keeping long-lived screens honest.
     if (!listenerRegistered) {
       listenerRegistered = true;
       Purchases.addCustomerInfoUpdateListener((info) => {
@@ -100,6 +157,10 @@ export async function initializePurchases(): Promise<void> {
       // Keep cache as-is; we'll treat as free tier until updated.
       console.log('[RevenueCat] getCustomerInfo prime failed (silent):', e);
     }
+
+    // Even when the prime failed the world changed: the SDK is usable now, so
+    // anyone still showing "can't check" gets a nudge to ask again.
+    notifyProStatus();
   } catch (error) {
     // Silent log - RevenueCat init failure is non-critical
     console.log('[RevenueCat] initializePurchases failed (silent):', error);
@@ -107,47 +168,72 @@ export async function initializePurchases(): Promise<void> {
 }
 
 /**
- * Check if the current user has an active "pro" entitlement.
- * Returns true if user is a pro subscriber, false otherwise.
- * Errors are logged silently and default to free tier.
+ * Resolve the entitlement, cheaply: a cached answer is returned as-is, and only
+ * a cold cache costs a round trip. `unknown` means exactly that — the SDK isn't
+ * up yet, or the call failed — never "free".
  */
-export async function checkProStatus(): Promise<boolean> {
+export async function readProStatus(): Promise<ProStatus> {
   try {
     if (cachedIsPro !== null) {
-      return cachedIsPro;
+      return cachedIsPro ? 'pro' : 'free';
     }
-    if (!configured) return false;
+    if (!configured) return 'unknown';
     const customerInfo = await Purchases.getCustomerInfo();
     updateCache(customerInfo);
-    return cachedIsPro ?? false;
+    return getProStatusSnapshot();
   } catch (error) {
     // Silent log - expected to fail in dev builds without proper signing
-    console.log('[RevenueCat] checkProStatus failed (silent):', error);
-    return false;
+    console.log('[RevenueCat] readProStatus failed (silent):', error);
+    return getProStatusSnapshot();
   }
 }
 
 /**
- * Ask the store again, ignoring the cached answer.
+ * Ask the store again, ignoring every cached answer — this module's and
+ * RevenueCat's own.
  *
- * `checkProStatus` answers from cache the moment it has one — that is what lets
- * the tap gates be synchronous — but it also means a subscription bought on
- * another device would never be noticed by a cache that already read `false`.
- * This is the escape hatch for that case: callers fire it *behind* a decision
- * they already made, never in front of one. Falls back to the cached answer
- * (free, if there isn't one) so an unreachable store never grants Pro.
+ * `getCustomerInfo` alone is cache-aware: the SDK will happily hand back the
+ * receipt state it fetched minutes ago, which is why a subscription bought on
+ * another device, a refund, or a sandbox expiry could sit unnoticed. Only
+ * `invalidateCustomerInfoCache` forces the network. That makes this the
+ * expensive path — passive reads use `readProStatus`, this one runs behind an
+ * explicit refresh (screen becoming visible, user tapping retry).
+ *
+ * Falls back to whatever the cache already knew, so an unreachable store never
+ * grants Pro and never revokes it either.
  */
-export async function refreshProStatus(): Promise<boolean> {
+export async function forceRefreshProStatus(): Promise<ProStatus> {
   try {
-    if (!configured) return cachedIsPro ?? false;
+    if (!configured) return getProStatusSnapshot();
+    try {
+      await Purchases.invalidateCustomerInfoCache();
+    } catch (error) {
+      // Invalidation is an optimisation, not a precondition — a failure here
+      // just means the fetch below may be answered from the SDK's cache.
+      console.log('[RevenueCat] invalidateCustomerInfoCache failed (silent):', error);
+    }
     const customerInfo = await Purchases.getCustomerInfo();
     updateCache(customerInfo);
-    return cachedIsPro ?? false;
+    return getProStatusSnapshot();
   } catch (error) {
-    console.log('[RevenueCat] refreshProStatus failed (silent):', error);
-    return cachedIsPro ?? false;
+    console.log('[RevenueCat] forceRefreshProStatus failed (silent):', error);
+    return getProStatusSnapshot();
   }
 }
+
+/**
+ * Boolean view of `readProStatus` for the gates: everything that isn't a
+ * confirmed `pro` is treated as not entitled, which is the conservative answer
+ * a gate wants. Copy must not use this — see ProStatus.
+ */
+export async function checkProStatus(): Promise<boolean> {
+  return (await readProStatus()) === 'pro';
+}
+
+// There is deliberately no boolean wrapper over forceRefreshProStatus. Its two
+// callers are the tap-time cap gates, and both need to tell a settled "free"
+// apart from a check that still hasn't landed — collapsing that to a boolean is
+// the bug this gate was fixed for.
 
 // Where each store keeps subscription management for an account. Only used
 // when the native sheet is unavailable — same destination, reached the long way.
@@ -241,21 +327,44 @@ export function categorizePurchasesError(error: unknown): PurchaseErrorCategory 
 
 export type RestoreResult =
   | { status: 'restored' }
+  /** A subscription was found on this account, but it has lapsed. */
+  | { status: 'expired' }
+  /** This account has never had a subscription to restore. */
   | { status: 'nothing_to_restore' }
   | { status: 'error'; category: PurchaseErrorCategory };
 
 /**
+ * Did this account ever hold the subscription, whatever its state today?
+ *
+ * Restore answers "is it active" but the user asked "where did my subscription
+ * go", and those need different copy: "nothing was ever bought here" is a wrong
+ * and slightly insulting thing to tell someone whose plan simply ran out. Any
+ * one of these is proof of a past purchase — the entitlement record survives
+ * expiry, and so do the purchase/expiration ledgers.
+ */
+function hasLapsedSubscription(customerInfo: CustomerInfo): boolean {
+  if (customerInfo.entitlements.all[PRO_ENTITLEMENT_ID] !== undefined) return true;
+  if (customerInfo.latestExpirationDate !== null) return true;
+  return customerInfo.allPurchasedProductIdentifiers.length > 0;
+}
+
+/**
  * Restore previous purchases from the App Store / Play Store.
- * Distinguishes "restored" from "nothing on this account" from "it broke",
- * because App Review checks that each of those is surfaced to the user.
+ * Distinguishes "restored" from "expired" from "nothing on this account" from
+ * "it broke", because App Review checks that each of those is surfaced to the
+ * user — and because the caller reconciles its card off this result in both
+ * directions: a restore that finds nothing active must clear a stale "Active".
  */
 export async function restorePurchases(): Promise<RestoreResult> {
   try {
     if (!configured) return { status: 'error', category: 'unknown' };
     const customerInfo = await Purchases.restorePurchases();
     updateCache(customerInfo);
-    return customerInfo.entitlements.active[PRO_ENTITLEMENT_ID] !== undefined
-      ? { status: 'restored' }
+    if (customerInfo.entitlements.active[PRO_ENTITLEMENT_ID] !== undefined) {
+      return { status: 'restored' };
+    }
+    return hasLapsedSubscription(customerInfo)
+      ? { status: 'expired' }
       : { status: 'nothing_to_restore' };
   } catch (error) {
     console.log('[RevenueCat] restorePurchases failed (silent):', error);

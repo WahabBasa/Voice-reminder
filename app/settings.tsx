@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -8,13 +8,18 @@ import { FONT_DISPLAY } from "../lib/fonts";
 import AppIcon from "../components/AppIcon";
 import {
   PRO_PRODUCT_NAME,
-  checkProStatus,
-  getCachedProStatus,
+  forceRefreshProStatus,
+  getProStatusSnapshot,
   openManageSubscriptions,
-  refreshProStatus,
+  readProStatus,
   restorePurchases,
+  subscribeToProStatus,
 } from "../lib/purchases";
-import { getProCardContent } from "../lib/proCardContent";
+import {
+  getProCardContent,
+  getRestoreOutcomeContent,
+  type ProStatus,
+} from "../lib/proCardContent";
 // One source of truth for the legal URLs — same constants the paywall and the
 // consent card use.
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL, openInAppBrowser } from "../lib/legalLinks";
@@ -51,36 +56,76 @@ function SettingsRow({ icon, label, subtitle, onPress }: SettingsRowProps) {
 type SettingsContentProps = {
   /** When true, renders for the pager page: no back button, extra bottom padding for the bar. */
   embedded?: boolean;
+  /**
+   * Whether this is the pager page the user is actually looking at. The pager
+   * keeps every page mounted (components/SwipePager), so swiping here is not a
+   * route focus and nothing else would tell us to re-check. Defaults to true
+   * for the standalone route, where being rendered means being visible.
+   */
+  visible?: boolean;
 };
 
-export function SettingsContent({ embedded = false }: SettingsContentProps) {
+export function SettingsContent({ embedded = false, visible = true }: SettingsContentProps) {
   const router = useRouter();
 
   const [isRestoring, setIsRestoring] = useState(false);
 
   // Seeded from the entitlement cache so a known subscriber never sees
   // "Upgrade to Pro" flash on the first paint.
-  const [isPro, setIsPro] = useState<boolean | null>(() => getCachedProStatus().isPro);
-  const proCard = getProCardContent(isPro, PRO_PRODUCT_NAME);
+  const [proStatus, setProStatus] = useState<ProStatus>(() => getProStatusSnapshot());
+  const proCard = getProCardContent(proStatus, PRO_PRODUCT_NAME);
 
-  // Runs on mount and on every re-focus, which is how a purchase made on the
-  // paywall lands here the moment the user comes back. checkProStatus answers
-  // from cache (instant, possibly stale); refreshProStatus asks the store
-  // behind it, catching sandbox expiry and purchases made on another device.
-  // Neither blocks the render, and both fall back to free on error.
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-      const apply = (pro: boolean) => {
-        if (!cancelled) setIsPro(pro);
-      };
-      void checkProStatus().then(apply);
-      void refreshProStatus().then(apply);
-      return () => {
-        cancelled = true;
-      };
-    }, [])
-  );
+  // Track the entitlement rather than sample it. This component mounts once, at
+  // cold start, inside the home pager — long before RevenueCat has configured
+  // (app/_layout defers it past interactions). Every sampled read at that point
+  // answers "unknown", and without this subscription nothing would ever correct
+  // it: the SDK's own update listener only refreshes lib/purchases' cache.
+  useEffect(() => subscribeToProStatus(setProStatus), []);
+
+  // One resolution pass: the cached answer lands first (instant, possibly
+  // stale), the forced re-read follows and catches sandbox expiry, refunds and
+  // purchases made on another device. Neither blocks the render, and both fall
+  // back to what we already knew rather than inventing "free".
+  const resolveProStatus = useCallback(() => {
+    let cancelled = false;
+    const apply = (status: ProStatus) => {
+      if (!cancelled) setProStatus(status);
+    };
+    void readProStatus().then(apply);
+    void forceRefreshProStatus().then(apply);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Mount and every route re-focus — how a purchase made on the paywall lands
+  // here the moment the user comes back.
+  useFocusEffect(resolveProStatus);
+
+  // Arriving at the Settings page by swipe/tab tap changes no route, so it
+  // needs its own trigger. Only the false → true edge: staying visible must not
+  // re-fire on every unrelated re-render.
+  const wasVisible = useRef(visible);
+  useEffect(() => {
+    const becameVisible = visible && !wasVisible.current;
+    wasVisible.current = visible;
+    if (!becameVisible) return;
+    return resolveProStatus();
+  }, [visible, resolveProStatus]);
+
+  // The "can't check" card's tap: ask again, and say so if it still won't
+  // answer. Deliberately not a route to the paywall — we don't know whether
+  // this user already pays.
+  const handleRetryProStatus = async () => {
+    const status = await forceRefreshProStatus();
+    setProStatus(status);
+    if (status === "unknown") {
+      Alert.alert(
+        "Couldn't check your subscription",
+        "Check your connection and try again in a moment."
+      );
+    }
+  };
 
   const versionLabel = useMemo(() => {
     const version = Constants.expoConfig?.version ?? "1.0.0";
@@ -96,25 +141,23 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
     const result = await restorePurchases();
     setIsRestoring(false);
 
-    if (result.status === "restored") {
-      // The card is right there under the alert — flip it in the same beat.
-      setIsPro(true);
-      Alert.alert("Purchases restored", `${PRO_PRODUCT_NAME} is active on this device again.`);
-      return;
-    }
-    if (result.status === "nothing_to_restore") {
+    if (result.status === "error") {
       Alert.alert(
-        "Nothing to restore",
-        "No previous subscription was found for this Apple Account."
+        "Restore failed",
+        result.category === "network"
+          ? "No connection to the App Store. Check your internet and try again."
+          : "Couldn't reach the App Store. Please try again shortly."
       );
       return;
     }
-    Alert.alert(
-      "Restore failed",
-      result.category === "network"
-        ? "No connection to the App Store. Check your internet and try again."
-        : "Couldn't reach the App Store. Please try again shortly."
-    );
+
+    // Restore is the one moment the store gives a definitive answer, so the
+    // card reconciles off it in BOTH directions — getRestoreOutcomeContent owns
+    // that rule. Only flipping it upward was how a lapsed subscriber kept
+    // reading "Active" straight after being told their subscription had ended.
+    const outcome = getRestoreOutcomeContent(result.status, PRO_PRODUCT_NAME);
+    setProStatus(outcome.proStatus);
+    Alert.alert(outcome.title, outcome.message);
   };
 
   // The manage-subscription UI belongs to the store, so it can decline to
@@ -158,14 +201,17 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
         <Text style={styles.headerTitle}>Settings</Text>
       </View>
 
-      {/* Pro card: the upgrade pitch until the entitlement says otherwise, then
-          the subscription's status with a way into the store to manage it */}
+      {/* Pro card: the upgrade pitch for a confirmed free user, the
+          subscription's status (with a way into the store) for a subscriber,
+          and a retry for the state where we don't know which they are */}
       <TouchableOpacity
         style={styles.proCard}
         onPress={
           proCard.action === "manage"
             ? () => void handleManageSubscription()
-            : () => router.push("/paywall")
+            : proCard.action === "retry"
+              ? () => void handleRetryProStatus()
+              : () => router.push("/paywall")
         }
         activeOpacity={0.7}
       >

@@ -224,10 +224,19 @@ export default function PaywallScreen() {
             return;
         }
 
-        if (result.status === "nothing_to_restore") {
+        if (result.status === "expired") {
+            // Something was bought here, it just isn't live any more. Telling
+            // this user "nothing was found" reads as the store losing their
+            // purchase, when the honest answer is that the plan ran out.
+            toast.show({
+                title: "Subscription Expired",
+                message: `Your ${PRO_PRODUCT_NAME} subscription has ended. You can subscribe again below.`,
+                type: "info",
+            });
+        } else if (result.status === "nothing_to_restore") {
             toast.show({
                 title: "Nothing to Restore",
-                message: "No previous subscription was found for this Apple Account.",
+                message: "No previous subscription was found for this account.",
                 type: "info",
             });
         } else {

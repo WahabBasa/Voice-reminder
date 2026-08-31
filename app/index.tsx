@@ -58,7 +58,12 @@ import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, todayISO } from "../lib/dayOccurrences";
 import { groupTodayReminders, overdueSubtitle } from "../lib/todayMembership";
 import { formatClockAt } from "../lib/time";
-import { checkProStatus, getCachedProStatus, refreshProStatus } from "../lib/purchases";
+import { checkProStatus, forceRefreshProStatus, getProStatusSnapshot } from "../lib/purchases";
+import {
+  getCapGateBlockContent,
+  resolveCapGateOutcome,
+  type CapGateBlock,
+} from "../lib/usageGate";
 import NetInfo from "@react-native-community/netinfo";
 import * as Sentry from "@sentry/react-native";
 
@@ -116,8 +121,10 @@ export default function HomeScreen() {
   const [isConnected, setIsConnected] = useState(true);
   const [showOfflineMessage, setShowOfflineMessage] = useState(false);
 
-  // Upgrade CTA: hidden for subscribers.
-  const [isPro, setIsPro] = useState(() => getCachedProStatus().isPro === true);
+  // Upgrade CTA: hidden for subscribers. Anything short of a confirmed "pro"
+  // leaves the pill up, which keeps the paywall reachable even while the gate
+  // below is refusing to guess.
+  const [isPro, setIsPro] = useState(() => getProStatusSnapshot() === "pro");
 
   // --- Tap-to-navigation tracing (debug/perf) ---
   const tapDebugSnapshotRef = useRef({
@@ -222,11 +229,21 @@ export default function HomeScreen() {
   }, [router]);
 
   const lockRecordingForLimit = useCallback(
-    (traceId: string, currentCount: number, limit: number) => {
+    (traceId: string, block: CapGateBlock, currentCount: number, limit: number) => {
+      // Two locks share this overlay state. The upgrade lock offers the CTA;
+      // the unverified lock deliberately doesn't — we can't tell whether this
+      // user already pays, so the only honest ask is for a connection.
+      const content = getCapGateBlockContent(block, limit);
       setCanStartRecording(false);
-      setGateStatusText(`You've reached ${limit} active reminders. Upgrade for unlimited.`);
-      setShowUpgradeCta(true);
-      perfLog(traceId, "ui.recording", "gate_blocked_limit", { currentCount, limit });
+      setGateStatusText(content.statusText);
+      setShowUpgradeCta(content.offersUpgrade);
+      // gate_blocked_limit keeps its name — the existing traces are read by it.
+      perfLog(
+        traceId,
+        "ui.recording",
+        block === "blocked_unverified" ? "gate_blocked_unverified" : "gate_blocked_limit",
+        { currentCount, limit }
+      );
     },
     []
   );
@@ -272,10 +289,12 @@ export default function HomeScreen() {
     // The plan is known before the tap: RevenueCat's entitlement is primed at
     // launch and its update listener keeps it current, so the gate is a
     // synchronous cache read and the mic opens in the same render as the
-    // overlay. An unresolved cache counts as free — that only ever costs a
-    // capped user the lock below, which the refresh behind it corrects.
+    // overlay. An unresolved entitlement still grants nothing — it just gets
+    // its own lock (and its own copy) instead of an upgrade pitch, and the
+    // refresh behind it settles which lock the user ends up looking at.
     const limit = getFreeActiveLimit();
-    const cachedPro = getCachedProStatus().isPro === true;
+    const proStatus = getProStatusSnapshot();
+    const cachedPro = proStatus === "pro";
     let currentCount = getActiveReminderCount();
 
     // Reminders load at startup, so an unloaded store here is the rare
@@ -295,33 +314,48 @@ export default function HomeScreen() {
       currentCount,
       limit,
       cachedPro,
+      proStatus,
       hasLoadedReminders,
     });
 
-    if (cachedPro || currentCount < limit) {
+    const gate = resolveCapGateOutcome(proStatus, currentCount, limit);
+    if (gate === "allow") {
       setCanStartRecording(true);
       setGateStatusText(undefined);
       perfLog(traceId, "ui.recording", "gate_allowed_cached", { cachedPro });
       return;
     }
 
-    // At the cap on a free plan. The only way the cache is wrong here is a
-    // subscription bought on another device, so the store gets asked behind
-    // the lock rather than in front of it.
-    lockRecordingForLimit(traceId, currentCount, limit);
+    // At the cap without a confirmed subscription. The only way the cache is
+    // wrong here is a subscription bought on another device, or a check that
+    // never landed, so the store gets asked behind the lock rather than in
+    // front of it — the overlay is already up and resolves in place.
+    lockRecordingForLimit(traceId, gate, currentCount, limit);
 
     const tRefresh = Date.now();
-    void refreshProStatus().then((isProNow) => {
+    void forceRefreshProStatus().then((settledStatus) => {
       perfLog(traceId, "ui.recording", "gate_refresh_done", {
         ms: Date.now() - tRefresh,
-        isPro: isProNow,
+        isPro: settledStatus === "pro",
+        proStatus: settledStatus,
       });
-      if (!isProNow || gateTraceRef.current !== traceId) return;
-      setIsPro(true);
-      setCanStartRecording(true);
-      setGateStatusText(undefined);
-      setShowUpgradeCta(false);
-      perfLog(traceId, "ui.recording", "gate_unlocked_after_refresh", { currentCount, limit });
+      if (gateTraceRef.current !== traceId) return;
+
+      const settled = resolveCapGateOutcome(settledStatus, currentCount, limit);
+      if (settled === "allow") {
+        setIsPro(true);
+        setCanStartRecording(true);
+        setGateStatusText(undefined);
+        setShowUpgradeCta(false);
+        perfLog(traceId, "ui.recording", "gate_unlocked_after_refresh", { currentCount, limit });
+        return;
+      }
+      // Still blocked, but possibly for a different reason than a moment ago:
+      // a check that has now come back "free" turns the "can't verify" lock
+      // into the real upgrade pitch. A still-unresolved one changes nothing.
+      if (settled !== gate) {
+        lockRecordingForLimit(traceId, settled, currentCount, limit);
+      }
     });
   }, [showRecording, isConnected, hasLoadedReminders, loadReminders, lockRecordingForLimit]);
 
@@ -353,7 +387,10 @@ export default function HomeScreen() {
         gateTraceRef.current = traceId;
         setRecordingTraceId(traceId);
         setShowRecording(true);
-        lockRecordingForLimit(traceId, currentCount, limit);
+        // Reached only after planTakeAllowance has already resolved the
+        // entitlement and cut the take by the cap, so this is a real
+        // upgrade block, not an unresolved one.
+        lockRecordingForLimit(traceId, "blocked_upgrade", currentCount, limit);
       }, 0);
     },
     [lockRecordingForLimit]
@@ -616,36 +653,45 @@ export default function HomeScreen() {
     // Free cap, counted exactly the way the mic counts it — and read the same
     // synchronous way, off the entitlement cache instead of a round trip.
     const limit = getFreeActiveLimit();
-    const cachedPro = getCachedProStatus().isPro === true;
+    const proStatus = getProStatusSnapshot();
+    const cachedPro = proStatus === "pro";
     if (!hasLoadedReminders && !cachedPro) {
       await loadReminders().catch(() => {});
     }
     const currentCount = getActiveReminderCount();
 
-    if (!cachedPro && currentCount >= limit) {
-      // The composer has no locked state of its own, so a blocked user gets the
-      // upgrade toast rather than an empty field they can't send. That also
-      // means there is no open surface for a late refresh to unlock the way the
-      // mic's overlay gets unlocked — and the toast it would have to talk over
-      // routes to the paywall, which is the wrong place to send a subscriber.
-      // So the refresh here only heals the cache: a stale-free subscriber (one
-      // who bought on another device) gets through on their next tap.
-      perfLog(traceId, "ui.composer", "gate_blocked_limit", { currentCount, limit });
+    const gate = resolveCapGateOutcome(proStatus, currentCount, limit);
+    if (gate !== "allow") {
+      // The composer has no locked state of its own, so a blocked user gets a
+      // toast rather than an empty field they can't send. That also means
+      // there is no open surface for a late refresh to unlock the way the
+      // mic's overlay gets unlocked — so the refresh here only heals the
+      // cache: whichever way it settles, the next tap gets the right answer.
+      const content = getCapGateBlockContent(gate, limit);
+      perfLog(
+        traceId,
+        "ui.composer",
+        gate === "blocked_unverified" ? "gate_blocked_unverified" : "gate_blocked_limit",
+        { currentCount, limit }
+      );
       toast.show({
-        title: `You've reached ${limit} active reminders`,
-        message: "Tap to upgrade for unlimited.",
+        title: content.toastTitle,
+        message: content.toastMessage,
         type: "warning",
         durationMs: 4000,
-        onPress: openPaywall,
+        // No paywall route on the unverified block — that is the wrong place
+        // to send someone who may already be a subscriber.
+        onPress: content.offersUpgrade ? openPaywall : undefined,
       });
 
       const tRefresh = Date.now();
-      void refreshProStatus().then((isProNow) => {
+      void forceRefreshProStatus().then((settledStatus) => {
         perfLog(traceId, "ui.composer", "gate_refresh_done", {
           ms: Date.now() - tRefresh,
-          isPro: isProNow,
+          isPro: settledStatus === "pro",
+          proStatus: settledStatus,
         });
-        if (isProNow) setIsPro(true);
+        if (settledStatus === "pro") setIsPro(true);
       });
       return;
     }
@@ -1203,7 +1249,10 @@ export default function HomeScreen() {
 
         {/* ---- Page 2: Settings ---- */}
         <View style={[styles.page, { paddingTop: insets.top + 8 }]}>
-          <SettingsContent embedded />
+          {/* Mounted from cold start like every pager page, so it needs to be
+              told when it is the one on screen — that is its cue to re-check
+              the subscription (same pattern as DaysPage's `active`). */}
+          <SettingsContent embedded visible={page === PAGE_SETTINGS} />
         </View>
       </SwipePager>
 

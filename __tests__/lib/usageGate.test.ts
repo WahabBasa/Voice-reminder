@@ -14,10 +14,14 @@ jest.mock("../../lib/purchases", () => ({
 import {
   checkCanCreateWithCount,
   checkCanUsePremiumSchedule,
+  getCapGateBlockContent,
   isPremiumSchedule,
+  resolveCapGateOutcome,
   ReminderLimitExceededError,
+  type CapGateBlock,
 } from "../../lib/usageGate";
 import type { GridSchedule } from "../../lib/schedule";
+import type { ProStatus } from "../../lib/proCardContent";
 
 beforeEach(() => {
   mockCheckProStatus.mockReset();
@@ -115,6 +119,144 @@ describe("checkCanCreateWithCount", () => {
       expect(result.currentCount).toBe(0);
       expect(mockCheckProStatus).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ─── the tap-time cap gate ──────────────────────────────────────────────────
+
+const LIMIT = 5;
+const ALL_STATUSES: ProStatus[] = ["pro", "free", "unknown"];
+
+describe("resolveCapGateOutcome", () => {
+  describe("under the cap", () => {
+    it("allows everyone, whatever we know about their plan", () => {
+      // The point of the cheap path: an unresolved entitlement costs nothing
+      // to the overwhelming majority of taps, because the cap isn't in play.
+      for (const status of ALL_STATUSES) {
+        expect(resolveCapGateOutcome(status, 4, LIMIT)).toBe("allow");
+        expect(resolveCapGateOutcome(status, 0, LIMIT)).toBe("allow");
+      }
+    });
+  });
+
+  describe("at or over the cap", () => {
+    it("allows a confirmed subscriber — there is no cap on Pro", () => {
+      expect(resolveCapGateOutcome("pro", LIMIT, LIMIT)).toBe("allow");
+      expect(resolveCapGateOutcome("pro", 99, LIMIT)).toBe("allow");
+    });
+
+    it("blocks a confirmed free user with the upgrade pitch, exactly as before", () => {
+      expect(resolveCapGateOutcome("free", LIMIT, LIMIT)).toBe("blocked_upgrade");
+      expect(resolveCapGateOutcome("free", 7, LIMIT)).toBe("blocked_upgrade");
+    });
+
+    it("still blocks when the entitlement is unresolved — unknown never grants", () => {
+      // The conservative direction does not move. Nobody gets Pro they haven't
+      // paid for just because the check failed.
+      expect(resolveCapGateOutcome("unknown", LIMIT, LIMIT)).not.toBe("allow");
+      expect(resolveCapGateOutcome("unknown", 7, LIMIT)).not.toBe("allow");
+    });
+
+    it("blocks an unresolved entitlement differently from a confirmed free plan", () => {
+      // This is the whole fix: the two used to be the same block, so a
+      // subscriber whose check failed was asked to buy their subscription
+      // a second time.
+      expect(resolveCapGateOutcome("unknown", LIMIT, LIMIT)).toBe("blocked_unverified");
+      expect(resolveCapGateOutcome("unknown", LIMIT, LIMIT)).not.toBe(
+        resolveCapGateOutcome("free", LIMIT, LIMIT)
+      );
+    });
+  });
+
+  describe("non-finite counts clamped to 0, like checkCanCreateWithCount", () => {
+    it("treats a broken count as no reminders rather than as being capped", () => {
+      for (const count of [NaN, Infinity, -3]) {
+        expect(resolveCapGateOutcome("unknown", count, LIMIT)).toBe("allow");
+        expect(resolveCapGateOutcome("free", count, LIMIT)).toBe("allow");
+      }
+    });
+  });
+});
+
+describe("getCapGateBlockContent", () => {
+  const upgrade = getCapGateBlockContent("blocked_upgrade", LIMIT);
+  const unverified = getCapGateBlockContent("blocked_unverified", LIMIT);
+
+  it("keeps the shipped upgrade copy byte for byte", () => {
+    // Both surfaces' existing strings, unchanged — this branch is today's
+    // behavior and must stay that way.
+    expect(upgrade.statusText).toBe("You've reached 5 active reminders. Upgrade for unlimited.");
+    expect(upgrade.toastTitle).toBe("You've reached 5 active reminders");
+    expect(upgrade.toastMessage).toBe("Tap to upgrade for unlimited.");
+    expect(upgrade.offersUpgrade).toBe(true);
+  });
+
+  it("counts the limit into the upgrade copy rather than hardcoding five", () => {
+    expect(getCapGateBlockContent("blocked_upgrade", 12).toastTitle).toContain("12");
+  });
+
+  it("tells an unverified user it is a connection problem, not a plan problem", () => {
+    expect(unverified.toastTitle).toMatch(/can't verify your subscription/i);
+    expect(unverified.toastMessage).toMatch(/connection/i);
+    expect(unverified.statusText).toMatch(/can't verify your subscription/i);
+    expect(unverified.statusText).toMatch(/connection/i);
+  });
+
+  it("pitches nothing on the unverified block, and offers no route to the paywall", () => {
+    expect(unverified.offersUpgrade).toBe(false);
+    for (const copy of [unverified.statusText, unverified.toastTitle, unverified.toastMessage]) {
+      expect(copy).not.toMatch(/upgrade|unlimited|subscribe|pro\b/i);
+    }
+    // It must not quietly reuse the cap copy either.
+    expect(unverified.statusText).not.toBe(upgrade.statusText);
+    expect(unverified.toastTitle).not.toBe(upgrade.toastTitle);
+  });
+
+  it("never mentions the reminder cap when the cap isn't the reason", () => {
+    // The user is at the cap, but we can't say that's why they're blocked —
+    // for all we know they're a subscriber with no cap at all.
+    expect(`${unverified.statusText} ${unverified.toastTitle} ${unverified.toastMessage}`)
+      .not.toContain(String(LIMIT));
+  });
+
+  it("names no external provider in anything the user reads", () => {
+    for (const block of ["blocked_upgrade", "blocked_unverified"] as CapGateBlock[]) {
+      const content = getCapGateBlockContent(block, LIMIT);
+      expect(`${content.statusText} ${content.toastTitle} ${content.toastMessage}`).not.toMatch(
+        /revenuecat|openai|elevenlabs|apple pay|google play|app store server/i
+      );
+    }
+  });
+});
+
+describe("the cap gate's wiring in app/index", () => {
+  // No renderer for the home screen in this suite, so the source is the
+  // evidence — same pattern as proCardContent.test and legalLinks.test.
+  const index = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../..", "app/index.tsx"),
+    "utf8"
+  ) as string;
+
+  it("reads the tri-state, not a boolean, at both tap gates", () => {
+    expect(index).toContain("const proStatus = getProStatusSnapshot()");
+    expect(index.match(/resolveCapGateOutcome\(proStatus, currentCount, limit\)/g)?.length).toBe(2);
+    // The old boolean collapse is gone from the gate decision.
+    expect(index).not.toContain("!cachedPro && currentCount >= limit");
+  });
+
+  it("routes the toast to the paywall only when the block actually offers an upgrade", () => {
+    expect(index).toContain("onPress: content.offersUpgrade ? openPaywall : undefined");
+  });
+
+  it("heals the entitlement behind both blocks with a forced refresh", () => {
+    expect(index.match(/forceRefreshProStatus\(\)/g)?.length).toBe(2);
+  });
+
+  it("re-locks the mic overlay when a pending check settles to a different block", () => {
+    // The overlay is already open, so the unverified lock can become the real
+    // upgrade lock in place rather than waiting for another tap.
+    expect(index).toContain("const settled = resolveCapGateOutcome(settledStatus, currentCount, limit)");
+    expect(index).toMatch(/if \(settled !== gate\) \{\s*lockRecordingForLimit\(traceId, settled/);
   });
 });
 
