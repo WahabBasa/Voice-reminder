@@ -1,12 +1,20 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import Constants from "expo-constants";
 import { borderRadius, colors, scaleFontSize, shadows } from "../lib/theme";
 import { FONT_DISPLAY } from "../lib/fonts";
 import AppIcon from "../components/AppIcon";
-import { PRO_PRODUCT_NAME, restorePurchases } from "../lib/purchases";
+import {
+  PRO_PRODUCT_NAME,
+  checkProStatus,
+  getCachedProStatus,
+  openManageSubscriptions,
+  refreshProStatus,
+  restorePurchases,
+} from "../lib/purchases";
+import { getProCardContent } from "../lib/proCardContent";
 // One source of truth for the legal URLs — same constants the paywall and the
 // consent card use.
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL, openInAppBrowser } from "../lib/legalLinks";
@@ -50,6 +58,30 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
 
   const [isRestoring, setIsRestoring] = useState(false);
 
+  // Seeded from the entitlement cache so a known subscriber never sees
+  // "Upgrade to Pro" flash on the first paint.
+  const [isPro, setIsPro] = useState<boolean | null>(() => getCachedProStatus().isPro);
+  const proCard = getProCardContent(isPro, PRO_PRODUCT_NAME);
+
+  // Runs on mount and on every re-focus, which is how a purchase made on the
+  // paywall lands here the moment the user comes back. checkProStatus answers
+  // from cache (instant, possibly stale); refreshProStatus asks the store
+  // behind it, catching sandbox expiry and purchases made on another device.
+  // Neither blocks the render, and both fall back to free on error.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      const apply = (pro: boolean) => {
+        if (!cancelled) setIsPro(pro);
+      };
+      void checkProStatus().then(apply);
+      void refreshProStatus().then(apply);
+      return () => {
+        cancelled = true;
+      };
+    }, [])
+  );
+
   const versionLabel = useMemo(() => {
     const version = Constants.expoConfig?.version ?? "1.0.0";
     const build = (Constants as any).nativeBuildVersion ?? (Constants as any).expoConfig?.ios?.buildNumber;
@@ -65,6 +97,8 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
     setIsRestoring(false);
 
     if (result.status === "restored") {
+      // The card is right there under the alert — flip it in the same beat.
+      setIsPro(true);
       Alert.alert("Purchases restored", `${PRO_PRODUCT_NAME} is active on this device again.`);
       return;
     }
@@ -81,6 +115,18 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
         ? "No connection to the App Store. Check your internet and try again."
         : "Couldn't reach the App Store. Please try again shortly."
     );
+  };
+
+  // The manage-subscription UI belongs to the store, so it can decline to
+  // appear; openManageSubscriptions swallows that and reports it instead.
+  const handleManageSubscription = async () => {
+    const opened = await openManageSubscriptions();
+    if (!opened) {
+      Alert.alert(
+        "Couldn't open subscriptions",
+        "Manage your subscription under Settings › your Apple Account › Subscriptions."
+      );
+    }
   };
 
   // Legal pages open in an in-app browser sheet — reading them doesn't bounce
@@ -112,10 +158,15 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
         <Text style={styles.headerTitle}>Settings</Text>
       </View>
 
-      {/* Pro upgrade card */}
+      {/* Pro card: the upgrade pitch until the entitlement says otherwise, then
+          the subscription's status with a way into the store to manage it */}
       <TouchableOpacity
         style={styles.proCard}
-        onPress={() => router.push("/paywall")}
+        onPress={
+          proCard.action === "manage"
+            ? () => void handleManageSubscription()
+            : () => router.push("/paywall")
+        }
         activeOpacity={0.7}
       >
         <View style={styles.proLeft}>
@@ -123,8 +174,8 @@ export function SettingsContent({ embedded = false }: SettingsContentProps) {
             <AppIcon name="crown" size={20} color="#fff" />
           </View>
           <View>
-            <Text style={styles.proTitle}>Upgrade to Pro</Text>
-            <Text style={styles.proSubtitle}>Unlimited active reminders</Text>
+            <Text style={styles.proTitle}>{proCard.title}</Text>
+            <Text style={styles.proSubtitle}>{proCard.subtitle}</Text>
           </View>
         </View>
         <AppIcon name="chevron-right" size={18} color={colors.accent} />

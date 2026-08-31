@@ -5,7 +5,7 @@ import Purchases, {
   PurchasesPackage,
   PurchasesOfferings,
 } from 'react-native-purchases';
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 
 // RevenueCat public SDK keys. These are publishable by design (they only identify
 // the app to RevenueCat), which is why they sit inline rather than in env.
@@ -146,6 +146,45 @@ export async function refreshProStatus(): Promise<boolean> {
   } catch (error) {
     console.log('[RevenueCat] refreshProStatus failed (silent):', error);
     return cachedIsPro ?? false;
+  }
+}
+
+// Where each store keeps subscription management for an account. Only used
+// when the native sheet is unavailable — same destination, reached the long way.
+const APPLE_MANAGE_SUBSCRIPTIONS_URL = 'https://apps.apple.com/account/subscriptions';
+const PLAY_MANAGE_SUBSCRIPTIONS_URL = 'https://play.google.com/store/account/subscriptions';
+
+/**
+ * Open the store's own manage-subscription screen.
+ *
+ * `showManageSubscriptions` is the native sheet users expect, but it is missing
+ * on older SDK versions and can refuse to present, so the account URL backs it
+ * up. Returns whether anything opened; never throws — a store UI that won't
+ * come up must not take Settings down with it.
+ */
+export async function openManageSubscriptions(): Promise<boolean> {
+  try {
+    const showNative = (Purchases as unknown as {
+      showManageSubscriptions?: () => Promise<void>;
+    }).showManageSubscriptions;
+    if (configured && typeof showNative === 'function') {
+      await showNative.call(Purchases);
+      return true;
+    }
+  } catch (error) {
+    console.log('[RevenueCat] showManageSubscriptions failed (silent):', error);
+  }
+
+  try {
+    await Linking.openURL(
+      Platform.OS === 'android'
+        ? PLAY_MANAGE_SUBSCRIPTIONS_URL
+        : APPLE_MANAGE_SUBSCRIPTIONS_URL
+    );
+    return true;
+  } catch (error) {
+    console.log('[RevenueCat] manage-subscriptions fallback failed (silent):', error);
+    return false;
   }
 }
 
