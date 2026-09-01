@@ -30,6 +30,15 @@ export const DEFAULT_ALARM_SETTINGS = {
 export interface Reminder {
     id: string;
     convexId?: string;
+    /**
+     * The creation job this row was imported from (spec §2.4, N1).
+     *
+     * Absent on every reminder made before the job pipeline and on every typed
+     * one. Its only job is to be durable proof: when a job vanishes mid-import,
+     * a stored row carrying its creationId is how the reconciler knows the
+     * import already landed (D4).
+     */
+    creationId?: string;
     title: string;
     description: string;
     // Legacy projection of `schedule` (see legacyFieldsFromGrid): `time` is the
@@ -132,6 +141,31 @@ interface ReminderState {
 }
 
 let loadRemindersInFlight: Promise<void> | null = null;
+
+/**
+ * The creation lock (spec §2.4, C9).
+ *
+ * Two writers can now reach for the free cap at the same time: a voice job
+ * finishing its import while the typed composer's `addReminder` counts active
+ * reminders. Both read the count, both decide there is room, both write — and
+ * the cap is over by one. Serializing the whole check-and-write closes it.
+ *
+ * Legacy `addReminder` runs inside it too, which is what makes the guarantee
+ * real rather than half of one. Its behavior is unchanged: same gate, same
+ * order, same rollback — just one at a time.
+ */
+let creationLock: Promise<void> = Promise.resolve();
+
+export function withCreationLock<T>(run: () => Promise<T>): Promise<T> {
+    const previous = creationLock;
+    let release: () => void = () => {};
+    // Never rejects: `release` is called from a finally, so a failed writer
+    // cannot poison the queue behind it.
+    creationLock = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    return previous.then(run).finally(release);
+}
 
 /**
  * What the free cap counts, through the one status rule in reminderActive —
@@ -275,7 +309,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
     },
 
     // Add a new reminder
-    addReminder: async (reminder) => {
+    addReminder: async (reminder) => withCreationLock(async () => {
         // Check if user can create more reminders (enforces free tier limit)
         const gateTraceId = createTraceId('gate');
 
@@ -324,7 +358,7 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
         }
 
         return newReminder;
-    },
+    }),
 
     // Update an existing reminder
     updateReminder: async (updatedReminder) => {
@@ -485,6 +519,18 @@ export const useReminderStore = create<ReminderState>((set, get) => ({
         }
     },
 }));
+
+/**
+ * Write the whole reminders list to disk in one call.
+ *
+ * The take import (spec §2.4 step 3) folds N rows in with ONE Zustand set and
+ * ONE AsyncStorage write, rather than N addReminder round trips — this is the
+ * write half of that. Everything else keeps going through the store's own
+ * actions.
+ */
+export async function persistReminders(reminders: Reminder[]): Promise<void> {
+    await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(reminders));
+}
 
 // Selector hooks for common use cases
 export const useReminders = () => useReminderStore((state) => state.reminders);

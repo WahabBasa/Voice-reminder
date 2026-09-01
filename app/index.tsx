@@ -20,12 +20,22 @@ import { convex } from "../lib/convexClient";
 import { colors, scaleFontSize, shadows } from "../lib/theme";
 import { Plus } from "lucide-react-native";
 import { FONT_DISPLAY } from "../lib/fonts";
-import { readFileAsBase64 } from "../lib/convex";
+import {
+  copyAsync,
+  deleteAsync,
+  documentDirectory,
+  getInfoAsync,
+} from "expo-file-system/legacy";
 import { uploadRecordingToConvex } from "../lib/convexUpload";
 import { scheduleReminder } from "../lib/notifications";
 import { hydrateReminderAudio } from "../lib/audioHydration";
 import { getDeviceId } from "../lib/deviceId";
-import { useReminderStore, Reminder } from "../lib/store";
+import {
+  persistReminders,
+  useReminderStore,
+  withCreationLock,
+  Reminder,
+} from "../lib/store";
 import { useSettingsStore } from "../lib/settingsStore";
 import RecordingOverlay from "../components/RecordingOverlay";
 import ComposerSheet from "../components/ComposerSheet";
@@ -42,7 +52,16 @@ import OverdueSection from "../components/OverdueSection";
 import DaysPage, { subtitleFor } from "../components/days/DaysPage";
 import BottomBar, { BottomBarTab } from "../components/BottomBar";
 import { SettingsContent } from "./settings";
-import { createTraceId, perfLog, recordTap, startStallMonitor } from "../lib/perf";
+import {
+  createTraceId,
+  dropCreationRun,
+  logCreationServerPerf,
+  markCreation,
+  perfLog,
+  recordTap,
+  startStallMonitor,
+} from "../lib/perf";
+import { creationBreadcrumb } from "../lib/sentry";
 import { getActiveReminderCount, getFreeActiveLimit } from "../lib/usage";
 import {
   describeTakeOutcome,
@@ -52,33 +71,113 @@ import {
   planTakeAllowance,
   scheduleTakeReminders,
 } from "../lib/voiceTake";
-import { submitTypedTake } from "../lib/typedTake";
+import { deviceClock, submitTypedTake } from "../lib/typedTake";
+import {
+  errorKindForServerCode,
+  getPendingTake,
+  loadPendingTakes,
+  newPendingTake,
+  putPendingTake,
+  removePendingTake,
+  resolveRecordingLocation,
+  updatePendingTake,
+  type PendingTake,
+} from "../lib/pendingTakes";
+import { commitTake, type CommitTakeOutcome, type TakeImportSummary } from "../lib/takeCommit";
+import {
+  abandonOrphanBlob,
+  cancelTake,
+  configureReconcile,
+  discardTake,
+  enqueueAllPendingTakes,
+  enqueueReconcile,
+  retryTake,
+} from "../lib/takeReconcile";
+import { watchCreationJob, type CreationJobWatchHandle } from "../lib/creationJobWatch";
+import PendingTakeCard, { usePendingTakes } from "../components/PendingTakeCard";
 import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, todayISO } from "../lib/dayOccurrences";
 import { groupTodayReminders, overdueSubtitle } from "../lib/todayMembership";
 import { formatClockAt } from "../lib/time";
 import { checkProStatus, forceRefreshProStatus, getProStatusSnapshot } from "../lib/purchases";
+import { resolveImportProStatus } from "../lib/proStatusResolve";
 import {
   getCapGateBlockContent,
   resolveCapGateOutcome,
   type CapGateBlock,
 } from "../lib/usageGate";
 import NetInfo from "@react-native-community/netinfo";
-import * as Sentry from "@sentry/react-native";
 
 // Pager pages: 0 = Today, 1 = Days, 2 = Settings (see docs/ui-redesign.md gesture map).
 const PAGE_TODAY = 0;
 const PAGE_DAYS = 1;
 const PAGE_SETTINGS = 2;
 
+// ─── The take's recording on disk (spec §2.1) ───────────────────────────────
+// expo-av writes into the cache directory, which the OS may reclaim whenever it
+// likes. A take can outlive several app launches, so its recording is copied
+// somewhere durable at stop-tap; a copy that fails is survivable (the cache
+// file is still there right now) and marks the take `fragileUri` (D10).
+
+function recordingPathFor(creationId: string): string | null {
+  if (!documentDirectory) return null;
+  return `${documentDirectory}take_${creationId}.m4a`;
+}
+
+async function copyRecordingToDocuments(
+  creationId: string,
+  cacheUri: string
+): Promise<string | null> {
+  const to = recordingPathFor(creationId);
+  if (!to) return null;
+  try {
+    await copyAsync({ from: cacheUri, to });
+    return to;
+  } catch (e) {
+    console.log("[VR] take: recording copy failed, keeping the cache uri:", e);
+    return null;
+  }
+}
+
+async function recordingFileExists(uri: string): Promise<boolean> {
+  try {
+    return (await getInfoAsync(uri)).exists;
+  } catch {
+    return false;
+  }
+}
+
+async function deleteTakeRecording(take: PendingTake): Promise<void> {
+  await deleteAsync(take.recordingUri, { idempotent: true }).catch(() => {});
+}
+
+/** The take's idempotency key, and the key its whole perf summary hangs off. */
+function createCreationId(): string {
+  const rand = () => Math.random().toString(36).slice(2, 10);
+  return `${Date.now().toString(36)}${rand()}${rand()}`;
+}
+
+// The pending card's three affordances. They capture nothing from the screen —
+// every one of them is a module function in lib/takeReconcile — so they live
+// out here with a stable identity, which is what lets the memoized card sit
+// still through the 30s `nowMs` tick.
+const onPendingTakeCancel = (creationId: string) => void cancelTake(creationId);
+const onPendingTakeRetry = (creationId: string) => void retryTake(creationId);
+const onPendingTakeDiscard = (creationId: string) => void discardTake(creationId);
+
 export default function HomeScreen() {
   const router = useRouter();
-  const processVoiceReminder = useAction(api.actions.processVoiceReminder);
-  const processVoiceReminderFast = useAction(api.actions.processVoiceReminderFast);
   const processTypedReminder = useAction(api.actions.processTypedReminder);
   const generateAudioUploadUrl = useMutation(api.reminders.generateAudioUploadUrl);
   const removeConvexReminder = useMutation(api.reminders.remove);
+  // The creation job pipeline (spec §1). The legacy voice actions are gone from
+  // this screen — a recording now becomes a job, not a blocking round trip.
+  const beginCreationJob = useMutation(api.creationJobs.begin);
+  const cancelCreationJob = useMutation(api.creationJobs.cancel);
+  const retryCreationJob = useMutation(api.creationJobs.retry);
+  const discardCreationJob = useMutation(api.creationJobs.discard);
+  const ackCreationJob = useMutation(api.creationJobs.ack);
   const toast = useToast();
   const insets = useSafeAreaInsets();
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -92,11 +191,16 @@ export default function HomeScreen() {
   const storeRecordCompletion = useReminderStore((state) => state.recordCompletion);
   const loadAllData = useReminderStore((state) => state.loadAll);
   const loadReminders = useReminderStore((state) => state.loadReminders);
+  const loadHistory = useReminderStore((state) => state.loadHistory);
   const hasLoadedReminders = useReminderStore((state) => state.hasLoadedReminders);
 
   const activeReminders = useMemo(() => {
     return reminders.filter((r) => isReminderActive(r, history, nowMs));
   }, [reminders, history, nowMs]);
+
+  // The pending card's unverified-entitlement copy is the cap gate's own, and
+  // that sentence names the limit.
+  const freeLimit = getFreeActiveLimit();
 
   const [showRecording, setShowRecording] = useState(false);
   // Convex upload URL, fetched when recording STARTS rather than when it stops
@@ -117,7 +221,13 @@ export default function HomeScreen() {
   const [composerTraceId, setComposerTraceId] = useState<string | null>(null);
   const [isComposerSubmitting, setIsComposerSubmitting] = useState(false);
   const [page, setPage] = useState(PAGE_TODAY);
-  const cancelledRef = useRef(false);
+  // Takes still on their way to becoming reminders (spec §2.3). Never in the
+  // reminders store, so never counted, scheduled, or swiped as one.
+  const pendingTakes = usePendingTakes();
+  // One entry per creationId we have taken responsibility for. `null` is a
+  // reservation held across the async setup below — it is what makes the guard
+  // in subscribeToJob a single check rather than a race (see there).
+  const watchesRef = useRef(new Map<string, CreationJobWatchHandle | null>());
   const [isConnected, setIsConnected] = useState(true);
   const [showOfflineMessage, setShowOfflineMessage] = useState(false);
 
@@ -378,36 +488,107 @@ export default function HomeScreen() {
     [handleOpenRecording]
   );
 
-  // Reopen the overlay in its locked state after the fact: the pre-recording
-  // gate can go stale while a take is in flight.
-  const showLimitLockedOverlay = useCallback(
-    (traceId: string, currentCount: number, limit: number) => {
-      setShowRecording(false);
-      setTimeout(() => {
-        gateTraceRef.current = traceId;
-        setRecordingTraceId(traceId);
-        setShowRecording(true);
-        // Reached only after planTakeAllowance has already resolved the
-        // entitlement and cut the take by the cap, so this is a real
-        // upgrade block, not an unresolved one.
-        lockRecordingForLimit(traceId, "blocked_upgrade", currentCount, limit);
-      }, 0);
+  /**
+   * Schedule every reminder a take produced.
+   *
+   * One reminder that won't schedule must not cost its siblings their alarms,
+   * so each is scheduled on its own. `onSettled` fires once every attempt has
+   * finished, success or logged failure — which is what `armedAt` means (C18).
+   */
+  const scheduleCreatedReminders = useCallback(
+    (created: Reminder[], traceId: string, onSettled?: () => void) => {
+      InteractionManager.runAfterInteractions(() => {
+        perfLog(traceId, "device.notifications", "scheduleReminder_start", {
+          count: created.length,
+        });
+        let promptedForExactAlarm = false;
+        void scheduleTakeReminders(
+          created,
+          async (newReminder) => {
+            const { triggerTimestamp } = await scheduleReminder(
+              {
+                id: newReminder.id,
+                title: newReminder.title,
+                description: newReminder.description,
+                time: newReminder.time,
+                date: newReminder.date,
+                frequency: newReminder.frequency,
+                days: newReminder.days,
+                audioUrl: newReminder.audioUrl,
+                preReminderMinutes: newReminder.preReminderMinutes,
+                preAudioUrl: newReminder.preAudioUrl,
+                urgency: newReminder.urgency,
+                persistent: newReminder.persistent,
+                volume: newReminder.volume,
+                volumeStyle: newReminder.volumeStyle,
+
+                intervalMs: newReminder.intervalMs,
+                anchorAt: newReminder.anchorAt,
+                intervalDays: newReminder.intervalDays,
+
+                // New unified schedule fields
+                schedule: newReminder.schedule,
+                scheduleType: newReminder.scheduleType,
+                onceAt: newReminder.onceAt,
+                rrule: newReminder.rrule,
+                dtstart: newReminder.dtstart,
+                tzid: newReminder.tzid,
+                until: newReminder.until,
+                parseWarnings: newReminder.parseWarnings,
+              },
+              { traceId }
+            );
+
+            const current = useReminderStore.getState().getReminderById(newReminder.id);
+            if (current) {
+              await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
+            }
+          },
+          (e: any) => {
+            console.log("[VR] Failed to schedule reminder:", e);
+            if (e?.name === "ExactAlarmPermissionError" && !promptedForExactAlarm) {
+              promptedForExactAlarm = true;
+              showPermissionPrompt();
+            }
+            perfLog(traceId, "device.notifications", "scheduleReminder_error", {
+              error: String(e),
+            });
+          }
+        ).finally(() => onSettled?.());
+      });
     },
-    [lockRecordingForLimit]
+    [storeUpdateReminder]
   );
 
-  const handleCancelProcessing = useCallback(() => {
-    cancelledRef.current = true;
-  }, []);
+  /** Fire-and-forget audio hydration for one imported row. */
+  const startHydration = useCallback(
+    (reminder: Reminder, convexId: string) => {
+      hydrateReminderAudio({
+        convexClient: convex,
+        convexId,
+        localReminderId: reminder.id,
+        updateLocal: async (patch) => {
+          const current = useReminderStore.getState().getReminderById(reminder.id);
+          if (current) {
+            await storeUpdateReminder({ ...current, ...patch });
+          }
+        },
+      }).catch((e) => {
+        console.error("[VR] Hydration failed:", e);
+      });
+    },
+    [storeUpdateReminder]
+  );
 
   /**
    * What a parsed take becomes: re-gated against the free cap, stored, hydrated,
    * scheduled, and then either opened in the edit sheet or summed up in a toast.
    *
-   * Voice and the typed composer share every line of it — the only difference
-   * between them is which action produced `result` (OLD-101). Returns false when
-   * the free cap ate the whole take; a take that produced nothing for any other
-   * reason throws, and the caller owns the error surface.
+   * THE TYPED COMPOSER'S PATH, and now only that (C8). Voice moved to the job
+   * pipeline below, which imports rows the server already created and never
+   * auto-opens the edit sheet; this loop keeps the legacy action, the legacy
+   * intake and the auto-open exactly as they were, because the composer's
+   * behavior is not what this wave is changing.
    */
   const applyTakeResult = useCallback(
     async (
@@ -465,20 +646,7 @@ export default function HomeScreen() {
           addReminder: storeAddReminder,
           startHydration: (reminder, convexId) => {
             console.log("[VR] Starting audio hydration for", convexId);
-            // Fire-and-forget hydration
-            hydrateReminderAudio({
-              convexClient: convex,
-              convexId,
-              localReminderId: reminder.id,
-              updateLocal: async (patch) => {
-                const current = useReminderStore.getState().getReminderById(reminder.id);
-                if (current) {
-                  await storeUpdateReminder({ ...current, ...patch });
-                }
-              },
-            }).catch((e) => {
-              console.error("[VR] Hydration failed:", e);
-            });
+            startHydration(reminder, convexId);
           },
           discardOverflow: async (item) => {
             const convexId = typeof item?.id === "string" ? item.id : undefined;
@@ -549,73 +717,14 @@ export default function HomeScreen() {
         setEditingReminder(outcome.created[0]);
       }
 
-      InteractionManager.runAfterInteractions(() => {
-        perfLog(traceId, "device.notifications", "scheduleReminder_start", {
-          count: outcome.created.length,
-        });
-        // One reminder that won't schedule must not cost its siblings their
-        // alarms, so each is scheduled on its own.
-        let promptedForExactAlarm = false;
-        void scheduleTakeReminders(
-          outcome.created,
-          async (newReminder) => {
-            const { triggerTimestamp } = await scheduleReminder(
-              {
-                id: newReminder.id,
-                title: newReminder.title,
-                description: newReminder.description,
-                time: newReminder.time,
-                date: newReminder.date,
-                frequency: newReminder.frequency,
-                days: newReminder.days,
-                audioUrl: newReminder.audioUrl,
-                preReminderMinutes: newReminder.preReminderMinutes,
-                preAudioUrl: newReminder.preAudioUrl,
-                urgency: newReminder.urgency,
-                persistent: newReminder.persistent,
-                volume: newReminder.volume,
-                volumeStyle: newReminder.volumeStyle,
-
-                intervalMs: newReminder.intervalMs,
-                anchorAt: newReminder.anchorAt,
-                intervalDays: newReminder.intervalDays,
-
-                // New unified schedule fields
-                schedule: newReminder.schedule,
-                scheduleType: newReminder.scheduleType,
-                onceAt: newReminder.onceAt,
-                rrule: newReminder.rrule,
-                dtstart: newReminder.dtstart,
-                tzid: newReminder.tzid,
-                until: newReminder.until,
-                parseWarnings: newReminder.parseWarnings,
-              },
-              { traceId }
-            );
-
-            const current = useReminderStore.getState().getReminderById(newReminder.id);
-            if (current) {
-              await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
-            }
-          },
-          (e: any) => {
-            console.log("[VR] Failed to schedule reminder:", e);
-            if (e?.name === "ExactAlarmPermissionError" && !promptedForExactAlarm) {
-              promptedForExactAlarm = true;
-              showPermissionPrompt();
-            }
-            perfLog(traceId, "device.notifications", "scheduleReminder_error", {
-              error: String(e),
-            });
-          }
-        );
-      });
+      scheduleCreatedReminders(outcome.created, traceId);
 
       return true;
     },
     [
       storeAddReminder,
-      storeUpdateReminder,
+      startHydration,
+      scheduleCreatedReminders,
       removeConvexReminder,
       toast,
       openPaywall,
@@ -820,144 +929,503 @@ export default function HomeScreen() {
     [generateAudioUploadUrl]
   );
 
-  const handleRecordingComplete = async (audioUri: string, traceId: string) => {
-    cancelledRef.current = false;
+  // ─── Voice takes: the creation-job pipeline (spec §2.2) ───────────────────
+
+  /**
+   * Watch one job (spec §2.7). One subscription per creationId, ever.
+   *
+   * The handlers here only move the CARD. Every decision that touches reminders
+   * is handed to reconciliation, which is the single place that knows how to
+   * combine a local phase with a server status.
+   */
+  const subscribeToJob = useCallback(async (take: PendingTake) => {
+    const creationId = take.creationId;
+    // Reserved SYNCHRONOUSLY, before the first await. The stop-tap path and a
+    // reconciliation pass can both reach this line in the same tick; a `has`
+    // check re-run on the far side of `getDeviceId()` lets both through, and
+    // the second watch is then unreachable — nothing holds its handle, so
+    // nothing can ever dispose it. The null placeholder makes the one check
+    // above the only guard this needs.
+    if (watchesRef.current.has(creationId)) return;
+    watchesRef.current.set(creationId, null);
+
+    let deviceId: string;
     try {
-      perfLog(traceId, "device.processing", "handleRecordingComplete_start", { audioUri });
+      deviceId = await getDeviceId();
+    } catch (error) {
+      // The reservation must not outlive the failure, or the take can never be
+      // watched again this launch.
+      watchesRef.current.delete(creationId);
+      console.log("[VR] take: could not subscribe to the job:", error);
+      return;
+    }
 
-      // Send device's LOCAL time (not UTC) so GPT can parse relative times correctly
-      const now = new Date();
-      const pad = (n: number) => n.toString().padStart(2, '0');
-      const deviceLocalDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-      const deviceLocalTime = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-      const deviceTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const handle = watchCreationJob({
+      convexClient: convex,
+      deviceId,
+      creationId,
+      onUpdate: async (job) => {
+        if (job === null) {
+          enqueueReconcile(creationId);
+          return;
+        }
+        if (job.status === "transcribed") {
+          markCreation(creationId, "transcriptAt");
+          // The job document is pushed again for every field the worker
+          // touches — perf patches, updatedAt — while the status sits at
+          // `transcribed`. Rewriting the whole outbox to the bytes it already
+          // holds is an AsyncStorage write and a card re-render for nothing.
+          const current = getPendingTake(creationId);
+          const settled =
+            current?.phase === "transcribed" &&
+            (job.transcript === undefined || current.transcript === job.transcript);
+          if (settled) return;
 
-      // Owning install for the reminder the backend is about to create (OLD-74).
-      const deviceId = await getDeviceId();
+          creationBreadcrumb("transcribed");
+          await updatePendingTake(creationId, "transcribed", {
+            ...(job.transcript ? { transcript: job.transcript } : {}),
+          });
+          return;
+        }
+        if (job.status === "committed") {
+          markCreation(creationId, "committedAt");
+          creationBreadcrumb("committed");
+          enqueueReconcile(creationId);
+          return;
+        }
+        if (job.status === "failed") {
+          const errorKind = errorKindForServerCode(job.errorCode);
+          creationBreadcrumb("job_failed", errorKind);
+          dropCreationRun(creationId);
+          await updatePendingTake(creationId, "failed", {
+            errorKind,
+            ...(job.errorCode ? { serverErrorCode: job.errorCode } : {}),
+          });
+          return;
+        }
+        if (job.status === "cancelled") {
+          creationBreadcrumb("job_cancelled");
+          dropCreationRun(creationId);
+          await removePendingTake(creationId);
+          await deleteTakeRecording(take);
+        }
+      },
+      onLocalFailure: async (errorKind) => {
+        creationBreadcrumb("watch_gave_up", errorKind);
+        await updatePendingTake(creationId, "failed", { errorKind }).catch(() => {});
+        // The watchdog gave up at 90s; the job may still commit at 95. Hand the
+        // take to reconciliation now rather than leaving it for the next
+        // foreground — the dispatch table already turns failed + committed into
+        // an import, so the card heals itself instead of waiting for a tap.
+        if (errorKind === "network") enqueueReconcile(creationId);
+      },
+      onServerPerf: (perf) => logCreationServerPerf(creationId, perf),
+    });
 
-      let result: any;
-      let usedFastPath = false;
+    watchesRef.current.set(creationId, handle);
+    void handle.done.finally(() => {
+      watchesRef.current.delete(creationId);
+    });
+  }, []);
 
-      // Try FAST PATH: binary upload + async TTS
+  /**
+   * The detached half of stop-tap: bytes up, job begun, subscription open.
+   *
+   * The phase is re-read immediately before `begin` because the user can cancel
+   * from the card while the upload is still in flight — in which case the blob
+   * belongs to nobody and is handed straight to the server for deletion (C4).
+   */
+  const uploadAndBegin = useCallback(
+    async (take: PendingTake, claimedUploadUrl: Promise<string | null> | null) => {
+      const creationId = take.creationId;
       try {
-        perfLog(traceId, "device.processing", "upload_start");
-        // Claim the URL prefetched at record time (OLD-106). Single-use, so the
-        // ref is cleared whether or not the fetch succeeded; a null result (the
-        // prefetch failed, or recording started before this screen wired it up)
-        // falls back to fetching one here, exactly as it used to.
-        const prefetchedUploadUrl = uploadUrlRef.current;
-        uploadUrlRef.current = null;
-        let uploadUrl = prefetchedUploadUrl ? await prefetchedUploadUrl : null;
-        if (uploadUrl) {
-          perfLog(traceId, "device.processing", "upload_url_prefetch_hit");
-        } else {
-          perfLog(traceId, "device.processing", "upload_url_prefetch_miss");
+        await updatePendingTake(creationId, "uploading");
+        markCreation(creationId, "uploadStart");
+        creationBreadcrumb("upload_start");
+
+        let uploadUrl = claimedUploadUrl ? await claimedUploadUrl : null;
+        if (!uploadUrl) {
           uploadUrl = (await generateAudioUploadUrl()).uploadUrl;
         }
-        const { storageId } = await uploadRecordingToConvex(uploadUrl, audioUri);
-        perfLog(traceId, "device.processing", "upload_done", { storageId });
+        const { storageId } = await uploadRecordingToConvex(uploadUrl, take.recordingUri);
+        markCreation(creationId, "uploadDone");
+        creationBreadcrumb("upload_done");
 
-        const tAction = Date.now();
-        result = await processVoiceReminderFast({
+        const deviceId = await getDeviceId();
+        const live = getPendingTake(creationId);
+        if (!live || live.phase === "cancelling") {
+          creationBreadcrumb("orphan_blob");
+          void abandonOrphanBlob(creationId, storageId);
+          return;
+        }
+
+        const stamped = await updatePendingTake(creationId, "uploading", {
+          audioStorageId: storageId,
+        });
+        markCreation(creationId, "beginCalled");
+        await beginCreationJob({
           deviceId,
+          creationId,
           audioStorageId: storageId as any,
-          traceId,
-          deviceLocalDate,
-          deviceLocalTime,
-          deviceTimezone,
+          localDate: take.localDate,
+          localTime: take.localTime,
+          timezone: take.timezone,
         });
-        perfLog(traceId, "device.processing", "processVoiceReminderFast_done", {
-          ms: Date.now() - tAction,
-        });
-        usedFastPath = true;
-      } catch (fastPathError) {
-        // FALLBACK: use base64 path.
-        //
-        // This is the most expensive branch in the app and until OLD-106 it was
-        // completely silent. processVoiceReminder blocks the reminder row on the
-        // full sequential TTS ladder (+4-10s) where the fast path defers it, so
-        // a user who lands here waits several times as long — and the only
-        // evidence was a console.log, which release builds do not ship (OLD-77
-        // turned off console streaming outside dev, and perfLog is __DEV__-gated
-        // too). Sentry is the one channel that survives to production, so the
-        // fallback reports itself as a real event.
-        //
-        // No transcript, no reminder text, no audio: the tags below are the
-        // shape of the failure, not its content (sendDefaultPii is off and this
-        // path must not become the exception).
-        console.log("[VR] Fast path failed, falling back to base64:", fastPathError);
-        perfLog(traceId, "device.processing", "fallback_to_base64", {
-          reason: (fastPathError as any)?.message ?? String(fastPathError),
-        });
-        Sentry.captureException(fastPathError, {
-          tags: {
-            vr_event: "voice_fallback_base64",
-            vr_stage: "processVoiceReminderFast",
-          },
-          extra: { traceId },
-          level: "warning",
-        });
+        creationBreadcrumb("job_begun");
 
-        const tBase64 = Date.now();
-        const base64 = await readFileAsBase64(audioUri);
-        perfLog(traceId, "device.processing", "audio_base64_done", {
-          ms: Date.now() - tBase64,
-          base64Chars: base64.length,
+        const processing = await updatePendingTake(creationId, "processing", {
+          audioStorageId: storageId,
         });
-
-        const tAction = Date.now();
-        result = await processVoiceReminder({
-          deviceId,
-          audioBase64: base64,
-          traceId,
-          deviceLocalDate,
-          deviceLocalTime,
-          deviceTimezone,
-        });
-        perfLog(traceId, "device.processing", "processVoiceReminder_done", {
-          ms: Date.now() - tAction,
-        });
+        void subscribeToJob(processing ?? stamped ?? take);
+      } catch (error) {
+        // A `fragileUri` recording that is simply gone is not a network problem,
+        // and retrying the upload will never fix it (D10).
+        const gone =
+          take.fragileUri === true && !(await recordingFileExists(take.recordingUri));
+        const errorKind = gone ? ("server" as const) : ("network" as const);
+        console.log("[VR] take: upload/begin failed:", error);
+        creationBreadcrumb("upload_failed", errorKind);
+        await updatePendingTake(creationId, "failed", { errorKind }).catch(() => {});
       }
+    },
+    [generateAudioUploadUrl, beginCreationJob, subscribeToJob]
+  );
 
-      // Check if cancelled while processing
-      if (cancelledRef.current) {
-        console.log("[VR] Processing cancelled by user");
-        return;
-      }
+  /**
+   * Stop-tap.
+   *
+   * Everything up to "close the overlay" is ONE AsyncStorage write, because the
+   * whole point of the wave is that the card is on screen before anything slow
+   * is consulted. The documents-dir copy is slow — it is a file copy of up to
+   * two minutes of audio — so it does not run here: the take is persisted
+   * against the cache URI as `fragileUri` (which §2.1 already knows how to
+   * survive), and the copy upgrades it in place afterwards. The upload, the job
+   * and the subscription all happen afterwards too, detached, and the take
+   * outlives the screen — a kill here costs a reconciliation pass, not a
+   * reminder.
+   */
+  const handleRecordingComplete = useCallback(
+    async (audioUri: string, traceId: string, stopTapAt?: number) => {
+      const creationId = createCreationId();
+      const startedAt = stopTapAt ?? Date.now();
+      markCreation(creationId, "stopTap", startedAt);
+      markCreation(creationId, "stopRecordingDone");
+      creationBreadcrumb("stop_tap");
+      perfLog(traceId, "device.processing", "take_stop_tap", { creationId });
 
-      if ((result as any)?.perf) {
-        perfLog(traceId, "device.processing", "convex_perf", (result as any).perf);
-      }
+      // Claim-and-clear the prefetched upload URL INTO THIS TAKE (C11). A URL
+      // from generateUploadUrl is single-use, and leaving it on the ref would
+      // hand a spent one to whatever the user records next.
+      const claimedUploadUrl = uploadUrlRef.current;
+      uploadUrlRef.current = null;
 
-      await applyTakeResult(result, {
-        traceId,
-        usedFastPath,
-        onCapBlocked: (activeCount, limit) => showLimitLockedOverlay(traceId, activeCount, limit),
-        onPremiumBlocked: () => {
-          setShowRecording(false);
-          openIntervalPaywall();
-        },
-        onCreated: () => setShowRecording(false),
+      const clock = deviceClock(
+        new Date(startedAt),
+        Intl.DateTimeFormat().resolvedOptions().timeZone
+      );
+
+      // The cache file is there RIGHT NOW; what it is not is durable. The take
+      // starts out pointing at it, marked fragile, and the copy below promotes
+      // it to the documents dir off the hot path.
+      const take = newPendingTake({
+        creationId,
+        recordingUri: audioUri,
+        fragileUri: true,
+        localDate: clock.deviceLocalDate,
+        localTime: clock.deviceLocalTime,
+        timezone: clock.deviceTimezone,
+        createdAt: startedAt,
       });
-    } catch (error: any) {
-      console.error("[VR] Processing error:", error);
 
-      // If we somehow got gated at the store level (race, legacy path), reset overlay to locked state.
-      if (error?.name === "ReminderLimitExceededError") {
-        const currentCount = Number.isFinite(error?.currentCount) ? error.currentCount : reminders.length;
-        const limit = Number.isFinite(error?.limit) ? error.limit : getFreeActiveLimit();
-        showLimitLockedOverlay(traceId, currentCount, limit);
+      // One retry, then the legacy blocking error path: nothing optimistic is
+      // on screen yet, so there is no card to fail into.
+      let persisted = true;
+      try {
+        await putPendingTake(take);
+      } catch {
+        try {
+          await putPendingTake(take);
+        } catch (error) {
+          persisted = false;
+          console.log("[VR] take: could not persist the outbox entry:", error);
+        }
+      }
+      if (!persisted) {
+        dropCreationRun(creationId);
+        setShowRecording(false);
+        Alert.alert(
+          "Error",
+          "Couldn't save your recording. Check your device storage and try again."
+        );
         return;
       }
 
       setShowRecording(false);
+      markCreation(creationId, "cardVisible");
+      creationBreadcrumb("card_visible");
 
-      Alert.alert(
-        "Error",
-        "Failed to process your reminder. Check your internet connection and try again."
-      );
-    }
-  };
+      // Detached, in order: make the recording durable, then send it. A copy
+      // that fails leaves the take exactly as it was persisted — cache URI,
+      // still fragile — which is the state §2.1's rules are written for.
+      void (async () => {
+        const copiedUri = await copyRecordingToDocuments(creationId, audioUri);
+        const { recordingUri, fragileUri } = resolveRecordingLocation({
+          cacheUri: audioUri,
+          copiedUri,
+        });
+
+        // The card has been on screen for the whole of that copy, so plenty can
+        // have happened to the take: the user can have cancelled it, and a
+        // reconciliation pass (a foreground, say) can have picked it up and
+        // resumed the upload itself. Only a take still sitting at
+        // `recording_saved` belongs to this block; anything else already has an
+        // owner, and uploading it again would be a second copy of the same
+        // take. The documents file this block just made is swept up on the way
+        // out either way — nothing else knows it exists.
+        const current = getPendingTake(creationId);
+        if (current?.phase !== "recording_saved") {
+          if (!fragileUri) await deleteAsync(recordingUri, { idempotent: true }).catch(() => {});
+          return;
+        }
+
+        let live = current;
+        if (!fragileUri) {
+          const upgraded = await updatePendingTake(creationId, "recording_saved", {
+            recordingUri,
+            fragileUri: false,
+          }).catch(() => null);
+          // The take could not be pointed at the durable copy (it moved on
+          // between the read above and this write, or the write itself failed),
+          // so the copy is an orphan and the take keeps its cache URI for
+          // whoever does own it.
+          if (!upgraded) {
+            await deleteAsync(recordingUri, { idempotent: true }).catch(() => {});
+            return;
+          }
+          live = upgraded;
+        }
+
+        await uploadAndBegin(live, claimedUploadUrl);
+      })();
+    },
+    [uploadAndBegin]
+  );
+
+  /** What a landed import does to the screen: animate, toast, schedule, hydrate. */
+  const onTakeImported = useCallback(
+    (take: PendingTake, created: Reminder[], summary: TakeImportSummary) => {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+
+      // Nothing survived a gate. The pending card has already gone, so this is
+      // the ONLY surface left that can say why — without it a free user at the
+      // cap, or one who asked for an interval reminder, watches the card
+      // vanish and gets nothing. Same two landings the legacy and typed paths
+      // use, in the same order: the interval "no" is the more specific of the
+      // two, and the cap is a number they can also read off the list.
+      if (summary.created === 0) {
+        markCreation(take.creationId, "armedAt");
+        if (summary.blockedPremium > 0) {
+          creationBreadcrumb("import_blocked_premium");
+          openIntervalPaywall();
+          return;
+        }
+        if (summary.dropped > 0) {
+          creationBreadcrumb("import_blocked_cap");
+          // The pinned cap copy, shared with the composer toast and the
+          // recording overlay's lock (C16) — not a fourth wording of it.
+          const content = getCapGateBlockContent("blocked_upgrade", summary.limit);
+          toast.show({
+            title: content.toastTitle,
+            message: content.toastMessage,
+            type: "warning",
+            durationMs: 4000,
+            onPress: openPaywall,
+          });
+          return;
+        }
+        // Defensive: with neither gate biting there is nothing to keep and no
+        // reason for it, so the legacy path's own error sentence stands in
+        // rather than a new one being invented for it.
+        creationBreadcrumb("import_produced_nothing");
+        toast.show({
+          title: "Error",
+          message: "Failed to process your reminder. Check your internet connection and try again.",
+          type: "error",
+          durationMs: 4000,
+        });
+        return;
+      }
+
+      const feedback = describeTakeOutcome({
+        created: summary.created,
+        dropped: summary.dropped,
+        blockedPremium: summary.blockedPremium,
+        failed: 0,
+        total: summary.total,
+        limit: summary.limit,
+      });
+      if (feedback) {
+        toast.show({
+          title: feedback.title,
+          message: feedback.message,
+          type: feedback.type,
+          durationMs: feedback.upgrade ? 4000 : undefined,
+          onPress: !feedback.upgrade
+            ? undefined
+            : feedback.upgradeContext === "interval"
+              ? openIntervalPaywall
+              : openPaywall,
+        });
+      }
+      // No edit sheet on this path: the rows simply appear (spec §2.4).
+
+      scheduleCreatedReminders(created, take.creationId, () => {
+        markCreation(take.creationId, "armedAt");
+        creationBreadcrumb("armed");
+      });
+
+      for (const reminder of created) {
+        if (reminder.convexId) startHydration(reminder, reminder.convexId);
+      }
+    },
+    [toast, openPaywall, openIntervalPaywall, scheduleCreatedReminders, startHydration]
+  );
+
+  /**
+   * Import one committed take.
+   *
+   * The store-level creation lock (C9) is handed to `commitTake` as a seam
+   * rather than wrapped around this whole call: the job read and the
+   * entitlement check are network work with no timeout, and holding the lock
+   * across them would stall legacy `addReminder` — the typed composer's Save
+   * button spinning until the network came back. `commitTake` takes the lock
+   * for the local validate/upsert/persist/cleanup half only, and re-reads the
+   * active count once it holds it.
+   */
+  const importCommittedTake = useCallback(
+    async (take: PendingTake): Promise<CommitTakeOutcome> => {
+      const deviceId = await getDeviceId();
+      const readRows = () =>
+        convex.query(api.creationJobs.getReminders, {
+          deviceId,
+          creationId: take.creationId,
+        }) as Promise<any>;
+
+      markCreation(take.creationId, "importStart");
+      const outcome = await commitTake({
+        take,
+        deps: {
+          fetchRows: readRows,
+          proStatus: resolveImportProStatus,
+          withLock: withCreationLock,
+          activeCount: getActiveReminderCount,
+          limit: getFreeActiveLimit(),
+          storeSnapshot: () => useReminderStore.getState().reminders,
+          applyStore: (rows) => useReminderStore.setState({ reminders: rows }),
+          persistStore: persistReminders,
+          newLocalId: () => Math.random().toString(36).substr(2, 9),
+          now: Date.now,
+          markCommitting: async () => {
+            await updatePendingTake(take.creationId, "committing");
+          },
+          markCapUnverified: async () => {
+            dropCreationRun(take.creationId);
+            await updatePendingTake(take.creationId, "failed", {
+              errorKind: "cap_unverified",
+            });
+          },
+          removeTake: () => removePendingTake(take.creationId),
+          deleteRecording: () => deleteTakeRecording(take),
+          ack: async () => {
+            await ackCreationJob({ deviceId, creationId: take.creationId });
+          },
+          deleteServerRow: async (id) => {
+            await removeConvexReminder({ id: id as any, deviceId });
+          },
+          wait: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+          onImported: (created, summary) => onTakeImported(take, created, summary),
+          onStage: (stage, data) =>
+            creationBreadcrumb(stage, data?.errorKind as string | undefined),
+        },
+      });
+      markCreation(take.creationId, "importDone");
+      return outcome;
+    },
+    [ackCreationJob, removeConvexReminder, onTakeImported]
+  );
+
+  // Reconciliation needs every one of the seams above, so it is handed them
+  // here and re-handed them whenever one changes identity. Wiring only — the
+  // sweep is its own effect below, so a gate-state change cannot start one.
+  useEffect(() => {
+    configureReconcile({
+      getDeviceId,
+      fetchJob: (deviceId, creationId) =>
+        convex.query(api.creationJobs.get, { deviceId, creationId }) as Promise<any>,
+      begin: (args) => beginCreationJob(args as any) as Promise<any>,
+      cancel: (args) => cancelCreationJob(args as any) as Promise<any>,
+      serverRetry: (args) => retryCreationJob(args as any) as Promise<any>,
+      discard: (args) => discardCreationJob(args) as Promise<any>,
+      uploadRecording: async (take) => {
+        // A recording that is not there cannot be uploaded, and saying so is
+        // what routes the take to "Record again" instead of a doomed retry.
+        if (!(await recordingFileExists(take.recordingUri))) return null;
+        const { uploadUrl } = await generateAudioUploadUrl();
+        const { storageId } = await uploadRecordingToConvex(uploadUrl, take.recordingUri);
+        return storageId;
+      },
+      recordingExists: (take) => recordingFileExists(take.recordingUri),
+      importTake: importCommittedTake,
+      subscribe: (take) => {
+        void subscribeToJob(take);
+      },
+      deleteRecording: deleteTakeRecording,
+      storeHasCreationId: (creationId) =>
+        useReminderStore.getState().reminders.some((r) => r.creationId === creationId),
+      // Three independent reads off three AsyncStorage keys. Nothing here
+      // depends on anything else here, so they go together — the barrier is
+      // "all three have landed", not "one after another".
+      loadBarrier: async () => {
+        await Promise.all([
+          loadPendingTakes(),
+          loadReminders().catch(() => {}),
+          loadHistory().catch(() => {}),
+        ]);
+      },
+      onRecordAgain: () => {
+        void handleOpenRecording();
+      },
+      onStage: (_creationId, stage, data) =>
+        creationBreadcrumb(stage, data?.errorKind as string | undefined),
+    });
+  }, [
+    beginCreationJob,
+    cancelCreationJob,
+    retryCreationJob,
+    discardCreationJob,
+    generateAudioUploadUrl,
+    importCommittedTake,
+    subscribeToJob,
+    loadReminders,
+    loadHistory,
+    handleOpenRecording,
+  ]);
+
+  // Once per launch: a take that outlived the last one finds its way home
+  // (spec §2.5). The queue holds until the wiring above lands, so the order of
+  // these two effects is not load-bearing — but it is the honest one.
+  useEffect(() => {
+    enqueueAllPendingTakes();
+  }, []);
+
+  // Every open subscription is dropped with the screen.
+  useEffect(() => {
+    const watches = watchesRef.current;
+    return () => {
+      for (const handle of watches.values()) handle?.dispose();
+      watches.clear();
+    };
+  }, []);
 
   const handleReminderPress = useCallback(
     (reminder: Reminder) => {
@@ -1226,7 +1694,23 @@ export default function HomeScreen() {
             maxToRenderPerBatch={12}
             windowSize={7}
             updateCellsBatchingPeriod={16}
-            ListHeaderComponent={<OverdueSection items={overdueItems} />}
+            ListHeaderComponent={
+              <>
+                {/* Takes still being made sit above everything, in the order
+                    they were recorded (spec §2.3). */}
+                {pendingTakes.map((take) => (
+                  <PendingTakeCard
+                    key={take.creationId}
+                    take={take}
+                    limit={freeLimit}
+                    onCancel={onPendingTakeCancel}
+                    onRetry={onPendingTakeRetry}
+                    onDiscard={onPendingTakeDiscard}
+                  />
+                ))}
+                <OverdueSection items={overdueItems} />
+              </>
+            }
             ListFooterComponent={
               <CompletedSection items={todayCompletedItems} initiallyCollapsed />
             }
@@ -1289,7 +1773,6 @@ export default function HomeScreen() {
         onClose={handleCloseRecording}
         onRecordingStart={handleRecordingStart}
         onRecordingComplete={handleRecordingComplete}
-        onCancelProcessing={handleCancelProcessing}
       />
 
       {/* Typed composer — same parse, same sheet, no microphone (OLD-101) */}

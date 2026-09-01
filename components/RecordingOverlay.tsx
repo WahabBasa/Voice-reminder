@@ -63,8 +63,10 @@ interface RecordingOverlayProps {
   // Used to prefetch the Convex upload URL so the upload can begin the instant
   // the recording stops (OLD-106).
   onRecordingStart?: (traceId: string) => void;
-  onRecordingComplete: (audioUri: string, traceId: string) => void;
-  onCancelProcessing?: () => void;
+  // `stopTapAt` is when the user's finger left the button, which is where the
+  // creation summary's clock starts (spec §3.3). The caller cannot observe it
+  // any other way — by the time this fires, the mic teardown is already done.
+  onRecordingComplete: (audioUri: string, traceId: string, stopTapAt?: number) => void;
 }
 
 export default function RecordingOverlay({
@@ -78,7 +80,6 @@ export default function RecordingOverlay({
   onClose,
   onRecordingStart,
   onRecordingComplete,
-  onCancelProcessing,
 }: RecordingOverlayProps) {
   const { height: windowHeight } = useWindowDimensions();
   const openHeight = Math.round(windowHeight * 0.48);
@@ -252,7 +253,7 @@ export default function RecordingOverlay({
       if (uri) {
         setState("processing");
         perfLog(traceId, "device.recording", "uri_ready");
-        onRecordingComplete(uri, traceId);
+        onRecordingComplete(uri, traceId, tStopTap);
       } else {
         perfLog(traceId, "device.recording", "stop_no_uri");
         setState("idle");
@@ -305,11 +306,6 @@ export default function RecordingOverlay({
 
   const handleDelete = () => {
     discardAndDismiss();
-  };
-
-  const handleCancelProcessing = () => {
-    onCancelProcessing?.();
-    dismissSheet();
   };
 
   const handleDragRelease = (velocity: number) => {
@@ -472,7 +468,7 @@ export default function RecordingOverlay({
                     state === "processing" && styles.primaryButtonCancel,
                     state !== "processing" && state === "idle" && !canStartRecording && styles.primaryButtonDisabled,
                   ]}
-                  onPress={state === "processing" ? handleCancelProcessing : handlePrimaryPress}
+                  onPress={state === "processing" ? () => dismissSheet() : handlePrimaryPress}
                   activeOpacity={0.85}
                 >
                   <AppIcon

@@ -313,4 +313,23 @@ describe("addReminder gate (the store's seam)", () => {
     await useReminderStore.getState().addReminder(sixth);
     expect(useReminderStore.getState().reminders).toHaveLength(LIMIT + 1);
   });
+
+  // The gate is a read followed by a write, with an await in between. Two
+  // writers used to be able to sit in that window together and each conclude
+  // there was room — the creation lock (spec §2.4, C9) closes it.
+  it("cannot let two concurrent adds spend the same last free slot", async () => {
+    seedOverdueOneOffs("completed"); // nothing is owed, so the cap starts empty
+    for (let i = 0; i < LIMIT - 1; i++) {
+      await useReminderStore.getState().addReminder({ ...sixth, title: `Filler ${i}` });
+    }
+    expect(getActiveReminderCount()).toBe(LIMIT - 1);
+
+    const settled = await Promise.allSettled([
+      useReminderStore.getState().addReminder({ ...sixth, title: "Racer A" }),
+      useReminderStore.getState().addReminder({ ...sixth, title: "Racer B" }),
+    ]);
+
+    expect(settled.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect(getActiveReminderCount()).toBe(LIMIT);
+  });
 });

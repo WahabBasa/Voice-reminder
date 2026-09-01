@@ -23,6 +23,7 @@ import { AlarmOverlay, AlarmOverlayProps } from "../components/AlarmOverlay";
 import { buildTraceId } from "../lib/vrLog";
 import { convex } from "../lib/convexClient";
 import { hydrateReminderAudio } from "../lib/audioHydration";
+import { startForegroundReconcile } from "../lib/takeReconcile";
 import { getDeviceId } from "../lib/deviceId";
 import ErrorBoundary from "../components/ErrorBoundary";
 import PermissionPrompt from "../components/PermissionPrompt";
@@ -90,6 +91,12 @@ function StartupTasks() {
       task.cancel();
     };
   }, [loadReminders, loadHistory]);
+
+  // Every return to the foreground drains the pending-take outbox (spec §2.5).
+  // Cross-platform, unlike the AlarmKit drain below: a take can be stranded by
+  // a kill, a lost network or a job that outlived its subscription on either OS,
+  // and the foreground is the moment the user is looking at the card.
+  useEffect(() => startForegroundReconcile(), []);
 
   // iOS 26 AlarmKit: Done/Later run inside App Intents with the app closed, so
   // their effects only reach the store when we drain the native event log —

@@ -24,6 +24,25 @@ const MAX_LOG_BODY_CHARS = 512;
 // key is a placeholder — dozens of identical lines per session.
 const LOG_NOISE_PREFIXES = ["[RevenueCat]"];
 
+/**
+ * One creation-pipeline stage transition, as a breadcrumb (spec §3.3).
+ *
+ * Content-free by construction: the stage name and, at most, an `errorKind`
+ * from the fixed set the pending card knows about. No transcript, no reminder
+ * title, no URI, no storage id — the creation path is the loudest carrier of
+ * user content in the app, and this is the one channel that survives to
+ * production.
+ */
+export function creationBreadcrumb(stage: string, errorKind?: string): void {
+  Sentry.addBreadcrumb({
+    category: "vr.creation",
+    type: "info",
+    level: "info",
+    message: stage,
+    ...(errorKind ? { data: { errorKind } } : {}),
+  });
+}
+
 export function initSentry(): void {
   const dsn = Platform.OS === "ios" ? SENTRY_DSN_IOS : SENTRY_DSN_ANDROID;
   if (!dsn) return;

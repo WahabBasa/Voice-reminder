@@ -154,6 +154,205 @@ describe("perf stage summary", () => {
   });
 });
 
+/**
+ * The creation-job summary (spec §3.3).
+ *
+ * The job pipeline has no single trace id: a take outlives the screen that
+ * started it and can be finished by a reconciliation pass that never saw the
+ * microphone. Its `creationId` is the only key that spans all of that, so the
+ * summary hangs off that instead — and the legacy alias line is emitted
+ * alongside it so old device logs and new ones can be read against each other
+ * through the rollout.
+ */
+describe("creation summary", () => {
+  let logSpy: jest.SpyInstance;
+  let perf: typeof import("../../lib/perf");
+
+  beforeEach(() => {
+    jest.resetModules();
+    process.env.EXPO_PUBLIC_VR_PERF_LOGS = "1";
+    logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    perf = require("../../lib/perf");
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    delete process.env.EXPO_PUBLIC_VR_PERF_LOGS;
+  });
+
+  function lines(prefix: string): string[] {
+    return logSpy.mock.calls.map((c) => String(c[0])).filter((line) => line.startsWith(prefix));
+  }
+
+  /** One take, end to end, with a controllable clock. */
+  function runTake(creationId: string, advance: (ms: number) => void, stopTapAt?: number) {
+    perf.markCreation(creationId, "stopTap", stopTapAt);
+    advance(120);
+    perf.markCreation(creationId, "stopRecordingDone");
+    advance(80);
+    perf.markCreation(creationId, "cardVisible");
+    perf.markCreation(creationId, "uploadStart");
+    advance(400);
+    perf.markCreation(creationId, "uploadDone");
+    perf.markCreation(creationId, "beginCalled");
+    advance(1500);
+    perf.markCreation(creationId, "transcriptAt");
+    advance(500);
+    perf.markCreation(creationId, "committedAt");
+    perf.markCreation(creationId, "importStart");
+    advance(30);
+    perf.markCreation(creationId, "importDone");
+    advance(70);
+    perf.markCreation(creationId, "armedAt");
+  }
+
+  it("emits exactly one summary per take, at armedAt, measured from stop-tap", () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+    runTake("take_a", (ms) => {
+      now += ms;
+    });
+
+    const summaries = lines("[VR CREATION SUMMARY]");
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toContain("cardVisible=200ms");
+    expect(summaries[0]).toContain("transcriptAt=2100ms");
+    expect(summaries[0]).toContain("committedAt=2600ms");
+    expect(summaries[0]).toContain("armedAt=2700ms");
+    expect(summaries[0]).toContain("creation=take_a");
+  });
+
+  it("emits the legacy alias line alongside it, mapped exactly as the spec says", () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+    runTake("take_b", (ms) => {
+      now += ms;
+    });
+
+    const legacy = lines("[VR PERF SUMMARY]");
+    expect(legacy).toHaveLength(1);
+    // audioStop = stopTap → stopRecordingDone
+    expect(legacy[0]).toContain("audioStop=120ms");
+    // upload = uploadStart → uploadDone
+    expect(legacy[0]).toContain("upload=400ms");
+    // convexAction = begin-call → committed-observed
+    expect(legacy[0]).toContain("convexAction=2000ms");
+    // cardWrite = the import itself (2.4 step 3)
+    expect(legacy[0]).toContain("cardWrite=30ms");
+    // total = stopTap → committed
+    expect(legacy[0]).toContain("total=2600ms");
+    expect(legacy[0]).toContain("path=job");
+    expect(legacy[0]).toContain("trace=take_b");
+  });
+
+  it("takes the stop-tap timestamp from the overlay, which is the only place it exists", () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+
+    perf.markCreation("take_c", "stopTap", now - 300);
+    perf.markCreation("take_c", "armedAt");
+
+    expect(lines("[VR CREATION SUMMARY]")[0]).toContain("armedAt=300ms");
+  });
+
+  it("keeps the first mark — a replayed stage cannot rewrite history", () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+
+    perf.markCreation("take_d", "stopTap");
+    now += 500;
+    perf.markCreation("take_d", "stopTap");
+    now += 100;
+    perf.markCreation("take_d", "armedAt");
+
+    expect(lines("[VR CREATION SUMMARY]")[0]).toContain("armedAt=600ms");
+  });
+
+  it("omits stages it never saw instead of printing NaN", () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+
+    perf.markCreation("take_e", "stopTap");
+    now += 40;
+    perf.markCreation("take_e", "armedAt");
+
+    const summary = lines("[VR CREATION SUMMARY]")[0];
+    expect(summary).not.toContain("NaN");
+    expect(summary).not.toContain("transcriptAt=");
+    expect(summary).toContain("armedAt=40ms");
+    expect(lines("[VR PERF SUMMARY]")[0]).toContain("total=?");
+  });
+
+  it("forgets a take that will never arm", () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+
+    perf.markCreation("take_f", "stopTap");
+    perf.dropCreationRun("take_f");
+    now += 50;
+    perf.markCreation("take_f", "armedAt");
+
+    // The run restarted from armedAt alone: no stopTap, so no spans at all.
+    const summary = lines("[VR CREATION SUMMARY]")[0];
+    expect(summary).toContain("creation=take_f");
+    expect(summary).not.toContain("armedAt=");
+  });
+
+  it("keeps concurrent takes apart", () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+
+    perf.markCreation("run_1", "stopTap");
+    perf.markCreation("run_2", "stopTap");
+    now += 50;
+    perf.markCreation("run_1", "armedAt");
+    now += 250;
+    perf.markCreation("run_2", "armedAt");
+
+    const summaries = lines("[VR CREATION SUMMARY]");
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0]).toContain("armedAt=50ms");
+    expect(summaries[1]).toContain("armedAt=300ms");
+  });
+
+  it("does not grow unboundedly when takes never arm", () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+
+    for (let i = 0; i < 200; i++) {
+      perf.markCreation(`abandoned_${i}`, "stopTap");
+      now += 1;
+    }
+    perf.markCreation("take_g", "stopTap");
+    now += 75;
+    perf.markCreation("take_g", "armedAt");
+
+    const summaries = lines("[VR CREATION SUMMARY]");
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toContain("armedAt=75ms");
+  });
+
+  it("logs the server's own timings as convex_perf, under the creationId", () => {
+    perf.logCreationServerPerf("take_h", { whisperMs: 900, parseMs: 700, totalMs: 2400 });
+
+    const line = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => l.includes("convex_perf"));
+    expect(line).toBeDefined();
+    expect(line).toContain('"traceId":"take_h"');
+    expect(line).toContain('"whisperMs":900');
+  });
+
+  it("stays silent when perf logging is disabled", () => {
+    process.env.EXPO_PUBLIC_VR_PERF_LOGS = "0";
+    jest.resetModules();
+    const quiet = require("../../lib/perf");
+    quiet.markCreation("take_i", "stopTap");
+    quiet.markCreation("take_i", "armedAt");
+    expect(lines("[VR CREATION SUMMARY]")).toHaveLength(0);
+  });
+});
+
 describe("stall monitor gating", () => {
   afterEach(() => {
     jest.resetModules();

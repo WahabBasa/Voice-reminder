@@ -427,6 +427,37 @@ describe("CRUD operations", () => {
     expect(useReminderStore.getState().reminders).toHaveLength(0);
   });
 
+  // The creation lock (spec §2.4, C9). Nothing about a single add changes; what
+  // changes is that two of them can no longer read the same store, both decide
+  // to append, and have the second write throw the first one away.
+  it("addReminder serializes concurrent writers instead of losing one", async () => {
+    const results = await Promise.all([
+      useReminderStore.getState().addReminder({
+        title: "First",
+        description: "",
+        time: "09:00",
+        frequency: "daily",
+        days: [],
+      }),
+      useReminderStore.getState().addReminder({
+        title: "Second",
+        description: "",
+        time: "10:00",
+        frequency: "daily",
+        days: [],
+      }),
+    ]);
+
+    expect(results.map((r) => r.title)).toEqual(["First", "Second"]);
+    expect(useReminderStore.getState().reminders.map((r) => r.title)).toEqual([
+      "First",
+      "Second",
+    ]);
+
+    const stored = JSON.parse((await AsyncStorage.getItem("@reminders")) || "[]");
+    expect(stored.map((r: any) => r.title)).toEqual(["First", "Second"]);
+  });
+
   it("getReminderById returns match or undefined", () => {
     useReminderStore.setState({
       reminders: [

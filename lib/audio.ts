@@ -1,6 +1,7 @@
 import { Audio } from "expo-av";
 import * as Sentry from "@sentry/react-native";
 import { perfLog } from "./perf";
+import { RECORDING_PRESET } from "./recordingPreset";
 
 export type PermissionStatus = "granted" | "denied" | "undetermined";
 
@@ -130,7 +131,7 @@ export async function startRecording(): Promise<void> {
     });
 
     const { recording: newRecording } = await Audio.Recording.createAsync(
-      { ...Audio.RecordingOptionsPresets.HIGH_QUALITY, isMeteringEnabled: true },
+      { ...RECORDING_PRESET, isMeteringEnabled: true },
       (status) => {
         if (status.isRecording && typeof status.metering === "number") {
           meteringListener?.(status.metering);
