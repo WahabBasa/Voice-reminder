@@ -20,4 +20,23 @@ crons.interval(
   {}
 );
 
+// Creation jobs that lost their worker, and the ones nobody needs any more.
+//
+// Its own entry rather than a second call inside keepWarm (C20): keepWarm is a
+// deliberate no-op whose whole value is that it does nothing but be invoked, and
+// hanging database work off it would make a failing sweep look like a cold
+// container. This one runs in the DEFAULT runtime, so it also does not care
+// whether the Node container is up.
+//
+// Five minutes matches the staleness window it enforces (convex/creationJobs.ts
+// STALE_AFTER_MS), so a job whose worker died is failed roughly within one
+// window of going quiet — long enough that a slow Whisper call is never mistaken
+// for a dead one.
+crons.interval(
+  "sweep stale creation jobs",
+  { minutes: 5 },
+  internal.creationJobs.sweepStale,
+  {}
+);
+
 export default crons;

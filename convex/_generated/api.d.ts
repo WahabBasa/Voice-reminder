@@ -9,6 +9,9 @@
  */
 
 import type * as actions from "../actions.js";
+import type * as creationJobActions from "../creationJobActions.js";
+import type * as creationJobs from "../creationJobs.js";
+import type * as creationValidate from "../creationValidate.js";
 import type * as crons from "../crons.js";
 import type * as helpers from "../helpers.js";
 import type * as reminders from "../reminders.js";
@@ -22,6 +25,9 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   actions: typeof actions;
+  creationJobActions: typeof creationJobActions;
+  creationJobs: typeof creationJobs;
+  creationValidate: typeof creationValidate;
   crons: typeof crons;
   helpers: typeof helpers;
   reminders: typeof reminders;

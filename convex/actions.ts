@@ -170,6 +170,19 @@ type ReminderPlan = {
   urgency: Urgency;
   persistent: boolean;
   parseWarnings: string[];
+  /**
+   * Did the parse actually NAME this reminder's day and clock time, or were
+   * they filled in from the device's own clock?
+   *
+   * Nothing on the legacy paths reads these — they are carried for the creation
+   * job's strict gate (convex/creationValidate.ts), which cannot tell the two
+   * apart by the time it sees the finished plan and needs to: "today at three",
+   * said at half past, is a one-off the user asked for and the app has an
+   * Overdue group for, while a past instant that fell out of a missing date or
+   * a missing time is a parse that went wrong.
+   */
+  explicitDate: boolean;
+  explicitTime: boolean;
 };
 
 /**
@@ -268,6 +281,16 @@ export function buildReminderPlan(
     typeof parsed.time === "string" && parsed.time
       ? (parsed.time as string)
       : getCurrentTimeHM(context.currentTime);
+
+  // Provenance of the wall clock, for the creation job's gate (see ReminderPlan).
+  // A day survives here only when the model named one; a time counts as named
+  // whether it arrived as `time` or inside the `times` list, because the grid's
+  // first ring can come from either.
+  const explicitDate = date !== undefined;
+  const explicitTime =
+    (typeof parsed.time === "string" && parsed.time !== "") ||
+    (Array.isArray(parsed.times) &&
+      parsed.times.some((entry) => typeof entry === "string" && entry !== ""));
 
   // Parse warnings for normalization issues
   let parseWarnings: string[] = [];
@@ -426,6 +449,8 @@ export function buildReminderPlan(
     urgency,
     persistent,
     parseWarnings,
+    explicitDate,
+    explicitTime,
   };
 }
 
