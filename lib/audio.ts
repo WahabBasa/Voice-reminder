@@ -1,7 +1,7 @@
 import { Audio } from "expo-av";
 import * as Sentry from "@sentry/react-native";
 import { perfLog } from "./perf";
-import { RECORDING_PRESET } from "./recordingPreset";
+import { RECORDING_PRESET, RECORDING_FALLBACK_PRESET } from "./recordingPreset";
 
 export type PermissionStatus = "granted" | "denied" | "undetermined";
 
@@ -130,16 +130,37 @@ export async function startRecording(): Promise<void> {
       playsInSilentModeIOS: true,
     });
 
-    const { recording: newRecording } = await Audio.Recording.createAsync(
-      { ...RECORDING_PRESET, isMeteringEnabled: true },
-      (status) => {
-        if (status.isRecording && typeof status.metering === "number") {
-          meteringListener?.(status.metering);
-        }
-      },
-      80
-    );
-    recording = newRecording;
+    const onStatusUpdate = (status: Audio.RecordingStatus) => {
+      if (status.isRecording && typeof status.metering === "number") {
+        meteringListener?.(status.metering);
+      }
+    };
+    const createRecording = (preset: Audio.RecordingOptions) =>
+      Audio.Recording.createAsync(
+        { ...preset, isMeteringEnabled: true },
+        onStatusUpdate,
+        80
+      );
+
+    let result;
+    try {
+      result = await createRecording(RECORDING_PRESET);
+    } catch (e: any) {
+      const data = {
+        preset: "RECORDING_PRESET",
+        code: e?.code ?? null,
+        message: e?.message ?? String(e),
+      };
+      Sentry.addBreadcrumb({
+        category: "device.recording",
+        message: "Recording preset failed; retrying HIGH_QUALITY",
+        level: "warning",
+        data,
+      });
+      perfLog("recording", "device.recording", "preset_failed", data);
+      result = await createRecording(RECORDING_FALLBACK_PRESET);
+    }
+    recording = result.recording;
   } finally {
     isRecordingPreparing = false;
   }

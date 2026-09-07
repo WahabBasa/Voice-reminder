@@ -19,7 +19,7 @@ jest.mock("expo-av", () => ({
 }));
 
 import { Audio } from "expo-av";
-import { RECORDING_PRESET } from "../../lib/recordingPreset";
+import { RECORDING_PRESET, RECORDING_FALLBACK_PRESET } from "../../lib/recordingPreset";
 
 describe("RECORDING_PRESET", () => {
   it("captures android as 16kHz mono AAC in an .m4a at 64kbps", () => {
@@ -33,15 +33,19 @@ describe("RECORDING_PRESET", () => {
     });
   });
 
-  it("captures ios as 16kHz mono MPEG4-AAC in an .m4a at 64kbps, HIGH quality", () => {
+  it("captures ios as 16kHz mono MPEG4-AAC in an .m4a at 32kbps, HIGH quality", () => {
     expect(RECORDING_PRESET.ios).toEqual({
       extension: ".m4a",
       outputFormat: "aac ", // IOSOutputFormat.MPEG4AAC
       audioQuality: 0x60, // IOSAudioQuality.HIGH
       sampleRate: 16000,
       numberOfChannels: 1,
-      bitRate: 64000,
+      bitRate: 32000,
     });
+  });
+
+  it("exports HIGH_QUALITY unchanged as the fallback preset", () => {
+    expect(RECORDING_FALLBACK_PRESET).toBe(Audio.RecordingOptionsPresets.HIGH_QUALITY);
   });
 
   it("keeps the web values it inherited from HIGH_QUALITY", () => {

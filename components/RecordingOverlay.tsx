@@ -21,6 +21,7 @@ import {
 } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useEffect, useRef } from "react";
+import * as Sentry from "@sentry/react-native";
 import { colors, scaleFontSize } from "../lib/theme";
 import AppIcon from "./AppIcon";
 import VoiceMeter from "./VoiceMeter";
@@ -89,6 +90,7 @@ export default function RecordingOverlay({
   const [state, setState] = useState<RecordingState>("idle");
   const [duration, setDuration] = useState(0);
   const [permissionDenied, setPermissionDenied] = useState(false);
+  const [startFailed, setStartFailed] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const traceIdRef = useRef<string | null>(null);
 
@@ -135,6 +137,7 @@ export default function RecordingOverlay({
   useEffect(() => {
     if (!visible) {
       setState("idle");
+      setStartFailed(false);
       setDuration(0);
       traceIdRef.current = null;
       if (timerRef.current) {
@@ -263,33 +266,42 @@ export default function RecordingOverlay({
       traceIdRef.current = traceId;
       perfLog(traceId, "device.recording", "start_tap");
 
-      const tPerm = Date.now();
-      const status = await requestMicrophonePermission();
-      perfLog(traceId, "device.recording", "micPermission_done", {
-        ms: Date.now() - tPerm,
-        status,
-      });
-      if (status !== "granted") {
-        setPermissionDenied(true);
-        return;
+      setStartFailed(false);
+      try {
+        const tPerm = Date.now();
+        const status = await requestMicrophonePermission();
+        perfLog(traceId, "device.recording", "micPermission_done", {
+          ms: Date.now() - tPerm,
+          status,
+        });
+        if (status !== "granted") {
+          setPermissionDenied(true);
+          return;
+        }
+        setPermissionDenied(false);
+
+        // Warm the upload path while the mic is still coming up (OLD-106). The
+        // Convex upload URL is a round trip that used to be spent *after* the
+        // user stopped talking, in the dead time between the mic releasing and
+        // the first byte going out. Fired here it overlaps recording entirely,
+        // and the owner treats it as optional — if it fails, the stop path just
+        // fetches one the old way.
+        onRecordingStart?.(traceId);
+
+        const tStart = Date.now();
+        await startRecording();
+        perfLog(traceId, "device.recording", "startRecording_done", {
+          ms: Date.now() - tStart,
+        });
+        setState("recording");
+        startTimers();
+      } catch (error) {
+        Sentry.captureException(error);
+        setStartFailed(true);
+        setState("idle");
+        // Keep auto-start attempted to avoid a retry loop. The primary button
+        // retries from idle independently of hasAutoStarted.
       }
-      setPermissionDenied(false);
-
-      // Warm the upload path while the mic is still coming up (OLD-106). The
-      // Convex upload URL is a round trip that used to be spent *after* the
-      // user stopped talking, in the dead time between the mic releasing and
-      // the first byte going out. Fired here it overlaps recording entirely,
-      // and the owner treats it as optional — if it fails, the stop path just
-      // fetches one the old way.
-      onRecordingStart?.(traceId);
-
-      const tStart = Date.now();
-      await startRecording();
-      perfLog(traceId, "device.recording", "startRecording_done", {
-        ms: Date.now() - tStart,
-      });
-      setState("recording");
-      startTimers();
     }
   };
 
@@ -351,6 +363,7 @@ export default function RecordingOverlay({
     });
 
   const getStatusText = () => {
+    if (startFailed) return "Couldn't start the microphone. Tap to try again.";
     if (permissionDenied) return "Microphone access required";
     if (state === "processing") return "Creating your reminder...";
     if (state === "paused") return "Paused";
