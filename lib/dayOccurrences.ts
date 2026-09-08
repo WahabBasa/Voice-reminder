@@ -209,31 +209,3 @@ export function isCompletedOnDay(
   }
   return false;
 }
-
-// ---------- Activity dots ----------
-
-export const MAX_ACTIVITY_DOTS = 3;
-
-/** Number of activity dots for a day (capped at MAX_ACTIVITY_DOTS). */
-export function activityDotCount(reminders: Reminder[], dateISO: string): number {
-  let count = 0;
-  for (const reminder of reminders) {
-    if (occursOnDay(reminder, dateISO)) {
-      count++;
-      if (count >= MAX_ACTIVITY_DOTS) return MAX_ACTIVITY_DOTS;
-    }
-  }
-  return count;
-}
-
-/** Dot counts for a batch of days, keyed by ISO date. */
-export function activityDotCounts(
-  reminders: Reminder[],
-  dateISOs: string[]
-): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const dateISO of dateISOs) {
-    counts[dateISO] = activityDotCount(reminders, dateISO);
-  }
-  return counts;
-}

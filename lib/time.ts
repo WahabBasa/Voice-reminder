@@ -513,3 +513,13 @@ export function formatNextTrigger(timestamp: number): string {
     return `${dayName} at ${timeStr}`;
   }
 }
+
+export function formatNextIn(targetMs: number, nowMs: number): string {
+  const diffMs = Math.max(0, targetMs - nowMs);
+  const minutes = Math.max(1, Math.ceil(diffMs / 60000));
+  if (minutes < 60) return `Next in ${minutes} min`;
+  const hours = Math.ceil(minutes / 60);
+  if (diffMs < 86_400_000) return `Next in ${hours} hour${hours !== 1 ? "s" : ""}`;
+  const days = Math.ceil(hours / 24);
+  return `Next in ${days} day${days !== 1 ? "s" : ""}`;
+}

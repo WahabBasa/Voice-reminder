@@ -15,6 +15,9 @@ export interface ReminderListItemProps {
   emoji?: string;
   chipColor: string;
   subtitle: string;
+  showCompletion?: boolean;
+  detail?: string;
+  overdueDot?: boolean;
   completed?: boolean;
   missed?: boolean;
   /** Owed from a ring that already passed — red subtitle, red ring, still tickable. */
@@ -43,6 +46,9 @@ export default function ReminderListItem({
   emoji,
   chipColor,
   subtitle,
+  showCompletion = true,
+  detail,
+  overdueDot = false,
   completed = false,
   missed = false,
   overdue = false,
@@ -107,16 +113,19 @@ export default function ReminderListItem({
             </View>
 
             <View style={styles.infoContainer}>
-              <Text
-                style={[
-                  styles.title,
-                  completed && styles.titleCompleted,
-                  missed && styles.titleMissed,
-                ]}
-                numberOfLines={1}
-              >
-                {title}
-              </Text>
+              <View style={styles.titleRow}>
+                {overdueDot && <View testID="overdue-dot" style={styles.overdueDot} />}
+                <Text
+                  style={[
+                    styles.title,
+                    completed && styles.titleCompleted,
+                    missed && styles.titleMissed,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {title}
+                </Text>
+              </View>
               <Text
                 style={[
                   styles.subtitle,
@@ -127,9 +136,11 @@ export default function ReminderListItem({
               >
                 {subtitle}
               </Text>
+              {detail ? <Text style={styles.subtitle} numberOfLines={1}>{detail}</Text> : null}
             </View>
 
-            <Pressable
+            {showCompletion && (
+              <Pressable
               onPress={(e) => {
                 e.stopPropagation();
                 onToggleComplete?.();
@@ -148,7 +159,8 @@ export default function ReminderListItem({
               ) : (
                 <View style={[styles.circle, overdue && styles.circleOverdue]} />
               )}
-            </Pressable>
+              </Pressable>
+            )}
           </Pressable>
         </Animated.View>
       </GestureDetector>
@@ -207,7 +219,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   // Serif card title, per the Tiimo reference (weight baked into the face).
+  titleRow: { flexDirection: "row", alignItems: "center" },
+  overdueDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.statusOverdue, marginRight: 6 },
   title: {
+    flexShrink: 1,
     fontFamily: FONT_DISPLAY,
     fontSize: 17,
     color: colors.textHeading,

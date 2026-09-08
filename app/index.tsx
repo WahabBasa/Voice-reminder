@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  AppState,
   FlatList,
   InteractionManager,
   Keyboard,
@@ -48,8 +49,7 @@ import SwipePager from "../components/SwipePager";
 import AppIcon from "../components/AppIcon";
 import ReminderListItem, { chipColorForId } from "../components/ReminderListItem";
 import CompletedSection from "../components/CompletedSection";
-import OverdueSection from "../components/OverdueSection";
-import DaysPage, { subtitleFor } from "../components/days/DaysPage";
+import DaysPage from "../components/days/DaysPage";
 import BottomBar, { BottomBarTab } from "../components/BottomBar";
 import { SettingsContent } from "./settings";
 import {
@@ -98,7 +98,8 @@ import PendingTakeCard, { usePendingTakes } from "../components/PendingTakeCard"
 import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, todayISO } from "../lib/dayOccurrences";
-import { groupTodayReminders, overdueSubtitle } from "../lib/todayMembership";
+import { activeCards, nextLine, patternLine, type ActiveCard, type SnoozeSnapshot } from "../lib/remindersMembership";
+import { getSnoozeUntil, refreshSnoozeWindows } from "../lib/alarmKit";
 import { formatClockAt } from "../lib/time";
 import { checkProStatus, forceRefreshProStatus, getProStatusSnapshot } from "../lib/purchases";
 import { resolveImportProStatus } from "../lib/proStatusResolve";
@@ -109,7 +110,7 @@ import {
 } from "../lib/usageGate";
 import NetInfo from "@react-native-community/netinfo";
 
-// Pager pages: 0 = Today, 1 = Days, 2 = Settings (see docs/ui-redesign.md gesture map).
+// Pager pages: 0 = Reminders, 1 = Days, 2 = Settings (see docs/ui-redesign.md gesture map).
 const PAGE_TODAY = 0;
 const PAGE_DAYS = 1;
 const PAGE_SETTINGS = 2;
@@ -181,6 +182,15 @@ export default function HomeScreen() {
   const toast = useToast();
   const insets = useSafeAreaInsets();
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [snoozes, setSnoozes] = useState<SnoozeSnapshot>({});
+  const remindersListRef = useRef<FlatList<ActiveCard>>(null);
+  const cardsRef = useRef<ActiveCard[]>([]);
+  const [importedCardId, setImportedCardId] = useState<string | null>(null);
+  const scrollRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollRetriedRef = useRef(false);
+  useEffect(() => () => {
+    if (scrollRetryRef.current) clearTimeout(scrollRetryRef.current);
+  }, []);
 
   // Zustand store for centralized state
   const reminders = useReminderStore((state) => state.reminders);
@@ -292,12 +302,32 @@ export default function HomeScreen() {
     }, [loadAllData])
   );
 
-  // Keep "due in X minutes" labels fresh without requiring user interaction.
+  // Refresh the clock and native snooze mirror together on every wake/focus/tick.
   useFocusEffect(
     useCallback(() => {
-      setNowMs(Date.now());
-      const interval = setInterval(() => setNowMs(Date.now()), 30_000);
-      return () => clearInterval(interval);
+      let cancelled = false;
+      const refresh = async () => {
+        await refreshSnoozeWindows();
+        if (cancelled) return;
+        const now = Date.now();
+        const snapshot: Record<string, number> = {};
+        for (const reminder of useReminderStore.getState().reminders) {
+          const until = getSnoozeUntil(reminder.id, now);
+          if (until !== undefined) snapshot[reminder.id] = until;
+        }
+        setSnoozes(snapshot);
+        setNowMs(now);
+      };
+      void refresh();
+      const interval = setInterval(() => void refresh(), 30_000);
+      const subscription = AppState.addEventListener("change", (state) => {
+        if (state === "active") void refresh();
+      });
+      return () => {
+        cancelled = true;
+        clearInterval(interval);
+        subscription.remove();
+      };
     }, [])
   );
 
@@ -1215,6 +1245,7 @@ export default function HomeScreen() {
   const onTakeImported = useCallback(
     (take: PendingTake, created: Reminder[], summary: TakeImportSummary) => {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      if (created[0]) setImportedCardId(created[0].id);
 
       // Nothing survived a gate. The pending card has already gone, so this is
       // the ONLY surface left that can say why — without it a free user at the
@@ -1517,14 +1548,27 @@ export default function HomeScreen() {
     [removeConvexReminder]
   );
 
-  // ---- Today page membership (see docs/ui-redesign.md) ----
-  // Today's own date, plus everything still owed from a ring that already
-  // passed — a one-off stays owed until it is ticked (OLD-118).
   const todayDate = todayISO(nowMs);
+  const cards = useMemo(
+    () => activeCards(reminders, history, nowMs, snoozes),
+    [reminders, history, nowMs, snoozes]
+  );
 
-  const { overdue: overdueReminders, today: todayReminders } = useMemo(() => {
-    return groupTodayReminders(activeReminders, history, todayDate, nowMs);
-  }, [activeReminders, history, todayDate, nowMs]);
+  cardsRef.current = cards;
+
+  // Wait for the committed reminder to reach FlatList, then reveal it once.
+  useEffect(() => {
+    if (!importedCardId || page !== PAGE_TODAY) return;
+    const index = cards.findIndex((card) => card.reminder.id === importedCardId);
+    if (index < 0) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (scrollRetryRef.current) clearTimeout(scrollRetryRef.current);
+      scrollRetriedRef.current = false;
+      remindersListRef.current?.scrollToIndex({ index, viewPosition: 0.3 });
+      setImportedCardId(null);
+    });
+    return () => task.cancel();
+  }, [cards, importedCardId, page]);
 
   const remindersById = useMemo(() => {
     return new Map(reminders.map((reminder) => [reminder.id, reminder]));
@@ -1565,8 +1609,9 @@ export default function HomeScreen() {
     });
   }, [nowMs]);
 
-  const renderTodayItem = useCallback(
-    ({ item }: { item: Reminder }) => {
+  const renderActiveItem = useCallback(
+    ({ item: card }: { item: ActiveCard }) => {
+      const item = card.reminder;
       const isExiting = exitingIds.has(item.id);
 
       return (
@@ -1575,7 +1620,11 @@ export default function HomeScreen() {
           title={item.title}
           emoji={item.emoji}
           chipColor={chipColorForId(item.id)}
-          subtitle={subtitleFor(item, true, nowMs)}
+          subtitle={nextLine(card, nowMs)}
+          detail={patternLine(item, undefined, nowMs)}
+          showCompletion={card.showCompletion}
+          overdueDot={card.overdue}
+          overdue={card.overdue}
           completed={isExiting}
           onPress={() => {
             recordReminderPressIn(item.id);
@@ -1600,38 +1649,6 @@ export default function HomeScreen() {
     ]
   );
 
-  // Overdue rows carry the date they were meant to ring, not "9:00 am" — the
-  // whole point of the group is that the ring is behind the user, not ahead.
-  const overdueItems = useMemo(() => {
-    return overdueReminders.map((item) => ({
-      id: item.id,
-      title: item.title,
-      emoji: item.emoji,
-      chipColor: chipColorForId(item.id),
-      subtitle: overdueSubtitle(item, history, nowMs),
-      completed: exitingIds.has(item.id),
-      onPress: () => {
-        recordReminderPressIn(item.id);
-        handleReminderPress(item);
-      },
-      onToggleComplete: () => {
-        if (!exitingIds.has(item.id)) {
-          handleMarkDone(item.id, item.title);
-        }
-      },
-      onDelete: () => handleDelete(item),
-    }));
-  }, [
-    overdueReminders,
-    history,
-    nowMs,
-    exitingIds,
-    recordReminderPressIn,
-    handleReminderPress,
-    handleMarkDone,
-    handleDelete,
-  ]);
-
   const activeTab: BottomBarTab =
     page === PAGE_TODAY ? "today" : page === PAGE_DAYS ? "days" : "settings";
 
@@ -1647,12 +1664,12 @@ export default function HomeScreen() {
         // own day-flipper (gesture map in docs/ui-redesign.md).
         swipeEnabled={false}
       >
-        {/* ---- Page 0: Today ---- */}
+        {/* ---- Page 0: Reminders ---- */}
         <View style={styles.page}>
           <View style={styles.header}>
             <View style={styles.headerTop}>
               <View style={styles.headerTitleWrap}>
-                <Text style={styles.headerTitle}>Today</Text>
+                <Text style={styles.headerTitle}>Reminders</Text>
                 <Text style={styles.headerDate}>{dateLabel}</Text>
               </View>
               <View style={styles.headerActions}>
@@ -1680,14 +1697,26 @@ export default function HomeScreen() {
           </View>
 
           <FlatList
+            ref={remindersListRef}
+            onScrollToIndexFailed={({ index, averageItemLength }) => {
+              remindersListRef.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
+              if (scrollRetriedRef.current) return;
+              scrollRetriedRef.current = true;
+              const reminderId = cards[index]?.reminder.id;
+              scrollRetryRef.current = setTimeout(() => {
+                scrollRetryRef.current = null;
+                const retryIndex = cardsRef.current.findIndex((card) => card.reminder.id === reminderId);
+                if (retryIndex >= 0) remindersListRef.current?.scrollToIndex({ index: retryIndex, viewPosition: 0.3 });
+              }, 150);
+            }}
             style={styles.content}
             contentContainerStyle={[
               styles.contentContainer,
               { paddingBottom: 120 + insets.bottom },
             ]}
-            data={todayReminders}
-            keyExtractor={(item) => item.id}
-            renderItem={renderTodayItem}
+            data={cards}
+            keyExtractor={(card) => `reminder:${card.reminder.id}`}
+            renderItem={renderActiveItem}
             showsVerticalScrollIndicator={false}
             removeClippedSubviews={Platform.OS === "android"}
             initialNumToRender={12}
@@ -1708,13 +1737,12 @@ export default function HomeScreen() {
                     onDiscard={onPendingTakeDiscard}
                   />
                 ))}
-                <OverdueSection items={overdueItems} />
               </>
             }
             ListFooterComponent={
               <CompletedSection items={todayCompletedItems} initiallyCollapsed />
             }
-            // Deliberately no ListEmptyComponent: an empty Today stays silent,
+            // Deliberately no ListEmptyComponent: an empty Reminders list stays silent,
             // including while the store loads.
           />
         </View>

@@ -6,6 +6,7 @@ import ReminderListItem, { chipColorForId } from "../ReminderListItem";
 import { borderRadius, colors, scaleFontSize, spacing } from "../../lib/theme";
 import { FONT_DISPLAY } from "../../lib/fonts";
 import {
+  formatNextIn,
   formatClockAt,
   formatClockTime,
   formatIntervalDuration,
@@ -13,7 +14,6 @@ import {
 } from "../../lib/time";
 import { type Reminder, type ReminderHistory } from "../../lib/store";
 import {
-  activityDotCounts,
   addDaysISO,
   historyOnDay,
   isCompletedOnDay,
@@ -24,9 +24,10 @@ import {
 import { describeGridSubtitle, formatEveryMinutes } from "../schedule/scheduleDraft";
 import { getSnoozeUntil, refreshSnoozeWindows } from "../../lib/alarmKit";
 import { nextGridOccurrence } from "../../lib/schedule";
+import { overdueDays } from "../../lib/remindersMembership";
 import DayPager from "./DayPager";
 import MonthSheet from "./MonthSheet";
-import WeekStrip, { weekDatesFor } from "./WeekStrip";
+import WeekStrip from "./WeekStrip";
 
 const NOW_TICK_MS = 30_000;
 
@@ -43,16 +44,6 @@ interface DaysPageProps {
 
 function capitalizeDay(day: string): string {
   return day.charAt(0).toUpperCase() + day.slice(1, 3).toLowerCase();
-}
-
-function formatNextIn(targetMs: number, nowMs: number): string {
-  const diffMs = Math.max(0, targetMs - nowMs);
-  const minutes = Math.max(1, Math.ceil(diffMs / 60000));
-  if (minutes < 60) return `Next in ${minutes} min`;
-  const hours = Math.ceil(minutes / 60);
-  if (hours < 24) return `Next in ${hours} hour${hours !== 1 ? "s" : ""}`;
-  const days = Math.ceil(hours / 24);
-  return `Next in ${days} day${days !== 1 ? "s" : ""}`;
 }
 
 /**
@@ -168,9 +159,9 @@ export default function DaysPage({
     return map;
   }, [reminders]);
 
-  const weekDotCounts = useMemo(
-    () => activityDotCounts(reminders, weekDatesFor(selectedDate)),
-    [reminders, selectedDate]
+  const overdueDates = useMemo(
+    () => overdueDays(reminders, history, nowMs),
+    [reminders, history, nowMs]
   );
 
   const handleFlip = useCallback((delta: 1 | -1) => {
@@ -268,13 +259,14 @@ export default function DaysPage({
       <WeekStrip
         selectedDate={selectedDate}
         todayDate={today}
-        dotCounts={weekDotCounts}
+        overdueDates={overdueDates}
         onSelectDate={setSelectedDate}
       />
 
       <DayPager dateISO={selectedDate} onFlip={handleFlip} renderDay={renderDay} />
 
       <MonthSheet
+        overdueDates={overdueDates}
         visible={monthSheetVisible}
         selectedDate={selectedDate}
         todayDate={today}

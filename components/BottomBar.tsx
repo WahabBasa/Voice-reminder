@@ -13,10 +13,10 @@ type BottomBarProps = {
     onRecord?: () => void;
 };
 
-const TABS: { key: BottomBarTab; Icon: typeof List }[] = [
-    { key: "today", Icon: List },
-    { key: "days", Icon: Calendar },
-    { key: "settings", Icon: Settings },
+const TABS: { key: BottomBarTab; label: string; Icon: typeof List }[] = [
+    { key: "today", label: "Reminders", Icon: List },
+    { key: "days", label: "Days", Icon: Calendar },
+    { key: "settings", label: "Settings", Icon: Settings },
 ];
 
 export default function BottomBar({ activeTab, onTab, onRecord }: BottomBarProps) {
@@ -27,7 +27,7 @@ export default function BottomBar({ activeTab, onTab, onRecord }: BottomBarProps
             {/* Dock and mic travel as one centered group. */}
             <View style={styles.dockRow} pointerEvents="box-none">
                 <View style={styles.bar}>
-                    {TABS.map(({ key, Icon }) => {
+                    {TABS.map(({ key, label, Icon }) => {
                         const active = key === activeTab;
                         return (
                             <TouchableOpacity
@@ -36,6 +36,7 @@ export default function BottomBar({ activeTab, onTab, onRecord }: BottomBarProps
                                 onPress={() => onTab(key)}
                                 activeOpacity={0.7}
                                 accessibilityRole="tab"
+                                accessibilityLabel={label}
                                 accessibilityState={{ selected: active }}
                             >
                                 <Icon

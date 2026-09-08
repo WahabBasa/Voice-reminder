@@ -7,7 +7,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { colors, scaleFontSize, spacing } from "../../lib/theme";
 import { FONT_DISPLAY } from "../../lib/fonts";
-import { addDaysISO, parseISODate, MAX_ACTIVITY_DOTS } from "../../lib/dayOccurrences";
+import { addDaysISO, parseISODate } from "../../lib/dayOccurrences";
 
 const DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 const SLIDE_DISTANCE = 48;
@@ -28,15 +28,14 @@ export function weekDatesFor(dateISO: string): string[] {
 interface WeekStripProps {
   selectedDate: string;
   todayDate: string;
-  /** Activity-dot counts keyed by ISO date (already capped or not — capped here). */
-  dotCounts: Record<string, number>;
+  overdueDates: ReadonlySet<string>;
   onSelectDate: (dateISO: string) => void;
 }
 
 export default function WeekStrip({
   selectedDate,
   todayDate,
-  dotCounts,
+  overdueDates,
   onSelectDate,
 }: WeekStripProps) {
   const weekDates = useMemo(() => weekDatesFor(selectedDate), [selectedDate]);
@@ -63,7 +62,6 @@ export default function WeekStrip({
       {weekDates.map((dateISO, index) => {
         const isSelected = dateISO === selectedDate;
         const isToday = dateISO === todayDate;
-        const dots = Math.min(dotCounts[dateISO] ?? 0, MAX_ACTIVITY_DOTS);
         const dayNumber = parseISODate(dateISO).getDate();
 
         return (
@@ -85,12 +83,12 @@ export default function WeekStrip({
             >
               {dayNumber}
             </Text>
-            {/* Tiimo-style short bar under the selected day's number. */}
-            <View style={[styles.underline, !isSelected && styles.underlineHidden]} />
+            <View testID={isToday ? `today-mark:${dateISO}` : undefined}
+              style={[styles.todayMark, !isToday && styles.underlineHidden]} />
+            <View testID={isSelected ? `selected-mark:${dateISO}` : undefined}
+              style={[styles.underline, !isSelected && styles.underlineHidden]} />
             <View style={styles.dotRow}>
-              {Array.from({ length: dots }).map((_, dotIndex) => (
-                <View key={dotIndex} style={styles.dot} />
-              ))}
+              {overdueDates.has(dateISO) && <View testID={`overdue-dot:${dateISO}`} style={styles.dot} />}
             </View>
           </Pressable>
         );
@@ -133,9 +131,10 @@ const styles = StyleSheet.create({
   selectedText: {
     color: colors.textHeading,
   },
+  todayMark: { width: 14, height: 2, borderRadius: 1, marginTop: 3, backgroundColor: colors.accent },
   underline: {
     width: 14,
-    height: 3,
+    height: 4,
     borderRadius: 2,
     marginTop: 3,
     backgroundColor: colors.textHeading,
@@ -154,6 +153,6 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.textTertiary,
+    backgroundColor: colors.statusOverdue,
   },
 });

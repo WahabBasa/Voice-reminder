@@ -4,12 +4,13 @@ process.env.TZ = "UTC";
 module.exports = {
   preset: "jest-expo",
   setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
-  testMatch: ["**/__tests__/**/*.test.ts"],
+  testMatch: ["**/__tests__/**/*.test.ts?(x)"],
   collectCoverageFrom: [
     "lib/time.ts",
     "lib/schedule.ts",
     "lib/reminderActive.ts",
     "lib/todayMembership.ts",
+    "lib/remindersMembership.ts",
     "lib/usageGate.ts",
     "lib/proCardContent.ts",
     "lib/store.ts",
@@ -28,6 +29,7 @@ module.exports = {
     "lib/schedule.ts": { lines: 95, branches: 80 },
     "lib/reminderActive.ts": { lines: 95, branches: 80 },
     "lib/todayMembership.ts": { lines: 95, branches: 90 },
+    "lib/remindersMembership.ts": { lines: 95, branches: 90 },
     "lib/usageGate.ts": { lines: 90, branches: 100 },
     "lib/proCardContent.ts": { lines: 100, branches: 100 },
     "lib/store.ts": { lines: 65, branches: 60 },

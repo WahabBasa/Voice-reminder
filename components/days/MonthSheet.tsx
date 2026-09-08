@@ -11,6 +11,7 @@ interface MonthSheetProps {
   visible: boolean;
   selectedDate: string;
   todayDate: string;
+  overdueDates: ReadonlySet<string>;
   onSelect: (dateISO: string) => void;
   onClose: () => void;
 }
@@ -20,6 +21,7 @@ export default function MonthSheet({
   visible,
   selectedDate,
   todayDate,
+  overdueDates,
   onSelect,
   onClose,
 }: MonthSheetProps) {
@@ -118,7 +120,6 @@ export default function MonthSheet({
                   <View
                     style={[
                       styles.dayCircle,
-                      isToday && !isSelected && styles.todayRing,
                       isSelected && styles.selectedCircle,
                     ]}
                   >
@@ -131,6 +132,11 @@ export default function MonthSheet({
                     >
                       {parseISODate(dateISO).getDate()}
                     </Text>
+                  </View>
+                  <View style={[styles.todayMark, !isToday && styles.hiddenMark]} />
+                  <View style={[styles.selectedMark, !isSelected && styles.hiddenMark]} />
+                  <View style={styles.dotRow}>
+                    {overdueDates.has(dateISO) && <View style={styles.overdueDot} />}
                   </View>
                 </Pressable>
               );
@@ -210,12 +216,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   selectedCircle: {
-    backgroundColor: colors.textHeading,
+    backgroundColor: colors.surface,
   },
-  todayRing: {
-    borderWidth: 1.5,
-    borderColor: colors.accent,
-  },
+  todayMark: { width: 14, height: 2, borderRadius: 1, marginTop: 3, backgroundColor: colors.accent },
+  selectedMark: { width: 14, height: 4, borderRadius: 2, marginTop: 3, backgroundColor: colors.textHeading },
+  hiddenMark: { opacity: 0 },
+  dotRow: { height: 6, marginTop: spacing.xs, justifyContent: "center" },
+  overdueDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: colors.statusOverdue },
   dayText: {
     fontSize: scaleFontSize(15),
     fontWeight: "500",
@@ -225,6 +232,6 @@ const styles = StyleSheet.create({
     color: colors.accent,
   },
   selectedText: {
-    color: colors.card,
+    color: colors.textHeading,
   },
 });
