@@ -459,7 +459,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: "700",
+    fontWeight: "600",
     color: colors.textPrimary,
     marginBottom: 15,
   },
@@ -648,7 +648,7 @@ const styles = StyleSheet.create({
   saveButtonText: {
     color: "white",
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: "600",
   },
   cancelButton: {
     paddingVertical: 15,

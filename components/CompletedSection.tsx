@@ -51,7 +51,7 @@ export default function CompletedSection({
 
 const styles = StyleSheet.create({
   container: {
-    marginTop: spacing.md,
+    marginTop: 20,
   },
   headerPill: {
     flexDirection: "row",
@@ -62,19 +62,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     gap: spacing.xs,
-    marginBottom: spacing.sm,
+    marginBottom: 12,
   },
   headerPressed: {
     opacity: 0.85,
   },
   headerText: {
     fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 1,
+    fontWeight: "600",
+    lineHeight: 16,
+    letterSpacing: 0.7,
     color: colors.textSecondary,
   },
   list: {
-    marginTop: spacing.xs,
+    marginTop: 0,
   },
   chevronExpanded: {
     transform: [{ rotate: "180deg" }],

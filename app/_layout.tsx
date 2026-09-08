@@ -309,7 +309,7 @@ function AlarmOverlayFallback() {
 }
 
 function RootLayout() {
-  // Fraunces display font (JS-bundled asset, OTA-safe). Gate first render so
+  // Newsreader display font (JS-bundled asset, OTA-safe). Gate first render so
   // serif page titles never flash the system font.
   const fontsLoaded = useAppFonts();
   const [splashVisible, setSplashVisible] = useState(true);

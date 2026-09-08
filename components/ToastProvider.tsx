@@ -161,13 +161,13 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.textHeading,
-    fontWeight: "700",
+    fontWeight: "600",
     fontSize: 15,
   },
   message: {
     marginTop: 4,
     color: colors.textSecondary,
-    fontWeight: "500",
+    fontWeight: "400",
     fontSize: 13,
   },
 });

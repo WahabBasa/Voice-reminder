@@ -1,7 +1,7 @@
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
 import { scaleFontSize } from "../../lib/theme";
-import { FONT_DISPLAY, FONT_DISPLAY_REGULAR } from "../../lib/fonts";
+import { FONT_DISPLAY } from "../../lib/fonts";
 import { PAYWALL_COPY } from "../../lib/paywallContent";
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from "../../lib/legalLinks";
 import { PAYWALL_GUTTER, paywallColors, paywallWeight } from "./paywallTheme";
@@ -104,7 +104,8 @@ const styles = StyleSheet.create({
   headline: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(26),
-    lineHeight: scaleFontSize(34),
+    lineHeight: scaleFontSize(32),
+    letterSpacing: -0.2,
     color: paywallColors.ink,
     textAlign: "center",
   },
@@ -130,20 +131,21 @@ const styles = StyleSheet.create({
   restoreText: {
     fontSize: scaleFontSize(14),
     fontWeight: paywallWeight.semibold,
+    lineHeight: scaleFontSize(20),
     color: paywallColors.ink,
   },
   brandStatement: {
     marginTop: 18,
-    fontFamily: FONT_DISPLAY_REGULAR,
-    fontSize: scaleFontSize(15),
-    lineHeight: scaleFontSize(22),
+    fontSize: scaleFontSize(14),
+    lineHeight: scaleFontSize(20),
+    fontWeight: paywallWeight.regular,
     color: paywallColors.ink,
     textAlign: "center",
   },
   disclosure: {
     marginTop: 16,
-    fontSize: scaleFontSize(11),
-    lineHeight: scaleFontSize(16),
+    fontSize: scaleFontSize(12),
+    lineHeight: scaleFontSize(18),
     fontWeight: paywallWeight.regular,
     color: paywallColors.ink,
     textAlign: "center",
@@ -156,13 +158,15 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   linkText: {
-    fontSize: scaleFontSize(12),
+    fontSize: scaleFontSize(13),
     fontWeight: paywallWeight.semibold,
+    lineHeight: scaleFontSize(18),
     color: paywallColors.ink,
     textDecorationLine: "underline",
   },
   linkSeparator: {
-    fontSize: scaleFontSize(12),
+    fontSize: scaleFontSize(13),
+    lineHeight: scaleFontSize(18),
     color: paywallColors.ink,
   },
 });

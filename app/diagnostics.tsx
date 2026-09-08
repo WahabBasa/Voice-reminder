@@ -176,18 +176,21 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(24),
+    lineHeight: scaleFontSize(29),
+    letterSpacing: -0.1,
     color: colors.textHeading,
   },
   content: {
     paddingBottom: 40,
   },
   sectionLabel: {
-    fontSize: scaleFontSize(13),
+    fontSize: scaleFontSize(12),
     fontWeight: "600",
-    letterSpacing: 0.6,
+    lineHeight: scaleFontSize(16),
+    letterSpacing: 0.7,
     textTransform: "uppercase",
     color: colors.textTertiary,
-    marginBottom: 8,
+    marginBottom: 12,
     marginLeft: 4,
   },
   card: {
@@ -221,11 +224,13 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: scaleFontSize(16),
     fontWeight: "600",
+    lineHeight: scaleFontSize(21),
     color: colors.textPrimary,
   },
   statusText: {
     fontSize: scaleFontSize(14),
-    fontWeight: "600",
+    fontWeight: "500",
+    lineHeight: scaleFontSize(20),
     color: colors.textSecondary,
   },
   statusOk: {

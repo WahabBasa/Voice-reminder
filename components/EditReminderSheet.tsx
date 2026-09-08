@@ -44,7 +44,6 @@ import { DEFAULT_ALARM_SETTINGS } from "../lib/storage";
 import { CURRENT_SCHEMA_VERSION, useReminderStore, Reminder } from "../lib/store";
 import { checkCanUsePremiumSchedule, isPremiumSchedule } from "../lib/usageGate";
 import { borderRadius, chipColors, colors, scaleFontSize, shadows } from "../lib/theme";
-import { FONT_DISPLAY } from "../lib/fonts";
 
 // Tap-to-cycle options
 const PRE_REMINDER_VALUES = [0, 5, 10, 15, 30];
@@ -791,8 +790,8 @@ const styles = StyleSheet.create({
     },
     titleInput: {
         flex: 1,
-        fontFamily: FONT_DISPLAY,
         fontSize: scaleFontSize(20),
+        fontWeight: "600",
         color: colors.textHeading,
         paddingVertical: 12,
     },
@@ -811,7 +810,7 @@ const styles = StyleSheet.create({
     rowCard: {
         backgroundColor: colors.card,
         borderRadius: borderRadius.lg,
-        marginTop: 16,
+        marginTop: 20,
         paddingHorizontal: 16,
         ...shadows.card,
     },
@@ -821,7 +820,7 @@ const styles = StyleSheet.create({
         marginLeft: 36,
     },
     row: {
-        paddingVertical: 16,
+        paddingVertical: 18,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
@@ -833,15 +832,17 @@ const styles = StyleSheet.create({
     },
     rowLeftText: {
         flex: 1,
-        gap: 2,
+        gap: 4,
     },
     rowLabel: {
         fontSize: scaleFontSize(15),
         fontWeight: "500",
+        lineHeight: scaleFontSize(21),
         color: colors.textPrimary,
     },
     rowSubLabel: {
-        fontSize: scaleFontSize(12),
+        fontSize: scaleFontSize(13),
+        lineHeight: scaleFontSize(18),
         color: colors.textSecondary,
         marginLeft: 36,
     },
@@ -853,7 +854,8 @@ const styles = StyleSheet.create({
     },
     valueText: {
         fontSize: scaleFontSize(13),
-        fontWeight: "500",
+        fontWeight: "400",
+        lineHeight: scaleFontSize(18),
         color: colors.textSecondary,
     },
     // Voice note
@@ -895,7 +897,8 @@ const styles = StyleSheet.create({
     },
     doneButtonText: {
         fontSize: scaleFontSize(16),
-        fontWeight: "700",
+        fontWeight: "600",
+        lineHeight: scaleFontSize(21),
         color: "white",
     },
 
@@ -913,7 +916,8 @@ const styles = StyleSheet.create({
     },
     emojiSheetTitle: {
         fontSize: scaleFontSize(16),
-        fontWeight: "700",
+        fontWeight: "600",
+        lineHeight: scaleFontSize(21),
         color: colors.textPrimary,
         marginBottom: 14,
     },
@@ -942,6 +946,7 @@ const styles = StyleSheet.create({
     emojiRemoveText: {
         fontSize: scaleFontSize(14),
         fontWeight: "600",
+        lineHeight: scaleFontSize(20),
         color: colors.destructive,
     },
 });

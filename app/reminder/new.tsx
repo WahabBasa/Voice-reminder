@@ -372,7 +372,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: scaleFontSize(14),
     color: colors.textSecondary,
-    fontWeight: "600",
+    fontWeight: "400",
   },
   header: {
     flexDirection: "row",
@@ -391,7 +391,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: scaleFontSize(18),
-    fontWeight: "700",
+    fontWeight: "600",
     color: colors.textPrimary,
   },
   handleBar: {
@@ -411,7 +411,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: scaleFontSize(18),
-    fontWeight: "700",
+    fontWeight: "600",
     color: colors.textPrimary,
     marginBottom: 15,
   },
@@ -553,7 +553,7 @@ const styles = StyleSheet.create({
   createButtonText: {
     color: "white",
     fontSize: scaleFontSize(16),
-    fontWeight: "700",
+    fontWeight: "600",
   },
   cancelButton: {
     paddingVertical: 15,

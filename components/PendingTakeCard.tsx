@@ -10,7 +10,6 @@ import Animated, {
 } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { borderRadius, colors, shadows, spacing } from "../lib/theme";
-import { FONT_DISPLAY } from "../lib/fonts";
 import AppIcon from "./AppIcon";
 import {
   getPendingTakesSnapshot,
@@ -244,13 +243,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   text: {
-    fontFamily: FONT_DISPLAY,
     fontSize: 16,
+    fontWeight: "500",
+    lineHeight: 22,
     color: colors.textHeading,
   },
   textError: {
-    fontFamily: undefined,
     fontSize: 14,
+    lineHeight: 20,
     color: colors.statusOverdue,
     fontWeight: "600",
   },

@@ -186,6 +186,7 @@ const styles = StyleSheet.create({
   monthLabel: {
     fontSize: scaleFontSize(17),
     fontWeight: "600",
+    lineHeight: scaleFontSize(23),
     color: colors.textPrimary,
   },
   letterRow: {
@@ -197,7 +198,9 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: "center",
     fontSize: scaleFontSize(12),
-    fontWeight: "600",
+    fontWeight: "500",
+    lineHeight: scaleFontSize(16),
+    letterSpacing: 0.3,
     color: colors.textTertiary,
   },
   weekRow: {
@@ -226,6 +229,7 @@ const styles = StyleSheet.create({
   dayText: {
     fontSize: scaleFontSize(15),
     fontWeight: "500",
+    lineHeight: scaleFontSize(20),
     color: colors.textPrimary,
   },
   todayText: {

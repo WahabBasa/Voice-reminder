@@ -1,25 +1,24 @@
-// Fraunces via @expo-google-fonts/fraunces (JS-bundled asset → OTA-safe; NO config plugin)
+// Newsreader via @expo-google-fonts/newsreader.
+// JS-bundled assets: OTA-safe; NO config plugin or native build.
 import {
-    Fraunces_400Regular,
-    Fraunces_500Medium,
-    Fraunces_600SemiBold,
+    Newsreader_400Regular,
+    Newsreader_500Medium,
     useFonts,
-} from "@expo-google-fonts/fraunces";
+} from "@expo-google-fonts/newsreader";
 
-/** Display serif, semibold — headlines and anything that has to carry weight. */
-export const FONT_DISPLAY = "Fraunces_600SemiBold";
-/** Same serif at book weight — plan names, quotes, the calmer display lines. */
-export const FONT_DISPLAY_REGULAR = "Fraunces_400Regular";
-/** In-between weight for large numerals (prices) that would shout at semibold. */
-export const FONT_DISPLAY_MEDIUM = "Fraunces_500Medium";
+/** Medium display serif for screen and section headings. */
+export const FONT_DISPLAY = "Newsreader_500Medium";
+/** Regular display serif for plan names and editorial copy. */
+export const FONT_DISPLAY_REGULAR = "Newsreader_400Regular";
+/** Medium display serif for prices and other emphasized numerals. */
+export const FONT_DISPLAY_MEDIUM = "Newsreader_500Medium";
 
 export function useAppFonts(): boolean {
     const [loaded, error] = useFonts({
-        Fraunces_400Regular,
-        Fraunces_500Medium,
-        Fraunces_600SemiBold,
+        Newsreader_400Regular,
+        Newsreader_500Medium,
     });
-    // A failed font load must not blank the app — render with the system
-    // fallback instead of gating forever.
+
+    // Preserve the existing behavior: a load error must not gate forever.
     return loaded || !!error;
 }

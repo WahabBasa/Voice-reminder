@@ -3,7 +3,7 @@ import { View, StyleSheet } from "react-native";
 import WeekStrip from "../../components/days/WeekStrip";
 import { colors } from "../../lib/theme";
 
-jest.mock("../../lib/fonts", () => ({ FONT_DISPLAY: "Fraunces" }));
+jest.mock("../../lib/fonts", () => ({ FONT_DISPLAY: "Newsreader_500Medium" }));
 
 // Match the suite's native-boundary mocks; keep React element creation real.
 jest.mock("react-native-reanimated", () => ({

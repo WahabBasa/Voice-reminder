@@ -58,12 +58,13 @@ const styles = StyleSheet.create({
   heroLine: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(34),
-    lineHeight: scaleFontSize(42),
+    lineHeight: scaleFontSize(39),
+    letterSpacing: -0.4,
     color: paywallColors.ink,
     textAlign: "center",
   },
   heroSubtitle: {
-    marginTop: 14,
+    marginTop: 16,
     fontSize: scaleFontSize(15),
     lineHeight: scaleFontSize(22),
     fontWeight: paywallWeight.regular,

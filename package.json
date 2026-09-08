@@ -15,7 +15,7 @@
     "test:convex": "vitest run --config vitest.config.mts"
   },
   "dependencies": {
-    "@expo-google-fonts/fraunces": "^0.4.1",
+    "@expo-google-fonts/newsreader": "0.4.1",
     "@gorhom/bottom-sheet": "^5.2.7",
     "@gorhom/portal": "^1.0.14",
     "@notifee/react-native": "^9.1.8",

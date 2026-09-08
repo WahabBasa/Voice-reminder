@@ -380,7 +380,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: scaleFontSize(20),
-    fontWeight: "700",
+    fontWeight: "600",
     color: colors.textPrimary,
     marginBottom: 8,
   },
@@ -447,7 +447,7 @@ const styles = StyleSheet.create({
   },
   enableBtnText: {
     fontSize: scaleFontSize(13),
-    fontWeight: "700",
+    fontWeight: "600",
     color: "#fff",
   },
   doneBtn: {
@@ -460,7 +460,7 @@ const styles = StyleSheet.create({
   },
   doneBtnText: {
     fontSize: scaleFontSize(16),
-    fontWeight: "700",
+    fontWeight: "600",
     color: "#fff",
   },
   skipBtn: {

@@ -202,7 +202,8 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: scaleFontSize(17),
-    fontWeight: "700",
+    fontWeight: "600",
+    lineHeight: scaleFontSize(23),
     color: colors.textHeading,
     marginBottom: 18,
   },
@@ -223,6 +224,7 @@ const styles = StyleSheet.create({
   modeChipText: {
     fontSize: scaleFontSize(13),
     fontWeight: "500",
+    lineHeight: scaleFontSize(18),
     color: colors.textSecondary,
   },
   modeChipTextSelected: {
@@ -234,7 +236,8 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     fontSize: scaleFontSize(13),
-    fontWeight: "600",
+    fontWeight: "500",
+    lineHeight: scaleFontSize(18),
     color: colors.textLabel,
   },
   stepper: {
@@ -262,6 +265,7 @@ const styles = StyleSheet.create({
   stepperValue: {
     fontSize: scaleFontSize(15),
     fontWeight: "600",
+    lineHeight: scaleFontSize(21),
     color: colors.textPrimary,
     minWidth: 78,
     textAlign: "center",
@@ -269,6 +273,7 @@ const styles = StyleSheet.create({
   hint: {
     marginTop: 14,
     fontSize: scaleFontSize(12),
+    lineHeight: scaleFontSize(18),
     color: colors.textSecondary,
   },
   actions: {
@@ -286,12 +291,14 @@ const styles = StyleSheet.create({
   },
   cancelText: {
     fontSize: scaleFontSize(14),
-    fontWeight: "600",
+    fontWeight: "500",
+    lineHeight: scaleFontSize(20),
     color: colors.textSecondary,
   },
   doneText: {
     fontSize: scaleFontSize(14),
     fontWeight: "600",
+    lineHeight: scaleFontSize(20),
     color: colors.accent,
   },
 });

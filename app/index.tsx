@@ -1844,7 +1844,7 @@ const styles = StyleSheet.create({
   header: {
     paddingTop: Platform.OS === "ios" ? 60 : 26,
     paddingHorizontal: 20,
-    paddingBottom: 8,
+    paddingBottom: 16,
   },
   headerTop: {
     flexDirection: "row",
@@ -1857,11 +1857,14 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(32),
+    lineHeight: scaleFontSize(38),
+    letterSpacing: -0.3,
     color: colors.textHeading,
   },
   headerDate: {
-    marginTop: 2,
+    marginTop: 4,
     fontSize: scaleFontSize(14),
+    lineHeight: scaleFontSize(20),
     color: colors.textSecondary,
   },
   headerActions: {
@@ -1879,8 +1882,9 @@ const styles = StyleSheet.create({
   },
   proPillText: {
     color: "white",
-    fontWeight: "700",
+    fontWeight: "600",
     fontSize: scaleFontSize(14),
+    lineHeight: scaleFontSize(19),
   },
   proIcon: {
     marginRight: 6,
@@ -1924,7 +1928,8 @@ const styles = StyleSheet.create({
   },
   offlineText: {
     fontSize: scaleFontSize(14),
-    fontWeight: "500",
+    fontWeight: "400",
+    lineHeight: scaleFontSize(20),
     color: colors.textSecondary,
   },
 });

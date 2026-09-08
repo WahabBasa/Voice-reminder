@@ -310,7 +310,8 @@ const styles = StyleSheet.create({
   },
   modeChipText: {
     fontSize: scaleFontSize(12),
-    fontWeight: "600",
+    fontWeight: "500",
+    lineHeight: scaleFontSize(17),
     color: colors.textSecondary,
   },
   modeChipTextSelected: {
@@ -332,7 +333,8 @@ const styles = StyleSheet.create({
   },
   timeChipText: {
     fontSize: scaleFontSize(13),
-    fontWeight: "600",
+    fontWeight: "500",
+    lineHeight: scaleFontSize(18),
     color: colors.accentDark,
   },
   addChip: {
@@ -346,6 +348,7 @@ const styles = StyleSheet.create({
   addChipText: {
     fontSize: scaleFontSize(13),
     fontWeight: "600",
+    lineHeight: scaleFontSize(18),
     color: colors.textSecondary,
   },
   intervalBlock: {
@@ -359,7 +362,8 @@ const styles = StyleSheet.create({
   },
   intervalLabel: {
     fontSize: scaleFontSize(13),
-    fontWeight: "500",
+    fontWeight: "400",
+    lineHeight: scaleFontSize(18),
     color: colors.textSecondary,
   },
   stepper: {
@@ -386,7 +390,8 @@ const styles = StyleSheet.create({
   },
   stepperValue: {
     fontSize: scaleFontSize(13),
-    fontWeight: "700",
+    fontWeight: "600",
+    lineHeight: scaleFontSize(18),
     color: colors.textPrimary,
     minWidth: 74,
     textAlign: "center",
@@ -404,15 +409,18 @@ const styles = StyleSheet.create({
   },
   windowPillText: {
     fontSize: scaleFontSize(13),
-    fontWeight: "600",
+    fontWeight: "500",
+    lineHeight: scaleFontSize(18),
     color: colors.textPrimary,
   },
   windowDash: {
     fontSize: scaleFontSize(13),
+    lineHeight: scaleFontSize(18),
     color: colors.textSecondary,
   },
   intervalHint: {
-    fontSize: scaleFontSize(11),
+    fontSize: scaleFontSize(12),
+    lineHeight: scaleFontSize(18),
     color: colors.textTertiary,
   },
 });

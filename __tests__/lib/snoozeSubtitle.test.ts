@@ -15,9 +15,9 @@
 // modules Jest has no answer for (fonts, icons, gesture/animation views). None
 // of them takes part in the subtitle, so the import graph is cut here.
 jest.mock("../../lib/fonts", () => ({
-  FONT_DISPLAY: "Fraunces_600SemiBold",
-  FONT_DISPLAY_REGULAR: "Fraunces_400Regular",
-  FONT_DISPLAY_MEDIUM: "Fraunces_500Medium",
+  FONT_DISPLAY: "Newsreader_500Medium",
+  FONT_DISPLAY_REGULAR: "Newsreader_400Regular",
+  FONT_DISPLAY_MEDIUM: "Newsreader_500Medium",
   useAppFonts: () => true,
 }));
 jest.mock("../../components/AppIcon", () => ({ __esModule: true, default: () => null }));

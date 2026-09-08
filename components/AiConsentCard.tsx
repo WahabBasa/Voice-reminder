@@ -151,9 +151,10 @@ const styles = StyleSheet.create({
     title: {
         fontFamily: FONT_DISPLAY,
         fontSize: scaleFontSize(22),
+        lineHeight: scaleFontSize(27),
         color: colors.textHeading,
         marginTop: 6,
-        marginBottom: 8,
+        marginBottom: 12,
     },
     body: {
         fontSize: scaleFontSize(15),
@@ -180,7 +181,8 @@ const styles = StyleSheet.create({
     },
     declineText: {
         fontSize: scaleFontSize(15),
-        fontWeight: "600",
+        fontWeight: "500",
+        lineHeight: scaleFontSize(21),
         color: colors.textSecondary,
     },
     allowButton: {
@@ -193,6 +195,7 @@ const styles = StyleSheet.create({
     allowText: {
         fontSize: scaleFontSize(15),
         fontWeight: "600",
+        lineHeight: scaleFontSize(21),
         color: "#ffffff",
     },
 });

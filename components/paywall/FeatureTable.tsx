@@ -70,9 +70,11 @@ const styles = StyleSheet.create({
   heading: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(24),
+    lineHeight: scaleFontSize(29),
+    letterSpacing: -0.1,
     color: paywallColors.ink,
     textAlign: "center",
-    marginBottom: 16,
+    marginBottom: 20,
   },
   container: {
     borderRadius: PAYWALL_CARD_RADIUS,
@@ -92,9 +94,10 @@ const styles = StyleSheet.create({
   colHead: {
     width: 56,
     textAlign: "center",
-    fontSize: scaleFontSize(10),
-    fontWeight: paywallWeight.bold,
-    letterSpacing: 1.4,
+    fontSize: scaleFontSize(11),
+    fontWeight: paywallWeight.semibold,
+    lineHeight: scaleFontSize(15),
+    letterSpacing: 0.7,
     textTransform: "uppercase",
     color: paywallColors.ink,
   },
@@ -102,7 +105,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 18,
-    paddingVertical: 14,
+    paddingVertical: 16,
   },
   rowDivided: {
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -112,7 +115,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingRight: 10,
     fontSize: scaleFontSize(14),
-    lineHeight: scaleFontSize(19),
+    lineHeight: scaleFontSize(20),
     fontWeight: paywallWeight.regular,
     color: paywallColors.ink,
   },
@@ -133,7 +136,8 @@ const styles = StyleSheet.create({
   },
   cellText: {
     fontSize: scaleFontSize(12),
-    fontWeight: paywallWeight.bold,
+    fontWeight: paywallWeight.semibold,
+    lineHeight: scaleFontSize(17),
     color: paywallColors.ink,
     textAlign: "center",
   },
@@ -142,6 +146,7 @@ const styles = StyleSheet.create({
   },
   cellEmpty: {
     fontSize: scaleFontSize(14),
+    lineHeight: scaleFontSize(20),
     color: paywallColors.ink,
   },
 });

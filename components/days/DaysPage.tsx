@@ -288,11 +288,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
-    paddingBottom: spacing.sm,
+    paddingBottom: 12,
   },
   weekdayTitle: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(32),
+    lineHeight: scaleFontSize(38),
+    letterSpacing: -0.3,
     color: colors.textHeading,
   },
   monthButton: {
@@ -304,9 +306,10 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   monthButtonText: {
-    fontSize: scaleFontSize(13),
-    fontWeight: "600",
-    letterSpacing: 0.5,
+    fontSize: scaleFontSize(12),
+    fontWeight: "500",
+    lineHeight: scaleFontSize(16),
+    letterSpacing: 0.7,
     color: colors.textSecondary,
   },
   dayScroll: {
@@ -314,7 +317,7 @@ const styles = StyleSheet.create({
   },
   dayContent: {
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
+    paddingTop: 16,
     // Clears the floating bottom bar.
     paddingBottom: 140,
   },
@@ -325,6 +328,7 @@ const styles = StyleSheet.create({
   },
   emptyDayText: {
     fontSize: scaleFontSize(15),
+    lineHeight: scaleFontSize(22),
     color: colors.textTertiary,
   },
 });

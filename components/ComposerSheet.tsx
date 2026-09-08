@@ -223,11 +223,13 @@ const styles = StyleSheet.create({
     hint: {
         flex: 1,
         fontSize: scaleFontSize(13),
+        lineHeight: scaleFontSize(18),
         color: colors.textTertiary,
     },
     status: {
         flex: 1,
         fontSize: scaleFontSize(13),
+        lineHeight: scaleFontSize(18),
         color: colors.textSecondary,
     },
     speakPill: {
@@ -243,6 +245,7 @@ const styles = StyleSheet.create({
         color: "white",
         fontWeight: "600",
         fontSize: scaleFontSize(14),
+        lineHeight: scaleFontSize(20),
     },
     sendButton: {
         width: 42,

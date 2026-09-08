@@ -252,7 +252,7 @@ const styles = StyleSheet.create({
   },
   doneButtonText: {
     color: "#fff",
-    fontWeight: "700",
+    fontWeight: "600",
     fontSize: 14,
   },
   doneBadge: {

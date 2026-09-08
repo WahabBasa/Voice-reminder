@@ -412,7 +412,8 @@ const styles = StyleSheet.create({
   },
   monthTitle: {
     fontSize: scaleFontSize(14),
-    fontWeight: "500",
+    fontWeight: "600",
+    lineHeight: scaleFontSize(20),
     color: "#212121",
     marginHorizontal: 16,
   },
@@ -425,6 +426,8 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: scaleFontSize(12),
     fontWeight: "500",
+    lineHeight: scaleFontSize(16),
+    letterSpacing: 0.3,
     color: "#757575",
   },
   calendarGrid: {
@@ -443,6 +446,7 @@ const styles = StyleSheet.create({
   },
   dayText: {
     fontSize: scaleFontSize(14),
+    lineHeight: scaleFontSize(20),
     color: "#212121",
   },
   dayTextMuted: {
@@ -473,6 +477,8 @@ const styles = StyleSheet.create({
   },
   chipText: {
     fontSize: scaleFontSize(12),
+    fontWeight: "500",
+    lineHeight: scaleFontSize(17),
     color: "#616161",
   },
   settingsSection: {
@@ -496,10 +502,13 @@ const styles = StyleSheet.create({
   },
   settingsRowLabel: {
     fontSize: scaleFontSize(14),
+    fontWeight: "500",
+    lineHeight: scaleFontSize(20),
     color: "#424242",
   },
   settingsRowValue: {
     fontSize: scaleFontSize(14),
+    lineHeight: scaleFontSize(20),
     color: "#757575",
   },
   actions: {
@@ -514,12 +523,14 @@ const styles = StyleSheet.create({
   },
   cancelText: {
     fontSize: scaleFontSize(14),
-    fontWeight: "600",
+    fontWeight: "500",
+    lineHeight: scaleFontSize(20),
     color: "#757575",
   },
   doneText: {
     fontSize: scaleFontSize(14),
     fontWeight: "600",
+    lineHeight: scaleFontSize(20),
     color: "#4285f4",
   },
 });

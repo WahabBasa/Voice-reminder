@@ -115,7 +115,9 @@ const styles = StyleSheet.create({
   },
   dayLetter: {
     fontSize: scaleFontSize(12),
-    fontWeight: "600",
+    fontWeight: "500",
+    lineHeight: scaleFontSize(16),
+    letterSpacing: 0.3,
     color: colors.textTertiary,
     marginBottom: spacing.xs,
   },
@@ -123,6 +125,7 @@ const styles = StyleSheet.create({
   dateText: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(18),
+    lineHeight: scaleFontSize(24),
     color: colors.textSecondary,
   },
   todayText: {

@@ -296,7 +296,7 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingTop: Platform.OS === "ios" ? 20 : 16,
-    paddingBottom: 20,
+    paddingBottom: 24,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
@@ -312,6 +312,8 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(30),
+    lineHeight: scaleFontSize(36),
+    letterSpacing: -0.3,
     color: colors.textHeading,
   },
 
@@ -325,7 +327,7 @@ const styles = StyleSheet.create({
     borderColor: colors.accent + "30",
     borderRadius: borderRadius.card,
     padding: 16,
-    marginBottom: 24,
+    marginBottom: 28,
   },
   proLeft: {
     flexDirection: "row",
@@ -341,15 +343,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   proTitle: {
-    fontSize: scaleFontSize(16),
-    fontWeight: "700",
+    fontSize: scaleFontSize(17),
+    fontWeight: "600",
+    lineHeight: scaleFontSize(22),
     color: colors.accent,
   },
   proSubtitle: {
-    fontSize: scaleFontSize(13),
+    fontSize: scaleFontSize(14),
+    lineHeight: scaleFontSize(20),
     color: colors.accent,
     opacity: 0.7,
-    marginTop: 1,
+    marginTop: 4,
   },
 
   // Card
@@ -357,16 +361,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderRadius: borderRadius.card,
     overflow: "hidden",
-    marginBottom: 24,
+    marginBottom: 28,
     ...shadows.card,
   },
   sectionLabel: {
-    fontSize: scaleFontSize(13),
+    fontSize: scaleFontSize(12),
     fontWeight: "600",
-    letterSpacing: 0.6,
+    lineHeight: scaleFontSize(16),
+    letterSpacing: 0.7,
     textTransform: "uppercase",
     color: colors.textTertiary,
-    marginBottom: 8,
+    marginBottom: 12,
     marginLeft: 4,
   },
   separator: {
@@ -379,7 +384,7 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 16,
+    paddingVertical: 18,
     paddingHorizontal: 16,
   },
   rowIcon: {
@@ -397,19 +402,22 @@ const styles = StyleSheet.create({
   rowTitle: {
     fontSize: scaleFontSize(16),
     fontWeight: "600",
+    lineHeight: scaleFontSize(21),
     color: colors.textPrimary,
   },
   rowSubtitle: {
-    fontSize: scaleFontSize(13),
+    fontSize: scaleFontSize(14),
+    lineHeight: scaleFontSize(20),
     color: colors.textSecondary,
-    marginTop: 1,
+    marginTop: 4,
   },
 
   // Footer
   versionFooter: {
     marginTop: 24,
     textAlign: "center",
-    fontSize: scaleFontSize(13),
+    fontSize: scaleFontSize(12),
+    lineHeight: scaleFontSize(17),
     color: colors.textTertiary,
   },
 });

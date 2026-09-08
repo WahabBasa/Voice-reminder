@@ -381,7 +381,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: PAYWALL_GUTTER + 10,
         fontFamily: FONT_DISPLAY_REGULAR,
         fontSize: scaleFontSize(20),
-        lineHeight: scaleFontSize(29),
+        lineHeight: scaleFontSize(28),
         color: paywallColors.ink,
         textAlign: "center",
     },
@@ -401,7 +401,9 @@ const styles = StyleSheet.create({
         backgroundColor: paywallColors.surface,
     },
     cta: {
-        height: 56,
+        minHeight: 56,
+        paddingVertical: 16,
+        paddingHorizontal: 20,
         borderRadius: 999,
         backgroundColor: paywallColors.ink,
         alignItems: "center",
@@ -412,19 +414,20 @@ const styles = StyleSheet.create({
     },
     ctaText: {
         fontSize: scaleFontSize(16),
-        fontWeight: paywallWeight.bold,
+        lineHeight: scaleFontSize(21),
+        fontWeight: paywallWeight.semibold,
         color: "white",
     },
     caption: {
         marginTop: 8,
-        fontSize: scaleFontSize(12),
-        lineHeight: scaleFontSize(17),
+        fontSize: scaleFontSize(13),
+        lineHeight: scaleFontSize(18),
         fontWeight: paywallWeight.regular,
         color: paywallColors.ink,
         textAlign: "center",
     },
     captionStrong: {
-        fontWeight: paywallWeight.bold,
+        fontWeight: paywallWeight.semibold,
         color: paywallColors.ink,
     },
     errorBanner: {
@@ -445,8 +448,9 @@ const styles = StyleSheet.create({
     },
     errorBannerText: {
         flexShrink: 1,
-        fontSize: scaleFontSize(13),
-        fontWeight: "500",
+        fontSize: scaleFontSize(14),
+        fontWeight: "400",
+        lineHeight: scaleFontSize(20),
         color: colors.destructive,
     },
 });

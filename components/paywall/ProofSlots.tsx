@@ -9,7 +9,7 @@
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { scaleFontSize } from "../../lib/theme";
-import { FONT_DISPLAY } from "../../lib/fonts";
+import { FONT_DISPLAY_REGULAR } from "../../lib/fonts";
 import {
   AWARD_BADGES,
   PAYWALL_PROOF_FLAGS,
@@ -123,21 +123,23 @@ const styles = StyleSheet.create({
     borderColor: paywallColors.cardBorder,
   },
   proofHeadline: {
-    fontFamily: FONT_DISPLAY,
     fontSize: scaleFontSize(17),
+    fontWeight: paywallWeight.semibold,
+    lineHeight: scaleFontSize(23),
     color: paywallColors.ink,
   },
   proofBody: {
     marginTop: 8,
-    fontSize: scaleFontSize(13),
-    lineHeight: scaleFontSize(19),
+    fontSize: scaleFontSize(14),
+    lineHeight: scaleFontSize(20),
     color: paywallColors.ink,
   },
   proofSource: {
     marginTop: 12,
     fontSize: scaleFontSize(11),
-    fontWeight: paywallWeight.bold,
-    letterSpacing: 0.8,
+    fontWeight: paywallWeight.semibold,
+    lineHeight: scaleFontSize(15),
+    letterSpacing: 0.7,
     textTransform: "uppercase",
     color: paywallColors.ink,
   },
@@ -155,15 +157,16 @@ const styles = StyleSheet.create({
   },
   quote: {
     marginTop: 10,
-    fontFamily: FONT_DISPLAY,
-    fontSize: scaleFontSize(19),
-    lineHeight: scaleFontSize(27),
+    fontFamily: FONT_DISPLAY_REGULAR,
+    fontSize: scaleFontSize(20),
+    lineHeight: scaleFontSize(28),
     color: paywallColors.ink,
     textAlign: "center",
   },
   quoteName: {
     marginTop: 10,
     fontSize: scaleFontSize(13),
+    lineHeight: scaleFontSize(18),
     color: paywallColors.ink,
   },
   badges: {
@@ -181,13 +184,15 @@ const styles = StyleSheet.create({
   },
   badgeTitle: {
     fontSize: scaleFontSize(14),
-    fontWeight: paywallWeight.bold,
+    fontWeight: paywallWeight.semibold,
+    lineHeight: scaleFontSize(20),
     color: paywallColors.ink,
     textAlign: "center",
   },
   badgeSubtitle: {
     marginTop: 2,
     fontSize: scaleFontSize(12),
+    lineHeight: scaleFontSize(17),
     color: paywallColors.ink,
     textAlign: "center",
   },

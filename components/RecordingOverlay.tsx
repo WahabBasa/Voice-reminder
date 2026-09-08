@@ -555,7 +555,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: scaleFontSize(16),
-    fontWeight: "700",
+    fontWeight: "600",
     color: colors.textPrimary,
     textAlign: "center",
   },
@@ -579,7 +579,7 @@ const styles = StyleSheet.create({
   gateText: {
     fontSize: scaleFontSize(13),
     color: colors.textSecondary,
-    fontWeight: "600",
+    fontWeight: "500",
     flex: 1,
   },
   upgradeButton: {
@@ -591,7 +591,7 @@ const styles = StyleSheet.create({
   upgradeButtonText: {
     color: "white",
     fontSize: scaleFontSize(13),
-    fontWeight: "800",
+    fontWeight: "600",
   },
   meterRow: {
     marginTop: 28,
@@ -604,7 +604,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: scaleFontSize(15),
     color: colors.textPrimary,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   timerPill: {
     marginTop: 18,
@@ -626,7 +626,7 @@ const styles = StyleSheet.create({
   timerText: {
     fontSize: scaleFontSize(15),
     color: colors.textPrimary,
-    fontWeight: "700",
+    fontWeight: "600",
     fontVariant: ["tabular-nums"],
   },
   processingRow: {
@@ -639,7 +639,7 @@ const styles = StyleSheet.create({
   processingText: {
     color: colors.textSecondary,
     fontSize: scaleFontSize(14),
-    fontWeight: "500",
+    fontWeight: "400",
   },
   spacer: {
     flex: 1,

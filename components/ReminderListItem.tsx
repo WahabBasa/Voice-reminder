@@ -6,7 +6,6 @@ import Animated, {
 } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { colors, spacing, borderRadius, shadows, chipColors } from "../lib/theme";
-import { FONT_DISPLAY } from "../lib/fonts";
 import AppIcon from "./AppIcon";
 
 export interface ReminderListItemProps {
@@ -218,15 +217,16 @@ const styles = StyleSheet.create({
   infoContainer: {
     flex: 1,
   },
-  // Serif card title, per the Tiimo reference (weight baked into the face).
+  // System semibold for reminder titles, including Arabic input.
   titleRow: { flexDirection: "row", alignItems: "center" },
   overdueDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.statusOverdue, marginRight: 6 },
   title: {
     flexShrink: 1,
-    fontFamily: FONT_DISPLAY,
     fontSize: 17,
+    fontWeight: "600",
+    lineHeight: 23,
     color: colors.textHeading,
-    marginBottom: 2,
+    marginBottom: 4,
   },
   titleCompleted: {
     textDecorationLine: "line-through",
@@ -237,6 +237,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 14,
+    lineHeight: 20,
     color: colors.textSecondary,
   },
   subtitleMissed: {
