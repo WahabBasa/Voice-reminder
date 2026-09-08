@@ -23,6 +23,8 @@ module.exports = {
     "convex/helpers.ts",
     "convex/scheduleShape.ts",
     "convex/creationValidate.ts",
+    "convex/parseUsage.ts",
+    "convex/stt.ts",
   ],
   coverageThreshold: {
     "lib/time.ts": { lines: 85, branches: 70 },
@@ -42,5 +44,7 @@ module.exports = {
     "convex/helpers.ts": { lines: 100, branches: 100 },
     "convex/scheduleShape.ts": { lines: 95, branches: 85 },
     "convex/creationValidate.ts": { lines: 100, branches: 100 },
+    "convex/parseUsage.ts": { lines: 100, branches: 100 },
+    "convex/stt.ts": { lines: 100, branches: 100 },
   },
 };

@@ -14,8 +14,10 @@ import type * as creationJobs from "../creationJobs.js";
 import type * as creationValidate from "../creationValidate.js";
 import type * as crons from "../crons.js";
 import type * as helpers from "../helpers.js";
+import type * as parseUsage from "../parseUsage.js";
 import type * as reminders from "../reminders.js";
 import type * as scheduleShape from "../scheduleShape.js";
+import type * as stt from "../stt.js";
 
 import type {
   ApiFromModules,
@@ -30,8 +32,10 @@ declare const fullApi: ApiFromModules<{
   creationValidate: typeof creationValidate;
   crons: typeof crons;
   helpers: typeof helpers;
+  parseUsage: typeof parseUsage;
   reminders: typeof reminders;
   scheduleShape: typeof scheduleShape;
+  stt: typeof stt;
 }>;
 
 /**

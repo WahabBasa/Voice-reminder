@@ -273,7 +273,11 @@ describe("retry", () => {
 
     const workers = await scheduledOf(t, WORKER);
     expect(workers).toHaveLength(1);
-    expect(workers[0].args[0]).toEqual({ jobId, generation: 2 });
+    expect(workers[0].args[0]).toMatchObject({ jobId, generation: 2 });
+    // The scheduling instant rides along for the worker's scheduler-delay timing.
+    expect((workers[0].args[0] as { scheduledAt?: number }).scheduledAt).toEqual(
+      expect.any(Number)
+    );
     // The blob is reused, so nothing is deleted.
     expect(await scheduledOf(t, BLOB_DELETE)).toHaveLength(0);
   });

@@ -182,6 +182,49 @@ describe("a failed or cancelled job", () => {
   });
 });
 
+describe("a failed job's timings", () => {
+  it("are forwarded once, before disposal, so failure latency reaches the device", async () => {
+    const convex = new FakeConvex();
+    const { handle, updates, perfs } = start(convex);
+    await flush();
+
+    convex.push(
+      job({
+        status: "failed",
+        errorCode: "stt_failed",
+        perf: { sttMs: 800, sttFallbackUsed: true },
+      })
+    );
+    await handle.done;
+
+    expect(perfs).toEqual([{ sttMs: 800, sttFallbackUsed: true }]);
+    expect(updates.map((u) => u?.status)).toEqual(["failed"]);
+    expect(convex.live).toHaveLength(0);
+  });
+
+  it("forwards an empty object when a failed job never accumulated any", async () => {
+    const convex = new FakeConvex();
+    const { handle, perfs } = start(convex);
+    await flush();
+
+    convex.push(job({ status: "failed", errorCode: "internal" }));
+    await handle.done;
+
+    expect(perfs).toEqual([{}]);
+  });
+
+  it("forwards nothing for a cancelled job — the user cancelled, there is no latency to report", async () => {
+    const convex = new FakeConvex();
+    const { handle, perfs } = start(convex);
+    await flush();
+
+    convex.push(job({ status: "cancelled" }));
+    await handle.done;
+
+    expect(perfs).toEqual([]);
+  });
+});
+
 describe("a committed job", () => {
   it("dispatches the import at once but HOLDS the watch for the timings", async () => {
     const convex = new FakeConvex();

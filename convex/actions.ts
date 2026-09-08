@@ -61,6 +61,25 @@ function getTtsProvider(): TtsProvider {
 
 import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, type Urgency } from "./helpers";
 import { buildGridSchedule, legacyFieldsFromGrid, normalizeClockTimes, zonedTimeToUtcMs, type GridSchedule } from "./scheduleShape";
+import { transcribeAudio, SttError, type SttPerf } from "./stt";
+import { extractParseUsage } from "./parseUsage";
+
+/**
+ * Content-free STT/parse telemetry (spec §4), matching the worker's lines.
+ * Never carry audio, transcripts, prompt text or credentials.
+ */
+function logSttPerf(traceId: string | null, path: string, sttPerf: SttPerf): void {
+  console.log(`[VR] stt_perf ${JSON.stringify({ traceId, path, ...sttPerf })}`);
+}
+
+function logParsePerf(
+  traceId: string | null,
+  path: string,
+  parseMs: number,
+  usage: ReturnType<typeof extractParseUsage>
+): void {
+  console.log(`[VR] parse_perf ${JSON.stringify({ traceId, path, parseMs, ...usage })}`);
+}
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -587,7 +606,7 @@ ARABIC TIME EXPRESSIONS:
 - "صباحاً" = AM, "مساءً" = PM
 
 INTENT + TONE RULES (the spoken voice — every spoken field obeys these):
-- Keep the exact intent (do not add meaning or extra context)
+- Keep the exact intent: do not add meaning or extra context, AND do not drop any concrete detail the user said that changes what they would physically do (a place, a source, a destination, a quantity, which one, or who)
 - ONE short sentence, present tense, about the thing itself (aim for 3-8 words)
 - The line takes ONE of exactly TWO shapes, picked by the content
 - Something the user DOES → a bare imperative and nothing else ("Drink your water.", "Take your pills.") — no "right now" on the end, no "please", no framing around the verb
@@ -1118,25 +1137,25 @@ export const processVoiceReminder = action({
     deviceTimezone: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
     const openrouter = new OpenAI({
       apiKey: process.env.OPENROUTER_API_KEY,
       baseURL: "https://openrouter.ai/api/v1",
     });
-    // 1. Whisper STT
+    // 1. Speech-to-text (convex/stt.ts). Preserve the base64 decode and File.
     const audioBuffer = Buffer.from(args.audioBase64, "base64");
     const audioFile = new File([audioBuffer], "recording.m4a", {
       type: "audio/mp4",
     });
 
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: "whisper-1",
-    });
-
-    const transcript = transcription.text;
+    let transcript: string;
+    try {
+      const stt = await transcribeAudio(audioFile);
+      transcript = stt.text;
+      logSttPerf(args.traceId ?? null, "base64", stt.perf);
+    } catch (e) {
+      if (e instanceof SttError) logSttPerf(args.traceId ?? null, "base64", e.perf);
+      throw e;
+    }
     console.log("[VR] === STEP 1: STT Transcription ===");
     console.log("[VR] Transcript:", transcript);
 
@@ -1152,6 +1171,7 @@ export const processVoiceReminder = action({
     console.log("[VR] Device Local Time:", args.deviceLocalTime);
     console.log("[VR] Parsed as:", { currentDate, currentTime, currentDayOfWeek, timezone });
 
+    const tParse = Date.now();
     const completion = await openrouter.chat.completions.create({
       model: "openai/gpt-5.6-luna",
       response_format: { type: "json_object" },
@@ -1175,6 +1195,14 @@ export const processVoiceReminder = action({
         },
       ],
     });
+    // Parse usage to the device log. This action keeps its no-perf return shape
+    // (spec §1), so the numbers ride the telemetry line, not the result.
+    logParsePerf(
+      args.traceId ?? null,
+      "base64",
+      Date.now() - tParse,
+      extractParseUsage((completion as { usage?: unknown }).usage)
+    );
 
     const rawGptResponse = completion.choices[0].message.content || "{}";
     console.log("[VR] === STEP 3: Raw GPT Response ===");
@@ -1359,8 +1387,13 @@ async function createTakeWithDeferredAudio(
     currentTime: string;
     currentDayOfWeek: string;
     timezone: string;
+    // For the parse telemetry line. `path` distinguishes fast voice from typed.
+    traceId?: string | null;
+    path: string;
   },
-  perf: Record<string, number>
+  // Widened to hold the STT model labels the fast path merges in alongside the
+  // numeric stage timings.
+  perf: Record<string, number | string | boolean>
 ) {
   const openrouter = new OpenAI({
     apiKey: process.env.OPENROUTER_API_KEY,
@@ -1389,7 +1422,13 @@ async function createTakeWithDeferredAudio(
       },
     ],
   });
-  perf.gptMs = Date.now() - tGpt;
+  const gptMs = Date.now() - tGpt;
+  perf.gptMs = gptMs;
+  // Legacy key retained; `parseMs` is the name the STT-switch telemetry reads.
+  perf.parseMs = gptMs;
+  const parseUsage = extractParseUsage((completion as { usage?: unknown }).usage);
+  Object.assign(perf, parseUsage);
+  logParsePerf(args.traceId ?? null, args.path, gptMs, parseUsage);
 
   const rawGptResponse = completion.choices[0].message.content || "{}";
   // One take can hold several reminders (OLD-93). A single-reminder take is
@@ -1489,10 +1528,6 @@ export const processVoiceReminderFast = action({
     deviceTimezone: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-
     // 1. Load audio blob from storage
     const audioBlob = await ctx.storage.get(args.audioStorageId);
     if (!audioBlob) {
@@ -1502,26 +1537,35 @@ export const processVoiceReminderFast = action({
     // Server-stage timings (OLD-82). Returned as `perf` — app/index.tsx already
     // logs `result.perf` when present, so this fills a branch that was until now
     // always dead and splits the action's wall time into its real components.
+    // Widened to hold the STT model labels the helper merges in.
     const tActionStart = Date.now();
-    const perf: Record<string, number> = {};
+    const perf: Record<string, number | string | boolean> = {};
 
     // Wrap STT+GPT processing in try/finally to ensure uploaded recording is deleted
     try {
-      // 2. Whisper STT
+      // 2. Speech-to-text (convex/stt.ts).
       const arrayBuffer = await audioBlob.arrayBuffer();
       const audioFile = new File([arrayBuffer], "recording.m4a", {
         type: "audio/mp4",
       });
       perf.blobMs = Date.now() - tActionStart;
 
-      const tWhisper = Date.now();
-      const transcription = await openai.audio.transcriptions.create({
-        file: audioFile,
-        model: "whisper-1",
-      });
-      perf.whisperMs = Date.now() - tWhisper;
-
-      const transcript = transcription.text;
+      let transcript: string;
+      try {
+        const stt = await transcribeAudio(audioFile);
+        transcript = stt.text;
+        Object.assign(perf, stt.perf);
+        // Compatibility alias — the device log and old readers key on whisperMs.
+        perf.whisperMs = stt.perf.sttMs;
+        logSttPerf(args.traceId ?? null, "fast", stt.perf);
+      } catch (e) {
+        if (e instanceof SttError) {
+          Object.assign(perf, e.perf);
+          perf.whisperMs = e.perf.sttMs;
+          logSttPerf(args.traceId ?? null, "fast", e.perf);
+        }
+        throw e;
+      }
       console.log("[VR] === STEP 1: STT Transcription ===");
       console.log("[VR] Transcript:", transcript);
 
@@ -1543,6 +1587,8 @@ export const processVoiceReminderFast = action({
           currentTime,
           currentDayOfWeek,
           timezone,
+          traceId: args.traceId ?? null,
+          path: "fast",
         },
         perf
       );
@@ -1609,7 +1655,7 @@ export const processTypedReminder = action({
     }
 
     const tActionStart = Date.now();
-    const perf: Record<string, number> = {};
+    const perf: Record<string, number | string | boolean> = {};
 
     // Device LOCAL time, same as the voice paths — relative phrasing ("in ten
     // minutes", "tomorrow") is only parseable against the user's own clock.
@@ -1631,6 +1677,8 @@ export const processTypedReminder = action({
         currentTime,
         currentDayOfWeek,
         timezone,
+        traceId: args.traceId ?? null,
+        path: "typed",
       },
       perf
     );

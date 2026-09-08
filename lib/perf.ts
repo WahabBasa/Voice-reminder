@@ -197,6 +197,7 @@ function emitCreationSummary(creationId: string, marks: StageMarks): void {
     ["cardVisible", span(marks, "stopTap", "cardVisible")],
     ["transcriptAt", span(marks, "stopTap", "transcriptAt")],
     ["committedAt", span(marks, "stopTap", "committedAt")],
+    ["importDone", span(marks, "stopTap", "importDone")],
     ["armedAt", span(marks, "stopTap", "armedAt")],
   ];
   const parts = stages
@@ -219,10 +220,13 @@ function emitCreationSummary(creationId: string, marks: StageMarks): void {
     .filter(([, ms]) => ms !== null)
     .map(([name, ms]) => `${name}=${ms}ms`)
     .join(" ");
-  const total = span(marks, "stopTap", "committedAt");
+  // Stop-tap through the import landing — the observable milestone the user
+  // actually waits on. (It was mislabelled micStop→card and ended at the server
+  // commit, which is neither where the card appears nor an app-side event.)
+  const total = span(marks, "stopTap", "importDone");
 
   console.log(
-    `[VR PERF SUMMARY] micStop→card total=${total === null ? "?" : `${total}ms`} ${legacyParts} path=job trace=${creationId}`
+    `[VR PERF SUMMARY] micStop→import total=${total === null ? "?" : `${total}ms`} ${legacyParts} path=job trace=${creationId}`
   );
 }
 

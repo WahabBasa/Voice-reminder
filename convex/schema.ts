@@ -75,10 +75,37 @@ void _gridShapesAgree;
 export const creationPerfValidator = v.object({
   storageGetMs: v.optional(v.number()),
   blobMs: v.optional(v.number()),
+  // `whisperMs` is a compatibility alias for `sttMs`, kept so the existing
+  // device log and every pre-STT-switch job row still read the same field.
   whisperMs: v.optional(v.number()),
   parseMs: v.optional(v.number()),
   commitMs: v.optional(v.number()),
   totalMs: v.optional(v.number()),
+
+  // ── Speech-to-text (convex/stt.ts SttPerf), all optional so a job that
+  //    failed before STT, or a row written before the switch, still validates.
+  sttRequestedModel: v.optional(v.string()),
+  sttModel: v.optional(v.string()),
+  sttMs: v.optional(v.number()),
+  sttPrimaryMs: v.optional(v.number()),
+  sttFallbackMs: v.optional(v.number()),
+  sttFallbackUsed: v.optional(v.boolean()),
+  sttInputTokens: v.optional(v.number()),
+  sttOutputTokens: v.optional(v.number()),
+  sttAudioSeconds: v.optional(v.number()),
+  sttCostUsd: v.optional(v.number()),
+
+  // ── Scheduling, query and checkpoint timings (spec §4).
+  schedulerDelayMs: v.optional(v.number()),
+  jobAgeMs: v.optional(v.number()),
+  getJobMs: v.optional(v.number()),
+  transcriptionCheckpointMs: v.optional(v.number()),
+
+  // ── Parse-response usage (convex/parseUsage.ts).
+  parsePromptTokens: v.optional(v.number()),
+  parseCompletionTokens: v.optional(v.number()),
+  parseCachedTokens: v.optional(v.number()),
+  parseReasoningTokens: v.optional(v.number()),
 });
 
 /** The five states a creation job can be in. The last three are terminal. */

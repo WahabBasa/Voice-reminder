@@ -176,8 +176,28 @@ describe("buildDescriptionInstruction", () => {
     // section this points at (OLD-106), not in a third copy of the rule.
     expect(result).toContain(SPOKEN_LINE_RULE_REFERENCE);
     expect(SPOKEN_LINE_RULES_SECTION).toContain("ONE short sentence, present tense");
-    expect(result).toContain("Roughly 3-8 words");
-    expect(result).toContain("Plain words only");
+    // Keep-what-matters, not a fixed word budget: the old "Roughly 3-8 words,
+    // shorter is better" framing trimmed real details the user gave (a place, a
+    // source), so length now follows the input.
+    expect(result).toContain("Keep every concrete detail the user gave");
+    expect(result).toContain("As short as the user's own details allow");
+    expect(result).toContain("no filler adjectives");
+    expect(result).not.toContain("shorter is better");
+    expect(result).not.toContain("Roughly 3-8 words");
+  });
+
+  it("keeps a concrete qualifier the user gives (the fridge regression)", () => {
+    const result = buildDescriptionInstruction();
+    // The keep-a-detail examples, in the same single-quoted style as the canon.
+    for (const example of [
+      "'Take the water bottle out of the fridge.'",
+      "'Move the laundry to the dryer.'",
+      "'Call Ahmed about the invoice.'",
+      "'أخرج قارورة الماء من الثلاجة.'",
+      "'انقل الغسيل إلى النشافة.'",
+    ]) {
+      expect(result).toContain(example);
+    }
   });
 
   it("carries the canon few-shots the voice was defined by (OLD-104)", () => {

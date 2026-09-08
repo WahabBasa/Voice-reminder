@@ -49,12 +49,20 @@ const PROMPT_CONTEXT = {
 
 // The battery leans on inputs that historically produced bad lines: "drink
 // water" is the transcript that converged on every formula era in stored data.
-const TRANSCRIPTS = [
+// `mustContain`, when present, is a concrete detail the user gave that the
+// spoken line must not drop — the "shorter is better" era trimmed these
+// (OLD: 'take the water bottle out of the fridge' → 'Take out your water bottle').
+const TRANSCRIPTS: { name: string; text: string; mustContain?: string }[] = [
   { name: "drink water (EN)", text: "Remind me to drink water at 8pm" },
   { name: "drink water (AR)", text: "ذكرني أن أشرب الماء الساعة ثمانية مساءً" },
   { name: "daily medicine", text: "Remind me to take my medicine every day at 9am" },
   { name: "meeting (pre-reminder)", text: "Remind me about my meeting with Ahmed tomorrow at 3pm" },
   { name: "mumbled input", text: "uh um the uh water thing you know at like uh" },
+  {
+    name: "water bottle from fridge (detail kept)",
+    text: "Remind me to take my water bottle out of the fridge in about 20 minutes",
+    mustContain: "fridge",
+  },
 ];
 
 // Openers the prompt forbids, plus the label and lead-in families: imported
@@ -247,6 +255,19 @@ describeLive("reminder phrasing (live model)", () => {
           // Budgets follow the prompt: 3-8 words for the line itself, under 12
           // for the heads-up (it has a time span to fit).
           violations.push(...lintLine({ field: `${slot} description`, text: description }, 8));
+
+          // A concrete detail the user named must survive into the spoken line:
+          // the opener ban and the wellness/padding checks above already run on
+          // every transcript, so this only adds the "detail kept" half. Case-
+          // insensitive so 'Fridge' or 'FRIDGE' still counts.
+          if (
+            transcript.mustContain &&
+            !description.toLowerCase().includes(transcript.mustContain.toLowerCase())
+          ) {
+            violations.push(
+              `${slot} dropped required detail "${transcript.mustContain}": "${description}"`
+            );
+          }
           if (preDescription) {
             violations.push(
               ...lintLine({ field: `${slot} preDescription`, text: preDescription }, 12)

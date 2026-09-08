@@ -447,3 +447,101 @@ describe("perfPatch", () => {
     ).toEqual({ result: "missing" });
   });
 });
+
+// ─── §4 scheduling telemetry ────────────────────────────────────────────────
+
+describe("getJob", () => {
+  test("returns createdAt so the worker can measure job age", async () => {
+    const { jobId } = await insertJob(t, { status: "pending" });
+    const job = await t.query(internal.creationJobs.getJob, { jobId });
+    expect(job).not.toBeNull();
+    expect(job!.createdAt).toEqual(expect.any(Number));
+  });
+});
+
+describe("scheduling timestamps", () => {
+  test("begin schedules the worker with the scheduling instant", async () => {
+    const begun = await begin();
+    const workers = await scheduledOf(t, WORKER);
+    expect(workers).toHaveLength(1);
+    expect(workers[0].args[0]).toMatchObject({
+      jobId: begun.jobId,
+      generation: 1,
+      scheduledAt: expect.any(Number),
+    });
+  });
+
+  test("retry schedules the next generation with its own scheduling instant", async () => {
+    const audioStorageId = await storeAudio(t);
+    const { jobId, creationId } = await insertJob(t, {
+      status: "failed",
+      audioStorageId,
+      errorCode: "stt_failed",
+    });
+
+    const result = await t.mutation(api.creationJobs.retry, { deviceId: DEVICE, creationId });
+    expect(result).toMatchObject({ status: "pending", generation: 2 });
+
+    const workers = await scheduledOf(t, WORKER);
+    expect(workers).toHaveLength(1);
+    expect(workers[0].args[0]).toMatchObject({
+      jobId,
+      generation: 2,
+      scheduledAt: expect.any(Number),
+    });
+  });
+});
+
+describe("the expanded perf object", () => {
+  test("survives commit, the watch projection and a later perfPatch", async () => {
+    const audioStorageId = await storeAudio(t);
+    const { jobId, creationId } = await insertJob(t, {
+      status: "transcribed",
+      transcript: "water at eight",
+      audioStorageId,
+    });
+
+    const expandedPerf = {
+      storageGetMs: 5,
+      blobMs: 2,
+      sttRequestedModel: "openai/gpt-4o-mini-transcribe",
+      sttModel: "openai/gpt-4o-mini-transcribe",
+      sttMs: 800,
+      sttPrimaryMs: 800,
+      sttFallbackUsed: false,
+      sttInputTokens: 320,
+      sttOutputTokens: 12,
+      sttAudioSeconds: 4,
+      sttCostUsd: 0.0007,
+      whisperMs: 800,
+      schedulerDelayMs: 12,
+      jobAgeMs: 40,
+      getJobMs: 3,
+      transcriptionCheckpointMs: 6,
+      parseMs: 500,
+      parsePromptTokens: 1200,
+      parseCompletionTokens: 40,
+      parseCachedTokens: 900,
+      parseReasoningTokens: 0,
+    };
+
+    await t.mutation(internal.creationJobs.commit, {
+      jobId,
+      generation: 1,
+      plans: [commitPlan()],
+      preCommitPerf: expandedPerf,
+    });
+
+    // Every field survives the schema validator and the watch projection.
+    const watched = await t.query(api.creationJobs.get, { deviceId: DEVICE, creationId });
+    expect(watched!.perf).toEqual(expandedPerf);
+
+    // The later best-effort timing patch merges on top without losing any of it.
+    await t.mutation(internal.creationJobs.perfPatch, {
+      jobId,
+      perf: { commitMs: 30, totalMs: 4200 },
+    });
+    const after = await readJob(t, DEVICE, creationId);
+    expect(after!.perf).toEqual({ ...expandedPerf, commitMs: 30, totalMs: 4200 });
+  });
+});

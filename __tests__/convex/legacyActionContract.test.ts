@@ -55,6 +55,56 @@ const PARSE_RESPONSE = JSON.stringify({
   ],
 });
 
+/** OpenRouter reports token usage on the parse response; the paths log its split. */
+const PARSE_USAGE = {
+  prompt_tokens: 1200,
+  completion_tokens: 40,
+  prompt_tokens_details: { cached_tokens: 900 },
+  // Zero, deliberately: the paths must record it, not drop it as "absent".
+  completion_tokens_details: { reasoning_tokens: 0 },
+};
+
+/** The four parse-usage keys each path folds into its perf. */
+const PARSE_USAGE_KEYS = [
+  "parsePromptTokens",
+  "parseCompletionTokens",
+  "parseCachedTokens",
+  "parseReasoningTokens",
+];
+
+/** The STT model labels + always-known timings the fast path merges in. */
+const STT_PERF_KEYS = [
+  "sttRequestedModel",
+  "sttModel",
+  "sttMs",
+  "sttPrimaryMs",
+  "sttFallbackUsed",
+];
+
+/** Fast voice: STT + parse + the deferred-audio stages + the cleanup schedule. */
+const FAST_PERF_KEYS = [
+  "actionMs",
+  "blobMs",
+  "gptMs",
+  "mutationMs",
+  "parseMs",
+  "scheduleMs",
+  "storageCleanupScheduleMs",
+  "whisperMs",
+  ...STT_PERF_KEYS,
+  ...PARSE_USAGE_KEYS,
+].sort();
+
+/** Typed: no STT, so only the parse stages, the parse usage and the totals. */
+const TYPED_PERF_KEYS = [
+  "actionMs",
+  "gptMs",
+  "mutationMs",
+  "parseMs",
+  "scheduleMs",
+  ...PARSE_USAGE_KEYS,
+].sort();
+
 const CLOCK = {
   deviceLocalDate: "2026-09-01",
   deviceLocalTime: "10:00:00",
@@ -101,7 +151,12 @@ beforeEach(() => {
   mockTranscriptionCreate.mockReset().mockResolvedValue({ text: TRANSCRIPT });
   mockCompletionsCreate
     .mockReset()
-    .mockResolvedValue({ choices: [{ message: { content: PARSE_RESPONSE } }] });
+    .mockResolvedValue({ choices: [{ message: { content: PARSE_RESPONSE } }], usage: PARSE_USAGE });
+
+  // STT and the parse both ride the single OpenRouter key now; the model stays
+  // at its default so these tests pin the switched-to slug.
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  delete process.env.STT_MODEL;
 
   // Pin the TTS provider so the slow path is deterministic wherever this runs.
   process.env.TTS_PROVIDER = "resemble";
@@ -189,24 +244,40 @@ describe("processVoiceReminderFast", () => {
     expect(result.audioStatus).toBe("pending");
   });
 
-  it("reports its own stage timings", async () => {
+  it("reports its own stage timings, the STT labels and the parse usage", async () => {
     const { result } = await run();
-    expect(Object.keys(result.perf).sort()).toEqual([
-      "actionMs",
-      "blobMs",
-      "gptMs",
-      "mutationMs",
-      "scheduleMs",
-      "storageCleanupScheduleMs",
-      "whisperMs",
-    ]);
+    expect(Object.keys(result.perf).sort()).toEqual(FAST_PERF_KEYS);
+    // The merged STT model and the compatibility alias.
+    expect(result.perf.sttRequestedModel).toBe("openai/gpt-4o-mini-transcribe");
+    expect(result.perf.sttModel).toBe("openai/gpt-4o-mini-transcribe");
+    expect(result.perf.sttFallbackUsed).toBe(false);
+    expect(result.perf.whisperMs).toBe(result.perf.sttMs);
+    // The parse usage, zero reasoning tokens preserved.
+    expect(result.perf.parsePromptTokens).toBe(1200);
+    expect(result.perf.parseCompletionTokens).toBe(40);
+    expect(result.perf.parseCachedTokens).toBe(900);
+    expect(result.perf.parseReasoningTokens).toBe(0);
+    // parseMs is the new name for the legacy gptMs; both are present and equal.
+    expect(result.perf.parseMs).toBe(result.perf.gptMs);
   });
 
-  it("still transcribes with whisper-1 and parses with gpt-5.6-luna", async () => {
+  it("transcribes with gpt-4o-mini-transcribe over OpenRouter and parses with gpt-5.6-luna", async () => {
     await run();
 
     expect(mockTranscriptionCreate).toHaveBeenCalledTimes(1);
-    expect(mockTranscriptionCreate.mock.calls[0][0]).toMatchObject({ model: "whisper-1" });
+    expect(mockTranscriptionCreate.mock.calls[0][0]).toMatchObject({
+      model: "openai/gpt-4o-mini-transcribe",
+      response_format: "json",
+    });
+
+    // The STT client is configured for OpenRouter: dummy key, base URL, no SDK
+    // retries, 15s timeout.
+    expect(mockOpenAiOptions).toHaveBeenCalledWith({
+      apiKey: "test-openrouter-key",
+      baseURL: "https://openrouter.ai/api/v1",
+      maxRetries: 0,
+      timeout: 15000,
+    });
 
     expect(mockCompletionsCreate).toHaveBeenCalledTimes(1);
     const parse = mockCompletionsCreate.mock.calls[0][0];
@@ -335,15 +406,16 @@ describe("processTypedReminder", () => {
     expect(result.transcript).toBe("water at eight");
   });
 
-  it("skips STT entirely and reports only the stages it ran", async () => {
+  it("skips STT entirely and reports only the stages it ran, plus parse usage", async () => {
     const { result } = await run();
     expect(mockTranscriptionCreate).not.toHaveBeenCalled();
-    expect(Object.keys(result.perf).sort()).toEqual([
-      "actionMs",
-      "gptMs",
-      "mutationMs",
-      "scheduleMs",
-    ]);
+    expect(Object.keys(result.perf).sort()).toEqual(TYPED_PERF_KEYS);
+    // No STT labels leak into the typed path.
+    expect(result.perf.sttModel).toBeUndefined();
+    expect(result.perf.whisperMs).toBeUndefined();
+    // The parse usage still rides along.
+    expect(result.perf.parseCachedTokens).toBe(900);
+    expect(result.perf.parseMs).toBe(result.perf.gptMs);
   });
 
   it("schedules one TTS job per reminder and no recording cleanup", async () => {

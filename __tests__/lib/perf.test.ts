@@ -218,6 +218,7 @@ describe("creation summary", () => {
     expect(summaries[0]).toContain("cardVisible=200ms");
     expect(summaries[0]).toContain("transcriptAt=2100ms");
     expect(summaries[0]).toContain("committedAt=2600ms");
+    expect(summaries[0]).toContain("importDone=2630ms");
     expect(summaries[0]).toContain("armedAt=2700ms");
     expect(summaries[0]).toContain("creation=take_a");
   });
@@ -239,8 +240,9 @@ describe("creation summary", () => {
     expect(legacy[0]).toContain("convexAction=2000ms");
     // cardWrite = the import itself (2.4 step 3)
     expect(legacy[0]).toContain("cardWrite=30ms");
-    // total = stopTap → committed
-    expect(legacy[0]).toContain("total=2600ms");
+    // total = stopTap → importDone (the observable milestone the user waits on)
+    expect(legacy[0]).toContain("micStop→import");
+    expect(legacy[0]).toContain("total=2630ms");
     expect(legacy[0]).toContain("path=job");
     expect(legacy[0]).toContain("trace=take_b");
   });
@@ -332,15 +334,27 @@ describe("creation summary", () => {
     expect(summaries[0]).toContain("armedAt=75ms");
   });
 
-  it("logs the server's own timings as convex_perf, under the creationId", () => {
-    perf.logCreationServerPerf("take_h", { whisperMs: 900, parseMs: 700, totalMs: 2400 });
+  it("logs the server's own timings as convex_perf, with the STT/parse/cached split", () => {
+    perf.logCreationServerPerf("take_h", {
+      sttModel: "openai/gpt-4o-mini-transcribe",
+      sttMs: 850,
+      whisperMs: 850,
+      parseMs: 700,
+      parseCachedTokens: 900,
+      totalMs: 2400,
+    });
 
     const line = logSpy.mock.calls
       .map((c) => String(c[0]))
       .find((l) => l.includes("convex_perf"));
     expect(line).toBeDefined();
     expect(line).toContain('"traceId":"take_h"');
-    expect(line).toContain('"whisperMs":900');
+    // The one device line now carries the model, the STT duration, the parse
+    // duration and the cached-token count.
+    expect(line).toContain('"sttModel":"openai/gpt-4o-mini-transcribe"');
+    expect(line).toContain('"sttMs":850');
+    expect(line).toContain('"parseMs":700');
+    expect(line).toContain('"parseCachedTokens":900');
   });
 
   it("stays silent when perf logging is disabled", () => {

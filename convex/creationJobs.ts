@@ -105,6 +105,9 @@ const workerJobValidator = v.object({
   localDate: v.string(),
   localTime: v.string(),
   timezone: v.string(),
+  // The worker measures job age (createdAt → handler entry) and, for an
+  // already-queued generation-1 run, uses createdAt as the scheduling instant.
+  createdAt: v.number(),
 });
 
 /** The watched document (spec 1.4). `perf` rides along so the client can log it. */
@@ -261,6 +264,7 @@ export const begin = mutation({
     await ctx.scheduler.runAfter(0, internal.creationJobActions.run, {
       jobId,
       generation: 1,
+      scheduledAt: now,
     });
 
     return { jobId, status: "pending" as const, generation: 1 };
@@ -411,6 +415,7 @@ export const getJob = internalQuery({
       localDate: job.localDate,
       localTime: job.localTime,
       timezone: job.timezone,
+      createdAt: job.createdAt,
     };
   },
 });
@@ -635,6 +640,7 @@ export const retry = mutation({
     await ctx.scheduler.runAfter(0, internal.creationJobActions.run, {
       jobId: job._id,
       generation,
+      scheduledAt: now,
     });
 
     return { status: "pending" as const, generation };

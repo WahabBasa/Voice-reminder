@@ -43,10 +43,35 @@ export type WatchedJob = {
 export type CreationServerPerf = {
   storageGetMs?: number;
   blobMs?: number;
+  /** Compatibility alias for `sttMs`. */
   whisperMs?: number;
   parseMs?: number;
   commitMs?: number;
   totalMs?: number;
+
+  // Speech-to-text (convex/stt.ts SttPerf).
+  sttRequestedModel?: string;
+  sttModel?: string;
+  sttMs?: number;
+  sttPrimaryMs?: number;
+  sttFallbackMs?: number;
+  sttFallbackUsed?: boolean;
+  sttInputTokens?: number;
+  sttOutputTokens?: number;
+  sttAudioSeconds?: number;
+  sttCostUsd?: number;
+
+  // Scheduling, query and checkpoint timings.
+  schedulerDelayMs?: number;
+  jobAgeMs?: number;
+  getJobMs?: number;
+  transcriptionCheckpointMs?: number;
+
+  // Parse-response usage.
+  parsePromptTokens?: number;
+  parseCompletionTokens?: number;
+  parseCachedTokens?: number;
+  parseReasoningTokens?: number;
 };
 
 /** The subset of ConvexReactClient this module needs — and all a test needs to fake. */
@@ -186,6 +211,10 @@ export function watchCreationJob(params: {
     }
 
     if (job.status === "failed" || job.status === "cancelled") {
+      // A failed job carries the timings of everything it did reach before it
+      // gave up. Forward them once, before disposal, so failure latency shows
+      // up in the device log too — cancelled takes have nothing worth logging.
+      if (job.status === "failed") onServerPerf?.(job.perf ?? {});
       const notify = onUpdate(job);
       dispose();
       await notify;

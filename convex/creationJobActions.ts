@@ -3,19 +3,19 @@
 /**
  * The creation job's worker (spec 1.3).
  *
- * This is the fast path's mechanics — the same Whisper call, the same prompt,
+ * This is the fast path's mechanics — the same STT call, the same prompt,
  * the same planner — walked through checkpoints instead of run end to end. The
  * difference that matters: `processVoiceReminderFast` owns its take because the
  * client is blocked on its return value, whereas this action owns nothing. The
  * client has already been told the take exists, a retry may have superseded
- * this run mid-Whisper, and the user may have cancelled. So every write goes
- * through a compare-and-set on `generation`, and a run that loses one simply
- * stops — no cleanup, no error, no second copy of the take. The winner owns the
- * cleanup (spec 1.3 step 4).
+ * this run mid-transcription, and the user may have cancelled. So every write
+ * goes through a compare-and-set on `generation`, and a run that loses one
+ * simply stops — no cleanup, no error, no second copy of the take. The winner
+ * owns the cleanup (spec 1.3 step 4).
  *
- * `"use node"` because Whisper needs the Node runtime, and a `"use node"` file
- * may hold actions and nothing else — which is why every query and mutation
- * this calls lives in convex/creationJobs.ts.
+ * `"use node"` because the STT and parse calls need the Node runtime, and a
+ * `"use node"` file may hold actions and nothing else — which is why every
+ * query and mutation this calls lives in convex/creationJobs.ts.
  *
  * The legacy actions in convex/actions.ts are untouched by all of this. They
  * are still the live path for typed reminders and for every build that predates
@@ -30,17 +30,72 @@ import type { Id } from "./_generated/dataModel";
 import OpenAI from "openai";
 import { buildSystemPrompt, planRemindersFromRawParse } from "./actions";
 import { MAX_EVERY_N_DAYS, validateCreationPlans } from "./creationValidate";
+import { transcribeAudio, SttError, type SttPerf } from "./stt";
+import { extractParseUsage } from "./parseUsage";
 import type { scheduleFields } from "./schema";
 
 /** The stage timings the job row carries. Every field optional — see 1.3. */
 type WorkerPerf = {
   storageGetMs?: number;
   blobMs?: number;
+  /** Compatibility alias for `sttMs`. */
   whisperMs?: number;
   parseMs?: number;
   commitMs?: number;
   totalMs?: number;
+
+  // Speech-to-text (convex/stt.ts SttPerf), merged in from the helper.
+  sttRequestedModel?: string;
+  sttModel?: string;
+  sttMs?: number;
+  sttPrimaryMs?: number;
+  sttFallbackMs?: number;
+  sttFallbackUsed?: boolean;
+  sttInputTokens?: number;
+  sttOutputTokens?: number;
+  sttAudioSeconds?: number;
+  sttCostUsd?: number;
+
+  // Scheduling, query and checkpoint timings (spec §4).
+  schedulerDelayMs?: number;
+  jobAgeMs?: number;
+  getJobMs?: number;
+  transcriptionCheckpointMs?: number;
+
+  // Parse-response usage (convex/parseUsage.ts).
+  parsePromptTokens?: number;
+  parseCompletionTokens?: number;
+  parseCachedTokens?: number;
+  parseReasoningTokens?: number;
 };
+
+/**
+ * Content-free backend telemetry lines (spec §4). Never carry audio,
+ * transcripts, prompt text or credentials — only ids, model slugs and numbers.
+ */
+function logSttPerf(traceId: string | null, path: string, sttPerf: SttPerf): void {
+  console.log(`[VR] stt_perf ${JSON.stringify({ traceId, path, ...sttPerf })}`);
+}
+
+function logParsePerf(
+  traceId: string | null,
+  path: string,
+  parseMs: number,
+  usage: ReturnType<typeof extractParseUsage>
+): void {
+  console.log(`[VR] parse_perf ${JSON.stringify({ traceId, path, parseMs, ...usage })}`);
+}
+
+function logCreationJobPerf(
+  creationId: string,
+  generation: number,
+  status: string,
+  perf: WorkerPerf
+): void {
+  console.log(
+    `[VR] creation_job_perf ${JSON.stringify({ creationId, generation, status, ...perf })}`
+  );
+}
 
 /** The closed set the schema's `errorCode` column holds. */
 type ErrorCode = "storage_missing" | "stt_failed" | "parse_failed" | "unparseable" | "internal";
@@ -172,13 +227,14 @@ async function failJob(
 type StageResult<T> = { ok: true; value: T } | { ok: false; code: ErrorCode };
 
 /**
- * Steps 2 and 3: the stored recording, then Whisper. `perf` is accumulated into
- * so a failure still reports how far the job got.
+ * Steps 2 and 3: the stored recording, then transcription (convex/stt.ts).
+ * `perf` is accumulated into so a failure still reports how far the job got.
  */
 async function transcribeRecording(
   ctx: ActionCtx,
   audioStorageId: Id<"_storage"> | undefined,
-  perf: WorkerPerf
+  perf: WorkerPerf,
+  traceId: string
 ): Promise<StageResult<string>> {
   if (!audioStorageId) return { ok: false, code: "storage_missing" };
 
@@ -206,18 +262,19 @@ async function transcribeRecording(
   }
   perf.blobMs = Date.now() - tBlob;
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const tWhisper = Date.now();
   try {
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: "whisper-1",
-    });
-    perf.whisperMs = Date.now() - tWhisper;
-    return { ok: true, value: transcription.text };
+    const { text, perf: sttPerf } = await transcribeAudio(audioFile);
+    Object.assign(perf, sttPerf);
+    perf.whisperMs = sttPerf.sttMs;
+    logSttPerf(traceId, "job", sttPerf);
+    return { ok: true, value: text };
   } catch (e) {
-    perf.whisperMs = Date.now() - tWhisper;
-    console.error("[VR] creation job: transcription failed:", e);
+    if (e instanceof SttError) {
+      Object.assign(perf, e.perf);
+      perf.whisperMs = e.perf.sttMs;
+      logSttPerf(traceId, "job", e.perf);
+    }
+    console.error("[VR] creation job: transcription failed");
     return { ok: false, code: "stt_failed" };
   }
 }
@@ -230,7 +287,8 @@ async function transcribeRecording(
 async function parseTake(
   job: { localDate: string; localTime: string; timezone: string },
   transcript: string,
-  perf: WorkerPerf
+  perf: WorkerPerf,
+  traceId: string
 ): Promise<StageResult<PlannedReminder[]>> {
   const tParse = Date.now();
   try {
@@ -271,6 +329,9 @@ async function parseTake(
       timezone: job.timezone,
     });
     perf.parseMs = Date.now() - tParse;
+    const usage = extractParseUsage((completion as { usage?: unknown }).usage);
+    Object.assign(perf, usage);
+    logParsePerf(traceId, "job", perf.parseMs, usage);
     return { ok: true, value: plans };
   } catch (e) {
     perf.parseMs = Date.now() - tParse;
@@ -282,38 +343,74 @@ async function parseTake(
 // ─── The worker ─────────────────────────────────────────────────────────────
 
 export const run = internalAction({
-  args: { jobId: v.id("creationJobs"), generation: v.number() },
+  args: {
+    jobId: v.id("creationJobs"),
+    generation: v.number(),
+    // The moment `begin`/`retry` scheduled this run, passed so the worker can
+    // measure how long it waited in the scheduler queue. Optional so a run
+    // queued by a build that predates this field still validates.
+    scheduledAt: v.optional(v.number()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const tStart = Date.now();
+    const handlerEnteredAt = Date.now();
+    const tStart = handlerEnteredAt;
     const perf: WorkerPerf = {};
 
     // 1. Still the live run?
-    const job = await ctx.runQuery(internal.creationJobs.getJob, { jobId: args.jobId });
+    const tGetJob = Date.now();
+    let job;
+    try {
+      job = await ctx.runQuery(internal.creationJobs.getJob, { jobId: args.jobId });
+    } finally {
+      // In a `finally` so a rejected query still records the elapsed time.
+      perf.getJobMs = Date.now() - tGetJob;
+    }
     if (!job) return null;
     if (job.generation !== args.generation || job.status !== "pending") return null;
 
+    // Scheduling telemetry. `jobAgeMs` is always createdAt → handler entry;
+    // `schedulerDelayMs` is scheduledAt → handler entry when the timestamp was
+    // supplied. For an already-queued generation-1 run without one, createdAt
+    // IS the scheduling instant (begin schedules inside the insert), so it
+    // stands in; a retry queued without one omits the delay rather than
+    // pretending the createdAt gap is scheduler latency.
+    perf.jobAgeMs = handlerEnteredAt - job.createdAt;
+    if (args.scheduledAt !== undefined) {
+      perf.schedulerDelayMs = handlerEnteredAt - args.scheduledAt;
+    } else if (args.generation === 1) {
+      perf.schedulerDelayMs = handlerEnteredAt - job.createdAt;
+    }
+
     // 2-3. Recording → transcript.
-    const stt = await transcribeRecording(ctx, job.audioStorageId, perf);
+    const stt = await transcribeRecording(ctx, job.audioStorageId, perf, job.creationId);
     if (!stt.ok) {
       await failJob(ctx, args, stt.code, perf);
+      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
       return null;
     }
 
     // 4. Milestone. Losing it means a retry or a cancel got here first, and the
     //    winner owns everything from here — including the recording.
-    const milestone = await ctx.runMutation(internal.creationJobs.casPatch, {
-      jobId: args.jobId,
-      generation: args.generation,
-      expectStatus: ["pending"],
-      patch: { status: "transcribed", transcript: stt.value },
-    });
+    let milestone;
+    const tCheckpoint = Date.now();
+    try {
+      milestone = await ctx.runMutation(internal.creationJobs.casPatch, {
+        jobId: args.jobId,
+        generation: args.generation,
+        expectStatus: ["pending"],
+        patch: { status: "transcribed", transcript: stt.value },
+      });
+    } finally {
+      perf.transcriptionCheckpointMs = Date.now() - tCheckpoint;
+    }
     if (milestone.result !== "applied") return null;
 
     // 5. Transcript → plans.
-    const parsed = await parseTake(job, stt.value, perf);
+    const parsed = await parseTake(job, stt.value, perf, job.creationId);
     if (!parsed.ok) {
       await failJob(ctx, args, parsed.code, perf);
+      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
       return null;
     }
 
@@ -331,6 +428,7 @@ export const run = internalAction({
         `[VR] creation job: plan ${verdict.index} rejected — ${verdict.field}: ${verdict.reason}`
       );
       await failJob(ctx, args, "unparseable", perf);
+      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
       return null;
     }
 
@@ -347,6 +445,7 @@ export const run = internalAction({
     } catch (e) {
       console.error("[VR] creation job: commit failed:", e);
       await failJob(ctx, args, "internal", perf);
+      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
       return null;
     }
     if (committed.result !== "applied") return null;
@@ -365,6 +464,7 @@ export const run = internalAction({
       console.error("[VR] creation job: could not record timings:", e);
     }
 
+    logCreationJobPerf(job.creationId, args.generation, "committed", perf);
     return null;
   },
 });
