@@ -12,6 +12,7 @@ import {
   Clock,
   FileText,
   Info,
+  MessageSquare,
   Mic,
   MoreVertical,
   Pause,
@@ -51,6 +52,7 @@ export type AppIconName =
   | "clock"
   | "file-text"
   | "info"
+  | "message-square"
   | "mic"
   | "more-vertical"
   | "pause"
@@ -82,6 +84,7 @@ const iconByName: Record<AppIconName, ComponentType<BaseIconProps>> = {
   clock: Clock,
   "file-text": FileText,
   info: Info,
+  "message-square": MessageSquare,
   mic: Mic,
   "more-vertical": MoreVertical,
   pause: Pause,

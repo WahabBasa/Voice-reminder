@@ -44,6 +44,8 @@ export type PendingTakeCardProps = {
   onCancel: (creationId: string) => void;
   onRetry: (creationId: string) => void;
   onDiscard: (creationId: string) => void;
+  /** Opens the feedback composer pre-loaded with this failed take's details. */
+  onReport?: (take: PendingTake) => void;
 };
 
 function PendingTakeCardView({
@@ -52,6 +54,7 @@ function PendingTakeCardView({
   onCancel,
   onRetry,
   onDiscard,
+  onReport,
 }: PendingTakeCardProps) {
   const content = pendingCardContent(take, limit);
   const translateX = useSharedValue(0);
@@ -152,6 +155,21 @@ function PendingTakeCardView({
               </Pressable>
             )}
           </Pressable>
+
+          {/* A failed take is the one moment worth offering a report: the
+              details that make it debuggable are right here. */}
+          {isError && onReport && (
+            <Pressable
+              onPress={() => onReport(take)}
+              hitSlop={8}
+              style={styles.reportTap}
+              accessibilityRole="button"
+              accessibilityLabel="Report a problem with this recording"
+            >
+              <AppIcon name="message-square" size={14} color={colors.textTertiary} />
+              <Text style={styles.reportText}>Report a problem</Text>
+            </Pressable>
+          )}
         </Animated.View>
       </GestureDetector>
     </View>
@@ -176,6 +194,7 @@ export function PendingTakeList(props: {
   onCancel: (creationId: string) => void;
   onRetry: (creationId: string) => void;
   onDiscard: (creationId: string) => void;
+  onReport?: (take: PendingTake) => void;
 }) {
   if (props.takes.length === 0) return null;
   return (
@@ -188,6 +207,7 @@ export function PendingTakeList(props: {
           onCancel={props.onCancel}
           onRetry={props.onRetry}
           onDiscard={props.onDiscard}
+          onReport={props.onReport}
         />
       ))}
     </View>
@@ -257,5 +277,19 @@ const styles = StyleSheet.create({
   cancelTap: {
     marginLeft: spacing.sm,
     padding: 4,
+  },
+  reportTap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingBottom: 14,
+    marginTop: -6,
+  },
+  reportText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textTertiary,
+    fontWeight: "500",
   },
 });

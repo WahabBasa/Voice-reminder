@@ -34,6 +34,7 @@ const modules: Record<string, () => Promise<unknown>> = {
   "../../convex/creationJobs.ts": () => import("../../convex/creationJobs"),
   "../../convex/creationValidate.ts": () => import("../../convex/creationValidate"),
   "../../convex/crons.ts": () => import("../../convex/crons"),
+  "../../convex/feedback.ts": () => import("../../convex/feedback"),
   "../../convex/helpers.ts": () => import("../../convex/helpers"),
   "../../convex/reminders.ts": () => import("../../convex/reminders"),
   "../../convex/scheduleShape.ts": () => import("../../convex/scheduleShape"),

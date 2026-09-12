@@ -26,6 +26,7 @@
   <li><strong>Generated reminder audio.</strong> The spoken version of your reminder that plays when the alarm goes off.</li>
   <li><strong>An install identifier.</strong> A random string your device generates the first time you open the app. It is not your Apple Account, not a hardware serial number, and not tied to your identity. It exists so our backend can tell your reminders apart from everyone else's. Delete the app and it's gone; reinstall and a brand-new one is made.</li>
   <li><strong>Crash and diagnostic reports.</strong> If something breaks, technical details &mdash; device model, operating system version, and where in the code the failure happened &mdash; go to our error-monitoring service so we can fix it.</li>
+  <li><strong>Feedback you send.</strong> If you send feedback from inside the app, we keep what you wrote so we can read and answer it. Depending on where you sent it from, a short bundle of technical details goes with it &mdash; the app build and version, and either the saved details of the reminder you were looking at or the details of a recording that failed &mdash; so we can make sense of the report. It's linked to your install identifier, never to your name, and it's emailed to the developer through an email delivery service so they actually see it. We keep feedback for up to 12 months.</li>
   <li><strong>Subscription status.</strong> If you subscribe to Pro, our subscription-management service records that a purchase exists against an anonymous identifier.</li>
 </ul>
 
@@ -58,6 +59,7 @@
   <li><strong>Hosting and storage</strong> &mdash; to keep your reminders and their audio available to your device.</li>
   <li><strong>Error monitoring</strong> &mdash; to tell us when something in the app breaks.</li>
   <li><strong>Subscription management</strong> &mdash; to record whether Pro is active on your install.</li>
+  <li><strong>Email delivery</strong> &mdash; to send the feedback you write to the developer.</li>
 </ul>
 <p>Each one sees only what its own job requires, is contractually bound to protect it, and is prohibited from using it for any purpose of its own. We pass on the smallest amount of data that lets each step work, and nothing beyond it.</p>
 <p>Purchases themselves are handled entirely by <strong>Apple</strong> through the App Store. Apple processes the payment; we never see your card details, billing address, or Apple Account credentials.</p>
@@ -68,6 +70,7 @@
   <li><strong>Voice recordings:</strong> deleted from our backend as soon as processing finishes &mdash; normally within seconds of you speaking. We do not keep an archive of your recordings.</li>
   <li><strong>Reminder text and generated audio:</strong> kept until you delete the reminder. Deleting a reminder in the app deletes its stored text and its audio files from our backend as well.</li>
   <li><strong>Reminders on your device:</strong> stored locally so the app works offline, and removed when you delete the reminder or uninstall the app.</li>
+  <li><strong>Feedback:</strong> kept for up to 12 months so we can look into it and follow up, then deleted. Deleting a reminder does <em>not</em> delete a feedback report that mentioned it &mdash; the report is a separate record of something you told us, and it stays until its own time is up.</li>
   <li><strong>Crash reports:</strong> retained by our error-monitoring service for a limited period (typically up to 90 days) and then discarded.</li>
   <li><strong>Subscription records:</strong> kept by our subscription-management service and by Apple for as long as needed for billing and tax purposes.</li>
 </ul>
