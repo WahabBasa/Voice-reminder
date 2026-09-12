@@ -367,6 +367,99 @@ describe("retry", () => {
     expect(late).toEqual({ result: "stale" });
     expect((await readJob(t, DEVICE, creationId))!.status).toBe("pending");
   });
+
+  test("a device take retries on its stored transcript, no audio needed", async () => {
+    const { creationId } = await insertJob(t, {
+      status: "failed",
+      errorCode: "parse_failed",
+      sttSource: "device",
+      transcript: "water at eight",
+      deviceSttMs: 90,
+      deviceSttEngine: "transcriber",
+      attempts: 1,
+    });
+
+    const result = await t.mutation(api.creationJobs.retry, { deviceId: DEVICE, creationId });
+    expect(result).toEqual({ status: "pending", generation: 2 });
+
+    const job = await readJob(t, DEVICE, creationId);
+    expect(job).toMatchObject({
+      status: "pending",
+      generation: 2,
+      attempts: 2,
+      sttSource: "device",
+      transcript: "water at eight",
+      deviceSttMs: 90,
+      deviceSttEngine: "transcriber",
+    });
+    expect(job!.audioStorageId).toBeUndefined();
+    expect(await scheduledOf(t, WORKER)).toHaveLength(1);
+    expect(await scheduledOf(t, BLOB_DELETE)).toHaveLength(0);
+  });
+
+  test("a replacement recording flips a device take to cloud and clears the device fields", async () => {
+    const { creationId } = await insertJob(t, {
+      status: "failed",
+      errorCode: "internal",
+      sttSource: "device",
+      transcript: "water at eight",
+      deviceSttMs: 90,
+      deviceSttEngine: "dictation",
+      deviceSttLocale: "en-US",
+    });
+    const newStorageId = await storeAudio(t, "re-record");
+
+    await t.mutation(api.creationJobs.retry, { deviceId: DEVICE, creationId, newStorageId });
+
+    const job = await readJob(t, DEVICE, creationId);
+    expect(job).toMatchObject({
+      status: "pending",
+      generation: 2,
+      sttSource: "cloud",
+      audioStorageId: newStorageId,
+    });
+    expect(job!.deviceSttMs).toBeUndefined();
+    expect(job!.deviceSttEngine).toBeUndefined();
+    expect(job!.deviceSttLocale).toBeUndefined();
+    // The transcript is left on the row; the cloud worker's milestone overwrites
+    // it. The device take had no recording, so nothing is scheduled for deletion.
+    expect(job!.transcript).toBe("water at eight");
+    expect(await scheduledOf(t, WORKER)).toHaveLength(1);
+    expect(await scheduledOf(t, BLOB_DELETE)).toHaveLength(0);
+  });
+
+  test("a fresh device transcript on retry replaces the stored one and its provenance", async () => {
+    const { creationId } = await insertJob(t, {
+      status: "failed",
+      errorCode: "unparseable",
+      sttSource: "device",
+      transcript: "old text",
+      deviceSttMs: 50,
+      deviceSttEngine: "dictation",
+    });
+
+    await t.mutation(api.creationJobs.retry, {
+      deviceId: DEVICE,
+      creationId,
+      transcript: "  new and better text  ",
+      sttSource: "device",
+      deviceSttMs: 75,
+      deviceSttEngine: "transcriber",
+      deviceSttLocale: "en-GB",
+    });
+
+    const job = await readJob(t, DEVICE, creationId);
+    expect(job).toMatchObject({
+      status: "pending",
+      generation: 2,
+      sttSource: "device",
+      transcript: "new and better text",
+      deviceSttMs: 75,
+      deviceSttEngine: "transcriber",
+      deviceSttLocale: "en-GB",
+    });
+    expect(job!.audioStorageId).toBeUndefined();
+  });
 });
 
 // ─── 1.5 discard ────────────────────────────────────────────────────────────

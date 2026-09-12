@@ -153,6 +153,33 @@ const MAX_TRACKED_CREATIONS = 8;
 
 const creationRuns = new Map<string, StageMarks>();
 
+// Which STT path produced a take, and — for a device take — how long the
+// on-device call took. Kept beside the timing marks (not a mark itself, because
+// these are provenance, not timestamps) so the creation summary can name both.
+type CreationStt = { sttSource?: string; deviceSttMs?: number };
+const creationStt = new Map<string, CreationStt>();
+
+/**
+ * Note a take's STT provenance for its summary line. The handoff calls this on
+ * the device path (`{ sttSource: "device", deviceSttMs }`) and the cloud
+ * fallback (`{ sttSource: "cloud" }`); the server perf fills `sttSource` in for
+ * a cloud take that had none locally.
+ */
+export function noteCreationStt(creationId: string, info: CreationStt): void {
+  if (!isEnabled()) return;
+  const existing = creationStt.get(creationId);
+  if (!existing) {
+    if (creationStt.size >= MAX_TRACKED_CREATIONS) {
+      const oldest = creationStt.keys().next().value;
+      if (oldest !== undefined) creationStt.delete(oldest);
+    }
+    creationStt.set(creationId, { ...info });
+    return;
+  }
+  if (info.sttSource !== undefined) existing.sttSource = info.sttSource;
+  if (info.deviceSttMs !== undefined) existing.deviceSttMs = info.deviceSttMs;
+}
+
 /**
  * Record one point in a take's life. First write wins; `armedAt` closes it.
  *
@@ -183,10 +210,16 @@ export function markCreation(creationId: string, mark: CreationMark, atMs?: numb
 /** A take that will never arm (failed, cancelled, discarded) stops being tracked. */
 export function dropCreationRun(creationId: string): void {
   creationRuns.delete(creationId);
+  creationStt.delete(creationId);
 }
 
 /** Server-side timings, read off the watched job document (D7). */
 export function logCreationServerPerf(creationId: string, perf: PerfData): void {
+  // The worker stamps the take's STT source into its perf patch; carry it into
+  // the summary so a cloud take that skipped the device path still reports one.
+  if (typeof perf.sttSource === "string") {
+    noteCreationStt(creationId, { sttSource: perf.sttSource });
+  }
   perfLog(creationId, "device.processing", "convex_perf", perf);
 }
 
@@ -205,8 +238,17 @@ function emitCreationSummary(creationId: string, marks: StageMarks): void {
     .map(([name, ms]) => `${name}=${ms}ms`)
     .join(" ");
 
+  // STT provenance, when we know it: the source (device/cloud) and, for a
+  // device take, the on-device call's own latency.
+  const stt = creationStt.get(creationId);
+  creationStt.delete(creationId);
+  const sttParts: string[] = [];
+  if (stt?.sttSource !== undefined) sttParts.push(`sttSource=${stt.sttSource}`);
+  if (stt?.deviceSttMs !== undefined) sttParts.push(`deviceStt=${stt.deviceSttMs}ms`);
+  const sttSuffix = sttParts.length > 0 ? ` ${sttParts.join(" ")}` : "";
+
   console.log(
-    `[VR CREATION SUMMARY] stopTap→armed ${parts} creation=${creationId}`
+    `[VR CREATION SUMMARY] stopTap→armed ${parts}${sttSuffix} creation=${creationId}`
   );
 
   // ---- Legacy aliases, exactly as spec §3.3 maps them ----

@@ -16,7 +16,7 @@ import { type Reminder, type ReminderHistory } from "../../lib/store";
 import {
   addDaysISO,
   historyOnDay,
-  isCompletedOnDay,
+  isDayFullyCompleted,
   occurrencesForDay,
   parseISODate,
   todayISO,
@@ -177,7 +177,7 @@ export default function DaysPage({
     (dateISO: string) => {
       const isToday = dateISO === today;
       const active = occurrencesForDay(reminders, dateISO).filter(
-        (reminder) => !isCompletedOnDay(reminder, history, dateISO)
+        (reminder) => !isDayFullyCompleted(reminder, history, dateISO)
       );
       const dayHistory = historyOnDay(history, dateISO);
 

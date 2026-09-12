@@ -95,6 +95,16 @@ export const creationPerfValidator = v.object({
   sttAudioSeconds: v.optional(v.number()),
   sttCostUsd: v.optional(v.number()),
 
+  // ── Device-STT provenance (spec §device transcript). "device" takes skip the
+  //    cloud STT block above entirely; these say so and carry the on-device
+  //    timing/engine/locale so the perf line reads the same shape either way.
+  sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+  deviceSttMs: v.optional(v.number()),
+  deviceSttEngine: v.optional(
+    v.union(v.literal("dictation"), v.literal("transcriber"))
+  ),
+  deviceSttLocale: v.optional(v.string()),
+
   // ── Scheduling, query and checkpoint timings (spec §4).
   schedulerDelayMs: v.optional(v.number()),
   jobAgeMs: v.optional(v.number()),
@@ -215,8 +225,21 @@ export default defineSchema({
     attempts: v.number(),
     transcript: v.optional(v.string()),
     // The uploaded recording. Retained while the job can still be retried and
-    // deleted at commit, cancel, discard or GC.
+    // deleted at commit, cancel, discard or GC. A device-transcribed take
+    // (sttSource "device") never has one — its transcript arrived with `begin`.
     audioStorageId: v.optional(v.id("_storage")),
+    // Where the transcript came from. "device" = the phone transcribed on-device
+    // and `begin` carried the text, so the worker skips storage + cloud STT;
+    // "cloud" = the worker transcribes the recording itself. Absent on rows
+    // written before this field existed, which are all cloud.
+    sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+    // Device-STT telemetry, only set on a "device" take. How long the on-device
+    // transcription took, which engine produced it, and the recognizer locale.
+    deviceSttMs: v.optional(v.number()),
+    deviceSttEngine: v.optional(
+      v.union(v.literal("dictation"), v.literal("transcriber"))
+    ),
+    deviceSttLocale: v.optional(v.string()),
     // Insertion order, written by `commit` — the order `getReminders` replays.
     reminderIds: v.optional(v.array(v.id("reminders"))),
     // storage_missing | stt_failed | parse_failed | unparseable | internal
@@ -235,4 +258,37 @@ export default defineSchema({
   })
     .index("by_device_creation", ["deviceId", "creationId"])
     .index("by_status_updated", ["status", "updatedAt"]),
+
+  /**
+   * In-app user feedback (bug reports, requests) with a founder-set status.
+   *
+   * There are no accounts, so a report belongs to the device that filed it, and
+   * `listForDevice` only ever returns that device's own rows. `clientId` is the
+   * client-generated idempotency key: a lost `submit` response must not file a
+   * second report or send a second email. `status`/`note`/`respondedAt` are the
+   * founder's half — set from the dashboard through `feedback.setStatus`, never
+   * on submit.
+   */
+  feedback: defineTable({
+    // Client uuid, the idempotency key on (deviceId, clientId).
+    clientId: v.string(),
+    // Owning install (bearer id, same trust model as creationJobs).
+    deviceId: v.string(),
+    // The report itself, trimmed to 1..2000 chars by the mutation.
+    text: v.string(),
+    // The client's clock at file time; `receivedAt` is the server's.
+    createdAt: v.number(),
+    receivedAt: v.number(),
+    // Client-attached JSON (screen, reminder, error, build). Capped at 8 KB
+    // serialized by the mutation. Never crosses back to the client.
+    context: v.optional(v.any()),
+    status: v.union(v.literal("received"), v.literal("looking"), v.literal("fixed")),
+    // The founder's short reply, shown next to the status.
+    note: v.optional(v.string()),
+    // Server time the founder last set a status; only setStatus writes it.
+    respondedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_device", ["deviceId", "createdAt"])
+    .index("by_client", ["deviceId", "clientId"]),
 });

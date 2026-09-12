@@ -589,6 +589,76 @@ describe("resuming an upload", () => {
   });
 });
 
+describe("a device take (spec §4)", () => {
+  it("rebegins from the persisted transcript alone — no upload, no audio", async () => {
+    const h = setup();
+    await seed(
+      take({
+        phase: "processing",
+        sttSource: "device",
+        transcript: "call mom at six",
+        deviceSttMs: 88,
+        deviceSttEngine: "dictation",
+        deviceSttLocale: "en-US",
+      })
+    );
+
+    enqueueReconcile("t1"); // processing + null → rebegin
+    await reconcileIdle();
+
+    expect(h.calls.uploads).toEqual([]); // the whole point: nothing uploaded
+    expect(h.calls.begin).toHaveLength(1);
+    expect(h.calls.begin[0]).toMatchObject({
+      creationId: "t1",
+      transcript: "call mom at six",
+      sttSource: "device",
+      deviceSttMs: 88,
+      deviceSttEngine: "dictation",
+      deviceSttLocale: "en-US",
+    });
+    expect(h.calls.begin[0].audioStorageId).toBeUndefined();
+    expect(getPendingTake("t1")).toMatchObject({ phase: "processing" });
+    expect(h.calls.subscribes).toEqual(["t1"]);
+  });
+
+  it("rebegins a transcribed device take with no audio either", async () => {
+    const h = setup();
+    await seed(
+      take({ phase: "transcribed", sttSource: "device", transcript: "buy milk" })
+    );
+
+    enqueueReconcile("t1"); // transcribed + null → rebegin
+    await reconcileIdle();
+
+    expect(h.calls.uploads).toEqual([]);
+    expect(h.calls.begin[0]).toMatchObject({ transcript: "buy milk", sttSource: "device" });
+  });
+
+  it("still uploads for a plain take with neither a transcript nor a blob (D10)", async () => {
+    const h = setup();
+    await seed(take({ phase: "recording_saved", fragileUri: false }));
+
+    enqueueReconcile("t1"); // recording_saved + null → resume_upload
+    await reconcileIdle();
+
+    expect(h.calls.uploads).toEqual(["t1"]);
+    expect(h.calls.begin[0]).toMatchObject({ audioStorageId: "st-new" });
+    expect(h.calls.begin[0].transcript).toBeUndefined();
+  });
+
+  it("still begins with audio for a cloud take that has a blob", async () => {
+    const h = setup();
+    await seed(take({ phase: "processing", audioStorageId: "st1" }));
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.begin[0]).toMatchObject({ audioStorageId: "st1" });
+    expect(h.calls.begin[0].transcript).toBeUndefined();
+    expect(h.calls.uploads).toEqual([]);
+  });
+});
+
 describe("a cancel", () => {
   it("stops the job and forgets the take", async () => {
     const h = setup();

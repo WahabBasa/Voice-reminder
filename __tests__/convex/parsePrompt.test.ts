@@ -78,6 +78,32 @@ describe("buildSystemPrompt — cacheable ordering", () => {
   });
 });
 
+describe("buildSystemPrompt — the title carries action + distinguishing detail", () => {
+  it("states the action-plus-detail guidance and gives an example", () => {
+    const prompt = buildSystemPrompt(CONTEXT_A);
+    // The guidance: the title is the action plus the detail that tells this
+    // reminder apart from every other one the user could have said.
+    expect(prompt).toContain(
+      "the action plus the distinguishing detail the user gave"
+    );
+    // A worked example, and an opposite-action pair so "take out" never
+    // collapses into "put in".
+    expect(prompt).toContain("Take bottle out of fridge");
+    expect(prompt).toContain('"take out" vs "put in"');
+  });
+
+  it("keeps the title rule in the cacheable prefix, not after the context", () => {
+    const prompt = buildSystemPrompt(CONTEXT_A);
+    const prefix = prompt.slice(0, prompt.indexOf(CONTEXT_MARKER));
+    // The rule and its example must sit in the byte-identical prefix so the
+    // whole instruction block stays cacheable (OLD-106).
+    expect(prefix).toContain(
+      "the action plus the distinguishing detail the user gave"
+    );
+    expect(prefix).toContain("Take bottle out of fridge");
+  });
+});
+
 describe("buildSystemPrompt — the spoken-line rule ships once", () => {
   it("carries the rule exactly one time", () => {
     const prompt = buildSystemPrompt(CONTEXT_A);

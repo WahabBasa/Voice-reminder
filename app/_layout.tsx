@@ -13,7 +13,9 @@ import ToastProvider, { useToast } from "../components/ToastProvider";
 import { initializePurchases } from "../lib/purchases";
 import { useReminderStore } from "../lib/store";
 import { useSettingsStore } from "../lib/settingsStore";
-import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, enforcePendingAlarmTimeout, reconcileAlarmKitEvents } from "../lib/notifications";
+import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, enforcePendingAlarmTimeout } from "../lib/notifications";
+import { reconcileRings } from "../lib/ringReconcile";
+import { subscribeAlarmEvents } from "../lib/alarmKit";
 import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
@@ -26,6 +28,7 @@ import { hydrateReminderAudio } from "../lib/audioHydration";
 import { startForegroundReconcile } from "../lib/takeReconcile";
 import { getDeviceId } from "../lib/deviceId";
 import ErrorBoundary from "../components/ErrorBoundary";
+import FeedbackHost from "../components/FeedbackHost";
 import PermissionPrompt from "../components/PermissionPrompt";
 import AnimatedSplash from "../components/AnimatedSplash";
 import { useAppFonts } from "../lib/fonts";
@@ -104,17 +107,32 @@ function StartupTasks() {
   useEffect(() => {
     if (Platform.OS !== "ios") return;
 
-    const drain = () => {
-      void reconcileAlarmKitEvents().catch((e) => {
-        console.log("[VR] AlarmKit reconciliation failed:", e);
+    const drain = (reason: "launch" | "foreground" | "native") => {
+      // reconcileRings is the SOLE native-queue drainer: it peeks once, applies
+      // the ring lifecycle AND the legacy ledger (missed/completed history rows,
+      // sibling cancels, one-off removal, reschedules) from the same events,
+      // then acks. The old reconcileAlarmKitEvents also drained (getAndClearEventLog
+      // = peek+ack), so running both double-acked the queue and starved one side.
+      void reconcileRings(reason).catch((e) => {
+        console.log("[VR] reconcileRings failed:", e);
       });
     };
 
-    drain();
+    drain("launch");
     const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") drain();
+      if (state === "active") drain("foreground");
     });
-    return () => sub.remove();
+    // A native Stop/Later fired while the app is alive but not transitioning
+    // AppState (a lock-screen answer) still reconciles immediately.
+    const unsubscribeNative = subscribeAlarmEvents(() => {
+      void reconcileRings("native").catch((e) => {
+        console.log("[VR] reconcileRings(native) failed:", e);
+      });
+    });
+    return () => {
+      sub.remove();
+      unsubscribeNative();
+    };
   }, []);
 
   useEffect(() => {
@@ -407,6 +425,9 @@ function RootLayout() {
                   }
                 />
               </Stack>
+              {/* Feedback composer + status list, mounted above every screen
+                  and sheet so opening it from an edit leaves that edit intact. */}
+              <FeedbackHost />
               {/* Fallback alarm overlay for foreground app (pastebin Step 4.1) */}
               <AlarmOverlayFallback />
             </ToastProvider>

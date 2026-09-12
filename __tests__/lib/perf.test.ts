@@ -357,6 +357,37 @@ describe("creation summary", () => {
     expect(line).toContain('"parseCachedTokens":900');
   });
 
+  it("names the STT source and on-device latency in the summary (§6)", () => {
+    perf.noteCreationStt("take_stt", { sttSource: "device", deviceSttMs: 350 });
+    perf.markCreation("take_stt", "stopTap");
+    perf.markCreation("take_stt", "armedAt");
+
+    const summary = lines("[VR CREATION SUMMARY]")[0];
+    expect(summary).toContain("sttSource=device");
+    expect(summary).toContain("deviceStt=350ms");
+    expect(summary).toContain("creation=take_stt");
+  });
+
+  it("takes the STT source from the server perf for a cloud take", () => {
+    perf.logCreationServerPerf("take_cloud", { sttSource: "cloud", sttMs: 900 });
+    perf.markCreation("take_cloud", "stopTap");
+    perf.markCreation("take_cloud", "armedAt");
+
+    const summary = lines("[VR CREATION SUMMARY]")[0];
+    expect(summary).toContain("sttSource=cloud");
+    // No device call happened, so no device-latency field is invented.
+    expect(summary).not.toContain("deviceStt=");
+  });
+
+  it("omits the STT fields entirely when nothing noted them", () => {
+    perf.markCreation("take_none", "stopTap");
+    perf.markCreation("take_none", "armedAt");
+
+    const summary = lines("[VR CREATION SUMMARY]")[0];
+    expect(summary).not.toContain("sttSource=");
+    expect(summary).not.toContain("deviceStt=");
+  });
+
   it("stays silent when perf logging is disabled", () => {
     process.env.EXPO_PUBLIC_VR_PERF_LOGS = "0";
     jest.resetModules();

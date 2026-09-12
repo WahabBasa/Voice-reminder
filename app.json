@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.wahabbasa.VoiceReminder",
-      "buildNumber": "2",
+      "buildNumber": "5",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
@@ -120,6 +120,7 @@
       "./plugins/withArmOnlyBuild",
       "./plugins/withAlarmAudioModule",
       "./plugins/withAlarmKit",
+      "./plugins/withVRSpeech",
       [
         "@sentry/react-native/expo",
         {

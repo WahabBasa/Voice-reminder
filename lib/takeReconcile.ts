@@ -13,6 +13,7 @@ import {
 } from "./pendingTakes";
 import type { WatchedJob } from "./creationJobWatch";
 import type { CommitTakeOutcome } from "./takeCommit";
+import type { SpeechEngine } from "./vrSpeech";
 
 /**
  * Reconciliation (spec §2.5) and the retry dispatch (§2.6).
@@ -153,14 +154,24 @@ export function decideRetryAction(params: {
 export type ReconcileDeps = {
   getDeviceId: () => Promise<string>;
   fetchJob: (deviceId: string, creationId: string) => Promise<WatchedJob | null>;
-  begin: (args: {
-    deviceId: string;
-    creationId: string;
-    audioStorageId: string;
-    localDate: string;
-    localTime: string;
-    timezone: string;
-  }) => Promise<{ status: ServerJobStatus }>;
+  begin: (
+    args: {
+      deviceId: string;
+      creationId: string;
+      localDate: string;
+      localTime: string;
+      timezone: string;
+    } & (
+      | { audioStorageId: string }
+      | {
+          transcript: string;
+          sttSource: "device";
+          deviceSttMs?: number;
+          deviceSttEngine?: SpeechEngine;
+          deviceSttLocale?: string;
+        }
+    )
+  ) => Promise<{ status: ServerJobStatus }>;
   cancel: (args: {
     deviceId: string;
     creationId: string;
@@ -423,28 +434,52 @@ async function beginAndSubscribe(
   deviceId: string
 ): Promise<void> {
   const audioStorageId = take.audioStorageId;
-  if (!audioStorageId) {
+  // A device take rebegins from its persisted transcript alone — no blob to
+  // upload, no audio to point at (spec §4). Exactly one of the two is ever set.
+  const isDeviceTake = !audioStorageId && take.sttSource === "device" && !!take.transcript;
+
+  if (!audioStorageId && !isDeviceTake) {
     await failLocally(take, "server");
     return;
   }
 
   const live = getPendingTake(take.creationId);
   if (!live || live.phase === "cancelling") {
-    await handOrphanBlob(current, deviceId, take.creationId, audioStorageId);
+    // Only a blob can be orphaned; a device transcript references nothing.
+    if (audioStorageId) {
+      await handOrphanBlob(current, deviceId, take.creationId, audioStorageId);
+    }
     return;
   }
 
-  await current.begin({
-    deviceId,
-    creationId: take.creationId,
-    audioStorageId,
-    localDate: take.localDate,
-    localTime: take.localTime,
-    timezone: take.timezone,
-  });
-  const processing = await updatePendingTake(take.creationId, "processing", {
-    audioStorageId,
-  });
+  await current.begin(
+    audioStorageId
+      ? {
+          deviceId,
+          creationId: take.creationId,
+          audioStorageId,
+          localDate: take.localDate,
+          localTime: take.localTime,
+          timezone: take.timezone,
+        }
+      : {
+          deviceId,
+          creationId: take.creationId,
+          transcript: take.transcript as string,
+          sttSource: "device",
+          ...(take.deviceSttMs !== undefined ? { deviceSttMs: take.deviceSttMs } : {}),
+          ...(take.deviceSttEngine ? { deviceSttEngine: take.deviceSttEngine } : {}),
+          ...(take.deviceSttLocale ? { deviceSttLocale: take.deviceSttLocale } : {}),
+          localDate: take.localDate,
+          localTime: take.localTime,
+          timezone: take.timezone,
+        }
+  );
+  const processing = await updatePendingTake(
+    take.creationId,
+    "processing",
+    audioStorageId ? { audioStorageId } : {}
+  );
   current.subscribe(processing ?? take);
 }
 

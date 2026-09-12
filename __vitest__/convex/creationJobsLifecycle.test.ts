@@ -96,6 +96,109 @@ describe("begin", () => {
   });
 });
 
+// ─── 1.2 begin, device transcript ───────────────────────────────────────────
+
+describe("begin — device transcript", () => {
+  async function beginDevice(over: Record<string, unknown> = {}) {
+    return await t.mutation(api.creationJobs.begin, {
+      deviceId: DEVICE,
+      creationId: "take_dev",
+      transcript: "water at eight",
+      sttSource: "device" as const,
+      deviceSttMs: 140,
+      deviceSttEngine: "dictation" as const,
+      deviceSttLocale: "en-US",
+      ...CLOCK,
+      ...over,
+    });
+  }
+
+  test("inserts a pending job with the transcript, no audio, and schedules a worker", async () => {
+    const begun = await beginDevice();
+
+    expect(begun).toMatchObject({ status: "pending", generation: 1 });
+    const job = await readJob(t, DEVICE, "take_dev");
+    expect(job).toMatchObject({
+      status: "pending",
+      generation: 1,
+      attempts: 1,
+      sttSource: "device",
+      transcript: "water at eight",
+      deviceSttMs: 140,
+      deviceSttEngine: "dictation",
+      deviceSttLocale: "en-US",
+    });
+    expect(job!.audioStorageId).toBeUndefined();
+
+    const workers = await scheduledOf(t, WORKER);
+    expect(workers).toHaveLength(1);
+    expect(workers[0].args[0]).toMatchObject({ jobId: begun.jobId, generation: 1 });
+  });
+
+  test("trims the transcript before storing it", async () => {
+    await beginDevice({ transcript: "  water at eight  " });
+    expect((await readJob(t, DEVICE, "take_dev"))!.transcript).toBe("water at eight");
+  });
+
+  test("a cloud begin stamps sttSource cloud and keeps the recording", async () => {
+    const begun = await begin();
+    const job = await readJob(t, DEVICE, "take_1");
+    expect(job!.sttSource).toBe("cloud");
+    expect(job!.audioStorageId).toBeDefined();
+    expect(job!.transcript).toBeUndefined();
+    expect(begun.status).toBe("pending");
+  });
+
+  test("get returns sttSource so the client can tell a device take apart", async () => {
+    const { creationId } = await insertJob(t, {
+      status: "pending",
+      sttSource: "device",
+      transcript: "water at eight",
+    });
+    const watched = await t.query(api.creationJobs.get, { deviceId: DEVICE, creationId });
+    expect(watched).toMatchObject({ sttSource: "device", transcript: "water at eight" });
+  });
+
+  test.each([
+    [
+      "both a recording and a device transcript",
+      async () => ({ audioStorageId: await storeAudio(t), transcript: "x", sttSource: "device" as const }),
+    ],
+    ["neither a recording nor a transcript", async () => ({})],
+    ["a transcript but sttSource is not device", async () => ({ transcript: "x", sttSource: "cloud" as const })],
+    ["a transcript with sttSource device but it is only whitespace", async () => ({ transcript: "   ", sttSource: "device" as const })],
+  ])("rejects %s", async (_label, build) => {
+    await expect(
+      t.mutation(api.creationJobs.begin, {
+        deviceId: DEVICE,
+        creationId: "take_bad",
+        ...CLOCK,
+        ...(await build()),
+      })
+    ).rejects.toThrow(/exactly one/i);
+    // Nothing was inserted and no worker was scheduled.
+    expect(await readJob(t, DEVICE, "take_bad")).toBeNull();
+    expect(await scheduledOf(t, WORKER)).toHaveLength(0);
+  });
+
+  test("an idempotent re-begin never re-validates: it returns the existing job", async () => {
+    const first = await beginDevice();
+    // A second call with contradictory args (audio too) would fail validation on
+    // the insert path, but the row already exists so it short-circuits.
+    const audioStorageId = await storeAudio(t);
+    const second = await t.mutation(api.creationJobs.begin, {
+      deviceId: DEVICE,
+      creationId: "take_dev",
+      transcript: "water at eight",
+      sttSource: "device" as const,
+      audioStorageId,
+      ...CLOCK,
+    });
+    expect(second.jobId).toBe(first.jobId);
+    expect(await scheduledOf(t, WORKER)).toHaveLength(1);
+  });
+});
+
 // ─── 1.4 get ────────────────────────────────────────────────────────────────
 
 describe("get", () => {

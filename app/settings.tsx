@@ -23,6 +23,16 @@ import {
 // One source of truth for the legal URLs — same constants the paywall and the
 // consent card use.
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL, openInAppBrowser } from "../lib/legalLinks";
+import { useSettingsStore } from "../lib/settingsStore";
+import { useFeedbackUi } from "../lib/feedbackUi";
+import type { VoiceLanguageSetting } from "../lib/deviceStt";
+import type { SpeechEngine } from "../lib/vrSpeech";
+
+const VOICE_LANGUAGE_LABELS: Record<VoiceLanguageSetting, string> = {
+  auto: "Automatic",
+  en: "English",
+  ar: "العربية",
+};
 
 type SettingsRowProps = {
   icon: Parameters<typeof AppIcon>[0]["name"];
@@ -81,6 +91,52 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
   // answers "unknown", and without this subscription nothing would ever correct
   // it: the SDK's own update listener only refreshes lib/purchases' cache.
   useEffect(() => subscribeToProStatus(setProStatus), []);
+
+  // Voice-transcription preferences. Loaded on mount so a value the user set
+  // last session is reflected even when they never opened the recorder yet.
+  const voiceLanguage = useSettingsStore((s) => s.settings.voiceLanguage);
+  const voiceEngine = useSettingsStore((s) => s.settings.voiceEngine);
+  const setVoiceLanguage = useSettingsStore((s) => s.setVoiceLanguage);
+  const setVoiceEngine = useSettingsStore((s) => s.setVoiceEngine);
+
+  // In-app feedback: the composer and the "your feedback" list are mounted once
+  // at the root (components/FeedbackHost); these rows just open them.
+  const openFeedbackComposer = useFeedbackUi((s) => s.openComposer);
+  const openFeedbackList = useFeedbackUi((s) => s.openList);
+  useEffect(() => {
+    void useSettingsStore.getState().loadSettings().catch(() => {});
+  }, []);
+  // The engine override is a debugging affordance, shown only when perf logs
+  // are on — the same flag the on-device timing lines ride.
+  const showVoiceEngineRow = process.env.EXPO_PUBLIC_VR_PERF_LOGS === "1";
+
+  const handlePickVoiceLanguage = () => {
+    Alert.alert(
+      "Voice language",
+      "Which language to transcribe your recordings in on this iPhone. Automatic follows your device languages.",
+      [
+        { text: VOICE_LANGUAGE_LABELS.auto, onPress: () => void setVoiceLanguage("auto") },
+        { text: VOICE_LANGUAGE_LABELS.en, onPress: () => void setVoiceLanguage("en") },
+        { text: VOICE_LANGUAGE_LABELS.ar, onPress: () => void setVoiceLanguage("ar") },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
+  const handlePickVoiceEngine = () => {
+    Alert.alert("Voice engine (dev)", "On-device transcription model", [
+      { text: "Dictation", onPress: () => void setVoiceEngine("dictation") },
+      { text: "Transcriber", onPress: () => void setVoiceEngine("transcriber") },
+      { text: "Default", onPress: () => void setVoiceEngine(undefined) },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
+  const voiceEngineLabel = (engine: SpeechEngine | undefined): string => {
+    if (engine === "dictation") return "Dictation";
+    if (engine === "transcriber") return "Transcriber";
+    return "Default";
+  };
 
   // One resolution pass: the cached answer lands first (instant, possibly
   // stale), the forced re-read follows and catches sandbox expiry, refunds and
@@ -242,6 +298,46 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
           label="Restore purchases"
           subtitle={isRestoring ? "Restoring…" : "Already subscribed? Get Pro back"}
           onPress={isRestoring ? undefined : handleRestore}
+        />
+      </View>
+
+      {/* Voice: how recordings get transcribed on this device */}
+      <Text style={styles.sectionLabel}>Voice</Text>
+      <View style={styles.card}>
+        <SettingsRow
+          icon="mic"
+          label="Voice language"
+          subtitle={`Transcribed on this iPhone · ${VOICE_LANGUAGE_LABELS[voiceLanguage]}`}
+          onPress={handlePickVoiceLanguage}
+        />
+        {showVoiceEngineRow ? (
+          <>
+            <View style={styles.separator} />
+            <SettingsRow
+              icon="settings"
+              label="Voice engine"
+              subtitle={voiceEngineLabel(voiceEngine)}
+              onPress={handlePickVoiceEngine}
+            />
+          </>
+        ) : null}
+      </View>
+
+      {/* Feedback: a direct line to the developer, and where past notes stand */}
+      <Text style={styles.sectionLabel}>Feedback</Text>
+      <View style={styles.card}>
+        <SettingsRow
+          icon="message-square"
+          label="Send feedback"
+          subtitle="Tell the developer what's working or what isn't"
+          onPress={() => openFeedbackComposer({ kind: "settings" })}
+        />
+        <View style={styles.separator} />
+        <SettingsRow
+          icon="info"
+          label="Your feedback"
+          subtitle="See what you've sent and any replies"
+          onPress={openFeedbackList}
         />
       </View>
 

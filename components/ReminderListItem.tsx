@@ -21,6 +21,8 @@ export interface ReminderListItemProps {
   missed?: boolean;
   /** Owed from a ring that already passed — red subtitle, red ring, still tickable. */
   overdue?: boolean;
+  /** A ring is live ("Ringing now") or just passed ("Due now") — subtle accent, never red. */
+  ringing?: boolean;
   onPress?: () => void;
   onToggleComplete?: () => void;
   onDelete?: () => void;
@@ -51,6 +53,7 @@ export default function ReminderListItem({
   completed = false,
   missed = false,
   overdue = false,
+  ringing = false,
   onPress,
   onToggleComplete,
   onDelete,
@@ -120,7 +123,7 @@ export default function ReminderListItem({
                     completed && styles.titleCompleted,
                     missed && styles.titleMissed,
                   ]}
-                  numberOfLines={1}
+                  numberOfLines={2}
                 >
                   {title}
                 </Text>
@@ -130,6 +133,7 @@ export default function ReminderListItem({
                   styles.subtitle,
                   missed && styles.subtitleMissed,
                   overdue && styles.subtitleOverdue,
+                  ringing && styles.subtitleRinging,
                 ]}
                 numberOfLines={1}
               >
@@ -156,7 +160,7 @@ export default function ReminderListItem({
                   <AppIcon name="x" size={14} color={colors.statusOverdue} strokeWidth={3} />
                 </View>
               ) : (
-                <View style={[styles.circle, overdue && styles.circleOverdue]} />
+                <View style={[styles.circle, overdue && styles.circleOverdue, ringing && styles.circleRinging]} />
               )}
               </Pressable>
             )}
@@ -248,6 +252,11 @@ const styles = StyleSheet.create({
     color: colors.statusOverdue,
     fontWeight: "600",
   },
+  // A live ring is not a failure — accent, not red. Just enough to draw the eye.
+  subtitleRinging: {
+    color: colors.accent,
+    fontWeight: "600",
+  },
   completeTap: {
     marginLeft: spacing.sm,
   },
@@ -260,6 +269,10 @@ const styles = StyleSheet.create({
   },
   circleOverdue: {
     borderColor: colors.statusOverdue,
+    borderWidth: 2,
+  },
+  circleRinging: {
+    borderColor: colors.accent,
     borderWidth: 2,
   },
   circleDone: {

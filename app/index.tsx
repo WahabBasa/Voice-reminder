@@ -57,10 +57,21 @@ import {
   dropCreationRun,
   logCreationServerPerf,
   markCreation,
+  noteCreationStt,
   perfLog,
   recordTap,
   startStallMonitor,
 } from "../lib/perf";
+import { isVRSpeechAvailable, speechPrepare } from "../lib/vrSpeech";
+import {
+  DEFAULT_STT_ENGINE,
+  DEFAULT_STT_TIMEOUT_MS,
+  defaultDeviceSttDeps,
+  getDeviceLocales,
+  resolveVoiceLocale,
+  runVoiceHandoff,
+  type DeviceSttSuccess,
+} from "../lib/deviceStt";
 import { creationBreadcrumb } from "../lib/sentry";
 import { getActiveReminderCount, getFreeActiveLimit } from "../lib/usage";
 import {
@@ -95,11 +106,16 @@ import {
 } from "../lib/takeReconcile";
 import { watchCreationJob, type CreationJobWatchHandle } from "../lib/creationJobWatch";
 import PendingTakeCard, { usePendingTakes } from "../components/PendingTakeCard";
+import { feedbackUi } from "../lib/feedbackUi";
 import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, todayISO } from "../lib/dayOccurrences";
 import { activeCards, nextLine, patternLine, type ActiveCard, type SnoozeSnapshot } from "../lib/remindersMembership";
 import { getSnoozeUntil, refreshSnoozeWindows } from "../lib/alarmKit";
+import { getRingSnapshot, subscribeRingLifecycle, type RingSnapshot } from "../lib/ringLifecycle";
+import { reconcileRings } from "../lib/ringReconcile";
+import { completeOccurrence } from "../lib/occurrenceActions";
+import { cancelOccurrenceFallbackChain } from "../lib/notifications";
 import { formatClockAt } from "../lib/time";
 import { checkProStatus, forceRefreshProStatus, getProStatusSnapshot } from "../lib/purchases";
 import { resolveImportProStatus } from "../lib/proStatusResolve";
@@ -166,6 +182,18 @@ function createCreationId(): string {
 const onPendingTakeCancel = (creationId: string) => void cancelTake(creationId);
 const onPendingTakeRetry = (creationId: string) => void retryTake(creationId);
 const onPendingTakeDiscard = (creationId: string) => void discardTake(creationId);
+// A failed take is worth a report: hand its debuggable details to the composer.
+const onPendingTakeReport = (take: PendingTake) =>
+  feedbackUi.openComposer(
+    {
+      kind: "failed_take",
+      errorKind: take.errorKind,
+      serverErrorCode: take.serverErrorCode,
+      creationId: take.creationId,
+      sttSource: take.sttSource,
+    },
+    "Includes details of this failed take."
+  );
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -183,6 +211,7 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [snoozes, setSnoozes] = useState<SnoozeSnapshot>({});
+  const [ringSnapshot, setRingSnapshot] = useState<RingSnapshot>(() => getRingSnapshot());
   const remindersListRef = useRef<FlatList<ActiveCard>>(null);
   const cardsRef = useRef<ActiveCard[]>([]);
   const [importedCardId, setImportedCardId] = useState<string | null>(null);
@@ -231,6 +260,10 @@ export default function HomeScreen() {
   const [composerTraceId, setComposerTraceId] = useState<string | null>(null);
   const [isComposerSubmitting, setIsComposerSubmitting] = useState(false);
   const [page, setPage] = useState(PAGE_TODAY);
+  // Current page, readable from callbacks that must not re-create when it
+  // changes (the stop-tap handler). Mirrors `page` on every render.
+  const pageRef = useRef(page);
+  pageRef.current = page;
   // Takes still on their way to becoming reminders (spec §2.3). Never in the
   // reminders store, so never counted, scheduled, or swiped as one.
   const pendingTakes = usePendingTakes();
@@ -306,27 +339,42 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-      const refresh = async () => {
+      // The tick is not a bare storage re-read any more: it drives the one
+      // serialized ring coordinator (native events → lifecycle → snapshot), so
+      // a Stop/Later answered while the app is open lands on the card within a
+      // tick instead of on the next foreground.
+      const refresh = async (reason: "tick" | "foreground" = "tick") => {
+        await reconcileRings(reason);
         await refreshSnoozeWindows();
         if (cancelled) return;
         const now = Date.now();
+        const ring = getRingSnapshot();
         const snapshot: Record<string, number> = {};
         for (const reminder of useReminderStore.getState().reminders) {
+          // The lifecycle record's real armed comeback time wins over the
+          // legacy AlarmKit "tap + 5 min" mirror.
           const until = getSnoozeUntil(reminder.id, now);
           if (until !== undefined) snapshot[reminder.id] = until;
         }
         setSnoozes(snapshot);
+        setRingSnapshot(ring);
         setNowMs(now);
       };
-      void refresh();
-      const interval = setInterval(() => void refresh(), 30_000);
+      void refresh("foreground");
+      const interval = setInterval(() => void refresh("tick"), 30_000);
       const subscription = AppState.addEventListener("change", (state) => {
-        if (state === "active") void refresh();
+        if (state === "active") void refresh("foreground");
+      });
+      // A native Stop/Later that reconciles the lifecycle out of band still
+      // repaints the list without waiting for the next tick.
+      const unsubscribeRing = subscribeRingLifecycle((next) => {
+        if (!cancelled) setRingSnapshot(next);
       });
       return () => {
         cancelled = true;
         clearInterval(interval);
         subscription.remove();
+        unsubscribeRing();
       };
     }, [])
   );
@@ -938,6 +986,17 @@ export default function HomeScreen() {
   // the upload-URL round trip overlaps the user talking (OLD-106). Deliberately
   // swallows its own failure: this is an optimization, and the stop path can
   // always fetch a URL itself.
+  // Preheat the on-device transcriber for the language the user will get. Pure
+  // fire-and-forget: it installs assets if missing and warms the analyzer, and
+  // any failure just means the cloud path takes the take. Never on the hot path
+  // of the upload-URL prefetch.
+  const warmDeviceStt = useCallback(() => {
+    if (!isVRSpeechAvailable()) return;
+    const { voiceLanguage, voiceEngine } = useSettingsStore.getState().settings;
+    const localeId = resolveVoiceLocale(voiceLanguage, getDeviceLocales());
+    void speechPrepare(localeId, voiceEngine ?? DEFAULT_STT_ENGINE).catch(() => {});
+  }, []);
+
   const handleRecordingStart = useCallback(
     (traceId: string) => {
       const tPrefetch = Date.now();
@@ -955,9 +1014,25 @@ export default function HomeScreen() {
           });
           return null;
         });
+      // Fired alongside the prefetch, not before it — the prefetch promise is
+      // already assigned above, so this cannot delay it.
+      warmDeviceStt();
     },
-    [generateAudioUploadUrl]
+    [generateAudioUploadUrl, warmDeviceStt]
   );
+
+  // Once at launch, after consent exists: get the transcriber assets warming
+  // before the first tap. Cheap and idempotent; skipped until the user has
+  // agreed to processing, so nothing runs for someone who never records.
+  useEffect(() => {
+    if (!isVRSpeechAvailable()) return;
+    void (async () => {
+      const store = useSettingsStore.getState();
+      if (!store.hasLoadedSettings) await store.loadSettings().catch(() => {});
+      if (useSettingsStore.getState().settings.aiConsentAcceptedAt === null) return;
+      warmDeviceStt();
+    })();
+  }, [warmDeviceStt]);
 
   // ─── Voice takes: the creation-job pipeline (spec §2.2) ───────────────────
 
@@ -1122,6 +1197,59 @@ export default function HomeScreen() {
   );
 
   /**
+   * The device-STT half of stop-tap: the transcript came from on-device, so
+   * there is nothing to upload. Persist it onto the take FIRST (a kill here
+   * lets reconcile rebegin from the transcript alone, no audio — spec §4), then
+   * begin the job from the transcript and open the same subscription the cloud
+   * path uses. A begin that fails is a plain network failure — the card says so
+   * and reconciliation/retry falls the take back to the cloud upload path.
+   */
+  const beginDeviceTake = useCallback(
+    async (take: PendingTake, stt: DeviceSttSuccess) => {
+      const creationId = take.creationId;
+      try {
+        const live = getPendingTake(creationId);
+        if (!live || live.phase === "cancelling") {
+          creationBreadcrumb("device_take_cancelled");
+          return;
+        }
+        const stamped = await updatePendingTake(creationId, "processing", {
+          transcript: stt.text,
+          sttSource: "device",
+          deviceSttMs: stt.ms,
+          deviceSttEngine: stt.engine,
+          deviceSttLocale: stt.locale,
+        });
+        markCreation(creationId, "transcriptAt");
+        noteCreationStt(creationId, { sttSource: "device", deviceSttMs: stt.ms });
+
+        const deviceId = await getDeviceId();
+        markCreation(creationId, "beginCalled");
+        await beginCreationJob({
+          deviceId,
+          creationId,
+          transcript: stt.text,
+          sttSource: "device",
+          deviceSttMs: stt.ms,
+          deviceSttEngine: stt.engine,
+          deviceSttLocale: stt.locale,
+          localDate: take.localDate,
+          localTime: take.localTime,
+          timezone: take.timezone,
+        } as any);
+        creationBreadcrumb("job_begun_device");
+
+        void subscribeToJob(stamped ?? take);
+      } catch (error) {
+        console.log("[VR] take: device begin failed:", error);
+        creationBreadcrumb("device_begin_failed", "network");
+        await updatePendingTake(creationId, "failed", { errorKind: "network" }).catch(() => {});
+      }
+    },
+    [beginCreationJob, subscribeToJob]
+  );
+
+  /**
    * Stop-tap.
    *
    * Everything up to "close the overlay" is ONE AsyncStorage write, because the
@@ -1194,6 +1322,20 @@ export default function HomeScreen() {
       markCreation(creationId, "cardVisible");
       creationBreadcrumb("card_visible");
 
+      // A take started from the Days page has nowhere to show on that page — its
+      // pending card renders in the Reminders list header. So once the take is
+      // safely persisted (the cancel / failed-save paths already returned
+      // above), switch back to the Reminders list and pin it to the top so the
+      // pending card is the first thing in view. setPage is the single source
+      // the pager and the bottom bar both read, so this keeps them in sync — the
+      // same setter the tab tap uses.
+      if (pageRef.current === PAGE_DAYS) {
+        setPage(PAGE_TODAY);
+        requestAnimationFrame(() =>
+          remindersListRef.current?.scrollToOffset({ offset: 0, animated: true })
+        );
+      }
+
       // Detached, in order: make the recording durable, then send it. A copy
       // that fails leaves the take exactly as it was persisted — cache URI,
       // still fragile — which is the state §2.1's rules are written for.
@@ -1235,10 +1377,31 @@ export default function HomeScreen() {
           live = upgraded;
         }
 
-        await uploadAndBegin(live, claimedUploadUrl);
+        // Device-first (spec §3): try the on-device transcriber, and only fall
+        // to the upload+begin path if it can't or won't produce a transcript.
+        // The perf events ride the take's traceId, exactly like the cloud path.
+        const { voiceLanguage, voiceEngine } = useSettingsStore.getState().settings;
+        await runVoiceHandoff({
+          available: isVRSpeechAvailable(),
+          hasAudioStorageId: !!live.audioStorageId,
+          fileUri: live.recordingUri,
+          localeId: resolveVoiceLocale(voiceLanguage, getDeviceLocales()),
+          engine: voiceEngine ?? DEFAULT_STT_ENGINE,
+          timeoutMs: DEFAULT_STT_TIMEOUT_MS,
+          requestId: live.creationId,
+          stt: defaultDeviceSttDeps,
+          onDevice: (stt) => beginDeviceTake(live, stt),
+          onCloud: () => uploadAndBegin(live, claimedUploadUrl),
+          onPerf: (event, data) => {
+            if (event === "device_stt_fallback") {
+              noteCreationStt(live.creationId, { sttSource: "cloud" });
+            }
+            perfLog(traceId, "device.processing", event, data);
+          },
+        });
       })();
     },
-    [uploadAndBegin]
+    [uploadAndBegin, beginDeviceTake]
   );
 
   /** What a landed import does to the screen: animate, toast, schedule, hydrate. */
@@ -1511,19 +1674,34 @@ export default function HomeScreen() {
         void (async () => {
           const reminder = useReminderStore.getState().getReminderById(reminderId);
 
-          // Record completion (always)
-          await storeRecordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
-            console.log("[VR] Failed to record completion:", e);
-          });
+          // Done targets the OCCURRENCE the card is showing (card row carries
+          // occurrenceAt). This stops the live ring and cancels that
+          // occurrence's chain — a repeater used to only get history written
+          // (Codex ring-state (l)), so Done-while-ringing left the ring going.
+          const card = cardsRef.current.find((c) => c.reminder.id === reminderId);
+          const occurrenceAt = card?.occurrenceAt ?? Date.now();
+          const isOnce = reminder?.frequency === "once";
 
-          // One-time reminders become inactive after completion.
-          if (reminder?.frequency === "once") {
-            await removeReminderFully(reminderId, {
-              removeConvexById: async (id) => {
-                await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
+          await completeOccurrence(
+            { reminderId, occurrenceAt },
+            {
+              reminderTitle,
+              isOneTime: isOnce,
+              source: "fallback",
+              cancelFallbackChain: async (ref) => {
+                await cancelOccurrenceFallbackChain(ref.reminderId, ref.occurrenceAt);
               },
-            });
-          }
+              removeReminder: async (id) => {
+                await removeReminderFully(id, {
+                  removeConvexById: async (cid) => {
+                    await removeConvexReminder({ id: cid as any, deviceId: await getDeviceId() });
+                  },
+                });
+              },
+            }
+          ).catch((e) => {
+            console.log("[VR] Failed to complete occurrence:", e);
+          });
         })();
 
         // No toast for individual mark-done (too noisy)
@@ -1550,8 +1728,8 @@ export default function HomeScreen() {
 
   const todayDate = todayISO(nowMs);
   const cards = useMemo(
-    () => activeCards(reminders, history, nowMs, snoozes),
-    [reminders, history, nowMs, snoozes]
+    () => activeCards(reminders, history, nowMs, snoozes, ringSnapshot),
+    [reminders, history, nowMs, snoozes, ringSnapshot]
   );
 
   cardsRef.current = cards;
@@ -1735,6 +1913,7 @@ export default function HomeScreen() {
                     onCancel={onPendingTakeCancel}
                     onRetry={onPendingTakeRetry}
                     onDiscard={onPendingTakeDiscard}
+                    onReport={onPendingTakeReport}
                   />
                 ))}
               </>

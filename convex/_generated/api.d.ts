@@ -13,6 +13,8 @@ import type * as creationJobActions from "../creationJobActions.js";
 import type * as creationJobs from "../creationJobs.js";
 import type * as creationValidate from "../creationValidate.js";
 import type * as crons from "../crons.js";
+import type * as feedback from "../feedback.js";
+import type * as feedbackEmail from "../feedbackEmail.js";
 import type * as helpers from "../helpers.js";
 import type * as parseUsage from "../parseUsage.js";
 import type * as reminders from "../reminders.js";
@@ -31,6 +33,8 @@ declare const fullApi: ApiFromModules<{
   creationJobs: typeof creationJobs;
   creationValidate: typeof creationValidate;
   crons: typeof crons;
+  feedback: typeof feedback;
+  feedbackEmail: typeof feedbackEmail;
   helpers: typeof helpers;
   parseUsage: typeof parseUsage;
   reminders: typeof reminders;

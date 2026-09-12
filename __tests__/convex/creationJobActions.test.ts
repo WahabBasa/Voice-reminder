@@ -184,6 +184,83 @@ describe("scheduling and stage telemetry", () => {
   });
 });
 
+describe("the cloud path", () => {
+  it("stamps sttSource cloud on the perf it carries to commit", async () => {
+    const ctx = makeCtx(makeJob());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1, scheduledAt: 999_500 });
+    expect(commitOf(ctx)?.preCommitPerf.sttSource).toBe("cloud");
+  });
+});
+
+describe("a device-transcribed take", () => {
+  function deviceJob(over: Record<string, unknown> = {}) {
+    return makeJob({
+      audioStorageId: undefined,
+      sttSource: "device",
+      transcript: "drink water at eight",
+      deviceSttMs: 120,
+      deviceSttEngine: "dictation",
+      deviceSttLocale: "en-US",
+      ...over,
+    });
+  }
+
+  it("skips storage and STT, parses the stored transcript and commits", async () => {
+    const ctx = makeCtx(deviceJob());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1, scheduledAt: 999_500 });
+
+    // Neither the recording nor the cloud transcriber was ever touched.
+    expect(ctx.storage.get).not.toHaveBeenCalled();
+    expect(mockTranscriptionCreate).not.toHaveBeenCalled();
+    // The parse ran on the device transcript, as the user message.
+    expect(mockCompletionsCreate).toHaveBeenCalledTimes(1);
+    const messages = (mockCompletionsCreate.mock.calls[0][0] as any).messages;
+    expect(messages[messages.length - 1]).toEqual({
+      role: "user",
+      content: "drink water at eight",
+    });
+    // The milestone CAS still wrote the transcript.
+    const milestone = ctx.runMutation.mock.calls.find(
+      ([, a]: [unknown, any]) => a.patch?.status === "transcribed"
+    )?.[1];
+    expect(milestone.patch.transcript).toBe("drink water at eight");
+    // And it reached commit.
+    expect(commitOf(ctx)).toBeDefined();
+  });
+
+  it("carries device provenance and zeroed STT timings in the perf", async () => {
+    const ctx = makeCtx(deviceJob());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1, scheduledAt: 999_500 });
+
+    const perf = commitOf(ctx)?.preCommitPerf;
+    expect(perf.sttSource).toBe("device");
+    expect(perf.sttModel).toBe("device");
+    expect(perf.storageGetMs).toBe(0);
+    expect(perf.blobMs).toBe(0);
+    expect(perf.sttMs).toBe(0);
+    expect(perf.whisperMs).toBe(0);
+    expect(perf.sttFallbackUsed).toBe(false);
+    expect(perf.deviceSttMs).toBe(120);
+    expect(perf.deviceSttEngine).toBe("dictation");
+    expect(perf.deviceSttLocale).toBe("en-US");
+    // The parse timings are still present — only STT was skipped.
+    expect(perf.parsePromptTokens).toBe(1200);
+    // Cloud-only STT fields never appear.
+    expect(perf.sttRequestedModel).toBeUndefined();
+  });
+
+  it("fails as internal if a device take somehow reaches the worker with no transcript", async () => {
+    const ctx = makeCtx(deviceJob({ transcript: "   " }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    const fail = failOf(ctx);
+    expect(fail).toBeDefined();
+    expect(fail.patch.errorCode).toBe("internal");
+    expect(mockCompletionsCreate).not.toHaveBeenCalled();
+    expect(commitOf(ctx)).toBeUndefined();
+  });
+});
+
 describe("an STT helper failure", () => {
   it("fails the job as stt_failed and never invokes the parse", async () => {
     // Both the primary and the fallback reject → SttError → stt_failed.

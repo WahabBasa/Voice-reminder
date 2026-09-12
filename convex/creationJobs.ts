@@ -102,6 +102,14 @@ const workerJobValidator = v.object({
   generation: v.number(),
   attempts: v.number(),
   audioStorageId: v.optional(v.id("_storage")),
+  // Transcript + provenance. A "device" take carries its transcript here and
+  // the worker skips storage + cloud STT; the deviceStt* fields ride into the
+  // perf line. Absent sttSource means a pre-field (cloud) row.
+  transcript: v.optional(v.string()),
+  sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+  deviceSttMs: v.optional(v.number()),
+  deviceSttEngine: v.optional(v.union(v.literal("dictation"), v.literal("transcriber"))),
+  deviceSttLocale: v.optional(v.string()),
   localDate: v.string(),
   localTime: v.string(),
   timezone: v.string(),
@@ -115,6 +123,9 @@ const watchedJobValidator = v.object({
   status: creationStatusValidator,
   generation: v.number(),
   transcript: v.optional(v.string()),
+  // So a client that lost its outbox can tell a device take from a cloud one
+  // and rebegin it from the transcript alone, no audio (spec §reconcile).
+  sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
   errorCode: v.optional(v.string()),
   reminderIds: v.optional(v.array(v.id("reminders"))),
   perf: v.optional(creationPerfValidator),
@@ -226,7 +237,15 @@ export const begin = mutation({
   args: {
     deviceId: v.string(),
     creationId: v.string(),
-    audioStorageId: v.id("_storage"),
+    // Optional now: a cloud take supplies the recording, a device take supplies
+    // the transcript instead. `begin` requires exactly one of the two — see the
+    // handler. Absent audio with a device transcript is the whole point.
+    audioStorageId: v.optional(v.id("_storage")),
+    transcript: v.optional(v.string()),
+    sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+    deviceSttMs: v.optional(v.number()),
+    deviceSttEngine: v.optional(v.union(v.literal("dictation"), v.literal("transcriber"))),
+    deviceSttLocale: v.optional(v.string()),
     localDate: v.string(),
     localTime: v.string(),
     timezone: v.string(),
@@ -246,6 +265,21 @@ export const begin = mutation({
       };
     }
 
+    // Exactly one source. A cloud take has an `audioStorageId` and the worker
+    // transcribes it; a device take has a non-empty `transcript` with
+    // sttSource "device" and the worker skips STT. Neither or both is a bug in
+    // the caller and must not reach the table — checked only on the insert path
+    // so an idempotent re-`begin` never throws.
+    const trimmed = args.transcript?.trim() ?? "";
+    const hasAudio = args.audioStorageId !== undefined;
+    const hasDeviceTranscript = trimmed.length > 0 && args.sttSource === "device";
+    if (hasAudio === hasDeviceTranscript) {
+      throw new Error(
+        "creationJobs.begin: provide exactly one of `audioStorageId` (cloud STT) " +
+          'or a non-empty `transcript` with `sttSource: "device"` (on-device STT)'
+      );
+    }
+
     const now = Date.now();
     const jobId = await ctx.db.insert("creationJobs", {
       deviceId: args.deviceId,
@@ -253,7 +287,18 @@ export const begin = mutation({
       status: "pending" as const,
       generation: 1,
       attempts: 1,
-      audioStorageId: args.audioStorageId,
+      ...(hasDeviceTranscript
+        ? {
+            transcript: trimmed,
+            sttSource: "device" as const,
+            deviceSttMs: args.deviceSttMs,
+            deviceSttEngine: args.deviceSttEngine,
+            deviceSttLocale: args.deviceSttLocale,
+          }
+        : {
+            audioStorageId: args.audioStorageId,
+            sttSource: "cloud" as const,
+          }),
       localDate: args.localDate,
       localTime: args.localTime,
       timezone: args.timezone,
@@ -287,6 +332,7 @@ export const get = query({
       status: job.status,
       generation: job.generation,
       transcript: job.transcript,
+      sttSource: job.sttSource,
       errorCode: job.errorCode,
       reminderIds: job.reminderIds,
       perf: job.perf,
@@ -412,6 +458,11 @@ export const getJob = internalQuery({
       generation: job.generation,
       attempts: job.attempts,
       audioStorageId: job.audioStorageId,
+      transcript: job.transcript,
+      sttSource: job.sttSource,
+      deviceSttMs: job.deviceSttMs,
+      deviceSttEngine: job.deviceSttEngine,
+      deviceSttLocale: job.deviceSttLocale,
       localDate: job.localDate,
       localTime: job.localTime,
       timezone: job.timezone,
@@ -603,6 +654,15 @@ export const retry = mutation({
     deviceId: v.string(),
     creationId: v.string(),
     newStorageId: v.optional(v.id("_storage")),
+    // A device take can be retried against a fresh on-device transcript, or —
+    // if on-device STT gave up — re-uploaded as audio and retried in the cloud.
+    // Passing `newStorageId` takes the cloud branch; passing a device transcript
+    // takes the device branch. See the handler for the exact transition.
+    transcript: v.optional(v.string()),
+    sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+    deviceSttMs: v.optional(v.number()),
+    deviceSttEngine: v.optional(v.union(v.literal("dictation"), v.literal("transcriber"))),
+    deviceSttLocale: v.optional(v.string()),
   },
   returns: v.object({
     status: statusOrMissingValidator,
@@ -622,12 +682,38 @@ export const retry = mutation({
     const swapping =
       args.newStorageId !== undefined && args.newStorageId !== job.audioStorageId;
 
+    // Source transition (spec §retry). A replacement recording turns the take
+    // into a cloud one — the worker will transcribe it — so the device fields
+    // are cleared. Otherwise a fresh device transcript replaces the stored one.
+    // With neither, a device take simply reruns its parse on the stored
+    // transcript (no audio needed) and a cloud take reuses its stored blob.
+    const trimmed = args.transcript?.trim() ?? "";
+    const replacingDeviceTranscript = trimmed.length > 0 && args.sttSource === "device";
+    let sourcePatch: Partial<Doc<"creationJobs">> = {};
+    if (args.newStorageId !== undefined) {
+      sourcePatch = {
+        sttSource: "cloud" as const,
+        deviceSttMs: undefined,
+        deviceSttEngine: undefined,
+        deviceSttLocale: undefined,
+      };
+    } else if (replacingDeviceTranscript) {
+      sourcePatch = {
+        sttSource: "device" as const,
+        transcript: trimmed,
+        deviceSttMs: args.deviceSttMs,
+        deviceSttEngine: args.deviceSttEngine,
+        deviceSttLocale: args.deviceSttLocale,
+      };
+    }
+
     await ctx.db.patch(job._id, {
       status: "pending" as const,
       generation,
       attempts: job.attempts + 1,
       errorCode: undefined,
       ...(swapping ? { audioStorageId: args.newStorageId } : {}),
+      ...sourcePatch,
       updatedAt: now,
     });
 

@@ -13,7 +13,7 @@ import {
 import ActionSheet from "./ActionSheet";
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
-import { useMutation } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { useToast } from "./ToastProvider";
 import { previewAudioService } from "../lib/AudioService";
 import BottomSheet, {
@@ -37,12 +37,15 @@ import {
     toDateString,
     type ScheduleDraft,
 } from "./schedule/scheduleDraft";
-import { cancelReminder, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
+import { cancelReminder, deleteLocalAudio, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
+import { removeAlarmSound } from "../lib/alarmSounds";
+import { regenerateVoiceOnSave, shouldRegenerateVoice } from "../lib/voiceRegen";
 import { getDeviceId } from "../lib/deviceId";
 import { createTraceId, perfLog } from "../lib/perf";
 import { DEFAULT_ALARM_SETTINGS } from "../lib/storage";
 import { CURRENT_SCHEMA_VERSION, useReminderStore, Reminder } from "../lib/store";
 import { checkCanUsePremiumSchedule, isPremiumSchedule } from "../lib/usageGate";
+import { useFeedbackUi } from "../lib/feedbackUi";
 import { borderRadius, chipColors, colors, scaleFontSize, shadows } from "../lib/theme";
 
 // Tap-to-cycle options
@@ -117,10 +120,16 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const router = useRouter();
     const updateConvexReminder = useMutation(api.reminders.update);
     const removeConvexReminder = useMutation(api.reminders.remove);
+    const regenerateReminderAudio = useAction(api.actions.regenerateReminderAudio);
 
     // Zustand store actions
     const storeUpdateReminder = useReminderStore((state) => state.updateReminder);
     const storeDeleteReminder = useReminderStore((state) => state.deleteReminder);
+
+    // Feedback composer opens ABOVE this sheet (FeedbackHost is mounted at the
+    // root, over the whole tree), so this sheet stays mounted and the user's
+    // unsaved edits are exactly where they left them on return.
+    const openFeedbackComposer = useFeedbackUi((state) => state.openComposer);
 
     const bottomSheetRef = useRef<BottomSheet>(null);
     const snapPoints = useMemo(() => ["60%", "95%"], []);
@@ -131,9 +140,43 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const reminder =
         useReminderStore((state) => state.reminders.find((r) => r.id === initialReminder.id)) ??
         initialReminder;
+
+    const handleReportProblem = useCallback(() => {
+        // Details come from the SAVED store row, not the in-progress inputs.
+        const schedule = JSON.stringify({
+            scheduleType: reminder.scheduleType,
+            onceAt: reminder.onceAt,
+            rrule: reminder.rrule,
+            dtstart: reminder.dtstart,
+            tzid: reminder.tzid,
+            until: reminder.until,
+            time: reminder.time,
+            date: reminder.date,
+            frequency: reminder.frequency,
+            days: reminder.days,
+            grid: reminder.schedule,
+        });
+        openFeedbackComposer(
+            {
+                kind: "reminder",
+                reminderId: reminder.id,
+                convexId: reminder.convexId,
+                reminderTitle: reminder.title,
+                reminderDescription: reminder.description,
+                schedule,
+                sttSource: (reminder as any).sttSource,
+            },
+            "Includes saved reminder details. Your edits stay here."
+        );
+    }, [reminder, openFeedbackComposer]);
     const [title, setTitle] = useState(initialReminder.title || "");
     const [emoji, setEmoji] = useState<string | undefined>(initialReminder.emoji);
-    const description = initialReminder.description || "";
+    // The spoken line the alarm says. Editing it regenerates the TTS on save
+    // (lib/voiceRegen.ts); leaving it untouched keeps the existing audio.
+    const [description, setDescription] = useState(initialReminder.description || "");
+    // True only while the regenerate-voice action + reschedule are in flight, so
+    // the Save button can show progress and refuse a double-tap.
+    const [regeneratingVoice, setRegeneratingVoice] = useState(false);
 
     // The whole schedule is one draft (components/schedule/scheduleDraft.ts):
     // both axes are always populated, so flipping between "weekly" and "every N
@@ -272,6 +315,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     );
 
     const handleSave = useCallback(async () => {
+        // A regeneration + reschedule is already awaiting; ignore the double-tap.
+        if (regeneratingVoice) return;
         if (!title.trim()) {
             Alert.alert("Error", "Please enter a reminder title");
             return;
@@ -327,58 +372,118 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
             const reminderId = reminder.id;
             const convexId = reminder.convexId;
-            const audioUrl = reminder.audioUrl;
+            const oldAudioUrl = reminder.audioUrl;
+            const oldWavUrl = reminder.wavUrl;
 
-            // Cancel + reschedule BEFORE closing (onClose unmounts the component)
-            if (audioUrl) {
+            // Merge a partial patch onto the freshest store row (it may already
+            // carry the description/schedule write above).
+            const applyRowPatch = async (patch: Partial<Reminder>) => {
+                const current = useReminderStore.getState().getReminderById(reminderId);
+                if (current) {
+                    await storeUpdateReminder({ ...current, ...patch });
+                }
+            };
+
+            const showExactAlarmAlertIfNeeded = (e: unknown) => {
+                console.log("[VR] Failed to reschedule reminder:", e);
+                if ((e as any)?.name === "ExactAlarmPermissionError") {
+                    Alert.alert(
+                        "Enable Alarms & reminders",
+                        "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+                        [
+                            { text: "Open permission", onPress: () => openAlarmPermissionSettingsSafe() },
+                            { text: "OK" },
+                        ]
+                    );
+                }
+            };
+
+            // Cancel + reschedule with whatever audio applies. Returns the next
+            // trigger; throws on failure (caller decides what to do).
+            const reschedule = async (audio: { audioUrl?: string; wavUrl?: string }): Promise<number> => {
+                await cancelReminder(reminderId);
+                const { triggerTimestamp } = await scheduleReminder({
+                    id: reminderId,
+                    title: updatedReminder.title,
+                    description,
+                    time: save.time,
+                    date: save.date,
+                    frequency: save.frequency,
+                    days: save.days,
+                    // Authoritative: the execution layer plans every ring of
+                    // the day off this, not off `time` (OLD-98).
+                    schedule: save.schedule,
+                    audioUrl: audio.audioUrl,
+                    wavUrl: audio.wavUrl,
+                    preReminderMinutes,
+                    preAudioUrl: reminder.preAudioUrl,
+                    urgency: reminder.urgency,
+                    persistent,
+                    volume,
+                    volumeStyle,
+
+                    intervalMs: save.intervalMs,
+                    anchorAt: save.anchorAt,
+                    intervalDays: save.intervalDays,
+                    scheduleType: save.scheduleType,
+                    onceAt: save.onceAt,
+                    rrule: save.rrule,
+                    dtstart: save.dtstart,
+                    tzid: save.tzid,
+                    until: save.until,
+                });
+                return triggerTimestamp;
+            };
+
+            // Editing the spoken line means the alarm must speak the new line:
+            // regenerate the TTS server-side, drop the stale local audio, and
+            // reschedule with the fresh URLs (lib/voiceRegen.ts). BEFORE closing,
+            // since onClose unmounts the component.
+            const needsRegen = shouldRegenerateVoice({
+                convexId,
+                newDescription: description,
+                storedDescription: reminder.description ?? "",
+                audioStale: reminder.audioStale,
+            });
+
+            if (needsRegen && convexId) {
+                setRegeneratingVoice(true);
                 try {
-                    await cancelReminder(reminderId);
-                    const { triggerTimestamp } = await scheduleReminder({
-                        id: reminderId,
-                        title: updatedReminder.title,
-                        description,
-                        time: save.time,
-                        date: save.date,
-                        frequency: save.frequency,
-                        days: save.days,
-                        // Authoritative: the execution layer plans every ring of
-                        // the day off this, not off `time` (OLD-98).
-                        schedule: save.schedule,
-                        audioUrl,
-                        preReminderMinutes,
-                        preAudioUrl: reminder.preAudioUrl,
-                        urgency: reminder.urgency,
-                        persistent,
-                        volume,
-                        volumeStyle,
-
-                        intervalMs: save.intervalMs,
-                        anchorAt: save.anchorAt,
-                        intervalDays: save.intervalDays,
-                        scheduleType: save.scheduleType,
-                        onceAt: save.onceAt,
-                        rrule: save.rrule,
-                        dtstart: save.dtstart,
-                        tzid: save.tzid,
-                        until: save.until,
-                    });
-
-                    const current = useReminderStore.getState().getReminderById(reminderId);
-                    if (current) {
-                        await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
-                    }
+                    const { patch, rescheduleError } = await regenerateVoiceOnSave(
+                        {
+                            regenerate: (a) =>
+                                regenerateReminderAudio({
+                                    reminderId: a.reminderId as any,
+                                    deviceId: a.deviceId,
+                                    soundText: a.soundText,
+                                }),
+                            getDeviceId,
+                            deleteLocalAudio,
+                            removeAlarmSound,
+                            reschedule,
+                            toast: (o) => toast.show(o as any),
+                            perf: (event, data) => perfLog(traceId, "overlay.edit", event, data),
+                        },
+                        {
+                            reminderId,
+                            convexId,
+                            soundText: description.trim(),
+                            currentAudioUrl: oldAudioUrl,
+                            currentWavUrl: oldWavUrl,
+                        }
+                    );
+                    await applyRowPatch(patch);
+                    if (rescheduleError) showExactAlarmAlertIfNeeded(rescheduleError);
+                } finally {
+                    setRegeneratingVoice(false);
+                }
+            } else if (oldAudioUrl) {
+                // Spoken line unchanged: reschedule with the existing audio.
+                try {
+                    const triggerTimestamp = await reschedule({ audioUrl: oldAudioUrl });
+                    await applyRowPatch({ scheduledFor: triggerTimestamp });
                 } catch (e) {
-                    console.log("[VR] Failed to reschedule reminder:", e);
-                    if ((e as any)?.name === "ExactAlarmPermissionError") {
-                        Alert.alert(
-                            "Enable Alarms & reminders",
-                            "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
-                            [
-                                { text: "Open permission", onPress: () => openAlarmPermissionSettingsSafe() },
-                                { text: "OK" },
-                            ]
-                        );
-                    }
+                    showExactAlarmAlertIfNeeded(e);
                 }
             }
 
@@ -419,7 +524,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             console.error("[VR] Save error:", error);
             Alert.alert("Error", "Failed to save reminder");
         }
-    }, [reminder, title, emoji, description, draft, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
+    }, [reminder, title, emoji, description, draft, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, regenerateReminderAudio, regeneratingVoice, toast, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
 
     const executeDelete = async () => {
         const reminderId = reminder.id;
@@ -549,6 +654,23 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         </TouchableOpacity>
                     </View>
 
+                    {/* Spoken line: the exact words the alarm says. Editing it
+                        regenerates the voice on save (lib/voiceRegen.ts). */}
+                    <View style={styles.spokenCard}>
+                        <Text style={styles.spokenLabel}>Spoken line</Text>
+                        <TextInput
+                            style={styles.spokenInput}
+                            value={description}
+                            onChangeText={setDescription}
+                            onFocus={expandSheet}
+                            placeholder="What should the alarm say?"
+                            placeholderTextColor={colors.textTertiary}
+                            multiline
+                            maxLength={300}
+                            editable={!regeneratingVoice}
+                        />
+                    </View>
+
                     {/* Schedule grid: days axis (Repeat, + Date when it needs one)
                         crossed with times axis (Times, expanding inline). */}
                     <View style={styles.rowCard}>
@@ -660,6 +782,18 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         />
                     )}
 
+                    {/* Report a problem — deliberately set apart from Done and
+                        Trash by its own spacing, so it can't be mistaken for
+                        either. Opens the composer above this sheet. */}
+                    <TouchableOpacity
+                        style={styles.reportRow}
+                        onPress={handleReportProblem}
+                        activeOpacity={0.7}
+                    >
+                        <AppIcon name="message-square" size={18} color={colors.textSecondary} />
+                        <Text style={styles.reportRowLabel}>Report a problem</Text>
+                    </TouchableOpacity>
+
                     {/* Trash / Done */}
                     <View style={styles.bottomActions}>
                         <TouchableOpacity
@@ -671,12 +805,15 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                            style={styles.doneButton}
+                            style={[styles.doneButton, regeneratingVoice && styles.doneButtonDisabled]}
                             onPress={handleSave}
                             activeOpacity={0.7}
+                            disabled={regeneratingVoice}
                         >
-                            <Text style={styles.doneButtonText}>Done</Text>
-                            <AppIcon name="check" size={18} color="white" />
+                            <Text style={styles.doneButtonText}>
+                                {regeneratingVoice ? "Updating voice…" : "Done"}
+                            </Text>
+                            {!regeneratingVoice && <AppIcon name="check" size={18} color="white" />}
                         </TouchableOpacity>
                     </View>
 
@@ -806,6 +943,30 @@ const styles = StyleSheet.create({
         fontSize: scaleFontSize(22),
     },
 
+    // Spoken line card
+    spokenCard: {
+        backgroundColor: colors.card,
+        borderRadius: borderRadius.lg,
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+        marginTop: 20,
+        gap: 8,
+        ...shadows.card,
+    },
+    spokenLabel: {
+        fontSize: scaleFontSize(13),
+        fontWeight: "500",
+        lineHeight: scaleFontSize(18),
+        color: colors.textSecondary,
+    },
+    spokenInput: {
+        fontSize: scaleFontSize(16),
+        lineHeight: scaleFontSize(22),
+        color: colors.textPrimary,
+        padding: 0,
+        minHeight: 24,
+    },
+
     // Grouped rows card
     rowCard: {
         backgroundColor: colors.card,
@@ -868,9 +1029,26 @@ const styles = StyleSheet.create({
         justifyContent: "center",
     },
 
+    // Report a problem row (set apart from the footer by its own spacing)
+    reportRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        alignSelf: "center",
+        marginTop: 28,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+    },
+    reportRowLabel: {
+        fontSize: scaleFontSize(14),
+        fontWeight: "500",
+        lineHeight: scaleFontSize(20),
+        color: colors.textSecondary,
+    },
+
     // Bottom actions
     bottomActions: {
-        marginTop: 28,
+        marginTop: 20,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
@@ -894,6 +1072,9 @@ const styles = StyleSheet.create({
         backgroundColor: colors.accent,
         borderRadius: borderRadius.full,
         paddingVertical: 15,
+    },
+    doneButtonDisabled: {
+        opacity: 0.6,
     },
     doneButtonText: {
         fontSize: scaleFontSize(16),

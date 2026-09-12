@@ -34,6 +34,7 @@ describe("loadSettings", () => {
       await useSettingsStore.getState().loadSettings();
       expect(useSettingsStore.getState().settings).toEqual({
         aiConsentAcceptedAt: null,
+        voiceLanguage: "auto",
       });
       expect(useSettingsStore.getState().hasLoadedSettings).toBe(true);
     });
@@ -87,7 +88,42 @@ describe("loadSettings", () => {
         await useSettingsStore.getState().loadSettings();
         expect(useSettingsStore.getState().settings).toEqual({
           aiConsentAcceptedAt: 1700000000000,
+          voiceLanguage: "auto",
         });
+      }
+    );
+  });
+
+  it("loads a stored voice language and drops an invalid one", async () => {
+    await withFreshStore(
+      JSON.stringify({ aiConsentAcceptedAt: null, voiceLanguage: "ar" }),
+      async (useSettingsStore) => {
+        await useSettingsStore.getState().loadSettings();
+        expect(useSettingsStore.getState().settings.voiceLanguage).toBe("ar");
+      }
+    );
+    await withFreshStore(
+      JSON.stringify({ aiConsentAcceptedAt: null, voiceLanguage: "klingon" }),
+      async (useSettingsStore) => {
+        await useSettingsStore.getState().loadSettings();
+        expect(useSettingsStore.getState().settings.voiceLanguage).toBe("auto");
+      }
+    );
+  });
+
+  it("loads a valid voice engine and ignores an invalid one", async () => {
+    await withFreshStore(
+      JSON.stringify({ aiConsentAcceptedAt: null, voiceEngine: "transcriber" }),
+      async (useSettingsStore) => {
+        await useSettingsStore.getState().loadSettings();
+        expect(useSettingsStore.getState().settings.voiceEngine).toBe("transcriber");
+      }
+    );
+    await withFreshStore(
+      JSON.stringify({ aiConsentAcceptedAt: null, voiceEngine: "bogus" }),
+      async (useSettingsStore) => {
+        await useSettingsStore.getState().loadSettings();
+        expect(useSettingsStore.getState().settings.voiceEngine).toBeUndefined();
       }
     );
   });
@@ -106,6 +142,7 @@ describe("setAiConsent", () => {
       expect(stamped).toBeGreaterThanOrEqual(before);
       expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
         aiConsentAcceptedAt: stamped,
+        voiceLanguage: "auto",
       });
     });
   });
@@ -119,6 +156,7 @@ describe("setAiConsent", () => {
         expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
         expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
           aiConsentAcceptedAt: null,
+          voiceLanguage: "auto",
         });
       }
     );
@@ -145,6 +183,52 @@ describe("setAiConsent", () => {
         useSettingsStore.getState().setAiConsent(true)
       ).rejects.toThrow("disk full");
       expect(useSettingsStore.getState().settings.aiConsentAcceptedAt).toBeNull();
+    });
+  });
+});
+
+// ─── setVoiceLanguage / setVoiceEngine ──────────────────────────────────────
+
+describe("voice settings", () => {
+  it("sets and persists the voice language, keeping consent", async () => {
+    await withFreshStore(
+      JSON.stringify({ aiConsentAcceptedAt: 1700000000000 }),
+      async (useSettingsStore, AsyncStorage) => {
+        await useSettingsStore.getState().loadSettings();
+        await useSettingsStore.getState().setVoiceLanguage("ar");
+        expect(useSettingsStore.getState().settings.voiceLanguage).toBe("ar");
+        expect(JSON.parse(AsyncStorage._store.get("@app_settings"))).toEqual({
+          aiConsentAcceptedAt: 1700000000000,
+          voiceLanguage: "ar",
+        });
+      }
+    );
+  });
+
+  it("sets a voice engine and can clear it back to the default", async () => {
+    await withFreshStore(null, async (useSettingsStore, AsyncStorage) => {
+      await useSettingsStore.getState().setVoiceEngine("transcriber");
+      expect(useSettingsStore.getState().settings.voiceEngine).toBe("transcriber");
+      expect(JSON.parse(AsyncStorage._store.get("@app_settings")).voiceEngine).toBe(
+        "transcriber"
+      );
+
+      await useSettingsStore.getState().setVoiceEngine(undefined);
+      expect(useSettingsStore.getState().settings.voiceEngine).toBeUndefined();
+      expect(
+        JSON.parse(AsyncStorage._store.get("@app_settings")).voiceEngine
+      ).toBeUndefined();
+    });
+  });
+
+  it("rolls back the voice language when persistence fails", async () => {
+    await withFreshStore(null, async (useSettingsStore, AsyncStorage) => {
+      await useSettingsStore.getState().loadSettings();
+      AsyncStorage.setItem.mockRejectedValueOnce(new Error("disk full"));
+      await expect(
+        useSettingsStore.getState().setVoiceLanguage("en")
+      ).rejects.toThrow("disk full");
+      expect(useSettingsStore.getState().settings.voiceLanguage).toBe("auto");
     });
   });
 });

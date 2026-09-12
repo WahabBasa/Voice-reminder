@@ -56,6 +56,14 @@ type WorkerPerf = {
   sttAudioSeconds?: number;
   sttCostUsd?: number;
 
+  // Where the transcript came from, and — for a device take — its on-device
+  // timing/engine/locale. A device take fills these instead of the cloud STT
+  // block above (spec §device transcript).
+  sttSource?: "device" | "cloud";
+  deviceSttMs?: number;
+  deviceSttEngine?: "dictation" | "transcriber";
+  deviceSttLocale?: string;
+
   // Scheduling, query and checkpoint timings (spec §4).
   schedulerDelayMs?: number;
   jobAgeMs?: number;
@@ -382,16 +390,46 @@ export const run = internalAction({
       perf.schedulerDelayMs = handlerEnteredAt - job.createdAt;
     }
 
-    // 2-3. Recording → transcript.
-    const stt = await transcribeRecording(ctx, job.audioStorageId, perf, job.creationId);
-    if (!stt.ok) {
-      await failJob(ctx, args, stt.code, perf);
-      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
-      return null;
+    // 2-3. Transcript. A device take already carries it — the phone transcribed
+    //    on-device and `begin` stored the text — so storage and cloud STT are
+    //    skipped entirely, the STT timings read as zero, and the on-device
+    //    provenance rides into the perf line. A cloud take transcribes its
+    //    recording here as before.
+    let transcript: string;
+    if (job.sttSource === "device") {
+      perf.sttSource = "device";
+      perf.sttModel = "device";
+      perf.storageGetMs = 0;
+      perf.blobMs = 0;
+      perf.sttMs = 0;
+      perf.whisperMs = 0;
+      perf.sttFallbackUsed = false;
+      perf.deviceSttMs = job.deviceSttMs;
+      perf.deviceSttEngine = job.deviceSttEngine;
+      perf.deviceSttLocale = job.deviceSttLocale;
+      const deviceTranscript = job.transcript?.trim() ?? "";
+      if (deviceTranscript.length === 0) {
+        // begin guarantees a device take has a non-empty transcript; a row that
+        // reaches here without one is corrupt, not retryable-into-anything.
+        await failJob(ctx, args, "internal", perf);
+        logCreationJobPerf(job.creationId, args.generation, "failed", perf);
+        return null;
+      }
+      transcript = deviceTranscript;
+    } else {
+      perf.sttSource = "cloud";
+      const stt = await transcribeRecording(ctx, job.audioStorageId, perf, job.creationId);
+      if (!stt.ok) {
+        await failJob(ctx, args, stt.code, perf);
+        logCreationJobPerf(job.creationId, args.generation, "failed", perf);
+        return null;
+      }
+      transcript = stt.value;
     }
 
     // 4. Milestone. Losing it means a retry or a cancel got here first, and the
-    //    winner owns everything from here — including the recording.
+    //    winner owns everything from here — including the recording. Kept for a
+    //    device take too, so its race and cancel semantics are identical.
     let milestone;
     const tCheckpoint = Date.now();
     try {
@@ -399,7 +437,7 @@ export const run = internalAction({
         jobId: args.jobId,
         generation: args.generation,
         expectStatus: ["pending"],
-        patch: { status: "transcribed", transcript: stt.value },
+        patch: { status: "transcribed", transcript },
       });
     } finally {
       perf.transcriptionCheckpointMs = Date.now() - tCheckpoint;
@@ -407,7 +445,7 @@ export const run = internalAction({
     if (milestone.result !== "applied") return null;
 
     // 5. Transcript → plans.
-    const parsed = await parseTake(job, stt.value, perf, job.creationId);
+    const parsed = await parseTake(job, transcript, perf, job.creationId);
     if (!parsed.ok) {
       await failJob(ctx, args, parsed.code, perf);
       logCreationJobPerf(job.creationId, args.generation, "failed", perf);

@@ -525,7 +525,7 @@ ${SPOKEN_LINE_RULES_SECTION}
 
 Return exactly this format:
 {
-  "title": "short title (2-4 words; must not begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself)",
+  "title": "the action plus the distinguishing detail the user gave — the object and its place / person / subject / qualifier, e.g. 'Take bottle out of fridge', 'Call mom about the flight', 'Pay July electricity bill' (aim 3-6 words; never begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself; see TITLE RULES)",
   "description": "${buildDescriptionInstruction()}",
   "time": "HH:MM in 24-hour format (the FIRST of \\"times\\")",
   "times": ["HH:MM", ...] (EVERY clock time this one reminder rings at — see SCHEDULE RULES),
@@ -549,6 +549,14 @@ EMOJI RULES:
 - Pick exactly ONE emoji that captures the reminder's subject (e.g. 💊 medicine, 🏋️ gym, 📞 call, 💧 drink water, 🍳 cooking)
 - Prefer concrete object/activity emojis over abstract ones; use ⏰ only when nothing fits
 - The "emoji" value must contain the emoji character only — no words, no punctuation
+
+TITLE RULES:
+- The title is the action plus the distinguishing detail the user gave — the object and its place / person / subject / qualifier: "Take bottle out of fridge", "Call mom about the flight", "Pay July electricity bill"
+- Aim for 3-6 words, but never pad a naturally short one ("Call mom", "Take pills") and never drop an essential detail just to fit
+- Keep meaningful qualifiers ("July", "Friday's flight"); leave out scheduling words that belong to the schedule (clock times, dates, "tomorrow", "every day")
+- Distinguish opposite actions — "take out" vs "put in", "turn on" vs "turn off"
+- Never open with a self-announcement ("Reminder", "It is time", "Time to", Arabic "تذكير" / "حان وقت") — the title names the thing, it never announces itself
+- Arabic follows the same rule at a natural Arabic length
 
 LANGUAGE RULES:
 - If the input is in Arabic, return "title" and "description" in Arabic
@@ -1351,11 +1359,15 @@ export const regenerateReminderAudio = action({
       });
     }
 
-    // 5. Get new audio URL
+    // 5. Get new audio URLs. The wav is optional — alarm synthesis is allowed
+    // to fail (it degrades to the system default sound), so a null wavUrl tells
+    // the device to clear any stale wav it was still pointing at.
     const audioUrl = await ctx.storage.getUrl(newStorageId);
+    const wavUrl = newWavStorageId ? await ctx.storage.getUrl(newWavStorageId) : null;
 
     return {
       audioUrl,
+      wavUrl,
       soundText: args.soundText,
     };
   },

@@ -60,6 +60,13 @@ export interface Reminder {
     wavUrl?: string; // alarm-ready wav of the base spoken line (iOS AlarmKit sound)
     audioStatus?: 'pending' | 'ready' | 'failed';
     /**
+     * Local-only (never synced to Convex): the spoken line was edited and saved
+     * but its TTS could not be regenerated yet (offline / TTS error / a
+     * reschedule that failed after a good regen). While true the alarm still
+     * speaks the OLD line; the next save of this reminder retries the voice.
+     */
+    audioStale?: boolean;
+    /**
      * The pre-alert line and replay variant lines, which arrive in a second
      * server patch after the base line (OLD-107). "pending" here means the
      * device has the base line but is still owed the rest — the startup sweep

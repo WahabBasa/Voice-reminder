@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { SpeechEngine } from "./vrSpeech";
 
 /**
  * The PendingTake outbox (spec §2.1).
@@ -39,6 +40,15 @@ export type PendingTake = {
   creationId: string;
   phase: PendingPhase;
   transcript?: string;
+  /**
+   * How this take's transcript was produced. A "device" take carries a
+   * non-empty `transcript` and no `audioStorageId`, and reconcile rebegins it
+   * from that transcript alone — no upload (spec §3/§4). Absent = cloud.
+   */
+  sttSource?: "device" | "cloud";
+  deviceSttMs?: number;
+  deviceSttEngine?: SpeechEngine;
+  deviceSttLocale?: string;
   errorKind?: PendingErrorKind;
   /** Documents-dir copy of the recording — or the cache URI, if the copy failed. */
   recordingUri: string;
@@ -97,6 +107,10 @@ export function canTransition(from: PendingPhase, to: PendingPhase): boolean {
 
 export type PendingPatch = {
   transcript?: string;
+  sttSource?: "device" | "cloud";
+  deviceSttMs?: number;
+  deviceSttEngine?: SpeechEngine;
+  deviceSttLocale?: string;
   errorKind?: PendingErrorKind;
   serverErrorCode?: string;
   audioStorageId?: string;
