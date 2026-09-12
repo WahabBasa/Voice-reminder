@@ -1,0 +1,3339 @@
+2026-09-10T03:32:26.857473Z ERROR codex_core::session::session: failed to load skill C:\Users\AtheA\.agents\skills\ptc-microsoft-todo\SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Dev\VR
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a0895f-ada6-7a30-837f-5e472c37b6df
+--------
+user
+Quick sanity round on two small product fixes from Claude (architect on this repo). Goal from the user: "avoid bugs and blind spots, but don't overdo it — just enough that the app is less likely to do something the user doesn't expect." Read-only; do not modify files; no convex/eas. Answer in under 50 lines: (1) factual corrections with file:line; (2) answers to the questions; (3) the 2-4 real edge cases per fix (things a normal user will hit, not exotic); (4) verdict. Explore the repo yourself for anything you need.
+
+## Fix 1 — reminder titles are too short to jog memory
+User feedback: "take out my water bottle from the fridge at 6 pm" produced the title "Water bottle" — not enough context to remember what it was for.
+Current rule (`convex/actions.ts:528`): `"title": "short title (2-4 words; must not begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself)"`. Language rules `:554-555`. The spoken line (`description`) is a separate field with its own rules (`:499-616`) — unchanged.
+Plan: change the title rule to: 3-6 words; names the thing PLUS the distinguishing detail the user gave (place, person, subject, qualifier) — "Water bottle from the fridge", "Call mom about the flight", "Pay the electricity bill"; a bare object only when the user gave no context; no time/date words (those belong to the schedule); same no-self-announcing openers; Arabic symmetric. Update `__tests__/convex/parsePrompt.test.ts` expectations.
+Questions: Q1 — where is the title rendered (reminder card, Days page rows, alarm/notification title, AlarmKit alarm title, live activity, edit sheet)? Any `numberOfLines`/truncation or a fixed-width layout that a 6-word title breaks, especially the Days page rows and the AlarmKit alert (`plugins/ios-src/*.swift`, `lib/notifications.ts`)? Q2 — anything else that assumes 2-4 words (prompt-cache tests, fixture snapshots, `convex/helpers.ts` shared rule text, `parseUsage` token budgets)? Q3 — the typed path (`processTypedReminder`) uses the same prompt — any reason a typed reminder should keep the shorter rule?
+
+## Fix 2 — a voice take started from the Days page leaves the user on Days, so they never see the new card
+Facts: pages are `PAGE_TODAY=0` (the Reminders list) / `PAGE_DAYS=1` / settings (`app/index.tsx:125-126`, state `:244`, tab→page `:1713`). `DaysPage` is mounted with `active={page === PAGE_DAYS}` (`:1864-1870`). The landed handler is `onTakeImported` (`:1356-1362`: LayoutAnimation, `setImportedCardId(created[0].id)` which highlights/scrolls the new card on the Reminders list). The recording overlay is global (works from any page). Take lands ~4-7 s after the stop tap; on relaunch, `lib/takeReconcile.ts` lands it later via the same handler.
+Plan options — Claude leans A: 
+- A. Switch to the Reminders page at the STOP TAP (when the pending take/card is created), so the user watches the pending card resolve where it lives. 
+- B. Switch only when the take lands (in `onTakeImported`, `if (page === PAGE_DAYS) setPage(PAGE_TODAY)` before highlighting).
+Questions: Q4 — does the pending (in-flight) take render as a card on the Reminders list today (if yes, A is coherent; if no, A shows an empty jump)? Q5 — does the Days page hold state the user would lose on a switch (browsed week, selected day) and does `active=false` unmount it or just pause its subscription? Q6 — if the reminder is for a day other than today, is the Reminders list still the right landing (does the list show all active reminders sorted by next ring — devlog says yes since 09-08)? Q7 — any path where `onTakeImported` fires while the user is mid-gesture on Days or the composer sheet is open, where a page switch would feel like a hijack (e.g. reconcile after relaunch, a late cloud fallback)? Should B be gated to "the take was started during this app session" only?
+
+2026-09-10T03:32:27.722218Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\"error\":{\"message\":\"Invalid API key: ak_**mXj4\",\"code\":801,\"status\":401,\"request_id\":\"cff1beea-a46d-4e31-955d-37c13cd02940\"}}")
+codex
+I’ll trace the title rendering and take-import flow, using the review skill for a read-only sanity check. I won’t run Convex or EAS commands.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content C:/Users/AtheA/.agents/skills/review/SKILL.md' in C:\Dev\VR
+ succeeded in 1169ms:
+---
+name: review
+description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes â€” Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+---
+
+Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
+
+- **Standards** â€” does the code conform to this repo's documented coding standards?
+- **Spec** â€” does the code faithfully implement the originating issue / PRD / spec?
+
+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+
+The issue tracker should have been provided to you â€” run `/setup-matt-pocock-skills` if `docs/agents/issue-tracker.md` is missing.
+
+## Process
+
+### 1. Pin the fixed point
+
+Whatever the user said is the fixed point â€” a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
+
+Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+
+Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here â€” not inside two parallel sub-agents.
+
+### 2. Identify the spec source
+
+Look for the originating spec, in this order:
+
+1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) â€” fetch via the workflow in `docs/agents/issue-tracker.md`.
+2. A path the user passed as an argument.
+3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+
+### 3. Identify the standards sources
+
+Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
+
+### 4. Spawn both sub-agents in parallel
+
+Send a single message with two `Agent` tool calls. Use the `general-purpose` subagent for both.
+
+**Standards sub-agent prompt** â€” include:
+
+- The full diff command and commit list.
+- The list of standards-source files you found in step 3.
+- The brief: "Report â€” per file/hunk where relevant â€” every place the diff violates a documented standard. Cite the standard (file + the rule). Distinguish hard violations from judgement calls. Skip anything tooling enforces. Under 400 words."
+
+**Spec sub-agent prompt** â€” include:
+
+- The diff command and commit list.
+- The path or fetched contents of the spec.
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+
+If the spec is missing, skip the Spec sub-agent and note this in the final report.
+
+### 5. Aggregate
+
+Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings â€” the two axes are deliberately separate (see _Why two axes_).
+
+End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes â€” that's the reranking the separation exists to prevent.
+
+## Why two axes
+
+A change can pass one axis and fail the other:
+
+- Code that follows every standard but implements the wrong thing â†’ **Standards pass, Spec fail.**
+- Code that does exactly what the issue asked but breaks the project's conventions â†’ **Spec pass, Standards fail.**
+
+Reporting them separately stops one axis from masking the other.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files -g AGENTS.md -g '*parsePrompt*' -g '*take*' -g '*.swift' -g '*Days*' -g '*Reminder*' -g '*notification*' -g '*helpers*'" in C:\Dev\VR
+ succeeded in 1502ms:
+listen-test\21-speechify-mp3-take-meds.mp3
+listen-test\20-native-wav24000-take-meds.wav
+listen-test\02-plain-take-meds.wav
+plugins\ios-src\VRSpeech.swift
+plugins\ios-src\VRAlarmIntents.swift
+__tests__\lib\takeReconcile.test.ts
+__tests__\lib\takeCommit.test.ts
+__tests__\lib\notificationDecisions.test.ts
+__tests__\convex\regenerateReminderAudio.test.ts
+__tests__\convex\parsePrompt.test.ts
+__tests__\convex\multiReminder.test.ts
+__tests__\convex\helpers.test.ts
+convex\helpers.ts
+components\ReminderListItem.tsx
+components\ReminderCard.tsx
+components\EditReminderSheet.tsx
+components\days\DaysPage.tsx
+lib\takeReconcile.ts
+lib\takeCommit.ts
+lib\notifications.ts
+lib\notificationDecisions.ts
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "onTakeImported|processTypedReminder|pendingTake|setPage|PAGE_DAYS|PAGE_TODAY|stopRecording|stopCapture|importedCardId|takeCommit|reconcile" app/index.tsx; rg -n "title|numberOfLines" components/ReminderCard.tsx components/ReminderListItem.tsx components/EditReminderSheet.tsx components/days/DaysPage.tsx lib/notifications.ts plugins/ios-src/*.swift; rg -n "2-4|2–4|short title|parseUsage|max_tokens|maxTokens|title" __tests__/convex/parsePrompt.test.ts convex/helpers.ts' in C:\Dev\VR
+ succeeded in 1561ms:
+96:} from "../lib/pendingTakes";
+97:import { commitTake, type CommitTakeOutcome, type TakeImportSummary } from "../lib/takeCommit";
+125:const PAGE_TODAY = 0;
+126:const PAGE_DAYS = 1;
+183:  const processTypedReminder = useAction(api.actions.processTypedReminder);
+199:  const [importedCardId, setImportedCardId] = useState<string | null>(null);
+244:  const [page, setPage] = useState(PAGE_TODAY);
+247:  const pendingTakes = usePendingTakes();
+896:          runAction: (actionArgs) => processTypedReminder(actionArgs),
+940:      processTypedReminder,
+1165:   * lets reconcile rebegin from the transcript alone, no audio — spec §4), then
+1233:      markCreation(creationId, "stopRecordingDone");
+1357:  const onTakeImported = useCallback(
+1489:          onImported: (created, summary) => onTakeImported(take, created, summary),
+1497:    [ackCreationJob, removeConvexReminder, onTakeImported]
+1673:    if (!importedCardId || page !== PAGE_TODAY) return;
+1674:    const index = cards.findIndex((card) => card.reminder.id === importedCardId);
+1683:  }, [cards, importedCardId, page]);
+1713:    setPage(tab === "today" ? PAGE_TODAY : tab === "days" ? PAGE_DAYS : PAGE_SETTINGS);
+1765:    page === PAGE_TODAY ? "today" : page === PAGE_DAYS ? "days" : "settings";
+1774:        onPageChange={setPage}
+1842:                {pendingTakes.map((take) => (
+1870:            active={page === PAGE_DAYS}
+rg: plugins/ios-src/*.swift: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+components/EditReminderSheet.tsx:137:    const [title, setTitle] = useState(initialReminder.title || "");
+components/EditReminderSheet.tsx:285:        if (!title.trim()) {
+components/EditReminderSheet.tsx:286:            Alert.alert("Error", "Please enter a reminder title");
+components/EditReminderSheet.tsx:307:            title: title.trim(),
+components/EditReminderSheet.tsx:372:                    title: updatedReminder.title,
+components/EditReminderSheet.tsx:466:                    title: updatedReminder.title,
+components/EditReminderSheet.tsx:492:    }, [reminder, title, emoji, description, draft, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, regenerateReminderAudio, regeneratingVoice, toast, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
+components/EditReminderSheet.tsx:503:            toast.show({ title: "Error", message: "Failed to delete reminder", type: "error" });
+components/EditReminderSheet.tsx:599:                    <View style={styles.titleCard}>
+components/EditReminderSheet.tsx:601:                            style={styles.titleInput}
+components/EditReminderSheet.tsx:602:                            value={title}
+components/EditReminderSheet.tsx:824:                title="Delete Reminder"
+components/EditReminderSheet.tsx:825:                message={`Are you sure you want to delete "${title}"?`}
+components/EditReminderSheet.tsx:870:    titleCard: {
+components/EditReminderSheet.tsx:881:    titleInput: {
+components/ReminderListItem.tsx:13:  title: string;
+components/ReminderListItem.tsx:16:  subtitle: string;
+components/ReminderListItem.tsx:22:  /** Owed from a ring that already passed — red subtitle, red ring, still tickable. */
+components/ReminderListItem.tsx:44:  title,
+components/ReminderListItem.tsx:47:  subtitle,
+components/ReminderListItem.tsx:115:              <View style={styles.titleRow}>
+components/ReminderListItem.tsx:119:                    styles.title,
+components/ReminderListItem.tsx:120:                    completed && styles.titleCompleted,
+components/ReminderListItem.tsx:121:                    missed && styles.titleMissed,
+components/ReminderListItem.tsx:123:                  numberOfLines={1}
+components/ReminderListItem.tsx:125:                  {title}
+components/ReminderListItem.tsx:130:                  styles.subtitle,
+components/ReminderListItem.tsx:131:                  missed && styles.subtitleMissed,
+components/ReminderListItem.tsx:132:                  overdue && styles.subtitleOverdue,
+components/ReminderListItem.tsx:134:                numberOfLines={1}
+components/ReminderListItem.tsx:136:                {subtitle}
+components/ReminderListItem.tsx:138:              {detail ? <Text style={styles.subtitle} numberOfLines={1}>{detail}</Text> : null}
+components/ReminderListItem.tsx:220:  // System semibold for reminder titles, including Arabic input.
+components/ReminderListItem.tsx:221:  titleRow: { flexDirection: "row", alignItems: "center" },
+components/ReminderListItem.tsx:223:  title: {
+components/ReminderListItem.tsx:231:  titleCompleted: {
+components/ReminderListItem.tsx:235:  titleMissed: {
+components/ReminderListItem.tsx:238:  subtitle: {
+components/ReminderListItem.tsx:243:  subtitleMissed: {
+components/ReminderListItem.tsx:246:  // Overdue is still owed, so only the time turns red — the title stays live.
+components/ReminderListItem.tsx:247:  subtitleOverdue: {
+components/days/DaysPage.tsx:24:import { describeGridSubtitle, formatEveryMinutes } from "../schedule/scheduleDraft";
+components/days/DaysPage.tsx:50: * Card subtitle: "09:00 · Daily", "08:00, 21:00 · Mon, Thu",
+components/days/DaysPage.tsx:59:export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number): string {
+components/days/DaysPage.tsx:79:    return describeGridSubtitle(grid);
+components/days/DaysPage.tsx:123:  // Keep the interval "Next in X" subtitle fresh while today is on screen, and
+components/days/DaysPage.tsx:186:        title: entry.reminderTitle,
+components/days/DaysPage.tsx:189:        subtitle: formatClockAt(entry.timestamp),
+components/days/DaysPage.tsx:211:              title={reminder.title}
+components/days/DaysPage.tsx:214:              subtitle={subtitleFor(reminder, isToday, nowMs)}
+components/ReminderCard.tsx:14:  title: string;
+components/ReminderCard.tsx:29:  title,
+components/ReminderCard.tsx:121:              <Text style={styles.title} numberOfLines={1}>
+components/ReminderCard.tsx:122:                {title}
+components/ReminderCard.tsx:212:  title: {
+lib/notifications.ts:135:// Lockscreen action button titles. Action IDs are stable
+lib/notifications.ts:136:// (dismiss_action/snooze_action) — only the display titles changed (OLD-53).
+lib/notifications.ts:228:  title?: string;
+lib/notifications.ts:260:    title: notification.title,
+lib/notifications.ts:395:  const title = (data.title as string) || notification.title || "Reminder";
+lib/notifications.ts:402:      title,
+lib/notifications.ts:421:          { title: DONE_ACTION_TITLE, pressAction: { id: "dismiss_action" } },
+lib/notifications.ts:422:          { title: LATER_ACTION_TITLE, pressAction: { id: "snooze_action" } },
+lib/notifications.ts:545:          title: next.notification.title || "Reminder",
+lib/notifications.ts:555:              { title: DONE_ACTION_TITLE, pressAction: { id: "dismiss_action" } },
+lib/notifications.ts:556:              { title: LATER_ACTION_TITLE, pressAction: { id: "snooze_action" } },
+lib/notifications.ts:890:          await store.recordCompletion(reminderId, reminder.title, "missed", {
+lib/notifications.ts:1055:  title: string;
+lib/notifications.ts:1247:  title: string,
+lib/notifications.ts:1265:    name: `Reminder: ${title}`,
+lib/notifications.ts:1279:  title: string;
+lib/notifications.ts:1337:      title: input.title,
+lib/notifications.ts:1338:      body: buildPreAlertBody(input.title, preReminderMinutes),
+lib/notifications.ts:1354:        actions: [{ title: "Done", pressAction: { id: "prealert_done_action" } }],
+lib/notifications.ts:1360:        title: input.title,
+lib/notifications.ts:1698:      title: reminder.title,
+lib/notifications.ts:1734: * Arm the comebacks of one ring: the same title, the same sound, the same
+lib/notifications.ts:1763:      title: reminder.title,
+lib/notifications.ts:1843:      title: reminder.title,
+lib/notifications.ts:2019:      await store.recordCompletion(reminderId, reminder.title, "completed", {
+lib/notifications.ts:2096:    await store.recordCompletion(reminderId, reminder.title, "missed", {
+lib/notifications.ts:2141:    reminder.title,
+lib/notifications.ts:2281:      title: reminder.title,
+lib/notifications.ts:2295:      title: DONE_ACTION_TITLE,
+lib/notifications.ts:2301:      title: LATER_ACTION_TITLE,
+lib/notifications.ts:2322:        title: reminder.title,
+lib/notifications.ts:2359:          title: reminder.title,
+lib/notifications.ts:2403:    title: reminder.title,
+lib/notifications.ts:2558:    title: reminder.title,
+lib/notifications.ts:2713:    await store.recordCompletion(reminderId, reminder.title, "completed", {
+lib/notifications.ts:3019:        await store.recordCompletion(reminderId, reminder.title, "completed", {
+lib/notifications.ts:3078:            await store.recordCompletion(reminderId, reminder.title, "missed", {
+lib/notifications.ts:3138:            title: detail.notification?.title || "Reminder",
+lib/notifications.ts:3148:                { title: DONE_ACTION_TITLE, pressAction: { id: "dismiss_action" } },
+lib/notifications.ts:3149:                { title: LATER_ACTION_TITLE, pressAction: { id: "snooze_action" } },
+lib/notifications.ts:3381:        title: (data.title as string) || detail.notification?.title || "Reminder",
+lib/notifications.ts:3485:            await store.recordCompletion(reminder.id, reminder.title, "missed", {
+lib/notifications.ts:3596:                title: reminder.title,
+convex/helpers.ts:45:- Never merge distinct tasks into one reminder. Each entry gets its own title, description, time, and frequency.
+convex/helpers.ts:173: * usually the title, and ordinary titles trip this ban all the time —
+convex/helpers.ts:212:export const SPOKEN_LINE_RULE = `ONE short sentence, present tense, about the thing itself and nothing else. There are exactly TWO shapes and the content picks which one. Something the user DOES is a bare imperative and nothing else ('Drink your water.', 'Take your pills.', in Arabic 'اشرب ماءك.' / 'خذ حبوبك.') — no 'right now' on the end, no 'please', no softening, nothing wrapped around the verb. Bare does not mean stripped of the user's own details: whatever they named that changes what they would physically do — a place, a source, a destination, a quantity, which one, or who — stays in the line ('Take the water bottle out of the fridge.', 'Move the laundry to the dryer.', 'Call Ahmed about the invoice.', in Arabic 'أخرج قارورة الماء من الثلاجة.' / 'انقل الغسيل إلى النشافة.'); only framing and filler come out. Something that HAPPENS on its own is stated as happening now, [the thing] is right now ('Your son's game is right now.', 'Your flight is right now.', in Arabic 'مباراة ابنك الآن.' / 'رحلتك الآن.') — and never restate the clock the reminder was set for. Start on the substance — the task, the object, the person, or the place — so the first two or three words already are the point. These are forbidden wordings, not merely discouraged: any opener or lead-in in front of the substance, whether a clock announcement ('It is time', 'It's time', a bare 'Time to ...', the Arabic 'حان وقت' / 'حان الوقت'), a reminder label ('Quick reminder', 'Just a reminder', 'Friendly reminder', 'Heads up', the Arabic 'تذكير سريع'), or a conversational lead-in ('By the way', 'Just so you know', 'Remember', 'Don't forget', the Arabic 'على فكرة' / 'لا تنسى'). Also forbidden: any greeting; addressing the user by name or title (no 'Sir', no invented names, no 'يا' + name); and wellness, benefit or encouragement commentary (never say why the task is good, how it will make the user feel, or add a sign-off). There is no approved replacement opener — the line never says that it is a reminder, it just says the thing.`;
+convex/helpers.ts:346:  // guarded form because the caller's '<title> in N minutes' stand-in is only
+convex/helpers.ts:347:  // usable when the title itself is opener-free (buildHeadsUpTtsText).
+convex/helpers.ts:351:  // the line to the caller's deterministic '<title> in N minutes' fallback.
+convex/helpers.ts:361: * reminder's title. Preference order, best first:
+convex/helpers.ts:364: * 2. the deterministic '<title> in N minutes' stand-in — but only when the
+convex/helpers.ts:365: *    title is opener-free, since a 'Time to Sleep' title would launder a banned
+convex/helpers.ts:369: * 4. the stand-in anyway, banned title and all — last resort, never "".
+convex/helpers.ts:377:  title: unknown;
+convex/helpers.ts:381:  const title = String(args.title ?? "").trim();
+convex/helpers.ts:382:  const standIn = title ? `${title} in ${args.preReminderMinutes} minutes` : "";
+convex/helpers.ts:383:  if (standIn && !hasBannedOpener(title)) return standIn;
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content components/days/DaysPage.tsx; Get-Content lib/takeCommit.ts; Get-Content lib/takeReconcile.ts' in C:\Dev\VR
+ succeeded in 1974ms:
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import AppIcon from "../AppIcon";
+import CompletedSection from "../CompletedSection";
+import ReminderListItem, { chipColorForId } from "../ReminderListItem";
+import { borderRadius, colors, scaleFontSize, spacing } from "../../lib/theme";
+import { FONT_DISPLAY } from "../../lib/fonts";
+import {
+  formatNextIn,
+  formatClockAt,
+  formatClockTime,
+  formatIntervalDuration,
+  getNextIntervalOccurrence,
+} from "../../lib/time";
+import { type Reminder, type ReminderHistory } from "../../lib/store";
+import {
+  addDaysISO,
+  historyOnDay,
+  isCompletedOnDay,
+  occurrencesForDay,
+  parseISODate,
+  todayISO,
+} from "../../lib/dayOccurrences";
+import { describeGridSubtitle, formatEveryMinutes } from "../schedule/scheduleDraft";
+import { getSnoozeUntil, refreshSnoozeWindows } from "../../lib/alarmKit";
+import { nextGridOccurrence } from "../../lib/schedule";
+import { overdueDays } from "../../lib/remindersMembership";
+import DayPager from "./DayPager";
+import MonthSheet from "./MonthSheet";
+import WeekStrip from "./WeekStrip";
+
+const NOW_TICK_MS = 30_000;
+
+interface DaysPageProps {
+  reminders: Reminder[];
+  history: ReminderHistory[];
+  onOpenReminder: (reminder: Reminder) => void;
+  /** Completion-circle tap for the given day (today's occurrence semantics for repeaters). */
+  onToggleComplete?: (reminder: Reminder, dateISO: string) => void;
+  onDelete?: (reminder: Reminder) => void;
+  /** Whether this page is the visible pager page. Leaving resets the view to today. */
+  active?: boolean;
+}
+
+function capitalizeDay(day: string): string {
+  return day.charAt(0).toUpperCase() + day.slice(1, 3).toLowerCase();
+}
+
+/**
+ * Card subtitle: "09:00 Â· Daily", "08:00, 21:00 Â· Mon, Thu",
+ * "Every 2 hr Â· 08:00â€“22:00" (+ next-in when today), or "Rings again 3:52 pm"
+ * while today's ring is snoozed.
+ *
+ * Below the snooze, the grid is read first because it is the only thing that
+ * can say a reminder rings twice a day â€” `reminder.time` is just its first
+ * ring. Reminders written before the grid existed (and any the store has not
+ * migrated yet) fall through to the legacy fields below.
+ */
+export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number): string {
+  // A live snooze outranks everything below: after "Later" the schedule text
+  // names a time the phone is no longer going to ring at (OLD-119). Once the
+  // comeback rings â€” or the reminder is completed or rescheduled â€” the window
+  // is gone and the schedule text comes back.
+  if (isToday) {
+    const snoozeUntil = getSnoozeUntil(reminder.id, nowMs);
+    if (snoozeUntil !== undefined) return `Rings again ${formatClockAt(snoozeUntil)}`;
+  }
+
+  const grid = reminder.schedule;
+  if (grid) {
+    // An interval trades its window for a countdown on today's card â€” the
+    // window is what it does every day, the countdown is what it does next.
+    if (grid.times.kind === "interval" && isToday) {
+      const next = nextGridOccurrence(grid, nowMs);
+      if (next !== null) {
+        return `Every ${formatEveryMinutes(grid.times.everyMinutes)} Â· ${formatNextIn(next, nowMs)}`;
+      }
+    }
+    return describeGridSubtitle(grid);
+  }
+
+  if (reminder.frequency === "interval") {
+    if (!reminder.intervalMs) return "";
+    const every = formatIntervalDuration(reminder.intervalMs);
+    if (isToday && reminder.anchorAt) {
+      const { scheduledFor } = getNextIntervalOccurrence(
+        reminder.anchorAt,
+        reminder.intervalMs,
+        nowMs
+      );
+      return `${every} Â· ${formatNextIn(scheduledFor, nowMs)}`;
+    }
+    return every;
+  }
+
+  // Pre-grid reminders keep a raw "HH:MM" â€” never shown as-is (OLD-105).
+  const time = formatClockTime(reminder.time ?? "");
+  if (reminder.frequency === "daily") {
+    const n = reminder.intervalDays && reminder.intervalDays > 1 ? reminder.intervalDays : 1;
+    return `${time} Â· ${n === 1 ? "Daily" : `Every ${n} days`}`;
+  }
+  if (reminder.frequency === "weekly" || reminder.frequency === "custom") {
+    const days = (reminder.days ?? []).map(capitalizeDay).join(", ");
+    return days ? `${time} Â· ${days}` : `${time} Â· Weekly`;
+  }
+  return time;
+}
+
+export default function DaysPage({
+  reminders,
+  history,
+  onOpenReminder,
+  onToggleComplete,
+  onDelete,
+  active,
+}: DaysPageProps) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [selectedDate, setSelectedDate] = useState(() => todayISO());
+  const [monthSheetVisible, setMonthSheetVisible] = useState(false);
+
+  const today = todayISO(nowMs);
+
+  // Keep the interval "Next in X" subtitle fresh while today is on screen, and
+  // pick up any snooze window written since the last tick before re-rendering.
+  // This page stays mounted behind the pager, so the Today list â€” which reads
+  // the same mirror on its own tick â€” rides along.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      await refreshSnoozeWindows();
+      if (!cancelled) setNowMs(Date.now());
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), NOW_TICK_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // Coming back to this page always lands on today. Reset happens on LEAVE,
+  // delayed past the pager's slide-out so the visible page never snaps.
+  const wasActiveRef = useRef(active);
+  useEffect(() => {
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (wasActive === true && active === false) {
+      const timer = setTimeout(() => {
+        setSelectedDate(todayISO());
+        setMonthSheetVisible(false);
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+  }, [active]);
+
+  const remindersById = useMemo(() => {
+    const map = new Map<string, Reminder>();
+    for (const reminder of reminders) map.set(reminder.id, reminder);
+    return map;
+  }, [reminders]);
+
+  const overdueDates = useMemo(
+    () => overdueDays(reminders, history, nowMs),
+    [reminders, history, nowMs]
+  );
+
+  const handleFlip = useCallback((delta: 1 | -1) => {
+    setSelectedDate((prev) => addDaysISO(prev, delta));
+  }, []);
+
+  const handleMonthSelect = useCallback((dateISO: string) => {
+    setSelectedDate(dateISO);
+    setMonthSheetVisible(false);
+  }, []);
+
+  const renderDay = useCallback(
+    (dateISO: string) => {
+      const isToday = dateISO === today;
+      const active = occurrencesForDay(reminders, dateISO).filter(
+        (reminder) => !isCompletedOnDay(reminder, history, dateISO)
+      );
+      const dayHistory = historyOnDay(history, dateISO);
+
+      const completedItems = dayHistory.map((entry) => ({
+        id: entry.id,
+        title: entry.reminderTitle,
+        emoji: remindersById.get(entry.reminderId)?.emoji,
+        chipColor: chipColorForId(entry.reminderId),
+        subtitle: formatClockAt(entry.timestamp),
+        missed: entry.status === "missed",
+      }));
+
+      if (active.length === 0 && completedItems.length === 0) {
+        return (
+          <View style={styles.emptyDay}>
+            <Text style={styles.emptyDayText}>Nothing on this day</Text>
+          </View>
+        );
+      }
+
+      return (
+        <ScrollView
+          style={styles.dayScroll}
+          contentContainerStyle={styles.dayContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {active.map((reminder) => (
+            <ReminderListItem
+              key={reminder.id}
+              id={reminder.id}
+              title={reminder.title}
+              emoji={reminder.emoji}
+              chipColor={chipColorForId(reminder.id)}
+              subtitle={subtitleFor(reminder, isToday, nowMs)}
+              onPress={() => onOpenReminder(reminder)}
+              onToggleComplete={() => onToggleComplete?.(reminder, dateISO)}
+              onDelete={() => onDelete?.(reminder)}
+            />
+          ))}
+          {completedItems.length > 0 && (
+            <CompletedSection items={completedItems} initiallyCollapsed />
+          )}
+        </ScrollView>
+      );
+    },
+    [
+      reminders,
+      history,
+      remindersById,
+      today,
+      nowMs,
+      onOpenReminder,
+      onToggleComplete,
+      onDelete,
+    ]
+  );
+
+  const selected = parseISODate(selectedDate);
+  const weekdayName = selected.toLocaleDateString([], { weekday: "long" });
+  const monthLabel = `${selected
+    .toLocaleDateString([], { month: "short" })
+    .toUpperCase()} ${selected.getFullYear()}`;
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.weekdayTitle}>{weekdayName}</Text>
+        <Pressable
+          style={styles.monthButton}
+          onPress={() => setMonthSheetVisible(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Open month picker"
+        >
+          <Text style={styles.monthButtonText}>{monthLabel}</Text>
+          <AppIcon name="chevron-right" size={16} color={colors.textSecondary} />
+        </Pressable>
+      </View>
+
+      <WeekStrip
+        selectedDate={selectedDate}
+        todayDate={today}
+        overdueDates={overdueDates}
+        onSelectDate={setSelectedDate}
+      />
+
+      <DayPager dateISO={selectedDate} onFlip={handleFlip} renderDay={renderDay} />
+
+      <MonthSheet
+        overdueDates={overdueDates}
+        visible={monthSheetVisible}
+        selectedDate={selectedDate}
+        todayDate={today}
+        onSelect={handleMonthSelect}
+        onClose={() => setMonthSheetVisible(false)}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: 12,
+  },
+  weekdayTitle: {
+    fontFamily: FONT_DISPLAY,
+    fontSize: scaleFontSize(32),
+    lineHeight: scaleFontSize(38),
+    letterSpacing: -0.3,
+    color: colors.textHeading,
+  },
+  monthButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: borderRadius.full,
+  },
+  monthButtonText: {
+    fontSize: scaleFontSize(12),
+    fontWeight: "500",
+    lineHeight: scaleFontSize(16),
+    letterSpacing: 0.7,
+    color: colors.textSecondary,
+  },
+  dayScroll: {
+    flex: 1,
+  },
+  dayContent: {
+    paddingHorizontal: spacing.md,
+    paddingTop: 16,
+    // Clears the floating bottom bar.
+    paddingBottom: 140,
+  },
+  emptyDay: {
+    flex: 1,
+    alignItems: "center",
+    paddingTop: spacing.xl * 2,
+  },
+  emptyDayText: {
+    fontSize: scaleFontSize(15),
+    lineHeight: scaleFontSize(22),
+    color: colors.textTertiary,
+  },
+});
+import { buildReminderDraft, isPremiumTakeItem, planTakeAllowance } from "./voiceTake";
+import type { Reminder } from "./store";
+import type { PendingTake } from "./pendingTakes";
+import type { ProStatus } from "./proCardContent";
+
+/**
+ * Importing a committed take (spec Â§2.4) â€” the voice-job path only.
+ *
+ * The typed composer keeps its legacy loop (C8); nothing here is on its path.
+ *
+ * Four rules shape everything below:
+ *
+ *  1. The rows are built against the JOB's timezone snapshot, not the device's
+ *     clock right now (C14). A take recorded in Riyadh and imported after a
+ *     flight must resolve to the times the user actually said.
+ *  2. The allowance is tri-state (D6/OLD-127). A confirmed subscriber keeps
+ *     everything; a confirmed free plan drops the Pro-only schedules FIRST and
+ *     then spends the cap on what is left â€” exactly the order planTakeAllowance
+ *     already applies; an entitlement we could not confirm imports NOTHING,
+ *     deletes nothing server-side, and sells nothing. Guessing "free" there
+ *     would delete a paying user's reminders.
+ *  3. The upsert IS the idempotency mechanism (D2). A row whose `convexId` is
+ *     already in the store is updated in place, never appended, so a crash
+ *     between the write and the outbox cleanup costs a replay and nothing else.
+ *     There is no skip-list to fall out of sync with.
+ *  4. The creation lock covers the LOCAL half only. Steps 1 and 2 are a Convex
+ *     query and an entitlement round trip with no timeout of its own; holding
+ *     the store-level lock across them means one stalled import freezes legacy
+ *     `addReminder`, and the typed composer's Save spins until the network
+ *     comes back. So the lock is taken after those two answers are in hand â€”
+ *     and the cap math that depends on the STORE is re-read once it is held,
+ *     because another writer may have taken the last slot while we waited (C9).
+ */
+
+/** One row as `creationJobs.getReminders` projects it. */
+export type CommittedRow = Record<string, any> & {
+  id: string;
+  deleted?: boolean;
+  audioStatus?: string;
+};
+
+export type TakeImportSummary = {
+  created: number;
+  dropped: number;
+  blockedPremium: number;
+  total: number;
+  limit: number;
+};
+
+export type CommitTakeOutcome =
+  | { result: "imported"; rows: Reminder[]; summary: TakeImportSummary }
+  /** Entitlement unresolved â€” the card says so and the take waits (OLD-127). */
+  | { result: "cap_unverified" }
+  /** The job is not readable (not committed, wrong device, or gone). */
+  | { result: "unavailable" }
+  /** Committed, but every row had already been deleted. */
+  | { result: "empty" }
+  /** The batch write failed; memory was rolled back and the phase stays committing. */
+  | { result: "persist_failed"; error: unknown };
+
+export type CommitTakeDeps = {
+  /**
+   * `creationJobs.getReminders` for this take. Null = not importable yet.
+   *
+   * Called again by the overflow queue as its audio-status refresh â€” it is the
+   * same read, so it is the same seam.
+   */
+  fetchRows: () => Promise<CommittedRow[] | null>;
+  proStatus: () => Promise<ProStatus>;
+  /**
+   * The store-level creation lock (C9), wrapped around the LOCAL half of the
+   * import only â€” see rule 4. Everything it covers is on-device work, so a
+   * network that never answers cannot hold legacy `addReminder` behind it.
+   */
+  withLock: <T>(run: () => Promise<T>) => Promise<T>;
+  activeCount: () => number;
+  limit: number;
+  storeSnapshot: () => Reminder[];
+  applyStore: (rows: Reminder[]) => void;
+  persistStore: (rows: Reminder[]) => Promise<void>;
+  newLocalId: () => string;
+  now: () => number;
+  markCommitting: () => Promise<void>;
+  markCapUnverified: () => Promise<void>;
+  removeTake: () => Promise<void>;
+  deleteRecording: () => Promise<void>;
+  ack: () => Promise<void>;
+  deleteServerRow: (id: string) => Promise<void>;
+  wait: (ms: number) => Promise<void>;
+  /** Scheduling + hydration. Called after the rows are durably on disk. */
+  onImported?: (created: Reminder[], summary: TakeImportSummary) => void;
+  onStage?: (stage: string, data?: Record<string, unknown>) => void;
+};
+
+export async function commitTake(params: {
+  take: PendingTake;
+  deps: CommitTakeDeps;
+}): Promise<CommitTakeOutcome> {
+  const { take, deps } = params;
+
+  // â”€â”€ 1. The rows the job produced â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // A Convex query, so it runs BEFORE the lock (rule 4).
+  const rows = await deps.fetchRows();
+  if (rows === null) return { result: "unavailable" };
+
+  // A row the user deleted between commit and import comes back as a
+  // placeholder rather than silently missing, so this drop is a decision.
+  const live = rows.filter((row) => row.deleted !== true);
+  if (live.length === 0) {
+    await finishCleanup(deps);
+    return { result: "empty" };
+  }
+
+  // â”€â”€ 2. The entitlement, once, for the whole take â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Also before the lock: this may force a store-kit refresh, and that call has
+  // no timeout. Nothing local is touched on either side of this answer.
+  const status = await deps.proStatus();
+  if (status === "unknown") {
+    await deps.markCapUnverified();
+    deps.onStage?.("cap_unverified");
+    return { result: "cap_unverified" };
+  }
+
+  // â”€â”€ 3-5. The local half, serialized against legacy addReminder (C9) â”€â”€â”€â”€â”€â”€â”€
+  return await deps.withLock(() => importUnderLock(take, deps, live, status));
+}
+
+/**
+ * Steps 3 to 5 â€” everything that reads or writes the store â€” with the creation
+ * lock held.
+ *
+ * The allowance is planned HERE rather than being carried in from step 2 on
+ * purpose. `status` and `live` are facts about the server and cannot change
+ * while we wait for the lock; "how many active reminders does this device
+ * already have" is a fact about the STORE, and the typed composer may have
+ * spent the last free slot in exactly that window. Reading the count after
+ * acquiring is what keeps the cap honest with two writers (C9).
+ */
+async function importUnderLock(
+  take: PendingTake,
+  deps: CommitTakeDeps,
+  live: CommittedRow[],
+  status: Exclude<ProStatus, "unknown">
+): Promise<CommitTakeOutcome> {
+  const tzid = take.timezone;
+  const premium = live.map((row) => isPremiumTakeItem(row, tzid));
+  const allowance = await planTakeAllowance({
+    takeCount: live.length,
+    activeCount: deps.activeCount(),
+    limit: deps.limit,
+    checkPro: async () => status === "pro",
+    premium,
+  });
+
+  // â”€â”€ 3. Durable marker, then ONE set + ONE write â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  await deps.markCommitting();
+
+  const kept: CommittedRow[] = [];
+  const overflow: CommittedRow[] = [];
+  live.forEach((row, index) => {
+    if (allowance.decisions[index] === "keep") kept.push(row);
+    else overflow.push(row);
+  });
+
+  const before = deps.storeSnapshot();
+  const drafts: ImportDraft[] = kept.map((row) => ({
+    convexId: String(row.id),
+    draft: {
+      ...buildReminderDraft(row, { usedFastPath: true, tzid }),
+      // Every imported row carries the take it came from, which is what lets a
+      // `committing + null` recovery prove the import already landed (N1/D4).
+      creationId: take.creationId,
+    },
+  }));
+
+  const nowIso = new Date(deps.now()).toISOString();
+  const { rows: nextRows, created } = upsertByConvexId(before, drafts, {
+    newLocalId: deps.newLocalId,
+    createdAt: () => nowIso,
+  });
+
+  deps.applyStore(nextRows);
+  try {
+    await deps.persistStore(nextRows);
+  } catch (error) {
+    // Memory must never hold a stamped row whose disk write failed â€” the
+    // `committing + null` recovery reads the store as durable proof (N3).
+    deps.applyStore(before);
+    deps.onStage?.("persist_failed");
+    return { result: "persist_failed", error };
+  }
+
+  // â”€â”€ 4. Overflow the free plan won't keep â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Detached: each row waits for its own TTS to settle before it can be
+  // deleted (C6), and the card must not linger on the screen for it.
+  if (overflow.length > 0) {
+    void drainOverflowDeletion({ rows: overflow, deps }).catch((e) => {
+      deps.onStage?.("overflow_drain_failed", { error: String(e) });
+    });
+  }
+
+  // â”€â”€ 5. Cleanup, then hand the rows on â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  await finishCleanup(deps);
+
+  const summary: TakeImportSummary = {
+    created: created.length,
+    dropped: allowance.dropped,
+    blockedPremium: allowance.blockedPremium,
+    total: live.length,
+    limit: deps.limit,
+  };
+  deps.onImported?.(created, summary);
+  return { result: "imported", rows: created, summary };
+}
+
+/**
+ * The take is done with: drop it from the outbox, drop its recording, and tell
+ * the server it may collect the job.
+ *
+ * Nothing here is allowed to throw. A cleanup that fails leaves the take at
+ * `committing`, and the next reconciliation replays the idempotent upsert and
+ * tries again â€” which is strictly better than a half-imported take.
+ */
+async function finishCleanup(deps: CommitTakeDeps): Promise<void> {
+  try {
+    await deps.removeTake();
+  } catch (e) {
+    deps.onStage?.("remove_take_failed", { error: String(e) });
+    return;
+  }
+  try {
+    await deps.deleteRecording();
+  } catch (e) {
+    deps.onStage?.("delete_recording_failed", { error: String(e) });
+  }
+  void ackOnce(deps);
+}
+
+/** Fire-and-forget with exactly one retry (D5). An unacked job just waits a week. */
+async function ackOnce(deps: CommitTakeDeps): Promise<void> {
+  try {
+    await deps.ack();
+    return;
+  } catch {
+    // one retry, below
+  }
+  try {
+    await deps.ack();
+  } catch (e) {
+    deps.onStage?.("ack_failed", { error: String(e) });
+  }
+}
+
+// â”€â”€â”€ The upsert (pure) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+export type ImportDraft = {
+  convexId: string;
+  draft: Omit<Reminder, "id" | "createdAt">;
+};
+
+/**
+ * Fold the take's rows into the store by `convexId`.
+ *
+ * `created` holds every row the take is responsible for, replayed ones
+ * included: scheduling and hydration are both idempotent, so re-running them
+ * after a crash is the cheap half of the trade that removes the skip-list.
+ */
+export function upsertByConvexId(
+  existing: Reminder[],
+  drafts: ImportDraft[],
+  opts: { newLocalId: () => string; createdAt: () => string }
+): { rows: Reminder[]; created: Reminder[] } {
+  const rows = [...existing];
+  const indexByConvexId = new Map<string, number>();
+  rows.forEach((row, index) => {
+    if (row.convexId) indexByConvexId.set(String(row.convexId), index);
+  });
+
+  const created: Reminder[] = [];
+  for (const { convexId, draft } of drafts) {
+    const index = indexByConvexId.get(convexId);
+    if (index === undefined) {
+      const row: Reminder = {
+        ...draft,
+        convexId,
+        id: opts.newLocalId(),
+        createdAt: opts.createdAt(),
+      };
+      indexByConvexId.set(convexId, rows.length);
+      rows.push(row);
+      created.push(row);
+      continue;
+    }
+    const merged = mergeImportedRow(rows[index], draft, convexId);
+    rows[index] = merged;
+    created.push(merged);
+  }
+
+  return { rows, created };
+}
+
+/**
+ * A row that is already here, brought up to date.
+ *
+ * The local identity survives (the notification triggers and the audio files on
+ * disk are keyed by it), and so does anything hydration has already won â€” a
+ * replay must not walk a playable reminder back to `pending`.
+ */
+export function mergeImportedRow(
+  existing: Reminder,
+  draft: Omit<Reminder, "id" | "createdAt">,
+  convexId: string
+): Reminder {
+  return {
+    ...existing,
+    ...draft,
+    convexId,
+    id: existing.id,
+    createdAt: existing.createdAt,
+    audioUrl: existing.audioUrl || draft.audioUrl,
+    audioStatus: existing.audioStatus ?? draft.audioStatus,
+    wavUrl: existing.wavUrl ?? draft.wavUrl,
+    preAudioUrl: existing.preAudioUrl ?? draft.preAudioUrl,
+    audioExtrasStatus: existing.audioExtrasStatus ?? draft.audioExtrasStatus,
+    scheduledFor: existing.scheduledFor ?? draft.scheduledFor,
+  };
+}
+
+// â”€â”€â”€ The overflow deletion queue (C6) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/** Backoff between passes. Five waits, ~31s, then the row is left to the server. */
+export const OVERFLOW_BACKOFF_MS: readonly number[] = [1000, 2000, 4000, 8000, 16000];
+
+/**
+ * Delete the rows the free plan won't let this device keep â€” but only once each
+ * row's audio has settled.
+ *
+ * Deleting a reminder whose TTS job is mid-write is the race C6 exists for, so
+ * a row is only removed when its `audioStatus` is `ready` or `failed`. Rows
+ * still pending are re-read on a backoff; a row that never settles is
+ * abandoned, which costs a server row nobody can see and no correctness.
+ */
+export async function drainOverflowDeletion(params: {
+  rows: CommittedRow[];
+  deps: Pick<CommitTakeDeps, "fetchRows" | "deleteServerRow" | "wait" | "onStage">;
+}): Promise<{ deleted: string[]; abandoned: string[] }> {
+  const { rows, deps } = params;
+  const deleted: string[] = [];
+  let pending = rows.map((row) => ({ id: String(row.id), audioStatus: row.audioStatus }));
+
+  for (let attempt = 0; ; attempt++) {
+    const waiting: typeof pending = [];
+    for (const row of pending) {
+      if (row.audioStatus !== "ready" && row.audioStatus !== "failed") {
+        waiting.push(row);
+        continue;
+      }
+      try {
+        await deps.deleteServerRow(row.id);
+        deleted.push(row.id);
+      } catch (e) {
+        deps.onStage?.("overflow_delete_failed", { error: String(e) });
+        waiting.push(row);
+      }
+    }
+    pending = waiting;
+
+    if (pending.length === 0) break;
+    if (attempt >= OVERFLOW_BACKOFF_MS.length) break;
+
+    await deps.wait(OVERFLOW_BACKOFF_MS[attempt]);
+    const fresh = await deps.fetchRows().catch(() => null);
+    if (!fresh) continue;
+
+    const byId = new Map(fresh.map((row) => [String(row.id), row]));
+    pending = pending.flatMap((row) => {
+      const latest = byId.get(row.id);
+      if (!latest) return [row];
+      // Already gone â€” a previous pass, or the user, got there first.
+      if (latest.deleted === true) {
+        deleted.push(row.id);
+        return [];
+      }
+      return [{ id: row.id, audioStatus: latest.audioStatus }];
+    });
+  }
+
+  return { deleted, abandoned: pending.map((row) => row.id) };
+}
+import { AppState } from "react-native";
+import {
+  errorKindForServerCode,
+  getPendingTake,
+  getPendingTakesSnapshot,
+  loadPendingTakes,
+  missingRecordingOutcome,
+  removePendingTake,
+  updatePendingTake,
+  type PendingErrorKind,
+  type PendingPhase,
+  type PendingTake,
+} from "./pendingTakes";
+import type { WatchedJob } from "./creationJobWatch";
+import type { CommitTakeOutcome } from "./takeCommit";
+import type { SpeechEngine } from "./vrSpeech";
+
+/**
+ * Reconciliation (spec Â§2.5) and the retry dispatch (Â§2.6).
+ *
+ * Everything that can strand a take converges here: a kill mid-upload, a
+ * foreground after three days offline, a watch that gave up at 90s, a cancel
+ * that raced a commit, a user tapping a failed card. The rule is that the
+ * device's phase and the server's status are BOTH inputs â€” neither alone says
+ * what to do â€” and the pair maps to exactly one action.
+ *
+ * The queue is a draining FIFO with two workers and single-flight per
+ * creationId, so two foregrounds in a second cannot import the same take twice,
+ * and a take enqueued while its own pass is running is re-run once rather than
+ * dropped.
+ *
+ * The load barrier is not an optimization (C10): dispatching before the outbox,
+ * the reminders and the history are on the device would read an empty store and
+ * conclude that a perfectly good import never happened.
+ */
+
+export type ServerJobStatus = WatchedJob["status"];
+
+export type ReconcileAction =
+  | "resume_upload"
+  | "rebegin"
+  | "subscribe"
+  | "import"
+  | "fail_from_server"
+  | "remove_local"
+  | "recover_committing"
+  | "invariant_violation"
+  | "cancel_then_remove"
+  | "discard_then_remove"
+  | "retry_dispatch";
+
+/**
+ * The Â§2.5 table, as one function.
+ *
+ * `null` here always means LOADED-and-missing. A watch's `undefined` never
+ * reaches this: it is filtered at the subscription (D-watch), because "not
+ * loaded yet" and "no such job" demand opposite actions.
+ */
+export function decideReconcileAction(
+  phase: PendingPhase,
+  status: ServerJobStatus | null
+): ReconcileAction {
+  // Two columns are the same answer whatever the device thinks.
+  if (status === "cancelled") return "remove_local";
+  if (status === "committed") return "import";
+
+  if (phase === "cancelling") {
+    // A cancel over a failed job is a discard â€” there is nothing to stop.
+    return status === "failed" ? "discard_then_remove" : "cancel_then_remove";
+  }
+
+  if (status === "failed") return "fail_from_server";
+
+  if (status === null) {
+    switch (phase) {
+      case "recording_saved":
+      case "uploading":
+        return "resume_upload";
+      case "processing":
+      case "transcribed":
+        return "rebegin";
+      case "committing":
+        return "recover_committing";
+      default:
+        // failed + no job: Â§2.6 owns this, by errorKind (D4).
+        return "retry_dispatch";
+    }
+  }
+
+  // pending | transcribed
+  // A committed take cannot become pending again â€” the server refuses it. Seeing
+  // it means our own phase is wrong, so the card says so rather than importing
+  // rows that do not exist.
+  return phase === "committing" ? "invariant_violation" : "subscribe";
+}
+
+export type RetryAction =
+  | "resume_upload"
+  | "rebegin"
+  | "reupload_then_retry"
+  | "server_retry"
+  | "import"
+  | "subscribe"
+  | "remove_local"
+  | "record_again";
+
+/**
+ * The Â§2.6 retry dispatch â€” the single source of truth for "this take failed,
+ * what now", used by the failed card's tap AND by reconciliation's `failed +
+ * null` cell.
+ */
+export function decideRetryAction(params: {
+  errorKind?: PendingErrorKind;
+  hasStorageId: boolean;
+  hasRecording: boolean;
+  server: ServerJobStatus | null;
+  serverErrorCode?: string;
+}): RetryAction {
+  const { errorKind, hasStorageId, hasRecording, server, serverErrorCode } = params;
+
+  // An unresolved entitlement is a LOCAL block on a job that already committed.
+  // It re-enters the import; it must never spend a server retry (C13). A job
+  // that is no longer there is no exception: the import is what re-checks the
+  // entitlement, and if there is genuinely nothing left to import it says so
+  // without the card losing the sentence that explains itself.
+  if (errorKind === "cap_unverified") {
+    return server === "cancelled" ? "remove_local" : "import";
+  }
+
+  if (server === "committed") return "import";
+  if (server === "cancelled") return "remove_local";
+  if (server === "pending" || server === "transcribed") return "subscribe";
+
+  if (server === "failed") {
+    // The one failure a reused blob cannot fix: the blob is what went missing.
+    if (serverErrorCode === "storage_missing") {
+      return hasRecording ? "reupload_then_retry" : "record_again";
+    }
+    return "server_retry";
+  }
+
+  // server === null
+  if (errorKind === "network") {
+    if (hasStorageId) return "rebegin";
+    return hasRecording ? "resume_upload" : "record_again";
+  }
+  // A failed job that has been garbage collected, or any non-network failure
+  // with nothing left on the server: there is nothing to retry.
+  return "record_again";
+}
+
+// â”€â”€â”€ Wiring â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+export type ReconcileDeps = {
+  getDeviceId: () => Promise<string>;
+  fetchJob: (deviceId: string, creationId: string) => Promise<WatchedJob | null>;
+  begin: (
+    args: {
+      deviceId: string;
+      creationId: string;
+      localDate: string;
+      localTime: string;
+      timezone: string;
+    } & (
+      | { audioStorageId: string }
+      | {
+          transcript: string;
+          sttSource: "device";
+          deviceSttMs?: number;
+          deviceSttEngine?: SpeechEngine;
+          deviceSttLocale?: string;
+        }
+    )
+  ) => Promise<{ status: ServerJobStatus }>;
+  cancel: (args: {
+    deviceId: string;
+    creationId: string;
+    orphanStorageId?: string;
+  }) => Promise<{ status: string }>;
+  serverRetry: (args: {
+    deviceId: string;
+    creationId: string;
+    newStorageId?: string;
+  }) => Promise<{ status: string; capReached?: boolean }>;
+  discard: (args: { deviceId: string; creationId: string }) => Promise<{ status: string }>;
+  /** Upload this take's recording. Null when the file is gone (D10). */
+  uploadRecording: (take: PendingTake) => Promise<string | null>;
+  /** Is the recording still on disk? Only ever false for a `fragileUri` take. */
+  recordingExists: (take: PendingTake) => Promise<boolean>;
+  importTake: (take: PendingTake) => Promise<CommitTakeOutcome>;
+  subscribe: (take: PendingTake) => void;
+  deleteRecording: (take: PendingTake) => Promise<void>;
+  /** Durable proof that an import landed: a stored row stamped with this take. */
+  storeHasCreationId: (creationId: string) => boolean;
+  /** Outbox + reminders + history, all on the device (C10). */
+  loadBarrier: () => Promise<void>;
+  /** The user asked to retry and there is nothing left but a fresh recording. */
+  onRecordAgain?: (take: PendingTake) => void;
+  onStage?: (creationId: string, stage: string, data?: Record<string, unknown>) => void;
+};
+
+const WORKERS = 2;
+
+let deps: ReconcileDeps | null = null;
+let queue: string[] = [];
+const inFlight = new Set<string>();
+const requested = new Set<string>();
+let active = 0;
+let barrier: Promise<void> | null = null;
+let idle: Promise<void> = Promise.resolve();
+let resolveIdle: (() => void) | null = null;
+
+export function configureReconcile(next: ReconcileDeps): void {
+  deps = next;
+  pump();
+}
+
+function markBusy(): void {
+  if (resolveIdle) return;
+  idle = new Promise<void>((resolve) => {
+    resolveIdle = resolve;
+  });
+}
+
+function markIdle(): void {
+  const resolve = resolveIdle;
+  resolveIdle = null;
+  resolve?.();
+}
+
+/** Resolves when the queue has drained. The seam every test waits on. */
+export function reconcileIdle(): Promise<void> {
+  return idle;
+}
+
+export function enqueueReconcile(creationId: string): void {
+  if (inFlight.has(creationId)) {
+    // Its pass is already running and may have read stale state â€” run it once
+    // more when it finishes rather than dropping the request.
+    requested.add(creationId);
+    return;
+  }
+  if (queue.includes(creationId)) return;
+  queue.push(creationId);
+  markBusy();
+  pump();
+}
+
+/** Startup and every foreground: sweep whatever the outbox is still holding. */
+export function enqueueAllPendingTakes(): void {
+  markBusy();
+  void (async () => {
+    try {
+      const takes = await loadPendingTakes();
+      for (const take of takes) enqueueReconcile(take.creationId);
+    } catch (e) {
+      console.log("[VR] takeReconcile: outbox load failed:", e);
+    } finally {
+      if (queue.length === 0 && active === 0) markIdle();
+    }
+  })();
+}
+
+function pump(): void {
+  // Nothing is dispatched before the screen has wired its seams; the queue
+  // simply holds until it does.
+  if (!deps) return;
+  while (active < WORKERS && queue.length > 0) {
+    const creationId = queue.shift() as string;
+    inFlight.add(creationId);
+    active += 1;
+    void runOne(creationId).finally(() => {
+      inFlight.delete(creationId);
+      active -= 1;
+      if (requested.delete(creationId)) {
+        queue.push(creationId);
+      }
+      if (queue.length > 0) {
+        pump();
+        return;
+      }
+      if (active === 0) markIdle();
+    });
+  }
+}
+
+async function ensureBarrier(current: ReconcileDeps): Promise<void> {
+  if (!barrier) barrier = current.loadBarrier();
+  await barrier;
+}
+
+async function runOne(creationId: string): Promise<void> {
+  const current = deps;
+  if (!current) return;
+  try {
+    await ensureBarrier(current);
+    const take = getPendingTake(creationId);
+    if (!take) return;
+    await dispatchTake(take, current);
+  } catch (e) {
+    current.onStage?.(creationId, "reconcile_error", { error: String(e) });
+  }
+}
+
+async function dispatchTake(take: PendingTake, current: ReconcileDeps): Promise<void> {
+  const deviceId = await current.getDeviceId();
+  const job = await current.fetchJob(deviceId, take.creationId);
+  const status = job?.status ?? null;
+  const action = decideReconcileAction(take.phase, status);
+  current.onStage?.(take.creationId, `reconcile_${action}`);
+
+  switch (action) {
+    case "remove_local":
+      await forget(take, current);
+      return;
+    case "import":
+      await runImport(take, current, status);
+      return;
+    case "fail_from_server":
+      await failFromServer(take, job as WatchedJob);
+      return;
+    case "subscribe":
+      current.subscribe(take);
+      return;
+    case "resume_upload":
+      await resumeUpload(take, current, deviceId);
+      return;
+    case "rebegin":
+      await beginAndSubscribe(take, current, deviceId);
+      return;
+    case "recover_committing":
+      await recoverCommitting(take, current);
+      return;
+    case "invariant_violation":
+      await failLocally(take, "server");
+      return;
+    case "cancel_then_remove":
+      await cancelThenRemove(take, current, deviceId);
+      return;
+    case "discard_then_remove":
+      await discardThenRemove(take, current, deviceId);
+      return;
+    default:
+      await runRetry(take, current, deviceId, job, "reconcile");
+      return;
+  }
+}
+
+// â”€â”€â”€ The individual moves â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async function forget(take: PendingTake, current: ReconcileDeps): Promise<void> {
+  await removePendingTake(take.creationId);
+  await current.deleteRecording(take).catch(() => {});
+}
+
+async function failLocally(take: PendingTake, errorKind: PendingErrorKind): Promise<void> {
+  await updatePendingTake(take.creationId, "failed", { errorKind });
+}
+
+async function failFromServer(take: PendingTake, job: WatchedJob): Promise<void> {
+  await updatePendingTake(take.creationId, "failed", {
+    errorKind: errorKindForServerCode(job.errorCode),
+    serverErrorCode: job.errorCode,
+  });
+}
+
+async function runImport(
+  take: PendingTake,
+  current: ReconcileDeps,
+  status: ServerJobStatus | null
+): Promise<void> {
+  const outcome = await current.importTake(take);
+  if (outcome.result !== "unavailable") return;
+
+  // The job said committed but its rows would not read: a race worth another
+  // push. With no job at all there is nothing to wait for.
+  if (status === "committed") {
+    current.subscribe(take);
+    return;
+  }
+  // An unresolved entitlement is a LOCAL block over a job that already
+  // committed, and a job that has since been collected does not turn it into a
+  // generic fault. Keeping the entitlement copy keeps the card honest â€” "can't
+  // verify your subscription" is still exactly what happened â€” and keeps the
+  // retry pointed at the local re-check rather than at a server that has
+  // nothing left to offer.
+  await failLocally(take, take.errorKind === "cap_unverified" ? "cap_unverified" : "server");
+}
+
+/**
+ * Resume from wherever the upload got to. The phase is re-read immediately
+ * before `begin` because a cancel may have landed while the bytes were in
+ * flight â€” in which case the blob is an orphan and is handed straight to the
+ * server for deletion (C4).
+ */
+async function resumeUpload(
+  take: PendingTake,
+  current: ReconcileDeps,
+  deviceId: string
+): Promise<void> {
+  if (missingRecordingOutcome(take) === "use_server_blob") {
+    // The bytes already reached Convex, so whether the local file survived is
+    // beside the point â€” the server blob is the source (D10).
+    await beginAndSubscribe(take, current, deviceId);
+    return;
+  }
+
+  const uploading = await updatePendingTake(take.creationId, "uploading");
+  if (!uploading) return;
+
+  const storageId = await current.uploadRecording(uploading);
+  if (!storageId) {
+    // Nothing uploaded and nothing on disk: the only honest offer is a
+    // re-record, which is what the failed("server") card carries (D10).
+    await failLocally(uploading, "server");
+    return;
+  }
+
+  const live = getPendingTake(take.creationId);
+  if (!live || live.phase === "cancelling") {
+    await handOrphanBlob(current, deviceId, take.creationId, storageId);
+    return;
+  }
+
+  const stamped = await updatePendingTake(take.creationId, "uploading", {
+    audioStorageId: storageId,
+  });
+  await beginAndSubscribe(stamped ?? { ...uploading, audioStorageId: storageId }, current, deviceId);
+}
+
+async function beginAndSubscribe(
+  take: PendingTake,
+  current: ReconcileDeps,
+  deviceId: string
+): Promise<void> {
+  const audioStorageId = take.audioStorageId;
+  // A device take rebegins from its persisted transcript alone â€” no blob to
+  // upload, no audio to point at (spec Â§4). Exactly one of the two is ever set.
+  const isDeviceTake = !audioStorageId && take.sttSource === "device" && !!take.transcript;
+
+  if (!audioStorageId && !isDeviceTake) {
+    await failLocally(take, "server");
+    return;
+  }
+
+  const live = getPendingTake(take.creationId);
+  if (!live || live.phase === "cancelling") {
+    // Only a blob can be orphaned; a device transcript references nothing.
+    if (audioStorageId) {
+      await handOrphanBlob(current, deviceId, take.creationId, audioStorageId);
+    }
+    return;
+  }
+
+  await current.begin(
+    audioStorageId
+      ? {
+          deviceId,
+          creationId: take.creationId,
+          audioStorageId,
+          localDate: take.localDate,
+          localTime: take.localTime,
+          timezone: take.timezone,
+        }
+      : {
+          deviceId,
+          creationId: take.creationId,
+          transcript: take.transcript as string,
+          sttSource: "device",
+          ...(take.deviceSttMs !== undefined ? { deviceSttMs: take.deviceSttMs } : {}),
+          ...(take.deviceSttEngine ? { deviceSttEngine: take.deviceSttEngine } : {}),
+          ...(take.deviceSttLocale ? { deviceSttLocale: take.deviceSttLocale } : {}),
+          localDate: take.localDate,
+          localTime: take.localTime,
+          timezone: take.timezone,
+        }
+  );
+  const processing = await updatePendingTake(
+    take.creationId,
+    "processing",
+    audioStorageId ? { audioStorageId } : {}
+  );
+  current.subscribe(processing ?? take);
+}
+
+/** Three tries, then the blob is left to the sweep â€” bounded and harmless. */
+async function handOrphanBlob(
+  current: ReconcileDeps,
+  deviceId: string,
+  creationId: string,
+  storageId: string
+): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await current.cancel({ deviceId, creationId, orphanStorageId: storageId });
+      return;
+    } catch (e) {
+      current.onStage?.(creationId, "orphan_cancel_failed", { attempt, error: String(e) });
+    }
+  }
+}
+
+/**
+ * `committing + null` (D4): the job vanished mid-import.
+ *
+ * `getReminders` is unavailable, so the only evidence left is the store itself.
+ * A row stamped with this creationId proves the import persisted â€” the Â§2.4
+ * rollback rule guarantees memory never holds a stamped row whose disk write
+ * failed, so the in-memory check is durable by construction (N3).
+ */
+async function recoverCommitting(take: PendingTake, current: ReconcileDeps): Promise<void> {
+  if (current.storeHasCreationId(take.creationId)) {
+    current.onStage?.(take.creationId, "committing_recovered");
+    await forget(take, current);
+    return;
+  }
+  await failLocally(take, "server");
+}
+
+async function cancelThenRemove(
+  take: PendingTake,
+  current: ReconcileDeps,
+  deviceId: string
+): Promise<void> {
+  const result = await current.cancel({
+    deviceId,
+    creationId: take.creationId,
+    ...(take.audioStorageId ? { orphanStorageId: take.audioStorageId } : {}),
+  });
+  // The cancel lost: the take committed anyway, so it gets imported rather than
+  // thrown away (C4).
+  if (result.status === "committed") {
+    await runImport(take, current, "committed");
+    return;
+  }
+  await forget(take, current);
+}
+
+async function discardThenRemove(
+  take: PendingTake,
+  current: ReconcileDeps,
+  deviceId: string
+): Promise<void> {
+  await current.discard({ deviceId, creationId: take.creationId }).catch(() => ({ status: "error" }));
+  await forget(take, current);
+}
+
+// â”€â”€â”€ Â§2.6, callable directly from the card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async function runRetry(
+  take: PendingTake,
+  current: ReconcileDeps,
+  deviceId: string,
+  job: WatchedJob | null,
+  trigger: "user" | "reconcile"
+): Promise<void> {
+  const status = job?.status ?? null;
+  const action = decideRetryAction({
+    errorKind: take.errorKind,
+    hasStorageId: !!take.audioStorageId,
+    hasRecording: await current.recordingExists(take),
+    server: status,
+    serverErrorCode: job?.errorCode,
+  });
+  current.onStage?.(take.creationId, `retry_${action}`, { trigger });
+
+  switch (action) {
+    case "import":
+      await runImport(take, current, status);
+      return;
+    case "subscribe":
+      current.subscribe(take);
+      return;
+    case "remove_local":
+      await forget(take, current);
+      return;
+    case "rebegin":
+      await beginAndSubscribe(take, current, deviceId);
+      return;
+    case "resume_upload": {
+      const cleared = await updatePendingTake(take.creationId, "uploading");
+      await resumeUpload(cleared ?? take, current, deviceId);
+      return;
+    }
+    case "reupload_then_retry": {
+      const storageId = await current.uploadRecording(take);
+      if (!storageId) {
+        await recordAgain(take, current, deviceId, trigger);
+        return;
+      }
+      await updatePendingTake(take.creationId, "processing", { audioStorageId: storageId });
+      const result = await current.serverRetry({
+        deviceId,
+        creationId: take.creationId,
+        newStorageId: storageId,
+      });
+      await afterServerRetry(take, current, deviceId, result, trigger);
+      return;
+    }
+    case "server_retry": {
+      const result = await current.serverRetry({ deviceId, creationId: take.creationId });
+      await afterServerRetry(take, current, deviceId, result, trigger);
+      return;
+    }
+    default:
+      await recordAgain(take, current, deviceId, trigger);
+      return;
+  }
+}
+
+async function afterServerRetry(
+  take: PendingTake,
+  current: ReconcileDeps,
+  deviceId: string,
+  result: { status: string; capReached?: boolean },
+  trigger: "user" | "reconcile"
+): Promise<void> {
+  if (result.capReached) {
+    // Three attempts is the server's limit; another one would only fail again.
+    await recordAgain(take, current, deviceId, trigger);
+    return;
+  }
+  const processing = await updatePendingTake(take.creationId, "processing", {
+    attempts: take.attempts + 1,
+  });
+  current.subscribe(processing ?? take);
+}
+
+/**
+ * Nothing left to retry with.
+ *
+ * A reconciliation pass only marks the card; popping the recorder because the
+ * app came back to the foreground would be an ambush. A deliberate tap gets the
+ * offer â€” and with it, the old take goes: a re-record is a NEW creationId
+ * (Â§2.6), so leaving the dead card on screen beside the recorder would show two
+ * takes for one reminder. Discard first (a failed or cancelled job and its blob
+ * leave the server; anything else is a no-op there), then the local row and its
+ * recording.
+ */
+async function recordAgain(
+  take: PendingTake,
+  current: ReconcileDeps,
+  deviceId: string,
+  trigger: "user" | "reconcile"
+): Promise<void> {
+  if (trigger !== "user") {
+    await failLocally(take, "server");
+    return;
+  }
+  await current
+    .discard({ deviceId, creationId: take.creationId })
+    .catch(() => ({ status: "error" }));
+  await forget(take, current);
+  current.onRecordAgain?.(take);
+}
+
+// â”€â”€â”€ Public entry points for the card and the uploader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/**
+ * An upload that finished after its take was cancelled or removed.
+ *
+ * The blob is referenced by nothing, so it is handed to `cancel` â€” which knows
+ * to schedule its deletion even for a job that no longer exists (C4).
+ */
+export async function abandonOrphanBlob(creationId: string, storageId: string): Promise<void> {
+  const current = deps;
+  if (!current) return;
+  const deviceId = await current.getDeviceId();
+  await handOrphanBlob(current, deviceId, creationId, storageId);
+}
+
+export async function retryTake(creationId: string): Promise<void> {
+  const current = deps;
+  const take = getPendingTake(creationId);
+  if (!current || !take) return;
+  try {
+    const deviceId = await current.getDeviceId();
+    const job = await current.fetchJob(deviceId, creationId);
+    await runRetry(take, current, deviceId, job, "user");
+  } catch (e) {
+    current.onStage?.(creationId, "retry_error", { error: String(e) });
+  }
+}
+
+export async function cancelTake(creationId: string): Promise<void> {
+  const take = getPendingTake(creationId);
+  if (!take) return;
+  await updatePendingTake(creationId, "cancelling");
+  enqueueReconcile(creationId);
+}
+
+export async function discardTake(creationId: string): Promise<void> {
+  const current = deps;
+  const take = getPendingTake(creationId);
+  if (!current || !take) return;
+  try {
+    const deviceId = await current.getDeviceId();
+    await current.discard({ deviceId, creationId }).catch(() => ({ status: "error" }));
+  } catch (e) {
+    current.onStage?.(creationId, "discard_error", { error: String(e) });
+  }
+  await forget(take, current);
+}
+
+/** Cross-platform: every return to the foreground drains the outbox. */
+export function startForegroundReconcile(): () => void {
+  const subscription = AppState.addEventListener("change", (state) => {
+    if (state === "active") enqueueAllPendingTakes();
+  });
+  return () => subscription.remove();
+}
+
+/** How many takes the card layer would draw right now. */
+export function pendingTakeCount(): number {
+  return getPendingTakesSnapshot().length;
+}
+
+/** Test seam. */
+export function __resetReconcile(): void {
+  deps = null;
+  queue = [];
+  inFlight.clear();
+  requested.clear();
+  active = 0;
+  barrier = null;
+  idle = Promise.resolve();
+  resolveIdle = null;
+}
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$f='"'app/index.tsx';"'$s=Get-Content $f;foreach($r in @(@(1170,1375),@(1600,1685),@(1770,1885))){for($i=$r[0];$i -le $r[1];$i++){ '"'{0}:{1}: {2}' -f "'$f,$i,$s[$i-1] }}' in C:\Dev\VR
+ succeeded in 648ms:
+app/index.tsx:1170:   const beginDeviceTake = useCallback(
+app/index.tsx:1171:     async (take: PendingTake, stt: DeviceSttSuccess) => {
+app/index.tsx:1172:       const creationId = take.creationId;
+app/index.tsx:1173:       try {
+app/index.tsx:1174:         const live = getPendingTake(creationId);
+app/index.tsx:1175:         if (!live || live.phase === "cancelling") {
+app/index.tsx:1176:           creationBreadcrumb("device_take_cancelled");
+app/index.tsx:1177:           return;
+app/index.tsx:1178:         }
+app/index.tsx:1179:         const stamped = await updatePendingTake(creationId, "processing", {
+app/index.tsx:1180:           transcript: stt.text,
+app/index.tsx:1181:           sttSource: "device",
+app/index.tsx:1182:           deviceSttMs: stt.ms,
+app/index.tsx:1183:           deviceSttEngine: stt.engine,
+app/index.tsx:1184:           deviceSttLocale: stt.locale,
+app/index.tsx:1185:         });
+app/index.tsx:1186:         markCreation(creationId, "transcriptAt");
+app/index.tsx:1187:         noteCreationStt(creationId, { sttSource: "device", deviceSttMs: stt.ms });
+app/index.tsx:1188: 
+app/index.tsx:1189:         const deviceId = await getDeviceId();
+app/index.tsx:1190:         markCreation(creationId, "beginCalled");
+app/index.tsx:1191:         await beginCreationJob({
+app/index.tsx:1192:           deviceId,
+app/index.tsx:1193:           creationId,
+app/index.tsx:1194:           transcript: stt.text,
+app/index.tsx:1195:           sttSource: "device",
+app/index.tsx:1196:           deviceSttMs: stt.ms,
+app/index.tsx:1197:           deviceSttEngine: stt.engine,
+app/index.tsx:1198:           deviceSttLocale: stt.locale,
+app/index.tsx:1199:           localDate: take.localDate,
+app/index.tsx:1200:           localTime: take.localTime,
+app/index.tsx:1201:           timezone: take.timezone,
+app/index.tsx:1202:         } as any);
+app/index.tsx:1203:         creationBreadcrumb("job_begun_device");
+app/index.tsx:1204: 
+app/index.tsx:1205:         void subscribeToJob(stamped ?? take);
+app/index.tsx:1206:       } catch (error) {
+app/index.tsx:1207:         console.log("[VR] take: device begin failed:", error);
+app/index.tsx:1208:         creationBreadcrumb("device_begin_failed", "network");
+app/index.tsx:1209:         await updatePendingTake(creationId, "failed", { errorKind: "network" }).catch(() => {});
+app/index.tsx:1210:       }
+app/index.tsx:1211:     },
+app/index.tsx:1212:     [beginCreationJob, subscribeToJob]
+app/index.tsx:1213:   );
+app/index.tsx:1214: 
+app/index.tsx:1215:   /**
+app/index.tsx:1216:    * Stop-tap.
+app/index.tsx:1217:    *
+app/index.tsx:1218:    * Everything up to "close the overlay" is ONE AsyncStorage write, because the
+app/index.tsx:1219:    * whole point of the wave is that the card is on screen before anything slow
+app/index.tsx:1220:    * is consulted. The documents-dir copy is slow â€” it is a file copy of up to
+app/index.tsx:1221:    * two minutes of audio â€” so it does not run here: the take is persisted
+app/index.tsx:1222:    * against the cache URI as `fragileUri` (which Â§2.1 already knows how to
+app/index.tsx:1223:    * survive), and the copy upgrades it in place afterwards. The upload, the job
+app/index.tsx:1224:    * and the subscription all happen afterwards too, detached, and the take
+app/index.tsx:1225:    * outlives the screen â€” a kill here costs a reconciliation pass, not a
+app/index.tsx:1226:    * reminder.
+app/index.tsx:1227:    */
+app/index.tsx:1228:   const handleRecordingComplete = useCallback(
+app/index.tsx:1229:     async (audioUri: string, traceId: string, stopTapAt?: number) => {
+app/index.tsx:1230:       const creationId = createCreationId();
+app/index.tsx:1231:       const startedAt = stopTapAt ?? Date.now();
+app/index.tsx:1232:       markCreation(creationId, "stopTap", startedAt);
+app/index.tsx:1233:       markCreation(creationId, "stopRecordingDone");
+app/index.tsx:1234:       creationBreadcrumb("stop_tap");
+app/index.tsx:1235:       perfLog(traceId, "device.processing", "take_stop_tap", { creationId });
+app/index.tsx:1236: 
+app/index.tsx:1237:       // Claim-and-clear the prefetched upload URL INTO THIS TAKE (C11). A URL
+app/index.tsx:1238:       // from generateUploadUrl is single-use, and leaving it on the ref would
+app/index.tsx:1239:       // hand a spent one to whatever the user records next.
+app/index.tsx:1240:       const claimedUploadUrl = uploadUrlRef.current;
+app/index.tsx:1241:       uploadUrlRef.current = null;
+app/index.tsx:1242: 
+app/index.tsx:1243:       const clock = deviceClock(
+app/index.tsx:1244:         new Date(startedAt),
+app/index.tsx:1245:         Intl.DateTimeFormat().resolvedOptions().timeZone
+app/index.tsx:1246:       );
+app/index.tsx:1247: 
+app/index.tsx:1248:       // The cache file is there RIGHT NOW; what it is not is durable. The take
+app/index.tsx:1249:       // starts out pointing at it, marked fragile, and the copy below promotes
+app/index.tsx:1250:       // it to the documents dir off the hot path.
+app/index.tsx:1251:       const take = newPendingTake({
+app/index.tsx:1252:         creationId,
+app/index.tsx:1253:         recordingUri: audioUri,
+app/index.tsx:1254:         fragileUri: true,
+app/index.tsx:1255:         localDate: clock.deviceLocalDate,
+app/index.tsx:1256:         localTime: clock.deviceLocalTime,
+app/index.tsx:1257:         timezone: clock.deviceTimezone,
+app/index.tsx:1258:         createdAt: startedAt,
+app/index.tsx:1259:       });
+app/index.tsx:1260: 
+app/index.tsx:1261:       // One retry, then the legacy blocking error path: nothing optimistic is
+app/index.tsx:1262:       // on screen yet, so there is no card to fail into.
+app/index.tsx:1263:       let persisted = true;
+app/index.tsx:1264:       try {
+app/index.tsx:1265:         await putPendingTake(take);
+app/index.tsx:1266:       } catch {
+app/index.tsx:1267:         try {
+app/index.tsx:1268:           await putPendingTake(take);
+app/index.tsx:1269:         } catch (error) {
+app/index.tsx:1270:           persisted = false;
+app/index.tsx:1271:           console.log("[VR] take: could not persist the outbox entry:", error);
+app/index.tsx:1272:         }
+app/index.tsx:1273:       }
+app/index.tsx:1274:       if (!persisted) {
+app/index.tsx:1275:         dropCreationRun(creationId);
+app/index.tsx:1276:         setShowRecording(false);
+app/index.tsx:1277:         Alert.alert(
+app/index.tsx:1278:           "Error",
+app/index.tsx:1279:           "Couldn't save your recording. Check your device storage and try again."
+app/index.tsx:1280:         );
+app/index.tsx:1281:         return;
+app/index.tsx:1282:       }
+app/index.tsx:1283: 
+app/index.tsx:1284:       setShowRecording(false);
+app/index.tsx:1285:       markCreation(creationId, "cardVisible");
+app/index.tsx:1286:       creationBreadcrumb("card_visible");
+app/index.tsx:1287: 
+app/index.tsx:1288:       // Detached, in order: make the recording durable, then send it. A copy
+app/index.tsx:1289:       // that fails leaves the take exactly as it was persisted â€” cache URI,
+app/index.tsx:1290:       // still fragile â€” which is the state Â§2.1's rules are written for.
+app/index.tsx:1291:       void (async () => {
+app/index.tsx:1292:         const copiedUri = await copyRecordingToDocuments(creationId, audioUri);
+app/index.tsx:1293:         const { recordingUri, fragileUri } = resolveRecordingLocation({
+app/index.tsx:1294:           cacheUri: audioUri,
+app/index.tsx:1295:           copiedUri,
+app/index.tsx:1296:         });
+app/index.tsx:1297: 
+app/index.tsx:1298:         // The card has been on screen for the whole of that copy, so plenty can
+app/index.tsx:1299:         // have happened to the take: the user can have cancelled it, and a
+app/index.tsx:1300:         // reconciliation pass (a foreground, say) can have picked it up and
+app/index.tsx:1301:         // resumed the upload itself. Only a take still sitting at
+app/index.tsx:1302:         // `recording_saved` belongs to this block; anything else already has an
+app/index.tsx:1303:         // owner, and uploading it again would be a second copy of the same
+app/index.tsx:1304:         // take. The documents file this block just made is swept up on the way
+app/index.tsx:1305:         // out either way â€” nothing else knows it exists.
+app/index.tsx:1306:         const current = getPendingTake(creationId);
+app/index.tsx:1307:         if (current?.phase !== "recording_saved") {
+app/index.tsx:1308:           if (!fragileUri) await deleteAsync(recordingUri, { idempotent: true }).catch(() => {});
+app/index.tsx:1309:           return;
+app/index.tsx:1310:         }
+app/index.tsx:1311: 
+app/index.tsx:1312:         let live = current;
+app/index.tsx:1313:         if (!fragileUri) {
+app/index.tsx:1314:           const upgraded = await updatePendingTake(creationId, "recording_saved", {
+app/index.tsx:1315:             recordingUri,
+app/index.tsx:1316:             fragileUri: false,
+app/index.tsx:1317:           }).catch(() => null);
+app/index.tsx:1318:           // The take could not be pointed at the durable copy (it moved on
+app/index.tsx:1319:           // between the read above and this write, or the write itself failed),
+app/index.tsx:1320:           // so the copy is an orphan and the take keeps its cache URI for
+app/index.tsx:1321:           // whoever does own it.
+app/index.tsx:1322:           if (!upgraded) {
+app/index.tsx:1323:             await deleteAsync(recordingUri, { idempotent: true }).catch(() => {});
+app/index.tsx:1324:             return;
+app/index.tsx:1325:           }
+app/index.tsx:1326:           live = upgraded;
+app/index.tsx:1327:         }
+app/index.tsx:1328: 
+app/index.tsx:1329:         // Device-first (spec Â§3): try the on-device transcriber, and only fall
+app/index.tsx:1330:         // to the upload+begin path if it can't or won't produce a transcript.
+app/index.tsx:1331:         // The perf events ride the take's traceId, exactly like the cloud path.
+app/index.tsx:1332:         const { voiceLanguage, voiceEngine } = useSettingsStore.getState().settings;
+app/index.tsx:1333:         await runVoiceHandoff({
+app/index.tsx:1334:           available: isVRSpeechAvailable(),
+app/index.tsx:1335:           hasAudioStorageId: !!live.audioStorageId,
+app/index.tsx:1336:           fileUri: live.recordingUri,
+app/index.tsx:1337:           localeId: resolveVoiceLocale(voiceLanguage, getDeviceLocales()),
+app/index.tsx:1338:           engine: voiceEngine ?? DEFAULT_STT_ENGINE,
+app/index.tsx:1339:           timeoutMs: DEFAULT_STT_TIMEOUT_MS,
+app/index.tsx:1340:           requestId: live.creationId,
+app/index.tsx:1341:           stt: defaultDeviceSttDeps,
+app/index.tsx:1342:           onDevice: (stt) => beginDeviceTake(live, stt),
+app/index.tsx:1343:           onCloud: () => uploadAndBegin(live, claimedUploadUrl),
+app/index.tsx:1344:           onPerf: (event, data) => {
+app/index.tsx:1345:             if (event === "device_stt_fallback") {
+app/index.tsx:1346:               noteCreationStt(live.creationId, { sttSource: "cloud" });
+app/index.tsx:1347:             }
+app/index.tsx:1348:             perfLog(traceId, "device.processing", event, data);
+app/index.tsx:1349:           },
+app/index.tsx:1350:         });
+app/index.tsx:1351:       })();
+app/index.tsx:1352:     },
+app/index.tsx:1353:     [uploadAndBegin, beginDeviceTake]
+app/index.tsx:1354:   );
+app/index.tsx:1355: 
+app/index.tsx:1356:   /** What a landed import does to the screen: animate, toast, schedule, hydrate. */
+app/index.tsx:1357:   const onTakeImported = useCallback(
+app/index.tsx:1358:     (take: PendingTake, created: Reminder[], summary: TakeImportSummary) => {
+app/index.tsx:1359:       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+app/index.tsx:1360:       if (created[0]) setImportedCardId(created[0].id);
+app/index.tsx:1361: 
+app/index.tsx:1362:       // Nothing survived a gate. The pending card has already gone, so this is
+app/index.tsx:1363:       // the ONLY surface left that can say why â€” without it a free user at the
+app/index.tsx:1364:       // cap, or one who asked for an interval reminder, watches the card
+app/index.tsx:1365:       // vanish and gets nothing. Same two landings the legacy and typed paths
+app/index.tsx:1366:       // use, in the same order: the interval "no" is the more specific of the
+app/index.tsx:1367:       // two, and the cap is a number they can also read off the list.
+app/index.tsx:1368:       if (summary.created === 0) {
+app/index.tsx:1369:         markCreation(take.creationId, "armedAt");
+app/index.tsx:1370:         if (summary.blockedPremium > 0) {
+app/index.tsx:1371:           creationBreadcrumb("import_blocked_premium");
+app/index.tsx:1372:           openIntervalPaywall();
+app/index.tsx:1373:           return;
+app/index.tsx:1374:         }
+app/index.tsx:1375:         if (summary.dropped > 0) {
+app/index.tsx:1600:   }, []);
+app/index.tsx:1601: 
+app/index.tsx:1602:   const handleEditSheetDelete = useCallback((_deleted: Reminder) => {
+app/index.tsx:1603:     // Store already updated by EditReminderSheet
+app/index.tsx:1604:   }, []);
+app/index.tsx:1605: 
+app/index.tsx:1606:   // Track items currently exiting (being marked done)
+app/index.tsx:1607:   const [exitingIds, setExitingIds] = useState<Set<string>>(new Set());
+app/index.tsx:1608: 
+app/index.tsx:1609:   const handleMarkDone = useCallback(
+app/index.tsx:1610:     (reminderId: string, reminderTitle: string) => {
+app/index.tsx:1611:       // Mark as exiting to trigger animation
+app/index.tsx:1612:       setExitingIds((prev) => new Set(prev).add(reminderId));
+app/index.tsx:1613: 
+app/index.tsx:1614:       // Delay actual state update to let animation play
+app/index.tsx:1615:       setTimeout(() => {
+app/index.tsx:1616:         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+app/index.tsx:1617:         setExitingIds((prev) => {
+app/index.tsx:1618:           const next = new Set(prev);
+app/index.tsx:1619:           next.delete(reminderId);
+app/index.tsx:1620:           return next;
+app/index.tsx:1621:         });
+app/index.tsx:1622: 
+app/index.tsx:1623:         void (async () => {
+app/index.tsx:1624:           const reminder = useReminderStore.getState().getReminderById(reminderId);
+app/index.tsx:1625: 
+app/index.tsx:1626:           // Record completion (always)
+app/index.tsx:1627:           await storeRecordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
+app/index.tsx:1628:             console.log("[VR] Failed to record completion:", e);
+app/index.tsx:1629:           });
+app/index.tsx:1630: 
+app/index.tsx:1631:           // One-time reminders become inactive after completion.
+app/index.tsx:1632:           if (reminder?.frequency === "once") {
+app/index.tsx:1633:             await removeReminderFully(reminderId, {
+app/index.tsx:1634:               removeConvexById: async (id) => {
+app/index.tsx:1635:                 await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
+app/index.tsx:1636:               },
+app/index.tsx:1637:             });
+app/index.tsx:1638:           }
+app/index.tsx:1639:         })();
+app/index.tsx:1640: 
+app/index.tsx:1641:         // No toast for individual mark-done (too noisy)
+app/index.tsx:1642:       }, 250); // Match animation duration
+app/index.tsx:1643:     },
+app/index.tsx:1644:     [storeRecordCompletion]
+app/index.tsx:1645:   );
+app/index.tsx:1646: 
+app/index.tsx:1647:   const handleDelete = useCallback(
+app/index.tsx:1648:     async (reminder: Reminder) => {
+app/index.tsx:1649:       const reminderId = reminder.id;
+app/index.tsx:1650: 
+app/index.tsx:1651:       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+app/index.tsx:1652:       await removeReminderFully(reminderId, {
+app/index.tsx:1653:         removeConvexById: async (id) => {
+app/index.tsx:1654:           await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
+app/index.tsx:1655:         },
+app/index.tsx:1656:       });
+app/index.tsx:1657: 
+app/index.tsx:1658:       // No toast for individual delete (too noisy)
+app/index.tsx:1659:     },
+app/index.tsx:1660:     [removeConvexReminder]
+app/index.tsx:1661:   );
+app/index.tsx:1662: 
+app/index.tsx:1663:   const todayDate = todayISO(nowMs);
+app/index.tsx:1664:   const cards = useMemo(
+app/index.tsx:1665:     () => activeCards(reminders, history, nowMs, snoozes),
+app/index.tsx:1666:     [reminders, history, nowMs, snoozes]
+app/index.tsx:1667:   );
+app/index.tsx:1668: 
+app/index.tsx:1669:   cardsRef.current = cards;
+app/index.tsx:1670: 
+app/index.tsx:1671:   // Wait for the committed reminder to reach FlatList, then reveal it once.
+app/index.tsx:1672:   useEffect(() => {
+app/index.tsx:1673:     if (!importedCardId || page !== PAGE_TODAY) return;
+app/index.tsx:1674:     const index = cards.findIndex((card) => card.reminder.id === importedCardId);
+app/index.tsx:1675:     if (index < 0) return;
+app/index.tsx:1676:     const task = InteractionManager.runAfterInteractions(() => {
+app/index.tsx:1677:       if (scrollRetryRef.current) clearTimeout(scrollRetryRef.current);
+app/index.tsx:1678:       scrollRetriedRef.current = false;
+app/index.tsx:1679:       remindersListRef.current?.scrollToIndex({ index, viewPosition: 0.3 });
+app/index.tsx:1680:       setImportedCardId(null);
+app/index.tsx:1681:     });
+app/index.tsx:1682:     return () => task.cancel();
+app/index.tsx:1683:   }, [cards, importedCardId, page]);
+app/index.tsx:1684: 
+app/index.tsx:1685:   const remindersById = useMemo(() => {
+app/index.tsx:1770:     // dead strip under the pager.
+app/index.tsx:1771:     <SafeAreaView style={styles.container} edges={[]}>
+app/index.tsx:1772:       <SwipePager
+app/index.tsx:1773:         page={page}
+app/index.tsx:1774:         onPageChange={setPage}
+app/index.tsx:1775:         // Navigation is dock-only: horizontal swipe belongs to the Days page's
+app/index.tsx:1776:         // own day-flipper (gesture map in docs/ui-redesign.md).
+app/index.tsx:1777:         swipeEnabled={false}
+app/index.tsx:1778:       >
+app/index.tsx:1779:         {/* ---- Page 0: Reminders ---- */}
+app/index.tsx:1780:         <View style={styles.page}>
+app/index.tsx:1781:           <View style={styles.header}>
+app/index.tsx:1782:             <View style={styles.headerTop}>
+app/index.tsx:1783:               <View style={styles.headerTitleWrap}>
+app/index.tsx:1784:                 <Text style={styles.headerTitle}>Reminders</Text>
+app/index.tsx:1785:                 <Text style={styles.headerDate}>{dateLabel}</Text>
+app/index.tsx:1786:               </View>
+app/index.tsx:1787:               <View style={styles.headerActions}>
+app/index.tsx:1788:                 {!isPro && (
+app/index.tsx:1789:                   <TouchableOpacity
+app/index.tsx:1790:                     style={styles.proPill}
+app/index.tsx:1791:                     activeOpacity={0.85}
+app/index.tsx:1792:                     onPress={openPaywall}
+app/index.tsx:1793:                   >
+app/index.tsx:1794:                     <AppIcon name="crown" size={14} color="white" style={styles.proIcon} />
+app/index.tsx:1795:                     <Text style={styles.proPillText}>Get Pro</Text>
+app/index.tsx:1796:                   </TouchableOpacity>
+app/index.tsx:1797:                 )}
+app/index.tsx:1798:                 <TouchableOpacity
+app/index.tsx:1799:                   style={styles.addButton}
+app/index.tsx:1800:                   activeOpacity={0.85}
+app/index.tsx:1801:                   onPress={() => void handleOpenComposer()}
+app/index.tsx:1802:                   accessibilityRole="button"
+app/index.tsx:1803:                   accessibilityLabel="Add a reminder by typing"
+app/index.tsx:1804:                 >
+app/index.tsx:1805:                   <Plus size={20} color={colors.textHeading} strokeWidth={2} />
+app/index.tsx:1806:                 </TouchableOpacity>
+app/index.tsx:1807:               </View>
+app/index.tsx:1808:             </View>
+app/index.tsx:1809:           </View>
+app/index.tsx:1810: 
+app/index.tsx:1811:           <FlatList
+app/index.tsx:1812:             ref={remindersListRef}
+app/index.tsx:1813:             onScrollToIndexFailed={({ index, averageItemLength }) => {
+app/index.tsx:1814:               remindersListRef.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
+app/index.tsx:1815:               if (scrollRetriedRef.current) return;
+app/index.tsx:1816:               scrollRetriedRef.current = true;
+app/index.tsx:1817:               const reminderId = cards[index]?.reminder.id;
+app/index.tsx:1818:               scrollRetryRef.current = setTimeout(() => {
+app/index.tsx:1819:                 scrollRetryRef.current = null;
+app/index.tsx:1820:                 const retryIndex = cardsRef.current.findIndex((card) => card.reminder.id === reminderId);
+app/index.tsx:1821:                 if (retryIndex >= 0) remindersListRef.current?.scrollToIndex({ index: retryIndex, viewPosition: 0.3 });
+app/index.tsx:1822:               }, 150);
+app/index.tsx:1823:             }}
+app/index.tsx:1824:             style={styles.content}
+app/index.tsx:1825:             contentContainerStyle={[
+app/index.tsx:1826:               styles.contentContainer,
+app/index.tsx:1827:               { paddingBottom: 120 + insets.bottom },
+app/index.tsx:1828:             ]}
+app/index.tsx:1829:             data={cards}
+app/index.tsx:1830:             keyExtractor={(card) => `reminder:${card.reminder.id}`}
+app/index.tsx:1831:             renderItem={renderActiveItem}
+app/index.tsx:1832:             showsVerticalScrollIndicator={false}
+app/index.tsx:1833:             removeClippedSubviews={Platform.OS === "android"}
+app/index.tsx:1834:             initialNumToRender={12}
+app/index.tsx:1835:             maxToRenderPerBatch={12}
+app/index.tsx:1836:             windowSize={7}
+app/index.tsx:1837:             updateCellsBatchingPeriod={16}
+app/index.tsx:1838:             ListHeaderComponent={
+app/index.tsx:1839:               <>
+app/index.tsx:1840:                 {/* Takes still being made sit above everything, in the order
+app/index.tsx:1841:                     they were recorded (spec Â§2.3). */}
+app/index.tsx:1842:                 {pendingTakes.map((take) => (
+app/index.tsx:1843:                   <PendingTakeCard
+app/index.tsx:1844:                     key={take.creationId}
+app/index.tsx:1845:                     take={take}
+app/index.tsx:1846:                     limit={freeLimit}
+app/index.tsx:1847:                     onCancel={onPendingTakeCancel}
+app/index.tsx:1848:                     onRetry={onPendingTakeRetry}
+app/index.tsx:1849:                     onDiscard={onPendingTakeDiscard}
+app/index.tsx:1850:                   />
+app/index.tsx:1851:                 ))}
+app/index.tsx:1852:               </>
+app/index.tsx:1853:             }
+app/index.tsx:1854:             ListFooterComponent={
+app/index.tsx:1855:               <CompletedSection items={todayCompletedItems} initiallyCollapsed />
+app/index.tsx:1856:             }
+app/index.tsx:1857:             // Deliberately no ListEmptyComponent: an empty Reminders list stays silent,
+app/index.tsx:1858:             // including while the store loads.
+app/index.tsx:1859:           />
+app/index.tsx:1860:         </View>
+app/index.tsx:1861: 
+app/index.tsx:1862:         {/* ---- Page 1: Days ---- */}
+app/index.tsx:1863:         <View style={[styles.page, { paddingTop: insets.top + 8 }]}>
+app/index.tsx:1864:           <DaysPage
+app/index.tsx:1865:             reminders={reminders}
+app/index.tsx:1866:             history={history}
+app/index.tsx:1867:             onOpenReminder={handleReminderPress}
+app/index.tsx:1868:             onToggleComplete={handleDayToggleComplete}
+app/index.tsx:1869:             onDelete={handleDelete}
+app/index.tsx:1870:             active={page === PAGE_DAYS}
+app/index.tsx:1871:           />
+app/index.tsx:1872:         </View>
+app/index.tsx:1873: 
+app/index.tsx:1874:         {/* ---- Page 2: Settings ---- */}
+app/index.tsx:1875:         <View style={[styles.page, { paddingTop: insets.top + 8 }]}>
+app/index.tsx:1876:           {/* Mounted from cold start like every pager page, so it needs to be
+app/index.tsx:1877:               told when it is the one on screen â€” that is its cue to re-check
+app/index.tsx:1878:               the subscription (same pattern as DaysPage's `active`). */}
+app/index.tsx:1879:           <SettingsContent embedded visible={page === PAGE_SETTINGS} />
+app/index.tsx:1880:         </View>
+app/index.tsx:1881:       </SwipePager>
+app/index.tsx:1882: 
+app/index.tsx:1883:       {/* Tiimo-style dock on every page, mic anchored bottom-right.
+app/index.tsx:1884:           Both yield the bottom edge while recording or editing. */}
+app/index.tsx:1885:       {!showRecording && !showComposer && !editingReminder && (
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"title|lineLimit|AlarmPresentation|LiveActivity\" plugins modules -g '*.swift'; rg -n '2-4|2–4|short title|parseUsage|max_tokens|max_completion_tokens|processTypedReminder|buildParse|PARSE_' convex/actions.ts __tests__ convex/helpers.ts; rg --files -g '*Pager*' -g '*PendingTake*' -g '*Membership*' -g '*alarm*' -g '*Alarm*'" in C:\Dev\VR
+ succeeded in 527ms:
+rg: modules: The system cannot find the file specified. (os error 2)
+plugins\ios-src\VRAlarmIntents.swift:332:    // MARK: Alarm metadata (fallback for the follow-up's title/sound/window)
+plugins\ios-src\VRAlarmIntents.swift:341:        return metaRecord(appKey: appKey)?["title"] as? String
+plugins\ios-src\VRAlarmIntents.swift:470:    static let secondaryButtonBehavior: AlarmPresentation.Alert.SecondaryButtonBehavior = .custom
+plugins\ios-src\VRAlarmIntents.swift:477:struct VRSnoozeIntent: LiveActivityIntent {
+plugins\ios-src\VRAlarmIntents.swift:478:    static var title: LocalizedStringResource = "Later"
+plugins\ios-src\VRAlarmIntents.swift:490:    @Parameter(title: "Alarm ID")
+plugins\ios-src\VRAlarmIntents.swift:493:    @Parameter(title: "App Key")
+plugins\ios-src\VRAlarmIntents.swift:496:    @Parameter(title: "Alarm Title")
+plugins\ios-src\VRAlarmIntents.swift:499:    @Parameter(title: "Sound Name")
+plugins\ios-src\VRAlarmIntents.swift:502:    @Parameter(title: "Snooze Minutes")
+plugins\ios-src\VRAlarmIntents.swift:610:                title: alarmTitle ?? VRAlarmIntentStore.storedTitle(appKey: resolvedKey) ?? "Reminder",
+plugins\ios-src\VRAlarmIntents.swift:631:struct VRStopIntent: LiveActivityIntent {
+plugins\ios-src\VRAlarmIntents.swift:632:    static var title: LocalizedStringResource = "Done"
+plugins\ios-src\VRAlarmIntents.swift:643:    @Parameter(title: "Alarm ID")
+plugins\ios-src\VRAlarmIntents.swift:646:    @Parameter(title: "App Key")
+plugins\ios-src\VRAlarmIntents.swift:726:        title: String,
+convex/actions.ts:65:import { extractParseUsage } from "./parseUsage";
+convex/actions.ts:528:  "title": "short title (2-4 words; must not begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself)",
+convex/actions.ts:1183:      max_tokens: 2000,
+convex/actions.ts:1412:    max_tokens: 2000,
+convex/actions.ts:1433:  const parseUsage = extractParseUsage((completion as { usage?: unknown }).usage);
+convex/actions.ts:1434:  Object.assign(perf, parseUsage);
+convex/actions.ts:1435:  logParsePerf(args.traceId ?? null, args.path, gptMs, parseUsage);
+convex/actions.ts:1645:export const processTypedReminder = action({
+__tests__\convex\creationJobActions.test.ts:80:const PARSE_USAGE = {
+__tests__\convex\creationJobActions.test.ts:128:    .mockResolvedValue({ choices: [{ message: { content: "{}" } }], usage: PARSE_USAGE });
+__tests__\convex\legacyActionContract.test.ts:4: * `processVoiceReminderFast`, `processVoiceReminder` and `processTypedReminder`
+__tests__\convex\legacyActionContract.test.ts:31:  processTypedReminder,
+__tests__\convex\legacyActionContract.test.ts:43:const PARSE_RESPONSE = JSON.stringify({
+__tests__\convex\legacyActionContract.test.ts:59:const PARSE_USAGE = {
+__tests__\convex\legacyActionContract.test.ts:68:const PARSE_USAGE_KEYS = [
+__tests__\convex\legacyActionContract.test.ts:95:  ...PARSE_USAGE_KEYS,
+__tests__\convex\legacyActionContract.test.ts:105:  ...PARSE_USAGE_KEYS,
+__tests__\convex\legacyActionContract.test.ts:154:    .mockResolvedValue({ choices: [{ message: { content: PARSE_RESPONSE } }], usage: PARSE_USAGE });
+__tests__\convex\legacyActionContract.test.ts:214:  it("processTypedReminder takes the typed sentence", () => {
+__tests__\convex\legacyActionContract.test.ts:215:    expect(argsOf(processTypedReminder)).toEqual({
+__tests__\convex\legacyActionContract.test.ts:288:      max_tokens: 2000,
+__tests__\convex\legacyActionContract.test.ts:383:// ─── processTypedReminder ───────────────────────────────────────────────────
+__tests__\convex\legacyActionContract.test.ts:385:describe("processTypedReminder", () => {
+__tests__\convex\legacyActionContract.test.ts:391:    const result = await handlerOf(processTypedReminder)(ctx, {
+__tests__\convex\legacyActionContract.test.ts:473:      max_tokens: 2000,
+__tests__\convex\parseUsage.test.ts:8:import { extractParseUsage } from "../../convex/parseUsage";
+plugins\withFullScreenAlarm.js
+plugins\withAlarmKit.js
+plugins\withAlarmAudioModule.js
+plugins\ios-src\VRAlarmIntents.swift
+__tests__\plugins\alarmIntentsSource.test.ts
+__tests__\lib\todayMembership.test.ts
+__tests__\lib\remindersMembership.test.ts
+__tests__\lib\alarmSounds.test.ts
+__tests__\lib\alarmKitNag.test.ts
+__tests__\lib\alarmKitIntegration.test.ts
+__tests__\lib\alarmKitContract.test.ts
+lib\todayMembership.ts
+lib\remindersMembership.ts
+lib\alarmSounds.ts
+lib\alarmKit.ts
+docs\alarmkit-port-prd.md
+docs\alarmkit-focus-breakthrough.md
+docs\alarm-banner-research.md
+alarm\AlarmRoot.tsx
+app\alarm.tsx
+components\SwipePager.tsx
+docs\aso\competitor-reviews-talking-alarm-clock.md
+docs\alarmkit-test-plan.md
+components\PendingTakeCard.tsx
+components\AlarmOverlay.tsx
+components\days\DayPager.tsx
+
+codex
+The pending card already exists, so A fits the current flow. Two details matter: leaving Days resets the selected date, and both reminder cards and Days rows limit titles to one line, which can hide the added context.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"title|lineLimit|AlarmPresentation|Text\\(\" plugins/withAlarmKit.js components/AlarmOverlay.tsx alarm/AlarmRoot.tsx app/alarm.tsx; Get-Content __tests__/convex/parsePrompt.test.ts; Get-Content lib/remindersMembership.ts; Get-Content convex/parseUsage.ts" in C:\Dev\VR
+ succeeded in 565ms:
+alarm/AlarmRoot.tsx:31:    title: String(data?.title ?? pending.notification?.title ?? ""),
+components/AlarmOverlay.tsx:53:  title: string;
+components/AlarmOverlay.tsx:82:  title,
+components/AlarmOverlay.tsx:340:            await store.recordCompletion(reminderId, reminder.title, "completed", {
+components/AlarmOverlay.tsx:411:          title,
+components/AlarmOverlay.tsx:437:            title,
+components/AlarmOverlay.tsx:493:              title,
+components/AlarmOverlay.tsx:516:                title,
+components/AlarmOverlay.tsx:560:        <Text style={styles.title}>{title}</Text>
+components/AlarmOverlay.tsx:627:  title: {
+app/alarm.tsx:46:        title?: string;
+app/alarm.tsx:69:    const title = params.title || "Reminder";
+app/alarm.tsx:214:                        await store.recordCompletion(reminderId, reminder.title, "completed", {
+app/alarm.tsx:286:                    title,
+app/alarm.tsx:304:                        title,
+app/alarm.tsx:360:                            title,
+app/alarm.tsx:375:                                title,
+app/alarm.tsx:420:                <Text style={styles.title}>{title}</Text>
+app/alarm.tsx:494:    title: {
+plugins/withAlarmKit.js:65:    let title = (opts["title"] as? String) ?? "Reminder"
+plugins/withAlarmKit.js:74:                                                       title: title,
+plugins/withAlarmKit.js:122:                                                       title: "VoiceReminder test alarm",
+plugins/withAlarmKit.js:260:  static let metaKey = "vr_alarm_meta"            // appKey -> title/soundName/snoozeMinutes/metadata
+plugins/withAlarmKit.js:309:  // MARK: Alarm meta (AK-2's SnoozeIntent recovers title/sound/window from here)
+plugins/withAlarmKit.js:311:  static func setMeta(appKey: String, title: String, soundName: String?, snoozeMinutes: Int, metadata: [String: String]) {
+plugins/withAlarmKit.js:313:    var record: [String: Any] = ["title": title, "snoozeMinutes": snoozeMinutes, "metadata": metadata]
+plugins/withAlarmKit.js:413:  private static func makeAlert(title: String) -> AlarmPresentation.Alert {
+plugins/withAlarmKit.js:416:    return AlarmPresentation.Alert(
+plugins/withAlarmKit.js:417:      title: LocalizedStringResource(stringLiteral: title),
+plugins/withAlarmKit.js:428:                                        title: String,
+plugins/withAlarmKit.js:432:    let alert = makeAlert(title: title)
+plugins/withAlarmKit.js:435:      presentation: AlarmPresentation(alert: alert),
+plugins/withAlarmKit.js:452:                                      alarmTitle: title,
+plugins/withAlarmKit.js:462:                       title: String,
+plugins/withAlarmKit.js:473:                                          title: title,
+plugins/withAlarmKit.js:480:    VRAlarmStore.setMeta(appKey: appKey, title: title, soundName: soundName,
+plugins/withAlarmKit.js:492:                            title: String,
+plugins/withAlarmKit.js:503:                                          title: title,
+plugins/withAlarmKit.js:509:    VRAlarmStore.setMeta(appKey: appKey, title: title, soundName: soundName,
+plugins/withAlarmKit.js:556://   VRAlarmScheduler.scheduleAlarm(appKey:fireDate:title:soundName:snoozeMinutes:metadata:)
+plugins/withAlarmKit.js:579:  static var title: LocalizedStringResource { "Done" }
+plugins/withAlarmKit.js:583:  @Parameter(title: "Alarm ID")
+plugins/withAlarmKit.js:586:  @Parameter(title: "App Key")
+plugins/withAlarmKit.js:607:  static var title: LocalizedStringResource { "Later" }
+plugins/withAlarmKit.js:611:  @Parameter(title: "Alarm ID")
+plugins/withAlarmKit.js:614:  @Parameter(title: "App Key")
+plugins/withAlarmKit.js:617:  @Parameter(title: "Alarm Title")
+plugins/withAlarmKit.js:620:  @Parameter(title: "Sound Name")
+plugins/withAlarmKit.js:623:  @Parameter(title: "Snooze Minutes")
+/**
+ * Parse-prompt assembly (OLD-106).
+ *
+ * The prompt is ~15k characters and 91-94% of a typed reminder's server time is
+ * the one model call that prefills it. Two structural properties keep that call
+ * cacheable, and neither is visible from reading any single string:
+ *
+ *   1. Everything except the trailing CURRENT CONTEXT block is byte-identical
+ *      across requests, so the stable prefix can be served from the provider's
+ *      cache. A single interpolated clock in the middle of the prompt (which is
+ *      how this used to be written) invalidates everything after it.
+ *   2. SPOKEN LINE RULES appears exactly once and above every field
+ *      instruction that refers to it by name.
+ *
+ * These are the tests that fail if someone reintroduces the volatile context
+ * mid-prompt or re-inlines the rule.
+ */
+import { buildSystemPrompt } from "../../convex/actions";
+import { SPOKEN_LINE_RULE, SPOKEN_LINE_RULES_HEADING } from "../../convex/helpers";
+
+const CONTEXT_A = {
+  currentDate: "2026-08-13",
+  currentDayOfWeek: "Thursday",
+  currentTime: "14:00",
+  timezone: "Asia/Dubai",
+};
+
+const CONTEXT_B = {
+  currentDate: "2027-01-02",
+  currentDayOfWeek: "Saturday",
+  currentTime: "23:47",
+  timezone: "America/New_York",
+};
+
+const CONTEXT_MARKER = "CURRENT CONTEXT:";
+
+describe("buildSystemPrompt â€” cacheable ordering", () => {
+  it("puts the volatile context last, with nothing after it", () => {
+    const prompt = buildSystemPrompt(CONTEXT_A);
+    const marker = prompt.indexOf(CONTEXT_MARKER);
+
+    expect(marker).toBeGreaterThan(-1);
+    // The context block names date, day, time and timezone, and then the
+    // prompt ends. Anything appended below it would stop being cacheable.
+    expect(prompt.slice(marker)).toBe(
+      `${CONTEXT_MARKER}
+- Current date: ${CONTEXT_A.currentDate} (${CONTEXT_A.currentDayOfWeek})
+- Current time: ${CONTEXT_A.currentTime}
+- User's timezone: ${CONTEXT_A.timezone}`
+    );
+  });
+
+  it("is byte-identical up to the context block for two different clocks", () => {
+    const a = buildSystemPrompt(CONTEXT_A);
+    const b = buildSystemPrompt(CONTEXT_B);
+
+    const prefixA = a.slice(0, a.indexOf(CONTEXT_MARKER));
+    const prefixB = b.slice(0, b.indexOf(CONTEXT_MARKER));
+
+    expect(prefixA).toBe(prefixB);
+    // The shared prefix has to be worth caching: the whole point is that it is
+    // the overwhelming majority of the prompt.
+    expect(prefixA.length).toBeGreaterThan(0.9 * a.length);
+  });
+
+  it("leaks no part of the context into the cacheable prefix", () => {
+    const prompt = buildSystemPrompt(CONTEXT_B);
+    const prefix = prompt.slice(0, prompt.indexOf(CONTEXT_MARKER));
+
+    for (const volatileValue of [
+      CONTEXT_B.currentDate,
+      CONTEXT_B.currentDayOfWeek,
+      CONTEXT_B.currentTime,
+      CONTEXT_B.timezone,
+    ]) {
+      expect(prefix).not.toContain(volatileValue);
+    }
+  });
+});
+
+describe("buildSystemPrompt â€” the spoken-line rule ships once", () => {
+  it("carries the rule exactly one time", () => {
+    const prompt = buildSystemPrompt(CONTEXT_A);
+    expect(prompt.split(SPOKEN_LINE_RULE)).toHaveLength(2);
+  });
+
+  it("states the rule above every instruction that refers back to it", () => {
+    const prompt = buildSystemPrompt(CONTEXT_A);
+    const section = prompt.indexOf(SPOKEN_LINE_RULE);
+    const headingAt = prompt.indexOf(SPOKEN_LINE_RULES_HEADING);
+
+    expect(headingAt).toBeGreaterThan(-1);
+    expect(headingAt).toBeLessThan(section);
+
+    // Every "Obey the SPOKEN LINE RULES above" points backwards, so the
+    // description field (which sits in the JSON template near the top) has to
+    // come after the section too.
+    let cursor = prompt.indexOf(SPOKEN_LINE_RULES_HEADING, headingAt + 1);
+    let references = 0;
+    while (cursor !== -1) {
+      expect(cursor).toBeGreaterThan(section);
+      references += 1;
+      cursor = prompt.indexOf(SPOKEN_LINE_RULES_HEADING, cursor + 1);
+    }
+    // description and preDescription â€” the two spoken fields left. The third
+    // reference was the replay-variant field, gone with the variants (OLD-108).
+    expect(references).toBe(2);
+  });
+});
+import type { Reminder, ReminderHistory } from "./store";
+import { dayBoundsMs, isCompletedOnDay, todayISO, toISODate, addDaysISO } from "./dayOccurrences";
+import { getReminderNextDueTimestamp, isReminderActive, statusOf } from "./reminderActive";
+import { nextGridOccurrence } from "./schedule";
+import { overdueRingTime, overdueSubtitle } from "./todayMembership";
+import { formatClockAt, formatClockTime, formatNextIn, type ClockFormatOptions } from "./time";
+import { describeGridSubtitle, formatEveryMinutes } from "../components/schedule/scheduleDraft";
+
+export type SnoozeSnapshot = Readonly<Record<string, number>>;
+export type DisplayDue = { at: number | null; source: "snooze" | "grid" | "legacy" | "unknown" };
+export type ActiveCard = {
+  reminder: Reminder;
+  due: DisplayDue;
+  overdue: boolean;
+  dueToday: boolean;
+  showCompletion: boolean;
+};
+
+export function nextDisplayDue(
+  reminder: Reminder, history: ReminderHistory[], nowMs: number, snoozes: SnoozeSnapshot
+): DisplayDue {
+  if (snoozes[reminder.id] > nowMs) return { at: snoozes[reminder.id], source: "snooze" };
+  const today = todayISO(nowMs);
+  const reference = isCompletedOnDay(reminder, history, today)
+    ? dayBoundsMs(addDaysISO(today, 1)).start - 1
+    : nowMs;
+  if (reminder.schedule) {
+    const next = nextGridOccurrence(reminder.schedule, reference);
+    if (next !== null) return { at: next, source: "grid" };
+    if (reminder.frequency !== "once") return { at: null, source: "unknown" };
+    const original = overdueRingTime(reminder, history, nowMs);
+    return { at: Number.isFinite(original) ? original : null, source: "grid" };
+  }
+  const next = getReminderNextDueTimestamp(reminder, history, reference);
+  return { at: Number.isFinite(next) ? next : null, source: "legacy" };
+}
+
+export function activeCards(
+  reminders: Reminder[], history: ReminderHistory[], nowMs: number, snoozes: SnoozeSnapshot
+): ActiveCard[] {
+  return reminders.filter((r) => isReminderActive(r, history, nowMs)).map((reminder) => {
+    const due = nextDisplayDue(reminder, history, nowMs, snoozes);
+    const overdue = reminder.frequency === "once" && due.source !== "snooze" && due.at !== null && due.at <= nowMs;
+    const dueToday = !overdue && due.at !== null && todayISO(due.at) === todayISO(nowMs);
+    return { reminder, due, overdue, dueToday, showCompletion: overdue || dueToday };
+  }).sort((a, b) => Number(b.overdue) - Number(a.overdue)
+    || (a.due.at ?? Infinity) - (b.due.at ?? Infinity)
+    || a.reminder.id.localeCompare(b.reminder.id));
+}
+
+export function nextLine(card: ActiveCard, nowMs: number, options: ClockFormatOptions = {}): string {
+  const at = card.due.at;
+  if (at === null) return "No next ring scheduled";
+  if (card.due.source === "snooze") return `Rings again ${formatClockAt(at, options)}`;
+  if (card.overdue) return `Overdue Â· ${overdueSubtitle(card.reminder, [], nowMs, options)}`;
+  if (at - nowMs < 86_400_000) return formatNextIn(at, nowMs);
+  const today = todayISO(nowMs);
+  const date = todayISO(at);
+  if (date === addDaysISO(today, 1)) return `Tomorrow Â· ${formatClockAt(at, options)}`;
+  for (let days = 2; days <= 6; days++) {
+    if (date === addDaysISO(today, days)) return `Next in ${days} days`;
+  }
+  return `${new Date(at).toLocaleDateString("en", { month: "short", day: "numeric" })} Â· ${formatClockAt(at, options)}`;
+}
+
+export function patternLine(
+  reminder: Reminder, options: ClockFormatOptions = {}, nowMs: number = Date.now()
+): string {
+  // A one-off's "pattern" is its date. Real `nowMs` matters for date-less one-offs, whose
+  // target rolls forward from now; 0 would print a 1970 date.
+  if (reminder.frequency === "once") return `Once Â· ${overdueSubtitle(reminder, [], nowMs, options)}`;
+  if (reminder.schedule) {
+    const description = describeGridSubtitle(reminder.schedule, options);
+    if (reminder.schedule.times.kind === "interval") return description;
+    const [times, days] = description.split(" Â· ");
+    const pattern = reminder.schedule.days.kind === "weekdays" && reminder.schedule.days.days.length
+      ? `Every ${days}` : days;
+    return pattern ? `${pattern} Â· ${times}` : times;
+  }
+  if (reminder.frequency === "interval") {
+    return reminder.intervalMs ? `Every ${formatEveryMinutes(reminder.intervalMs / 60_000)}` : "";
+  }
+  const time = formatClockTime(reminder.time ?? "", options);
+  if (reminder.frequency === "daily") {
+    const n = reminder.intervalDays ?? 1;
+    return `${n > 1 ? `Every ${n} days` : "Daily"} Â· ${time}`;
+  }
+  const days = (reminder.days ?? []).map((day) => day[0].toUpperCase() + day.slice(1, 3).toLowerCase()).join(", ");
+  return `${days ? `Every ${days}` : "Weekly"} Â· ${time}`;
+}
+
+export function overdueDays(reminders: Reminder[], history: ReminderHistory[], nowMs: number): Set<string> {
+  return new Set(reminders.filter((r) => statusOf(r, history, nowMs) === "overdue")
+    .map((r) => toISODate(new Date(overdueRingTime(r, history, nowMs)))));
+}
+/**
+ * Parse-response usage extraction (spec Â§4, "Parse usage").
+ *
+ * OpenRouter returns token accounting on non-streaming chat completions without
+ * any extra request parameter. The four numbers below are pulled out of it the
+ * same way at all three parse call sites (the worker's `parseTake`, and the two
+ * legacy actions' parse paths) so the device log's cached-token split means the
+ * same thing everywhere.
+ *
+ * Pure and side-effect-free â€” no network, no Node globals â€” so it lives outside
+ * the "use node" files and is unit-testable on its own.
+ *
+ * Only finite, nonnegative numbers are kept. A reported 0 is a real value (a
+ * cache miss, no reasoning tokens) and is preserved; an absent field is omitted
+ * rather than invented as 0, so "we don't know" stays distinct from "it was 0".
+ */
+
+export type ParseUsage = {
+  /** `usage.prompt_tokens`. */
+  parsePromptTokens?: number;
+  /** `usage.completion_tokens`. */
+  parseCompletionTokens?: number;
+  /** `usage.prompt_tokens_details.cached_tokens` â€” cache reads. */
+  parseCachedTokens?: number;
+  /** `usage.completion_tokens_details.reasoning_tokens`. */
+  parseReasoningTokens?: number;
+};
+
+/** A number only if it is finite and nonnegative; a reported 0 qualifies. */
+function finiteNonNegative(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * Read the four parse-usage fields out of a chat-completion's `usage`, through a
+ * narrow runtime check because the provider shape is wider than the SDK type.
+ */
+export function extractParseUsage(usage: unknown): ParseUsage {
+  const result: ParseUsage = {};
+  if (!usage || typeof usage !== "object") return result;
+
+  const u = usage as {
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+    prompt_tokens_details?: unknown;
+    completion_tokens_details?: unknown;
+  };
+
+  const prompt = finiteNonNegative(u.prompt_tokens);
+  if (prompt !== undefined) result.parsePromptTokens = prompt;
+
+  const completion = finiteNonNegative(u.completion_tokens);
+  if (completion !== undefined) result.parseCompletionTokens = completion;
+
+  const promptDetails = u.prompt_tokens_details;
+  if (promptDetails && typeof promptDetails === "object") {
+    const cached = finiteNonNegative((promptDetails as { cached_tokens?: unknown }).cached_tokens);
+    if (cached !== undefined) result.parseCachedTokens = cached;
+  }
+
+  const completionDetails = u.completion_tokens_details;
+  if (completionDetails && typeof completionDetails === "object") {
+    const reasoning = finiteNonNegative(
+      (completionDetails as { reasoning_tokens?: unknown }).reasoning_tokens
+    );
+    if (reasoning !== undefined) result.parseReasoningTokens = reasoning;
+  }
+
+  return result;
+}
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$spec=@(@('"'convex/actions.ts',499,565),@('convex/actions.ts',1370,1425),@('convex/actions.ts',1645,1718),@('components/ReminderCard.tsx',200,230),@('components/ReminderListItem.tsx',200,235),@('components/EditReminderSheet.tsx',594,615),@('components/EditReminderSheet.tsx',870,900));foreach("'$r in $spec){$s=Get-Content $r[0];for($i=$r[1];$i -le $r[2];$i++){'"'{0}:{1}: {2}' -f "'$r[0],$i,$s[$i-1]}}; rg -n "renderActiveItem|ReminderCard|showComposer|configureReconcile|importRef|importTakeRef|enqueueAllPendingTakes" app/index.tsx; rg -n '"'cache|snapshot|2-4|2–4|short title' __tests__ convex" in C:\Dev\VR
+ succeeded in 1109ms:
+convex/actions.ts:499: // The spoken line addresses nobody by name (OLD-95): there is no address term
+convex/actions.ts:500: // anywhere in this signature, so none can reach the prompt.
+convex/actions.ts:501: /**
+convex/actions.ts:502:  * The parse prompt, shared by every path that turns a sentence into a reminder.
+convex/actions.ts:503:  *
+convex/actions.ts:504:  * Ordered for prompt caching (OLD-106). Everything from here down to
+convex/actions.ts:505:  * CURRENT CONTEXT is byte-identical on every request, so the provider can serve
+convex/actions.ts:506:  * the ~3.6k-token instruction block from cache instead of prefilling it each
+convex/actions.ts:507:  * time; the volatile date/time/timezone sits alone at the very END, where it
+convex/actions.ts:508:  * invalidates nothing behind it. This block used to open with the context,
+convex/actions.ts:509:  * which meant ~70% of the prompt sat behind a string that changed every second
+convex/actions.ts:510:  * and could never be cached.
+convex/actions.ts:511:  *
+convex/actions.ts:512:  * Two consequences worth keeping in mind when editing:
+convex/actions.ts:513:  *   1. Nothing above the CURRENT CONTEXT block may interpolate anything that
+convex/actions.ts:514:  *      varies per request. The RELATIVE TIME RULES point at the block by name
+convex/actions.ts:515:  *      rather than inlining the clock for exactly this reason.
+convex/actions.ts:516:  *   2. SPOKEN LINE RULES is stated once, near the top, and the spoken field
+convex/actions.ts:517:  *      instructions refer to it by name â€” so it must stay above them. There are
+convex/actions.ts:518:  *      two of those left since OLD-108 (description, preDescription); the
+convex/actions.ts:519:  *      replay-variant field that was the third is gone.
+convex/actions.ts:520:  */
+convex/actions.ts:521: export function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string }): string {
+convex/actions.ts:522:   return `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
+convex/actions.ts:523: 
+convex/actions.ts:524: ${SPOKEN_LINE_RULES_SECTION}
+convex/actions.ts:525: 
+convex/actions.ts:526: Return exactly this format:
+convex/actions.ts:527: {
+convex/actions.ts:528:   "title": "short title (2-4 words; must not begin with 'Reminder', 'It is time', 'Time to', or Arabic 'ØªØ°ÙƒÙŠØ±' / 'Ø­Ø§Ù† ÙˆÙ‚Øª' â€” the title names the thing, it never announces itself)",
+convex/actions.ts:529:   "description": "${buildDescriptionInstruction()}",
+convex/actions.ts:530:   "time": "HH:MM in 24-hour format (the FIRST of \\"times\\")",
+convex/actions.ts:531:   "times": ["HH:MM", ...] (EVERY clock time this one reminder rings at â€” see SCHEDULE RULES),
+convex/actions.ts:532:   "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
+convex/actions.ts:533:   "frequency": "once" | "daily" | "custom" | "everyNDays" | "interval",
+convex/actions.ts:534:   "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom),
+convex/actions.ts:535:   "everyNDays": number (only if frequency is everyNDays, e.g. 3 for "every three days"),
+convex/actions.ts:536:   "intervalHours": number (only if frequency is interval),
+convex/actions.ts:537:   "intervalMinutes": number (only if frequency is interval),
+convex/actions.ts:538:   "windowStart": "HH:MM (only if frequency is interval â€” earliest it may ring)",
+convex/actions.ts:539:   "windowEnd": "HH:MM (only if frequency is interval â€” latest it may ring)",
+convex/actions.ts:540:   "until": "ISO date for bounded recurrences",
+convex/actions.ts:541:   "preReminderMinutes": number (heads-up lead time in minutes, see PRE-REMINDER RULES),
+convex/actions.ts:542:   "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
+convex/actions.ts:543:   "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ${URGENCY_RULES_HEADING}),
+convex/actions.ts:544:   "persistent": boolean (true only for critical tasks, see ${URGENCY_RULES_HEADING}),
+convex/actions.ts:545:   "emoji": "ONE emoji that best fits the reminder (see EMOJI RULES)"
+convex/actions.ts:546: }
+convex/actions.ts:547: 
+convex/actions.ts:548: EMOJI RULES:
+convex/actions.ts:549: - Pick exactly ONE emoji that captures the reminder's subject (e.g. ðŸ’Š medicine, ðŸ‹ï¸ gym, ðŸ“ž call, ðŸ’§ drink water, ðŸ³ cooking)
+convex/actions.ts:550: - Prefer concrete object/activity emojis over abstract ones; use â° only when nothing fits
+convex/actions.ts:551: - The "emoji" value must contain the emoji character only â€” no words, no punctuation
+convex/actions.ts:552: 
+convex/actions.ts:553: LANGUAGE RULES:
+convex/actions.ts:554: - If the input is in Arabic, return "title" and "description" in Arabic
+convex/actions.ts:555: - If the input is in English, return "title" and "description" in English
+convex/actions.ts:556: - The JSON field names and "frequency"/"days" values always remain in English
+convex/actions.ts:557: - For Arabic days: Ø§Ù„Ø£Ø­Ø¯=sun, Ø§Ù„Ø§Ø«Ù†ÙŠÙ†=mon, Ø§Ù„Ø«Ù„Ø§Ø«Ø§Ø¡=tue, Ø§Ù„Ø£Ø±Ø¨Ø¹Ø§Ø¡=wed, Ø§Ù„Ø®Ù…ÙŠØ³=thu, Ø§Ù„Ø¬Ù…Ø¹Ø©=fri, Ø§Ù„Ø³Ø¨Øª=sat
+convex/actions.ts:558: 
+convex/actions.ts:559: DATE PARSING RULES (English & Arabic):
+convex/actions.ts:560: - "Sunday"/"ÙŠÙˆÙ… Ø§Ù„Ø£Ø­Ø¯", "tomorrow"/"ØºØ¯Ø§Ù‹", "today"/"Ø§Ù„ÙŠÙˆÙ…" â†’ calculate actual YYYY-MM-DD
+convex/actions.ts:561: - "next Sunday"/"Ø§Ù„Ø£Ø­Ø¯ Ø§Ù„Ù‚Ø§Ø¯Ù…" â†’ find the NEXT occurrence
+convex/actions.ts:562: - "in 3 days"/"Ø¨Ø¹Ø¯ Ø«Ù„Ø§Ø«Ø© Ø£ÙŠØ§Ù…" â†’ add days to current date
+convex/actions.ts:563: - ONLY include "date" for one-time reminders (frequency: "once")
+convex/actions.ts:564: - Do NOT include "date" for recurring/daily reminders
+convex/actions.ts:565: 
+convex/actions.ts:1370: /** The slice of an action ctx a deferred-audio take needs. */
+convex/actions.ts:1371: type FastTakeCtx = {
+convex/actions.ts:1372:   runMutation: (reference: any, args: any) => Promise<any>;
+convex/actions.ts:1373:   scheduler: { runAfter: (delayMs: number, reference: any, args: any) => Promise<any> };
+convex/actions.ts:1374: };
+convex/actions.ts:1375: 
+convex/actions.ts:1376: /**
+convex/actions.ts:1377:  * Parse one transcript and insert every reminder it asks for, with the audio
+convex/actions.ts:1378:  * deferred to a background TTS job.
+convex/actions.ts:1379:  *
+convex/actions.ts:1380:  * Both fast paths land here: a voice take arrives after Whisper, the composer's
+convex/actions.ts:1381:  * typed sentence arrives with no STT at all (OLD-101). Same prompt, same plans,
+convex/actions.ts:1382:  * same TTS jobs â€” a typed reminder is a spoken one that skipped the microphone.
+convex/actions.ts:1383:  * `perf` is the caller's own timings object and is accumulated into.
+convex/actions.ts:1384:  */
+convex/actions.ts:1385: async function createTakeWithDeferredAudio(
+convex/actions.ts:1386:   ctx: FastTakeCtx,
+convex/actions.ts:1387:   args: {
+convex/actions.ts:1388:     deviceId: string;
+convex/actions.ts:1389:     transcript: string;
+convex/actions.ts:1390:     currentDate: string;
+convex/actions.ts:1391:     currentTime: string;
+convex/actions.ts:1392:     currentDayOfWeek: string;
+convex/actions.ts:1393:     timezone: string;
+convex/actions.ts:1394:     // For the parse telemetry line. `path` distinguishes fast voice from typed.
+convex/actions.ts:1395:     traceId?: string | null;
+convex/actions.ts:1396:     path: string;
+convex/actions.ts:1397:   },
+convex/actions.ts:1398:   // Widened to hold the STT model labels the fast path merges in alongside the
+convex/actions.ts:1399:   // numeric stage timings.
+convex/actions.ts:1400:   perf: Record<string, number | string | boolean>
+convex/actions.ts:1401: ) {
+convex/actions.ts:1402:   const openrouter = new OpenAI({
+convex/actions.ts:1403:     apiKey: process.env.OPENROUTER_API_KEY,
+convex/actions.ts:1404:     baseURL: "https://openrouter.ai/api/v1",
+convex/actions.ts:1405:   });
+convex/actions.ts:1406: 
+convex/actions.ts:1407:   const tGpt = Date.now();
+convex/actions.ts:1408:   const completion = await openrouter.chat.completions.create({
+convex/actions.ts:1409:     model: "openai/gpt-5.6-luna",
+convex/actions.ts:1410:     response_format: { type: "json_object" },
+convex/actions.ts:1411:     reasoning_effort: "none",
+convex/actions.ts:1412:     max_tokens: 2000,
+convex/actions.ts:1413:     messages: [
+convex/actions.ts:1414:       {
+convex/actions.ts:1415:         role: "system",
+convex/actions.ts:1416:         content: buildSystemPrompt({
+convex/actions.ts:1417:           currentDate: args.currentDate,
+convex/actions.ts:1418:           currentDayOfWeek: args.currentDayOfWeek,
+convex/actions.ts:1419:           currentTime: args.currentTime,
+convex/actions.ts:1420:           timezone: args.timezone,
+convex/actions.ts:1421:         }),
+convex/actions.ts:1422:       },
+convex/actions.ts:1423:       {
+convex/actions.ts:1424:         role: "user",
+convex/actions.ts:1425:         content: args.transcript,
+convex/actions.ts:1645: export const processTypedReminder = action({
+convex/actions.ts:1646:   args: {
+convex/actions.ts:1647:     // Owning install (OLD-74) â€” stamped on the reminder so only this device can read it back.
+convex/actions.ts:1648:     deviceId: v.string(),
+convex/actions.ts:1649:     text: v.string(),
+convex/actions.ts:1650:     traceId: v.optional(v.string()),
+convex/actions.ts:1651:     deviceLocalDate: v.optional(v.string()),
+convex/actions.ts:1652:     deviceLocalTime: v.optional(v.string()),
+convex/actions.ts:1653:     deviceTimezone: v.optional(v.string()),
+convex/actions.ts:1654:   },
+convex/actions.ts:1655:   handler: async (ctx, args) => {
+convex/actions.ts:1656:     const transcript = args.text.trim();
+convex/actions.ts:1657:     if (!transcript) {
+convex/actions.ts:1658:       throw new Error("Nothing to parse");
+convex/actions.ts:1659:     }
+convex/actions.ts:1660: 
+convex/actions.ts:1661:     const tActionStart = Date.now();
+convex/actions.ts:1662:     const perf: Record<string, number | string | boolean> = {};
+convex/actions.ts:1663: 
+convex/actions.ts:1664:     // Device LOCAL time, same as the voice paths â€” relative phrasing ("in ten
+convex/actions.ts:1665:     // minutes", "tomorrow") is only parseable against the user's own clock.
+convex/actions.ts:1666:     const currentDate = args.deviceLocalDate || new Date().toISOString().split('T')[0];
+convex/actions.ts:1667:     const currentTime = args.deviceLocalTime || new Date().toLocaleTimeString('en-US', { hour12: false });
+convex/actions.ts:1668:     const now = new Date(`${currentDate}T${currentTime}`);
+convex/actions.ts:1669:     const currentDayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
+convex/actions.ts:1670:     const timezone = args.deviceTimezone || 'UTC';
+convex/actions.ts:1671: 
+convex/actions.ts:1672:     console.log("[VR] === TYPED INPUT ===");
+convex/actions.ts:1673:     console.log("[VR] Text:", transcript);
+convex/actions.ts:1674: 
+convex/actions.ts:1675:     const created = await createTakeWithDeferredAudio(
+convex/actions.ts:1676:       ctx,
+convex/actions.ts:1677:       {
+convex/actions.ts:1678:         deviceId: args.deviceId,
+convex/actions.ts:1679:         transcript,
+convex/actions.ts:1680:         currentDate,
+convex/actions.ts:1681:         currentTime,
+convex/actions.ts:1682:         currentDayOfWeek,
+convex/actions.ts:1683:         timezone,
+convex/actions.ts:1684:         traceId: args.traceId ?? null,
+convex/actions.ts:1685:         path: "typed",
+convex/actions.ts:1686:       },
+convex/actions.ts:1687:       perf
+convex/actions.ts:1688:     );
+convex/actions.ts:1689: 
+convex/actions.ts:1690:     perf.actionMs = Date.now() - tActionStart;
+convex/actions.ts:1691: 
+convex/actions.ts:1692:     return {
+convex/actions.ts:1693:       perf,
+convex/actions.ts:1694:       ...created[0],
+convex/actions.ts:1695:       reminders: created,
+convex/actions.ts:1696:       reminderCount: created.length,
+convex/actions.ts:1697:     };
+convex/actions.ts:1698:   },
+convex/actions.ts:1699: });
+convex/actions.ts:1700: 
+convex/actions.ts:1701: export const generateReminderTtsForReminder = internalAction({
+convex/actions.ts:1702:   args: {
+convex/actions.ts:1703:     reminderId: v.id("reminders"),
+convex/actions.ts:1704:     title: v.string(),
+convex/actions.ts:1705:     ttsText: v.string(),
+convex/actions.ts:1706:     preTtsText: v.optional(v.string()),
+convex/actions.ts:1707:     // Neither is read any more. `persistent` stopped mattering when the wav
+convex/actions.ts:1708:     // shape became the same for every tier; `variantTexts` stopped existing
+convex/actions.ts:1709:     // when the nag went back to repeating the base line (OLD-108). Both are
+convex/actions.ts:1710:     // still accepted so a job enqueued by an older deploy passes validation
+convex/actions.ts:1711:     // instead of dying in the scheduler.
+convex/actions.ts:1712:     variantTexts: v.optional(v.array(v.string())),
+convex/actions.ts:1713:     persistent: v.optional(v.boolean()),
+convex/actions.ts:1714:   },
+convex/actions.ts:1715:   handler: async (ctx, args) => {
+convex/actions.ts:1716:     const hasPreAlert = Boolean(args.preTtsText);
+convex/actions.ts:1717: 
+convex/actions.ts:1718:     // â”€â”€ Phase 1: the base line, alone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+components/ReminderCard.tsx:200:   iconBadge: {
+components/ReminderCard.tsx:201:     width: 50,
+components/ReminderCard.tsx:202:     height: 50,
+components/ReminderCard.tsx:203:     borderRadius: 25,
+components/ReminderCard.tsx:204:     backgroundColor: colors.muted,
+components/ReminderCard.tsx:205:     justifyContent: "center",
+components/ReminderCard.tsx:206:     alignItems: "center",
+components/ReminderCard.tsx:207:     marginRight: 15,
+components/ReminderCard.tsx:208:   },
+components/ReminderCard.tsx:209:   infoContainer: {
+components/ReminderCard.tsx:210:     flex: 1,
+components/ReminderCard.tsx:211:   },
+components/ReminderCard.tsx:212:   title: {
+components/ReminderCard.tsx:213:     fontSize: 16,
+components/ReminderCard.tsx:214:     fontWeight: "600",
+components/ReminderCard.tsx:215:     color: colors.textHeading,
+components/ReminderCard.tsx:216:     marginBottom: 4,
+components/ReminderCard.tsx:217:   },
+components/ReminderCard.tsx:218:   frequencyText: {
+components/ReminderCard.tsx:219:     fontSize: 14,
+components/ReminderCard.tsx:220:     color: colors.textSecondary,
+components/ReminderCard.tsx:221:     marginBottom: 4,
+components/ReminderCard.tsx:222:   },
+components/ReminderCard.tsx:223:   timeRow: {
+components/ReminderCard.tsx:224:     flexDirection: "row",
+components/ReminderCard.tsx:225:     alignItems: "center",
+components/ReminderCard.tsx:226:   },
+components/ReminderCard.tsx:227:   nextText: {
+components/ReminderCard.tsx:228:     marginLeft: 5,
+components/ReminderCard.tsx:229:     fontSize: 14,
+components/ReminderCard.tsx:230:     color: colors.textSecondary,
+components/ReminderListItem.tsx:200:     paddingHorizontal: spacing.md,
+components/ReminderListItem.tsx:201:   },
+components/ReminderListItem.tsx:202:   cardPressed: {
+components/ReminderListItem.tsx:203:     opacity: 0.95,
+components/ReminderListItem.tsx:204:   },
+components/ReminderListItem.tsx:205:   // Tiimo-style rounded-square chip (not a circle).
+components/ReminderListItem.tsx:206:   chip: {
+components/ReminderListItem.tsx:207:     width: 44,
+components/ReminderListItem.tsx:208:     height: 44,
+components/ReminderListItem.tsx:209:     borderRadius: 14,
+components/ReminderListItem.tsx:210:     justifyContent: "center",
+components/ReminderListItem.tsx:211:     alignItems: "center",
+components/ReminderListItem.tsx:212:     marginRight: 14,
+components/ReminderListItem.tsx:213:   },
+components/ReminderListItem.tsx:214:   chipEmoji: {
+components/ReminderListItem.tsx:215:     fontSize: 22,
+components/ReminderListItem.tsx:216:   },
+components/ReminderListItem.tsx:217:   infoContainer: {
+components/ReminderListItem.tsx:218:     flex: 1,
+components/ReminderListItem.tsx:219:   },
+components/ReminderListItem.tsx:220:   // System semibold for reminder titles, including Arabic input.
+components/ReminderListItem.tsx:221:   titleRow: { flexDirection: "row", alignItems: "center" },
+components/ReminderListItem.tsx:222:   overdueDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.statusOverdue, marginRight: 6 },
+components/ReminderListItem.tsx:223:   title: {
+components/ReminderListItem.tsx:224:     flexShrink: 1,
+components/ReminderListItem.tsx:225:     fontSize: 17,
+components/ReminderListItem.tsx:226:     fontWeight: "600",
+components/ReminderListItem.tsx:227:     lineHeight: 23,
+components/ReminderListItem.tsx:228:     color: colors.textHeading,
+components/ReminderListItem.tsx:229:     marginBottom: 4,
+components/ReminderListItem.tsx:230:   },
+components/ReminderListItem.tsx:231:   titleCompleted: {
+components/ReminderListItem.tsx:232:     textDecorationLine: "line-through",
+components/ReminderListItem.tsx:233:     color: colors.textSecondary,
+components/ReminderListItem.tsx:234:   },
+components/ReminderListItem.tsx:235:   titleMissed: {
+components/EditReminderSheet.tsx:594:                 activeOffsetY={[-15, 15]}
+components/EditReminderSheet.tsx:595:             >
+components/EditReminderSheet.tsx:596:                 <BottomSheetScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+components/EditReminderSheet.tsx:597: 
+components/EditReminderSheet.tsx:598:                     {/* Title card: input + emoji chip */}
+components/EditReminderSheet.tsx:599:                     <View style={styles.titleCard}>
+components/EditReminderSheet.tsx:600:                         <TextInput
+components/EditReminderSheet.tsx:601:                             style={styles.titleInput}
+components/EditReminderSheet.tsx:602:                             value={title}
+components/EditReminderSheet.tsx:603:                             onChangeText={setTitle}
+components/EditReminderSheet.tsx:604:                             onFocus={expandSheet}
+components/EditReminderSheet.tsx:605:                             placeholder="Reminder"
+components/EditReminderSheet.tsx:606:                             placeholderTextColor={colors.textTertiary}
+components/EditReminderSheet.tsx:607:                             maxLength={100}
+components/EditReminderSheet.tsx:608:                         />
+components/EditReminderSheet.tsx:609:                         <TouchableOpacity
+components/EditReminderSheet.tsx:610:                             style={[styles.emojiChip, { backgroundColor: chipColor }]}
+components/EditReminderSheet.tsx:611:                             onPress={() => setShowEmojiPicker(true)}
+components/EditReminderSheet.tsx:612:                             activeOpacity={0.7}
+components/EditReminderSheet.tsx:613:                         >
+components/EditReminderSheet.tsx:614:                             {emoji ? (
+components/EditReminderSheet.tsx:615:                                 <Text style={styles.emojiChipText}>{emoji}</Text>
+components/EditReminderSheet.tsx:870:     titleCard: {
+components/EditReminderSheet.tsx:871:         flexDirection: "row",
+components/EditReminderSheet.tsx:872:         alignItems: "center",
+components/EditReminderSheet.tsx:873:         backgroundColor: colors.card,
+components/EditReminderSheet.tsx:874:         borderRadius: borderRadius.lg,
+components/EditReminderSheet.tsx:875:         paddingHorizontal: 16,
+components/EditReminderSheet.tsx:876:         paddingVertical: 6,
+components/EditReminderSheet.tsx:877:         marginTop: 14,
+components/EditReminderSheet.tsx:878:         gap: 12,
+components/EditReminderSheet.tsx:879:         ...shadows.card,
+components/EditReminderSheet.tsx:880:     },
+components/EditReminderSheet.tsx:881:     titleInput: {
+components/EditReminderSheet.tsx:882:         flex: 1,
+components/EditReminderSheet.tsx:883:         fontSize: scaleFontSize(20),
+components/EditReminderSheet.tsx:884:         fontWeight: "600",
+components/EditReminderSheet.tsx:885:         color: colors.textHeading,
+components/EditReminderSheet.tsx:886:         paddingVertical: 12,
+components/EditReminderSheet.tsx:887:     },
+components/EditReminderSheet.tsx:888:     emojiChip: {
+components/EditReminderSheet.tsx:889:         width: 44,
+components/EditReminderSheet.tsx:890:         height: 44,
+components/EditReminderSheet.tsx:891:         borderRadius: borderRadius.full,
+components/EditReminderSheet.tsx:892:         alignItems: "center",
+components/EditReminderSheet.tsx:893:         justifyContent: "center",
+components/EditReminderSheet.tsx:894:     },
+components/EditReminderSheet.tsx:895:     emojiChipText: {
+components/EditReminderSheet.tsx:896:         fontSize: scaleFontSize(22),
+components/EditReminderSheet.tsx:897:     },
+components/EditReminderSheet.tsx:898: 
+components/EditReminderSheet.tsx:899:     // Spoken line card
+components/EditReminderSheet.tsx:900:     spokenCard: {
+101:  configureReconcile,
+103:  enqueueAllPendingTakes,
+241:  const [showComposer, setShowComposer] = useState(false);
+785:    if (showComposer || showRecording) return;
+853:    showComposer,
+1504:    configureReconcile({
+1561:    enqueueAllPendingTakes();
+1724:  const renderActiveItem = useCallback(
+1831:            renderItem={renderActiveItem}
+1885:      {!showRecording && !showComposer && !editingReminder && (
+1920:        visible={showComposer}
+convex\creationJobActions.ts:293: * snapshot rather than this container's UTC one (OLD-120).
+convex\actions.ts:506: * the ~3.6k-token instruction block from cache instead of prefilling it each
+convex\actions.ts:510: * and could never be cached.
+convex\actions.ts:528:  "title": "short title (2-4 words; must not begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself)",
+convex\actions.ts:635:let cachedResembleProjectUuid: string | null = null;
+convex\actions.ts:639:  if (cachedResembleProjectUuid) return cachedResembleProjectUuid;
+convex\actions.ts:668:    cachedResembleProjectUuid = await tryFetch(`Bearer ${apiKey}`);
+convex\actions.ts:669:    return cachedResembleProjectUuid;
+convex\actions.ts:671:    cachedResembleProjectUuid = await tryFetch(`Token token=${apiKey}`);
+convex\actions.ts:672:    return cachedResembleProjectUuid;
+__tests__\convex\legacyActionContract.test.ts:62:  prompt_tokens_details: { cached_tokens: 900 },
+__tests__\convex\creationJobActions.test.ts:83:  prompt_tokens_details: { cached_tokens: 900 },
+__tests__\convex\parseUsage.test.ts:16:        prompt_tokens_details: { cached_tokens: 900 },
+__tests__\convex\parseUsage.test.ts:33:  it("preserves reported zero cached and reasoning values", () => {
+__tests__\convex\parseUsage.test.ts:38:        prompt_tokens_details: { cached_tokens: 0 },
+__tests__\convex\parseUsage.test.ts:61:        prompt_tokens_details: { cached_tokens: Infinity },
+__tests__\lib\alarmSounds.test.ts:153:  it("does not cache a failed placement", async () => {
+__tests__\lib\alarmSounds.test.ts:192:  it("clears the session cache so a re-created reminder re-places its sound", async () => {
+__tests__\convex\parsePrompt.test.ts:6: * cacheable, and neither is visible from reading any single string:
+__tests__\convex\parsePrompt.test.ts:10: *      cache. A single interpolated clock in the middle of the prompt (which is
+__tests__\convex\parsePrompt.test.ts:37:describe("buildSystemPrompt — cacheable ordering", () => {
+__tests__\convex\parsePrompt.test.ts:44:    // prompt ends. Anything appended below it would stop being cacheable.
+__tests__\convex\parsePrompt.test.ts:66:  it("leaks no part of the context into the cacheable prefix", () => {
+__tests__\lib\creationLock.test.ts:225:    // The import's snapshot and its write are separated by real awaits; without
+__tests__\lib\alarmKitIntegration.test.ts:119:  it("caches the decision for the session", async () => {
+__tests__\lib\deviceId.test.ts:1:// Helper: run a test in an isolated module scope so the module-level cache and
+__tests__\lib\deviceId.test.ts:97:      // Unpersisted, but cached — the session keeps one identity.
+__tests__\lib\deviceId.test.ts:103:// ─── cached accessor ────────────────────────────────────────────────────────
+__tests__\lib\perf.test.ts:337:  it("logs the server's own timings as convex_perf, with the STT/parse/cached split", () => {
+__tests__\lib\perf.test.ts:353:    // duration and the cached-token count.
+__tests__\lib\pendingTakes.test.ts:81:      recordingUri: "file:///cache/a.m4a",
+__tests__\lib\pendingTakes.test.ts:180:      resolveRecordingLocation({ cacheUri: "file:///cache/a.m4a", copiedUri: "file:///docs/a.m4a" })
+__tests__\lib\pendingTakes.test.ts:184:  it("keeps the cache uri when the copy failed, and says it is fragile", () => {
+__tests__\lib\pendingTakes.test.ts:186:      resolveRecordingLocation({ cacheUri: "file:///cache/a.m4a", copiedUri: null })
+__tests__\lib\pendingTakes.test.ts:187:    ).toEqual({ recordingUri: "file:///cache/a.m4a", fragileUri: true });
+__tests__\lib\pendingTakes.test.ts:274:describe("the snapshot", () => {
+__tests__\lib\pendingTakes.test.ts:296:    const snapshot = getPendingTakesSnapshot();
+__tests__\lib\pendingTakes.test.ts:297:    expect(snapshot.map((t) => t.creationId)).toEqual(["a", "b"]);
+__tests__\lib\pendingTakes.test.ts:298:    expect(snapshot[0].phase).toBe("uploading");
+__tests__\lib\proStatusResolve.test.ts:25:it("takes a confirmed answer from the cache and spends no round trip", async () => {
+__tests__\lib\proCardContent.test.ts:137:  it("seeds state from the entitlement cache so a subscriber sees no flash", () => {
+__tests__\lib\proCardContent.test.ts:169:  it("asks the cache and forces the store, so a cross-device purchase still lands", () => {
+__tests__\lib\proCardContent.test.ts:179:describe("the forced refresh actually bypasses the cache", () => {
+__tests__\lib\proCardContent.test.ts:180:  it("invalidates RevenueCat's customer info cache before fetching", () => {
+__tests__\lib\proCardContent.test.ts:181:    // getCustomerInfo alone is cache-aware: without this a refund or a
+__tests__\lib\proCardContent.test.ts:182:    // cross-device purchase can sit unnoticed for the SDK's cache lifetime.
+__tests__\lib\proCardContent.test.ts:188:  it("leaves the cheap cached path alone for passive reads", () => {
+__tests__\lib\proCardContent.test.ts:190:      /export async function readProStatus[\s\S]*?if \(cachedIsPro !== null\)/
+__tests__\lib\proCardContent.test.ts:195:    // Both resolvers fall back to the snapshot (unknown, unless a real answer
+__tests__\lib\usageGate.test.ts:244:    expect(index).not.toContain("!cachedPro && currentCount >= limit");
+__tests__\lib\usageGate.test.ts:291:  it("answers from a cached subscription without a round trip", async () => {
+__tests__\lib\usageGate.test.ts:300:  it("asks the store when the cache is empty, and blocks a free plan", async () => {
+__tests__\lib\usageGate.test.ts:309:  it("asks again when the cache says free — an upgrade may have just landed", async () => {
+__tests__\lib\voiceRegen.test.ts:78:    it("calls the action with the trimmed text + device id, clears cache, removes the alarm sound, reschedules with the new URLs", async () => {
+convex\creationValidate.ts:70:  /** The job's own timezone snapshot. Must be a zone this runtime knows. */
+convex\parseUsage.ts:7: * legacy actions' parse paths) so the device log's cached-token split means the
+convex\parseUsage.ts:14: * cache miss, no reasoning tokens) and is preserved; an absent field is omitted
+convex\parseUsage.ts:23:  /** `usage.prompt_tokens_details.cached_tokens` — cache reads. */
+convex\parseUsage.ts:57:    const cached = finiteNonNegative((promptDetails as { cached_tokens?: unknown }).cached_tokens);
+convex\parseUsage.ts:58:    if (cached !== undefined) result.parseCachedTokens = cached;
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$spec=@(@('"'app/index.tsx',1724,1761),@('app/index.tsx',1498,1566),@('components/EditReminderSheet.tsx',599,609),@('components/ReminderListItem.tsx',215,232),@('plugins/withAlarmKit.js',413,450));foreach("'$r in $spec){$s=Get-Content $r[0];for($i=$r[1];$i -le $r[2];$i++){'"'{0}:{1}: {2}' -f "'$r[0],$i,$s[$i-1]}}; rg -n '"'title|lineLimit|LiveActivity|Widget|ActivityConfiguration' components/ActiveReminderCard.tsx plugins -g '*.js' -g '*.swift'; rg -n 'max_tokens|buildSystemPrompt' convex/creationJobActions.ts; rg -n 'title|numberOfLines|height|flex' components/ReminderCard.tsx" in C:\Dev\VR
+ succeeded in 514ms:
+app/index.tsx:1724:   const renderActiveItem = useCallback(
+app/index.tsx:1725:     ({ item: card }: { item: ActiveCard }) => {
+app/index.tsx:1726:       const item = card.reminder;
+app/index.tsx:1727:       const isExiting = exitingIds.has(item.id);
+app/index.tsx:1728: 
+app/index.tsx:1729:       return (
+app/index.tsx:1730:         <ReminderListItem
+app/index.tsx:1731:           id={item.id}
+app/index.tsx:1732:           title={item.title}
+app/index.tsx:1733:           emoji={item.emoji}
+app/index.tsx:1734:           chipColor={chipColorForId(item.id)}
+app/index.tsx:1735:           subtitle={nextLine(card, nowMs)}
+app/index.tsx:1736:           detail={patternLine(item, undefined, nowMs)}
+app/index.tsx:1737:           showCompletion={card.showCompletion}
+app/index.tsx:1738:           overdueDot={card.overdue}
+app/index.tsx:1739:           overdue={card.overdue}
+app/index.tsx:1740:           completed={isExiting}
+app/index.tsx:1741:           onPress={() => {
+app/index.tsx:1742:             recordReminderPressIn(item.id);
+app/index.tsx:1743:             handleReminderPress(item);
+app/index.tsx:1744:           }}
+app/index.tsx:1745:           onToggleComplete={() => {
+app/index.tsx:1746:             if (!isExiting) {
+app/index.tsx:1747:               handleMarkDone(item.id, item.title);
+app/index.tsx:1748:             }
+app/index.tsx:1749:           }}
+app/index.tsx:1750:           onDelete={() => handleDelete(item)}
+app/index.tsx:1751:         />
+app/index.tsx:1752:       );
+app/index.tsx:1753:     },
+app/index.tsx:1754:     [
+app/index.tsx:1755:       exitingIds,
+app/index.tsx:1756:       nowMs,
+app/index.tsx:1757:       recordReminderPressIn,
+app/index.tsx:1758:       handleReminderPress,
+app/index.tsx:1759:       handleMarkDone,
+app/index.tsx:1760:       handleDelete,
+app/index.tsx:1761:     ]
+app/index.tsx:1498:   );
+app/index.tsx:1499: 
+app/index.tsx:1500:   // Reconciliation needs every one of the seams above, so it is handed them
+app/index.tsx:1501:   // here and re-handed them whenever one changes identity. Wiring only â€” the
+app/index.tsx:1502:   // sweep is its own effect below, so a gate-state change cannot start one.
+app/index.tsx:1503:   useEffect(() => {
+app/index.tsx:1504:     configureReconcile({
+app/index.tsx:1505:       getDeviceId,
+app/index.tsx:1506:       fetchJob: (deviceId, creationId) =>
+app/index.tsx:1507:         convex.query(api.creationJobs.get, { deviceId, creationId }) as Promise<any>,
+app/index.tsx:1508:       begin: (args) => beginCreationJob(args as any) as Promise<any>,
+app/index.tsx:1509:       cancel: (args) => cancelCreationJob(args as any) as Promise<any>,
+app/index.tsx:1510:       serverRetry: (args) => retryCreationJob(args as any) as Promise<any>,
+app/index.tsx:1511:       discard: (args) => discardCreationJob(args) as Promise<any>,
+app/index.tsx:1512:       uploadRecording: async (take) => {
+app/index.tsx:1513:         // A recording that is not there cannot be uploaded, and saying so is
+app/index.tsx:1514:         // what routes the take to "Record again" instead of a doomed retry.
+app/index.tsx:1515:         if (!(await recordingFileExists(take.recordingUri))) return null;
+app/index.tsx:1516:         const { uploadUrl } = await generateAudioUploadUrl();
+app/index.tsx:1517:         const { storageId } = await uploadRecordingToConvex(uploadUrl, take.recordingUri);
+app/index.tsx:1518:         return storageId;
+app/index.tsx:1519:       },
+app/index.tsx:1520:       recordingExists: (take) => recordingFileExists(take.recordingUri),
+app/index.tsx:1521:       importTake: importCommittedTake,
+app/index.tsx:1522:       subscribe: (take) => {
+app/index.tsx:1523:         void subscribeToJob(take);
+app/index.tsx:1524:       },
+app/index.tsx:1525:       deleteRecording: deleteTakeRecording,
+app/index.tsx:1526:       storeHasCreationId: (creationId) =>
+app/index.tsx:1527:         useReminderStore.getState().reminders.some((r) => r.creationId === creationId),
+app/index.tsx:1528:       // Three independent reads off three AsyncStorage keys. Nothing here
+app/index.tsx:1529:       // depends on anything else here, so they go together â€” the barrier is
+app/index.tsx:1530:       // "all three have landed", not "one after another".
+app/index.tsx:1531:       loadBarrier: async () => {
+app/index.tsx:1532:         await Promise.all([
+app/index.tsx:1533:           loadPendingTakes(),
+app/index.tsx:1534:           loadReminders().catch(() => {}),
+app/index.tsx:1535:           loadHistory().catch(() => {}),
+app/index.tsx:1536:         ]);
+app/index.tsx:1537:       },
+app/index.tsx:1538:       onRecordAgain: () => {
+app/index.tsx:1539:         void handleOpenRecording();
+app/index.tsx:1540:       },
+app/index.tsx:1541:       onStage: (_creationId, stage, data) =>
+app/index.tsx:1542:         creationBreadcrumb(stage, data?.errorKind as string | undefined),
+app/index.tsx:1543:     });
+app/index.tsx:1544:   }, [
+app/index.tsx:1545:     beginCreationJob,
+app/index.tsx:1546:     cancelCreationJob,
+app/index.tsx:1547:     retryCreationJob,
+app/index.tsx:1548:     discardCreationJob,
+app/index.tsx:1549:     generateAudioUploadUrl,
+app/index.tsx:1550:     importCommittedTake,
+app/index.tsx:1551:     subscribeToJob,
+app/index.tsx:1552:     loadReminders,
+app/index.tsx:1553:     loadHistory,
+app/index.tsx:1554:     handleOpenRecording,
+app/index.tsx:1555:   ]);
+app/index.tsx:1556: 
+app/index.tsx:1557:   // Once per launch: a take that outlived the last one finds its way home
+app/index.tsx:1558:   // (spec Â§2.5). The queue holds until the wiring above lands, so the order of
+app/index.tsx:1559:   // these two effects is not load-bearing â€” but it is the honest one.
+app/index.tsx:1560:   useEffect(() => {
+app/index.tsx:1561:     enqueueAllPendingTakes();
+app/index.tsx:1562:   }, []);
+app/index.tsx:1563: 
+app/index.tsx:1564:   // Every open subscription is dropped with the screen.
+app/index.tsx:1565:   useEffect(() => {
+app/index.tsx:1566:     const watches = watchesRef.current;
+components/EditReminderSheet.tsx:599:                     <View style={styles.titleCard}>
+components/EditReminderSheet.tsx:600:                         <TextInput
+components/EditReminderSheet.tsx:601:                             style={styles.titleInput}
+components/EditReminderSheet.tsx:602:                             value={title}
+components/EditReminderSheet.tsx:603:                             onChangeText={setTitle}
+components/EditReminderSheet.tsx:604:                             onFocus={expandSheet}
+components/EditReminderSheet.tsx:605:                             placeholder="Reminder"
+components/EditReminderSheet.tsx:606:                             placeholderTextColor={colors.textTertiary}
+components/EditReminderSheet.tsx:607:                             maxLength={100}
+components/EditReminderSheet.tsx:608:                         />
+components/EditReminderSheet.tsx:609:                         <TouchableOpacity
+components/ReminderListItem.tsx:215:     fontSize: 22,
+components/ReminderListItem.tsx:216:   },
+components/ReminderListItem.tsx:217:   infoContainer: {
+components/ReminderListItem.tsx:218:     flex: 1,
+components/ReminderListItem.tsx:219:   },
+components/ReminderListItem.tsx:220:   // System semibold for reminder titles, including Arabic input.
+components/ReminderListItem.tsx:221:   titleRow: { flexDirection: "row", alignItems: "center" },
+components/ReminderListItem.tsx:222:   overdueDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.statusOverdue, marginRight: 6 },
+components/ReminderListItem.tsx:223:   title: {
+components/ReminderListItem.tsx:224:     flexShrink: 1,
+components/ReminderListItem.tsx:225:     fontSize: 17,
+components/ReminderListItem.tsx:226:     fontWeight: "600",
+components/ReminderListItem.tsx:227:     lineHeight: 23,
+components/ReminderListItem.tsx:228:     color: colors.textHeading,
+components/ReminderListItem.tsx:229:     marginBottom: 4,
+components/ReminderListItem.tsx:230:   },
+components/ReminderListItem.tsx:231:   titleCompleted: {
+components/ReminderListItem.tsx:232:     textDecorationLine: "line-through",
+plugins/withAlarmKit.js:413:   private static func makeAlert(title: String) -> AlarmPresentation.Alert {
+plugins/withAlarmKit.js:414:     let later = AlarmButton(text: "Later", textColor: .white, systemImageName: "clock.badge")
+plugins/withAlarmKit.js:415: 
+plugins/withAlarmKit.js:416:     return AlarmPresentation.Alert(
+plugins/withAlarmKit.js:417:       title: LocalizedStringResource(stringLiteral: title),
+plugins/withAlarmKit.js:418:       stopButton: AlarmButton(text: "Done", textColor: .white, systemImageName: "checkmark.circle.fill"),
+plugins/withAlarmKit.js:419:       secondaryButton: later,
+plugins/withAlarmKit.js:420:       // .custom (not .countdown) so VRSnoozeIntent actually runs on tap.
+plugins/withAlarmKit.js:421:       secondaryButtonBehavior: .custom
+plugins/withAlarmKit.js:422:     )
+plugins/withAlarmKit.js:423:   }
+plugins/withAlarmKit.js:424: 
+plugins/withAlarmKit.js:425:   private static func makeConfiguration(alarmID: UUID,
+plugins/withAlarmKit.js:426:                                         appKey: String,
+plugins/withAlarmKit.js:427:                                         fireDate: Date,
+plugins/withAlarmKit.js:428:                                         title: String,
+plugins/withAlarmKit.js:429:                                         soundName: String?,
+plugins/withAlarmKit.js:430:                                         snoozeMinutes: Int,
+plugins/withAlarmKit.js:431:                                         metadata: [String: String]) -> AlarmManager.AlarmConfiguration<VRAlarmMetadata> {
+plugins/withAlarmKit.js:432:     let alert = makeAlert(title: title)
+plugins/withAlarmKit.js:433: 
+plugins/withAlarmKit.js:434:     let attributes = AlarmAttributes<VRAlarmMetadata>(
+plugins/withAlarmKit.js:435:       presentation: AlarmPresentation(alert: alert),
+plugins/withAlarmKit.js:436:       metadata: VRAlarmMetadata(appKey: appKey, values: metadata),
+plugins/withAlarmKit.js:437:       tintColor: brandTint
+plugins/withAlarmKit.js:438:     )
+plugins/withAlarmKit.js:439: 
+plugins/withAlarmKit.js:440:     // Bare filename incl. extension, resolved from Library/Sounds (AK-3 writes it there).
+plugins/withAlarmKit.js:441:     var sound: AlertConfiguration.AlertSound = .default
+plugins/withAlarmKit.js:442:     if let soundName = soundName, !soundName.isEmpty {
+plugins/withAlarmKit.js:443:       sound = .named(soundName)
+plugins/withAlarmKit.js:444:     }
+plugins/withAlarmKit.js:445: 
+plugins/withAlarmKit.js:446:     return AlarmManager.AlarmConfiguration(
+plugins/withAlarmKit.js:447:       schedule: .fixed(fireDate),
+plugins/withAlarmKit.js:448:       attributes: attributes,
+plugins/withAlarmKit.js:449:       stopIntent: VRStopIntent(alarmID: alarmID, appKey: appKey),
+plugins/withAlarmKit.js:450:       secondaryIntent: VRSnoozeIntent(alarmID: alarmID,
+rg: components/ActiveReminderCard.tsx: The system cannot find the file specified. (os error 2)
+plugins\ios-src\VRAlarmIntents.swift:332:    // MARK: Alarm metadata (fallback for the follow-up's title/sound/window)
+plugins\ios-src\VRAlarmIntents.swift:341:        return metaRecord(appKey: appKey)?["title"] as? String
+plugins\ios-src\VRAlarmIntents.swift:477:struct VRSnoozeIntent: LiveActivityIntent {
+plugins\ios-src\VRAlarmIntents.swift:478:    static var title: LocalizedStringResource = "Later"
+plugins\ios-src\VRAlarmIntents.swift:490:    @Parameter(title: "Alarm ID")
+plugins\ios-src\VRAlarmIntents.swift:493:    @Parameter(title: "App Key")
+plugins\ios-src\VRAlarmIntents.swift:496:    @Parameter(title: "Alarm Title")
+plugins\ios-src\VRAlarmIntents.swift:499:    @Parameter(title: "Sound Name")
+plugins\ios-src\VRAlarmIntents.swift:502:    @Parameter(title: "Snooze Minutes")
+plugins\ios-src\VRAlarmIntents.swift:610:                title: alarmTitle ?? VRAlarmIntentStore.storedTitle(appKey: resolvedKey) ?? "Reminder",
+plugins\ios-src\VRAlarmIntents.swift:631:struct VRStopIntent: LiveActivityIntent {
+plugins\ios-src\VRAlarmIntents.swift:632:    static var title: LocalizedStringResource = "Done"
+plugins\ios-src\VRAlarmIntents.swift:643:    @Parameter(title: "Alarm ID")
+plugins\ios-src\VRAlarmIntents.swift:646:    @Parameter(title: "App Key")
+plugins\ios-src\VRAlarmIntents.swift:726:        title: String,
+plugins\withAlarmKit.js:65:    let title = (opts["title"] as? String) ?? "Reminder"
+plugins\withAlarmKit.js:74:                                                       title: title,
+plugins\withAlarmKit.js:122:                                                       title: "VoiceReminder test alarm",
+plugins\withAlarmKit.js:260:  static let metaKey = "vr_alarm_meta"            // appKey -> title/soundName/snoozeMinutes/metadata
+plugins\withAlarmKit.js:309:  // MARK: Alarm meta (AK-2's SnoozeIntent recovers title/sound/window from here)
+plugins\withAlarmKit.js:311:  static func setMeta(appKey: String, title: String, soundName: String?, snoozeMinutes: Int, metadata: [String: String]) {
+plugins\withAlarmKit.js:313:    var record: [String: Any] = ["title": title, "snoozeMinutes": snoozeMinutes, "metadata": metadata]
+plugins\withAlarmKit.js:413:  private static func makeAlert(title: String) -> AlarmPresentation.Alert {
+plugins\withAlarmKit.js:417:      title: LocalizedStringResource(stringLiteral: title),
+plugins\withAlarmKit.js:428:                                        title: String,
+plugins\withAlarmKit.js:432:    let alert = makeAlert(title: title)
+plugins\withAlarmKit.js:452:                                      alarmTitle: title,
+plugins\withAlarmKit.js:462:                       title: String,
+plugins\withAlarmKit.js:473:                                          title: title,
+plugins\withAlarmKit.js:480:    VRAlarmStore.setMeta(appKey: appKey, title: title, soundName: soundName,
+plugins\withAlarmKit.js:492:                            title: String,
+plugins\withAlarmKit.js:503:                                          title: title,
+plugins\withAlarmKit.js:509:    VRAlarmStore.setMeta(appKey: appKey, title: title, soundName: soundName,
+plugins\withAlarmKit.js:556://   VRAlarmScheduler.scheduleAlarm(appKey:fireDate:title:soundName:snoozeMinutes:metadata:)
+plugins\withAlarmKit.js:578:struct VRStopIntent: LiveActivityIntent {
+plugins\withAlarmKit.js:579:  static var title: LocalizedStringResource { "Done" }
+plugins\withAlarmKit.js:583:  @Parameter(title: "Alarm ID")
+plugins\withAlarmKit.js:586:  @Parameter(title: "App Key")
+plugins\withAlarmKit.js:606:struct VRSnoozeIntent: LiveActivityIntent {
+plugins\withAlarmKit.js:607:  static var title: LocalizedStringResource { "Later" }
+plugins\withAlarmKit.js:611:  @Parameter(title: "Alarm ID")
+plugins\withAlarmKit.js:614:  @Parameter(title: "App Key")
+plugins\withAlarmKit.js:617:  @Parameter(title: "Alarm Title")
+plugins\withAlarmKit.js:620:  @Parameter(title: "Sound Name")
+plugins\withAlarmKit.js:623:  @Parameter(title: "Snooze Minutes")
+31:import { buildSystemPrompt, planRemindersFromRawParse } from "./actions";
+315:      max_tokens: 2000,
+319:          content: buildSystemPrompt({
+14:  title: string;
+29:  title,
+121:              <Text style={styles.title} numberOfLines={1}>
+122:                {title}
+175:    alignItems: "flex-end",
+187:    shadowOffset: { width: 0, height: 2 },
+193:    flexDirection: "row",
+202:    height: 50,
+210:    flex: 1,
+212:  title: {
+224:    flexDirection: "row",
+259:    flexDirection: "row",
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'LiveActivity|ActivityConfiguration|lineLimit|WidgetKit' --glob '"'!package-lock.json'"' --glob '"'!bun.lock'"' --glob '"'!docs/**'"' --glob '"'!listen-test/**'"' .; "'$spec=@(@('"'components/ReminderListItem.tsx',223,230),@('lib/notifications.ts',2270,2287),@('lib/notifications.ts',2310,2330),@('lib/notifications.ts',2397,2410));foreach("'$r in $spec){$s=Get-Content $r[0];for($i=$r[1];$i -le $r[2];$i++){'"'{0}:{1}: {2}' -f "'$r[0],$i,$s[$i-1]}}; rg -n '"'setSelectedDate|setMonthSheetVisible|setInterval' components/days/DaysPage.tsx; rg -n 'scrollToOffset|scrollToIndex' app/index.tsx" in C:\Dev\VR
+ succeeded in 2211ms:
+.\plugins\withAlarmKit.js:578:struct VRStopIntent: LiveActivityIntent {
+.\plugins\withAlarmKit.js:606:struct VRSnoozeIntent: LiveActivityIntent {
+.\plugins\ios-src\VRAlarmIntents.swift:477:struct VRSnoozeIntent: LiveActivityIntent {
+.\plugins\ios-src\VRAlarmIntents.swift:631:struct VRStopIntent: LiveActivityIntent {
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:2139:"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"title|lineLimit|AlarmPresentation|LiveActivity\" plugins modules -g '*.swift'; rg -n '2-4|2–4|short title|parseUsage|max_tokens|max_completion_tokens|processTypedReminder|buildParse|PARSE_' convex/actions.ts __tests__ convex/helpers.ts; rg --files -g '*Pager*' -g '*PendingTake*' -g '*Membership*' -g '*alarm*' -g '*Alarm*'" in C:\Dev\VR
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:2145:plugins\ios-src\VRAlarmIntents.swift:477:struct VRSnoozeIntent: LiveActivityIntent {
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:2153:plugins\ios-src\VRAlarmIntents.swift:631:struct VRStopIntent: LiveActivityIntent {
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:2215:"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"title|lineLimit|AlarmPresentation|Text\\(\" plugins/withAlarmKit.js components/AlarmOverlay.tsx alarm/AlarmRoot.tsx app/alarm.tsx; Get-Content __tests__/convex/parsePrompt.test.ts; Get-Content lib/remindersMembership.ts; Get-Content convex/parseUsage.ts" in C:\Dev\VR
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:2934:"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$spec=@(@('"'app/index.tsx',1724,1761),@('app/index.tsx',1498,1566),@('components/EditReminderSheet.tsx',599,609),@('components/ReminderListItem.tsx',215,232),@('plugins/withAlarmKit.js',413,450));foreach("'$r in $spec){$s=Get-Content $r[0];for($i=$r[1];$i -le $r[2];$i++){'"'{0}:{1}: {2}' -f "'$r[0],$i,$s[$i-1]}}; rg -n '"'title|lineLimit|LiveActivity|Widget|ActivityConfiguration' components/ActiveReminderCard.tsx plugins -g '*.js' -g '*.swift'; rg -n 'max_tokens|buildSystemPrompt' convex/creationJobActions.ts; rg -n 'title|numberOfLines|height|flex' components/ReminderCard.tsx" in C:\Dev\VR
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:3113:plugins\ios-src\VRAlarmIntents.swift:477:struct VRSnoozeIntent: LiveActivityIntent {
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:3121:plugins\ios-src\VRAlarmIntents.swift:631:struct VRStopIntent: LiveActivityIntent {
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:3145:plugins\withAlarmKit.js:578:struct VRStopIntent: LiveActivityIntent {
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:3149:plugins\withAlarmKit.js:606:struct VRSnoozeIntent: LiveActivityIntent {
+.\outputs\codex\2026-09-10-title-redirect.transcript.log:3173:"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'LiveActivity|ActivityConfiguration|lineLimit|WidgetKit' --glob '"'!package-lock.json'"' --glob '"'!bun.lock'"' --glob '"'!docs/**'"' --glob '"'!listen-test/**'"' .; "'$spec=@(@('"'components/ReminderListItem.tsx',223,230),@('lib/notifications.ts',2270,2287),@('lib/notifications.ts',2310,2330),@('lib/notifications.ts',2397,2410));foreach("'$r in $spec){$s=Get-Content $r[0];for($i=$r[1];$i -le $r[2];$i++){'"'{0}:{1}: {2}' -f "'$r[0],$i,$s[$i-1]}}; rg -n '"'setSelectedDate|setMonthSheetVisible|setInterval' components/days/DaysPage.tsx; rg -n 'scrollToOffset|scrollToIndex' app/index.tsx" in C:\Dev\VR
+components/ReminderListItem.tsx:223:   title: {
+components/ReminderListItem.tsx:224:     flexShrink: 1,
+components/ReminderListItem.tsx:225:     fontSize: 17,
+components/ReminderListItem.tsx:226:     fontWeight: "600",
+components/ReminderListItem.tsx:227:     lineHeight: 23,
+components/ReminderListItem.tsx:228:     color: colors.textHeading,
+components/ReminderListItem.tsx:229:     marginBottom: 4,
+components/ReminderListItem.tsx:230:   },
+lib/notifications.ts:2270:   // notification (it is not an alarm surface) so it keeps today's shape.
+lib/notifications.ts:2271:   if (alarmKitActive) {
+lib/notifications.ts:2272:     const keepAppKeys = occurrenceAppKeys(reminder.id, plannedOccurrences);
+lib/notifications.ts:2273:     for (const [index, occurrence] of plannedOccurrences.entries()) {
+lib/notifications.ts:2274:       await scheduleAlarmKitOccurrence(reminder, occurrence, keepAppKeys, {
+lib/notifications.ts:2275:         withNagChain: index < NAG_CHAIN_HORIZON,
+lib/notifications.ts:2276:       });
+lib/notifications.ts:2277:     }
+lib/notifications.ts:2278:     await patchAlarmKitState(reminder.id, { snoozeUntil: 0, nagCount: 0 });
+lib/notifications.ts:2279:     await schedulePreAlertForOccurrence({
+lib/notifications.ts:2280:       reminderId: reminder.id,
+lib/notifications.ts:2281:       title: reminder.title,
+lib/notifications.ts:2282:       mainTriggerTimestamp: triggerTimestamp,
+lib/notifications.ts:2283:       preReminderMinutes: parsePreReminderMinutes(reminder.preReminderMinutes),
+lib/notifications.ts:2284:       preAudioUrl: reminder.preAudioUrl,
+lib/notifications.ts:2285:       volume: reminder.volume,
+lib/notifications.ts:2286:       frequency: reminder.frequency,
+lib/notifications.ts:2287:       scheduleType: reminder.scheduleType,
+lib/notifications.ts:2310:   // grid it is carrying.
+lib/notifications.ts:2311:   for (const occurrence of plannedOccurrences) {
+lib/notifications.ts:2312:     const trigger: TimestampTrigger = {
+lib/notifications.ts:2313:       type: TriggerType.TIMESTAMP,
+lib/notifications.ts:2314:       timestamp: occurrence,
+lib/notifications.ts:2315:       alarmManager: {
+lib/notifications.ts:2316:         type: AlarmType.SET_ALARM_CLOCK, // AlarmClock for lockscreen reliability
+lib/notifications.ts:2317:       },
+lib/notifications.ts:2318:     };
+lib/notifications.ts:2319:     await notifee.createTriggerNotification(
+lib/notifications.ts:2320:       {
+lib/notifications.ts:2321:         id: `reminder_${reminder.id}_${occurrence}`,
+lib/notifications.ts:2322:         title: reminder.title,
+lib/notifications.ts:2323:         body: reminder.description,
+lib/notifications.ts:2324:         ios: {
+lib/notifications.ts:2325:           sound: "default",
+lib/notifications.ts:2326:           foregroundPresentationOptions: {
+lib/notifications.ts:2327:             banner: true,
+lib/notifications.ts:2328:             list: true,
+lib/notifications.ts:2329:             badge: true,
+lib/notifications.ts:2330:             sound: true,
+lib/notifications.ts:2397:     );
+lib/notifications.ts:2398:   }
+lib/notifications.ts:2399: 
+lib/notifications.ts:2400:   // Soft heads-up before the main alarm (also clears stale pre-alerts when off).
+lib/notifications.ts:2401:   await schedulePreAlertForOccurrence({
+lib/notifications.ts:2402:     reminderId: reminder.id,
+lib/notifications.ts:2403:     title: reminder.title,
+lib/notifications.ts:2404:     mainTriggerTimestamp: triggerTimestamp,
+lib/notifications.ts:2405:     preReminderMinutes: parsePreReminderMinutes(reminder.preReminderMinutes),
+lib/notifications.ts:2406:     preAudioUrl: reminder.preAudioUrl,
+lib/notifications.ts:2407:     volume: reminder.volume,
+lib/notifications.ts:2408:     frequency: reminder.frequency,
+lib/notifications.ts:2409:     scheduleType: reminder.scheduleType,
+lib/notifications.ts:2410:   });
+118:  const [selectedDate, setSelectedDate] = useState(() => todayISO());
+119:  const [monthSheetVisible, setMonthSheetVisible] = useState(false);
+134:    const timer = setInterval(() => void tick(), NOW_TICK_MS);
+149:        setSelectedDate(todayISO());
+150:        setMonthSheetVisible(false);
+168:    setSelectedDate((prev) => addDaysISO(prev, delta));
+172:    setSelectedDate(dateISO);
+173:    setMonthSheetVisible(false);
+250:          onPress={() => setMonthSheetVisible(true)}
+263:        onSelectDate={setSelectedDate}
+274:        onClose={() => setMonthSheetVisible(false)}
+1679:      remindersListRef.current?.scrollToIndex({ index, viewPosition: 0.3 });
+1814:              remindersListRef.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
+1821:                if (retryIndex >= 0) remindersListRef.current?.scrollToIndex({ index: retryIndex, viewPosition: 0.3 });
+
+codex
+**1. Factual corrections**
+
+- The current Reminders list uses `ReminderListItem`, not `ReminderCard` ([app/index.tsx:1730](/C:/Dev/VR/app/index.tsx:1730)). `importedCardId` triggers scrolling; I found no visual highlight ([app/index.tsx:1673](/C:/Dev/VR/app/index.tsx:1673)).
+- `parsePrompt.test.ts` currently tests cache ordering and spoken-rule placement, not title length. Add title-rule assertions; there are no existing 2–4-word expectations to replace ([parsePrompt.test.ts:37](/C:/Dev/VR/__tests__/convex/parsePrompt.test.ts:37)).
+- `active=false` **resets Days to today and closes its month sheet after 400 ms**; it neither unmounts Days nor pauses its timer ([DaysPage.tsx:123](/C:/Dev/VR/components/days/DaysPage.tsx:123), [DaysPage.tsx:143](/C:/Dev/VR/components/days/DaysPage.tsx:143)).
+- The AlarmKit presentation is generated in [withAlarmKit.js:413](/C:/Dev/VR/plugins/withAlarmKit.js:413), beyond the standalone Swift files.
+
+**2. Answers**
+
+- **Q1:** Both Reminders and Days use a one-line title with `flexShrink: 1`; six words can truncate precisely the distinguishing detail ([ReminderListItem.tsx:123](/C:/Dev/VR/components/ReminderListItem.tsx:123), [ReminderListItem.tsx:223](/C:/Dev/VR/components/ReminderListItem.tsx:223)). The older `ReminderCard` also limits titles to one line.
+- Full-screen alarm titles have no explicit line limit ([AlarmOverlay.tsx:560](/C:/Dev/VR/components/AlarmOverlay.tsx:560), [app/alarm.tsx:420](/C:/Dev/VR/app/alarm.tsx:420)). The edit title is a single-line input with `maxLength={100}` ([EditReminderSheet.tsx:600](/C:/Dev/VR/components/EditReminderSheet.tsx:600)).
+- Notifications receive the full title ([notifications.ts:2322](/C:/Dev/VR/lib/notifications.ts:2322)). AlarmKit receives it unchanged through `LocalizedStringResource`; no custom Live Activity layout or title limit was found. Native alert visibility needs a device check; source inspection cannot guarantee six words fit.
+- **Q2:** No other 2–4-word dependency found. Helpers contain the separate spoken rule. Cache tests remain structurally valid; `parseUsage` records usage, not budgets. Both worker and shared fast parser use 2,000 output tokens—no reason to increase that for this change ([creationJobActions.ts:315](/C:/Dev/VR/convex/creationJobActions.ts:315), [actions.ts:1412](/C:/Dev/VR/convex/actions.ts:1412)).
+- **Q3:** Typed and voice paths share the prompt and downstream behavior; keep the same title rule ([actions.ts:1380](/C:/Dev/VR/convex/actions.ts:1380)).
+- **Q4:** Yes: pending takes render in the list header ([app/index.tsx:1842](/C:/Dev/VR/app/index.tsx:1842)). A is coherent, but also reveal that header—the retained list scroll position may hide it.
+- **Q5:** Browsed date/week context is lost on leaving; the component remains mounted. This is existing navigation behavior.
+- **Q6:** Yes: all active reminders appear, including future dates; overdue items come first, then next due time ([remindersMembership.ts:38](/C:/Dev/VR/lib/remindersMembership.ts:38)).
+- **Q7:** Yes: reconciliation uses the same importer, and delayed processing can finish after the user resumes browsing or opens a sheet ([app/index.tsx:1521](/C:/Dev/VR/app/index.tsx:1521)). “Started this session” alone is insufficient for B: the user can move on within that session. Prefer A without a second automatic switch on import.
+
+**3. Real edge cases**
+
+Fix 1:
+- **Preserve the action:** “Water bottle from the fridge” still omits what to do. Prefer “Take bottle out of fridge”; distinguish taking out from putting in.
+- **Exclude scheduling text, not meaningful temporal qualifiers:** retain “July electricity bill” or “Call about Friday’s flight.”
+- **Treat 3–6 words as a target:** avoid padding “Call mom” or natural short Arabic titles, and avoid dropping essential details to meet six.
+- **Small screens/large text/Arabic:** one-line rows can defeat the fix. Allow two title lines in the shared row and check representative English/Arabic examples.
+
+Fix 2:
+- **Previously scrolled list:** switch and reveal the pending header, otherwise A can still hide the take.
+- **Failed save or cancelled recording:** navigate only after successful pending-take persistence, beside overlay dismissal ([app/index.tsx:1284](/C:/Dev/VR/app/index.tsx:1284)).
+- **Slow processing, another recording, or relaunch:** landing must not pull the user back after they deliberately leave.
+- **Future reminder or multiple reminders:** pending header first, then existing scroll-to-first-created behavior is sensible; zero-created imports must retain their existing gate feedback.
+
+**4. Verdict**
+
+**Fix 1: approve with action preservation, a soft word target, and two-line rows. Fix 2: choose A after persistence, reveal the pending header, and leave import-time navigation alone.** Read-only inspection completed; no files modified and no Convex/EAS commands run.
+tokens used
+53,509
+**1. Factual corrections**
+
+- The current Reminders list uses `ReminderListItem`, not `ReminderCard` ([app/index.tsx:1730](/C:/Dev/VR/app/index.tsx:1730)). `importedCardId` triggers scrolling; I found no visual highlight ([app/index.tsx:1673](/C:/Dev/VR/app/index.tsx:1673)).
+- `parsePrompt.test.ts` currently tests cache ordering and spoken-rule placement, not title length. Add title-rule assertions; there are no existing 2–4-word expectations to replace ([parsePrompt.test.ts:37](/C:/Dev/VR/__tests__/convex/parsePrompt.test.ts:37)).
+- `active=false` **resets Days to today and closes its month sheet after 400 ms**; it neither unmounts Days nor pauses its timer ([DaysPage.tsx:123](/C:/Dev/VR/components/days/DaysPage.tsx:123), [DaysPage.tsx:143](/C:/Dev/VR/components/days/DaysPage.tsx:143)).
+- The AlarmKit presentation is generated in [withAlarmKit.js:413](/C:/Dev/VR/plugins/withAlarmKit.js:413), beyond the standalone Swift files.
+
+**2. Answers**
+
+- **Q1:** Both Reminders and Days use a one-line title with `flexShrink: 1`; six words can truncate precisely the distinguishing detail ([ReminderListItem.tsx:123](/C:/Dev/VR/components/ReminderListItem.tsx:123), [ReminderListItem.tsx:223](/C:/Dev/VR/components/ReminderListItem.tsx:223)). The older `ReminderCard` also limits titles to one line.
+- Full-screen alarm titles have no explicit line limit ([AlarmOverlay.tsx:560](/C:/Dev/VR/components/AlarmOverlay.tsx:560), [app/alarm.tsx:420](/C:/Dev/VR/app/alarm.tsx:420)). The edit title is a single-line input with `maxLength={100}` ([EditReminderSheet.tsx:600](/C:/Dev/VR/components/EditReminderSheet.tsx:600)).
+- Notifications receive the full title ([notifications.ts:2322](/C:/Dev/VR/lib/notifications.ts:2322)). AlarmKit receives it unchanged through `LocalizedStringResource`; no custom Live Activity layout or title limit was found. Native alert visibility needs a device check; source inspection cannot guarantee six words fit.
+- **Q2:** No other 2–4-word dependency found. Helpers contain the separate spoken rule. Cache tests remain structurally valid; `parseUsage` records usage, not budgets. Both worker and shared fast parser use 2,000 output tokens—no reason to increase that for this change ([creationJobActions.ts:315](/C:/Dev/VR/convex/creationJobActions.ts:315), [actions.ts:1412](/C:/Dev/VR/convex/actions.ts:1412)).
+- **Q3:** Typed and voice paths share the prompt and downstream behavior; keep the same title rule ([actions.ts:1380](/C:/Dev/VR/convex/actions.ts:1380)).
+- **Q4:** Yes: pending takes render in the list header ([app/index.tsx:1842](/C:/Dev/VR/app/index.tsx:1842)). A is coherent, but also reveal that header—the retained list scroll position may hide it.
+- **Q5:** Browsed date/week context is lost on leaving; the component remains mounted. This is existing navigation behavior.
+- **Q6:** Yes: all active reminders appear, including future dates; overdue items come first, then next due time ([remindersMembership.ts:38](/C:/Dev/VR/lib/remindersMembership.ts:38)).
+- **Q7:** Yes: reconciliation uses the same importer, and delayed processing can finish after the user resumes browsing or opens a sheet ([app/index.tsx:1521](/C:/Dev/VR/app/index.tsx:1521)). “Started this session” alone is insufficient for B: the user can move on within that session. Prefer A without a second automatic switch on import.
+
+**3. Real edge cases**
+
+Fix 1:
+- **Preserve the action:** “Water bottle from the fridge” still omits what to do. Prefer “Take bottle out of fridge”; distinguish taking out from putting in.
+- **Exclude scheduling text, not meaningful temporal qualifiers:** retain “July electricity bill” or “Call about Friday’s flight.”
+- **Treat 3–6 words as a target:** avoid padding “Call mom” or natural short Arabic titles, and avoid dropping essential details to meet six.
+- **Small screens/large text/Arabic:** one-line rows can defeat the fix. Allow two title lines in the shared row and check representative English/Arabic examples.
+
+Fix 2:
+- **Previously scrolled list:** switch and reveal the pending header, otherwise A can still hide the take.
+- **Failed save or cancelled recording:** navigate only after successful pending-take persistence, beside overlay dismissal ([app/index.tsx:1284](/C:/Dev/VR/app/index.tsx:1284)).
+- **Slow processing, another recording, or relaunch:** landing must not pull the user back after they deliberately leave.
+- **Future reminder or multiple reminders:** pending header first, then existing scroll-to-first-created behavior is sensible; zero-created imports must retain their existing gate feedback.
+
+**4. Verdict**
+
+**Fix 1: approve with action preservation, a soft word target, and two-line rows. Fix 2: choose A after persistence, reveal the pending header, and leave import-time navigation alone.** Read-only inspection completed; no files modified and no Convex/EAS commands run.

@@ -1,0 +1,38 @@
+**(1) Factual corrections**
+
+- **Job context is temporary.** Acknowledged creation jobs become immediately eligible for garbage collection; unacknowledged committed jobs and failed jobs expire after a week. Plan 2 cannot reliably fetch an existing reminder’s transcript later. [convex/creationJobs.ts:818](C:/Dev/VR/convex/creationJobs.ts:818), [convex/creationJobs.ts:844](C:/Dev/VR/convex/creationJobs.ts:844).
+- **Current reminder ≠ original parse.** The edit sheet initializes from the current reminder; previous saved edits have already replaced earlier values. Preserve original output explicitly if that comparison matters. Typed/legacy reminders can lack `creationId`. [EditReminderSheet.tsx:137](C:/Dev/VR/components/EditReminderSheet.tsx:137), [lib/store.ts:34](C:/Dev/VR/lib/store.ts:34).
+- **Automatic transcript attachment changes the existing privacy boundary.** Production creation breadcrumbs deliberately exclude user content; AI consent describes processing voice *to create reminders*. The privacy policy also says email is never requested. [lib/sentry.ts:28](C:/Dev/VR/lib/sentry.ts:28), [lib/aiConsent.ts:21](C:/Dev/VR/lib/aiConsent.ts:21), [privacy.html:22](C:/Dev/VR/legal-site/privacy.html:22).
+- **Offline snags do not necessarily produce failed cards.** Opening recording while disconnected returns early with the banner. Settings feedback must remain usable then; consider a report link on that banner. [app/index.tsx:413](C:/Dev/VR/app/index.tsx:413).
+- **Cloud STT is not inherently a failure.** It is an intentional fallback, including when device transcription is unavailable. Alerting on every fallback creates noise. [lib/deviceStt.ts:123](C:/Dev/VR/lib/deviceStt.ts:123), [lib/deviceStt.ts:232](C:/Dev/VR/lib/deviceStt.ts:232).
+
+**(2) Q1–Q6**
+
+- **Q1 — Privacy:** Add a visible notice beside Send: “Sends your transcript, reminder details and any edits to Abdul to investigate.” Let users exclude those details. Existing AI consent does not clearly authorize this support use. Keep automatic Sentry alerts content-free; send webhook notifications containing a report ID/link, keeping transcripts in the feedback record.
+  Update the policy for feedback, optional email, recipients and retention. Review labels for Email Address, Customer Support/Other User Content, Device ID and diagnostics; device-linked reports are not anonymous merely because accounts are absent. Apple’s optional-feedback disclosure exception has several conditions—including displaying a name/account name—so this anonymous form should not assume exemption. No ATT is indicated by the described support use, absent advertising linkage/data-broker sharing. Actual submitted labels weren’t available to inspect. [Apple privacy details](https://developer.apple.com/app-store/app-privacy-details/).
+  A short Review note explaining entry points, attachments and optional email is useful; this does not call for a special approval process. [Review guidelines](https://developer.apple.com/app-store/review/guidelines/).
+
+- **Q2 — Offline:** Sentry RN supports native offline event storage, including message events through native transport; using that for best-effort automatic diagnostics is reasonable. It is not guaranteed delivery or a background-send SLA. I could verify the SDK’s documented offline support, but not this installed 7.2.0 binary’s kill/relaunch behavior; verify that on a release device before relying on it. [Official SDK](https://github.com/getsentry/sentry-react-native).
+  Use a **separate AsyncStorage feedback outbox**: feedback must survive take retry, deletion and reconciliation. Persist first; show “Saved on this phone—will send when Remi is open and connected.” Show “Sent” only after backend acknowledgement. Flush immediately, on foreground/reconnect, and with backoff while active; serialize outbox writes and flushes.
+
+- **Q3 — Surfaces:** Keep all three as entrances to one small composer. Users noticing a wrong reminder will open that reminder; users facing a failed take will stay at its card; Settings covers everything else. Cut the rotating Settings box in favor of a stable “Send feedback” row. “Report a problem” is clearer than “Tell me what happened,” which can sound like an explanation button.
+
+- **Q4 — Replies:** Later. Offer optional reply email in the shared composer now and answer manually—no email infrastructure required. A founder’s plain-text support reply is ordinary content; my reading is that Apple’s downloaded-code restriction does not prohibit it. [Guideline 2.5.2](https://developer.apple.com/app-store/review/guidelines/).
+  When added, make replies dismissible and persist their read state. “Fixed” must mean fixed for the version actually running; otherwise say an update is required.
+
+- **Q5 — Context:** Essential: expected versus actual behavior, report timestamp, creation/reminder ID when available, failure stage/code, app/build/update identity and iOS version. For parse problems: consented transcript, original output if retained, current values and unsaved edits as separately named snapshots.
+  Add recording-time timezone/local date/time, STT source/locale and job generation/attempt: these distinguish schedule interpretation and retry problems. Device ID helps correlation; it needn’t appear in phone alerts. Structured stage timings are useful for slowness; raw perf lines are usually noise. Missing context must never block sending.
+
+- **Q6 — Prompts:** Negative prompts can bias the feedback; don’t rotate them while someone is composing. Use contextual prompts: “What were you trying to do?” / “What happened instead?” / “What would make Remi easier to use?”
+
+**(3) Five real edge cases**
+
+1. **Offline save fails or app is killed:** Never confirm queued feedback before persistence succeeds. Keep the draft and offer retry on storage failure; uninstalling removes unsent reports.
+2. **Backend accepts, acknowledgement disappears:** Retry the same report ID; deduplicate server-side. Separately track webhook delivery and retry failures—scheduled Convex actions are not automatically retried. A webhook timeout can still cause duplicate notifications; include the report ID. [Convex scheduling](https://docs.convex.dev/scheduling/scheduled-functions).
+3. **Context changes before delivery:** Snapshot when reporting. Retrying can replace transcript/error state; garbage collection can remove it. For future parse-quality reports, retain a small original snapshot locally at import, with bounded retention; accept unavailable context for older reminders.
+4. **Reporting is mistaken for saving:** Sending from the edit sheet must preserve the draft and clearly say changes still require Save. Do not silently save or discard edits.
+5. **Identity and alerts leak or overwhelm:** Current job reads trust supplied `deviceId`; it is effectively a bearer identifier, not authenticated ownership. Don’t distribute it in webhook alerts or expose feedback rows through an equally loose read API. Bound submission size/rate; group automatic alerts by failure type and suppress recovered fallbacks. [convex/creationJobs.ts:326](C:/Dev/VR/convex/creationJobs.ts:326).
+
+**(4) Verdict**
+
+Proceed with three entrances, one composer, a separate durable outbox, optional email and content-free automatic alerts. Defer in-app replies and rotating prompts. Resolve context retention and truthful delivery wording before implementation; promise prompt attention, not a one-minute delivery or 15-minute fix. No files changed; no Convex/EAS commands run.

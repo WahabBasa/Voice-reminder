@@ -1,0 +1,1455 @@
+2026-09-09T18:41:16.576778Z ERROR codex_core::session::session: failed to load skill C:\Users\AtheA\.agents\skills\ptc-microsoft-todo\SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Dev\VR
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a08779-5e7c-73b2-be9b-067b6c3395f9
+--------
+user
+You are grilling a plan from Claude (the architect on this repo) for a small feature. Keep it short: this is a quick sanity round, not a deep review. Read-only — do not modify files, do not run convex or eas. Respond in under 60 lines: (1) anything factually wrong about the codebase or iOS behavior in the plan, with file:line evidence; (2) the 2-4 edge cases that WILL actually happen for a solo-dev reminder app (skip exotic ones); (3) a verdict: agree / agree with these changes. No essays.
+
+## Context (verified by Claude)
+
+- The line the alarm speaks is the reminder's `description` field. `convex/actions.ts:1062-1066` and `:1270-1274` — `ttsText = plan.description` / `normalizedDescription`, "what was stored is what is spoken".
+- `components/EditReminderSheet.tsx` (opened by tapping a card, `app/index.tsx:1461-1478`) already has a `description` text input. On save (`:286-420`) it updates the local store, then `cancelReminder` + `scheduleReminder` reusing the OLD `reminder.audioUrl` / `preAudioUrl`, then `updateConvexReminder` with text + schedule fields. So editing the description changes the card text but the alarm keeps speaking the old line.
+- Backend action `regenerateReminderAudio` exists at `convex/actions.ts:1308-1362`: takes `{reminderId, deviceId, soundText}`, synthesizes mp3 + AlarmKit wav via `synthesizeAndStoreLineTts`, swaps storage ids via `internal.reminders.updateAudio` / `setAudio`, returns `{audioUrl, soundText}` — but NOT the new `wavUrl`. Nothing in the app calls it.
+- Local audio cache: `lib/notifications.ts:1140-1170` — mp3 downloaded to a path keyed by reminderId, and `downloadAudio` short-circuits with "Audio already exists locally" if the file exists. `:1190-1201` has deleteAsync helpers for the local mp3. AlarmKit sound: `ensureAlarmSound(reminderId, wavUrl)` at `:99` / `:1458` — check how it caches the wav (Library/Sounds? keyed by reminderId?) and whether a stale wav would survive a regeneration.
+- Reactive hydration: `lib/audioHydration.ts:57 hydrateReminderAudio` watches the Convex row and downloads when `audioStatus` flips to "ready"; it is what creation uses. Store row fields: `audioUrl`, `wavUrl`, `audioStatus`, `preAudioUrl` (`lib/store.ts:40-100`).
+- Pre-alert heads-up line (`preDescription` / `preAudioUrl`) is a separate line; out of scope, leave it.
+
+## Plan
+
+1. **Backend**: `regenerateReminderAudio` also returns `wavUrl` (`ctx.storage.getUrl(newWavStorageId)` when present). No schema change.
+2. **Edit sheet save**: if `description.trim() !== reminder.description` and the reminder has a `convexId`:
+   a. Set a `regenerating` UI state (Save button reads "Updating voice…", disabled).
+   b. `await regenerateReminderAudio({ reminderId: convexId, deviceId, soundText: description })`.
+   c. Delete the local cached mp3 (and wav) for this reminderId so the next download is not short-circuited; then `cancelReminder` + `scheduleReminder` with the NEW `audioUrl` / `wavUrl`. Update the store row with the new URLs.
+   d. On failure (offline, TTS error): still save the text + schedule edit and reschedule with the OLD audio; toast "Couldn't update the voice — it will still say the old line". No retry queue.
+3. Unchanged description → existing path, untouched.
+4. Tests: jest unit for the save branch (regenerate called only when description changed; failure path keeps old audio), and a convex test asserting `wavUrl` in the return.
+
+## Specific questions
+
+- Q1: Is awaiting the action inline (TTS ~2-5 s) the right call vs. flipping `audioStatus: "pending"` and letting `hydrateReminderAudio` pick it up reactively like creation does? Claude leans inline because the sheet is modal and the user just typed the new line; the reactive path would need the sheet to survive closing.
+- Q2: Any AlarmKit / iOS gotcha with replacing the wav for an already-scheduled alarm (cached sound file by name, alarm needing re-creation, background download)?
+- Q3: Anything in `scheduleReminder`'s ring planning that keys off `audioUrl` identity (e.g. skipping a download when the URL is unchanged) that would break with the new URL?
+
+2026-09-09T18:41:17.574775Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\"error\":{\"message\":\"Invalid API key: ak_**mXj4\",\"code\":801,\"status\":401,\"request_id\":\"465079b4-faeb-4c93-bd56-0fdac25d741b\"}}")
+codex
+I’ll use the grilling skill for a quick read-only sanity check of the save, hydration, and audio-cache paths. I won’t run Convex or EAS.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content C:/Users/AtheA/.agents/skills/grilling/SKILL.md' in C:\Dev\VR
+ succeeded in 1098ms:
+---
+name: grilling
+description: Interview the user relentlessly about a plan or design. Use when the user wants to stress-test a plan before building, or uses any 'grill' trigger phrases.
+---
+
+Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+
+Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+
+If a question can be answered by exploring the codebase, explore the codebase instead.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "regenerateReminderAudio|ensureAlarmSound|downloadAudio|hydrateReminderAudio|handleSave|updateConvexReminder|scheduleReminder|deleteAudio" components/EditReminderSheet.tsx lib/notifications.ts lib/audioHydration.ts convex/actions.ts; rg --files -g AGENTS.md' in C:\Dev\VR
+ exited 1 in 2401ms:
+lib/audioHydration.ts:57:export async function hydrateReminderAudio(params: {
+components/EditReminderSheet.tsx:40:import { cancelReminder, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
+components/EditReminderSheet.tsx:118:    const updateConvexReminder = useMutation(api.reminders.update);
+components/EditReminderSheet.tsx:274:    const handleSave = useCallback(async () => {
+components/EditReminderSheet.tsx:336:                    const { triggerTimestamp } = await scheduleReminder({
+components/EditReminderSheet.tsx:393:                updateConvexReminder({
+components/EditReminderSheet.tsx:422:    }, [reminder, title, emoji, description, draft, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
+components/EditReminderSheet.tsx:675:                            onPress={handleSave}
+convex/actions.ts:1308:export const regenerateReminderAudio = action({
+lib/notifications.ts:99:  ensureAlarmSound?: (reminderId: string, wavUrl?: string | null) => Promise<string | null>;
+lib/notifications.ts:1458:async function ensureAlarmSoundSafe(
+lib/notifications.ts:1462:  if (!alarmSounds?.ensureAlarmSound) return null;
+lib/notifications.ts:1464:    return (await alarmSounds.ensureAlarmSound(reminderId, wavUrl ?? null)) ?? null;
+lib/notifications.ts:1694:    const soundName = await ensureAlarmSoundSafe(reminder.id, hydrated.wavUrl);
+lib/notifications.ts:1755:      : await ensureAlarmSoundSafe(reminder.id, withStoredWavUrls(reminder).wavUrl);
+lib/notifications.ts:1823:  const soundName = await ensureAlarmSoundSafe(reminderId, reminder.wavUrl);
+lib/notifications.ts:1892:    await scheduleReminder(toReminderNotification(reminder), {
+lib/notifications.ts:2116:export async function scheduleReminder(
+lib/notifications.ts:2729:  // (scheduleReminder also schedules its pre-alert).
+lib/notifications.ts:2731:    const { triggerTimestamp } = await scheduleReminder(toReminderNotification(reminder), {
+lib/notifications.ts:3620:        const { triggerTimestamp } = await scheduleReminder(toReminderNotification(reminder));
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$files = @(@('"'components/EditReminderSheet.tsx',270,425),@('convex/actions.ts',1300,1370),@('lib/audioHydration.ts',1,240),@('lib/notifications.ts',1110,1210)); foreach ("'$f in $files) { $n=0; Get-Content $f[0] | ForEach-Object { $n++; if($n -ge $f[1] -and $n -le $f[2]) { '"'{0}:{1}: {2}' -f "'$f[0],$n,$_ } } }; rg -n "ensureAlarmSound|Library/Sounds|wavUrl|removeAlarmSound|deleteAlarmSound" modules lib/audioHydration.ts app/index.tsx | Select-Object -First 100' in C:\Dev\VR
+ exited 1 in 1194ms:
+components/EditReminderSheet.tsx:270:         },
+components/EditReminderSheet.tsx:271:         [draft.date, patchDraft]
+components/EditReminderSheet.tsx:272:     );
+components/EditReminderSheet.tsx:273: 
+components/EditReminderSheet.tsx:274:     const handleSave = useCallback(async () => {
+components/EditReminderSheet.tsx:275:         if (!title.trim()) {
+components/EditReminderSheet.tsx:276:             Alert.alert("Error", "Please enter a reminder title");
+components/EditReminderSheet.tsx:277:             return;
+components/EditReminderSheet.tsx:278:         }
+components/EditReminderSheet.tsx:279: 
+components/EditReminderSheet.tsx:280:         // One place turns the draft into a schedule: the grid plus the legacy
+components/EditReminderSheet.tsx:281:         // columns that project out of it (never one without the other).
+components/EditReminderSheet.tsx:282:         const save = saveShapeFromDraft(draft);
+components/EditReminderSheet.tsx:283: 
+components/EditReminderSheet.tsx:284:         // Turning a reminder into an interval one is a purchase, not an edit.
+components/EditReminderSheet.tsx:285:         // The sheet stays open behind the paywall so the draft survives the trip.
+components/EditReminderSheet.tsx:286:         if (!startedOnInterval && isPremiumSchedule(save.schedule)) {
+components/EditReminderSheet.tsx:287:             const { allowed } = await checkCanUsePremiumSchedule();
+components/EditReminderSheet.tsx:288:             if (!allowed) {
+components/EditReminderSheet.tsx:289:                 perfLog(traceId, "overlay.edit", "save_blocked_premium_schedule");
+components/EditReminderSheet.tsx:290:                 router.push({ pathname: "/paywall", params: { context: "interval" } });
+components/EditReminderSheet.tsx:291:                 return;
+components/EditReminderSheet.tsx:292:             }
+components/EditReminderSheet.tsx:293:         }
+components/EditReminderSheet.tsx:294: 
+components/EditReminderSheet.tsx:295:         const updatedReminder: Reminder = {
+components/EditReminderSheet.tsx:296:             ...reminder,
+components/EditReminderSheet.tsx:297:             title: title.trim(),
+components/EditReminderSheet.tsx:298:             emoji,
+components/EditReminderSheet.tsx:299:             description,
+components/EditReminderSheet.tsx:300:             time: save.time,
+components/EditReminderSheet.tsx:301:             date: save.date,
+components/EditReminderSheet.tsx:302:             frequency: save.frequency,
+components/EditReminderSheet.tsx:303:             days: save.days,
+components/EditReminderSheet.tsx:304:             schedule: save.schedule,
+components/EditReminderSheet.tsx:305:             preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
+components/EditReminderSheet.tsx:306:             persistent: persistent || undefined,
+components/EditReminderSheet.tsx:307:             volume,
+components/EditReminderSheet.tsx:308:             volumeStyle,
+components/EditReminderSheet.tsx:309: 
+components/EditReminderSheet.tsx:310:             intervalMs: save.intervalMs,
+components/EditReminderSheet.tsx:311:             anchorAt: save.anchorAt,
+components/EditReminderSheet.tsx:312:             intervalDays: save.intervalDays,
+components/EditReminderSheet.tsx:313:             schemaVersion: CURRENT_SCHEMA_VERSION,
+components/EditReminderSheet.tsx:314: 
+components/EditReminderSheet.tsx:315:             // Canonical schedule fields
+components/EditReminderSheet.tsx:316:             scheduleType: save.scheduleType,
+components/EditReminderSheet.tsx:317:             onceAt: save.onceAt,
+components/EditReminderSheet.tsx:318:             rrule: save.rrule,
+components/EditReminderSheet.tsx:319:             dtstart: save.dtstart,
+components/EditReminderSheet.tsx:320:             tzid: save.tzid,
+components/EditReminderSheet.tsx:321:             until: save.until,
+components/EditReminderSheet.tsx:322:         };
+components/EditReminderSheet.tsx:323: 
+components/EditReminderSheet.tsx:324:         try {
+components/EditReminderSheet.tsx:325:             // Update via Zustand store (handles state + persistence)
+components/EditReminderSheet.tsx:326:             await storeUpdateReminder(updatedReminder);
+components/EditReminderSheet.tsx:327: 
+components/EditReminderSheet.tsx:328:             const reminderId = reminder.id;
+components/EditReminderSheet.tsx:329:             const convexId = reminder.convexId;
+components/EditReminderSheet.tsx:330:             const audioUrl = reminder.audioUrl;
+components/EditReminderSheet.tsx:331: 
+components/EditReminderSheet.tsx:332:             // Cancel + reschedule BEFORE closing (onClose unmounts the component)
+components/EditReminderSheet.tsx:333:             if (audioUrl) {
+components/EditReminderSheet.tsx:334:                 try {
+components/EditReminderSheet.tsx:335:                     await cancelReminder(reminderId);
+components/EditReminderSheet.tsx:336:                     const { triggerTimestamp } = await scheduleReminder({
+components/EditReminderSheet.tsx:337:                         id: reminderId,
+components/EditReminderSheet.tsx:338:                         title: updatedReminder.title,
+components/EditReminderSheet.tsx:339:                         description,
+components/EditReminderSheet.tsx:340:                         time: save.time,
+components/EditReminderSheet.tsx:341:                         date: save.date,
+components/EditReminderSheet.tsx:342:                         frequency: save.frequency,
+components/EditReminderSheet.tsx:343:                         days: save.days,
+components/EditReminderSheet.tsx:344:                         // Authoritative: the execution layer plans every ring of
+components/EditReminderSheet.tsx:345:                         // the day off this, not off `time` (OLD-98).
+components/EditReminderSheet.tsx:346:                         schedule: save.schedule,
+components/EditReminderSheet.tsx:347:                         audioUrl,
+components/EditReminderSheet.tsx:348:                         preReminderMinutes,
+components/EditReminderSheet.tsx:349:                         preAudioUrl: reminder.preAudioUrl,
+components/EditReminderSheet.tsx:350:                         urgency: reminder.urgency,
+components/EditReminderSheet.tsx:351:                         persistent,
+components/EditReminderSheet.tsx:352:                         volume,
+components/EditReminderSheet.tsx:353:                         volumeStyle,
+components/EditReminderSheet.tsx:354: 
+components/EditReminderSheet.tsx:355:                         intervalMs: save.intervalMs,
+components/EditReminderSheet.tsx:356:                         anchorAt: save.anchorAt,
+components/EditReminderSheet.tsx:357:                         intervalDays: save.intervalDays,
+components/EditReminderSheet.tsx:358:                         scheduleType: save.scheduleType,
+components/EditReminderSheet.tsx:359:                         onceAt: save.onceAt,
+components/EditReminderSheet.tsx:360:                         rrule: save.rrule,
+components/EditReminderSheet.tsx:361:                         dtstart: save.dtstart,
+components/EditReminderSheet.tsx:362:                         tzid: save.tzid,
+components/EditReminderSheet.tsx:363:                         until: save.until,
+components/EditReminderSheet.tsx:364:                     });
+components/EditReminderSheet.tsx:365: 
+components/EditReminderSheet.tsx:366:                     const current = useReminderStore.getState().getReminderById(reminderId);
+components/EditReminderSheet.tsx:367:                     if (current) {
+components/EditReminderSheet.tsx:368:                         await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
+components/EditReminderSheet.tsx:369:                     }
+components/EditReminderSheet.tsx:370:                 } catch (e) {
+components/EditReminderSheet.tsx:371:                     console.log("[VR] Failed to reschedule reminder:", e);
+components/EditReminderSheet.tsx:372:                     if ((e as any)?.name === "ExactAlarmPermissionError") {
+components/EditReminderSheet.tsx:373:                         Alert.alert(
+components/EditReminderSheet.tsx:374:                             "Enable Alarms & reminders",
+components/EditReminderSheet.tsx:375:                             "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+components/EditReminderSheet.tsx:376:                             [
+components/EditReminderSheet.tsx:377:                                 { text: "Open permission", onPress: () => openAlarmPermissionSettingsSafe() },
+components/EditReminderSheet.tsx:378:                                 { text: "OK" },
+components/EditReminderSheet.tsx:379:                             ]
+components/EditReminderSheet.tsx:380:                         );
+components/EditReminderSheet.tsx:381:                     }
+components/EditReminderSheet.tsx:382:                 }
+components/EditReminderSheet.tsx:383:             }
+components/EditReminderSheet.tsx:384: 
+components/EditReminderSheet.tsx:385:             // Now safe to close
+components/EditReminderSheet.tsx:386:             onSave(updatedReminder);
+components/EditReminderSheet.tsx:387:             onClose();
+components/EditReminderSheet.tsx:388: 
+components/EditReminderSheet.tsx:389:             // Convex sync can be deferred â€” it doesn't affect local scheduling.
+components/EditReminderSheet.tsx:390:             // Every schedule field goes back up (OLD-97 widened the mutation):
+components/EditReminderSheet.tsx:391:             // an edit Convex cannot express is one the next sync silently reverts.
+components/EditReminderSheet.tsx:392:             if (convexId) {
+components/EditReminderSheet.tsx:393:                 updateConvexReminder({
+components/EditReminderSheet.tsx:394:                     id: convexId as any,
+components/EditReminderSheet.tsx:395:                     deviceId: await getDeviceId(),
+components/EditReminderSheet.tsx:396:                     title: updatedReminder.title,
+components/EditReminderSheet.tsx:397:                     description,
+components/EditReminderSheet.tsx:398:                     time: save.time,
+components/EditReminderSheet.tsx:399:                     date: save.date,
+components/EditReminderSheet.tsx:400:                     frequency: save.frequency,
+components/EditReminderSheet.tsx:401:                     days: save.days,
+components/EditReminderSheet.tsx:402:                     schedule: save.schedule,
+components/EditReminderSheet.tsx:403:                     scheduleType: save.scheduleType,
+components/EditReminderSheet.tsx:404:                     onceAt: save.onceAt,
+components/EditReminderSheet.tsx:405:                     rrule: save.rrule,
+components/EditReminderSheet.tsx:406:                     dtstart: save.dtstart,
+components/EditReminderSheet.tsx:407:                     tzid: save.tzid,
+components/EditReminderSheet.tsx:408:                     until: save.until,
+components/EditReminderSheet.tsx:409:                     intervalMs: save.intervalMs,
+components/EditReminderSheet.tsx:410:                     anchorAt: save.anchorAt,
+components/EditReminderSheet.tsx:411:                     intervalDays: save.intervalDays,
+components/EditReminderSheet.tsx:412:                     preReminderMinutes,
+components/EditReminderSheet.tsx:413:                     persistent,
+components/EditReminderSheet.tsx:414:                 }).catch((e) => {
+components/EditReminderSheet.tsx:415:                     console.log("[VR] Failed to update Convex reminder:", e);
+components/EditReminderSheet.tsx:416:                 });
+components/EditReminderSheet.tsx:417:             }
+components/EditReminderSheet.tsx:418:         } catch (error) {
+components/EditReminderSheet.tsx:419:             console.error("[VR] Save error:", error);
+components/EditReminderSheet.tsx:420:             Alert.alert("Error", "Failed to save reminder");
+components/EditReminderSheet.tsx:421:         }
+components/EditReminderSheet.tsx:422:     }, [reminder, title, emoji, description, draft, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
+components/EditReminderSheet.tsx:423: 
+components/EditReminderSheet.tsx:424:     const executeDelete = async () => {
+components/EditReminderSheet.tsx:425:         const reminderId = reminder.id;
+convex/actions.ts:1300:       frequency,
+convex/actions.ts:1301:       days,
+convex/actions.ts:1302:       schedule,
+convex/actions.ts:1303:       audioUrl,
+convex/actions.ts:1304:     };
+convex/actions.ts:1305:   },
+convex/actions.ts:1306: });
+convex/actions.ts:1307: 
+convex/actions.ts:1308: export const regenerateReminderAudio = action({
+convex/actions.ts:1309:   args: {
+convex/actions.ts:1310:     reminderId: v.id("reminders"),
+convex/actions.ts:1311:     // Owning install (OLD-74) â€” another device's reminder is not found here.
+convex/actions.ts:1312:     deviceId: v.string(),
+convex/actions.ts:1313:     soundText: v.string(),
+convex/actions.ts:1314:   },
+convex/actions.ts:1315:   handler: async (ctx, args) => {
+convex/actions.ts:1316:     // 1. Get the existing reminder
+convex/actions.ts:1317:     const reminder = await ctx.runQuery(internal.reminders.getInternal, {
+convex/actions.ts:1318:       id: args.reminderId,
+convex/actions.ts:1319:     });
+convex/actions.ts:1320: 
+convex/actions.ts:1321:     // A reminder owned by another device is indistinguishable from a missing
+convex/actions.ts:1322:     // one; a legacy row (no deviceId) is still regenerable by whoever holds it.
+convex/actions.ts:1323:     if (!reminder || (reminder.deviceId !== undefined && reminder.deviceId !== args.deviceId)) {
+convex/actions.ts:1324:       throw new Error("Reminder not found");
+convex/actions.ts:1325:     }
+convex/actions.ts:1326: 
+convex/actions.ts:1327:     // 2. Generate + store new TTS audio (mp3 + alarm-ready wav when available).
+convex/actions.ts:1328:     const { audioStorageId: newStorageId, wavStorageId: newWavStorageId } =
+convex/actions.ts:1329:       await synthesizeAndStoreLineTts(ctx, {
+convex/actions.ts:1330:         text: args.soundText,
+convex/actions.ts:1331:         title: reminder.title,
+convex/actions.ts:1332:       });
+convex/actions.ts:1333: 
+convex/actions.ts:1334:     // 4. Delete old audio and update reminder
+convex/actions.ts:1335:     if (reminder.audioStorageId) {
+convex/actions.ts:1336:       await ctx.runMutation(internal.reminders.updateAudio, {
+convex/actions.ts:1337:         id: args.reminderId,
+convex/actions.ts:1338:         oldStorageId: reminder.audioStorageId,
+convex/actions.ts:1339:         newStorageId,
+convex/actions.ts:1340:         oldWavStorageId: reminder.wavStorageId,
+convex/actions.ts:1341:         newWavStorageId,
+convex/actions.ts:1342:       });
+convex/actions.ts:1343:     } else {
+convex/actions.ts:1344:       // No existing audio, just update with new storage ID
+convex/actions.ts:1345:       await ctx.runMutation(internal.reminders.setAudio, {
+convex/actions.ts:1346:         id: args.reminderId,
+convex/actions.ts:1347:         audioStorageId: newStorageId,
+convex/actions.ts:1348:         wavStorageId: newWavStorageId,
+convex/actions.ts:1349:         audioStatus: "ready",
+convex/actions.ts:1350:         audioUpdatedAt: Date.now(),
+convex/actions.ts:1351:       });
+convex/actions.ts:1352:     }
+convex/actions.ts:1353: 
+convex/actions.ts:1354:     // 5. Get new audio URL
+convex/actions.ts:1355:     const audioUrl = await ctx.storage.getUrl(newStorageId);
+convex/actions.ts:1356: 
+convex/actions.ts:1357:     return {
+convex/actions.ts:1358:       audioUrl,
+convex/actions.ts:1359:       soundText: args.soundText,
+convex/actions.ts:1360:     };
+convex/actions.ts:1361:   },
+convex/actions.ts:1362: });
+convex/actions.ts:1363: 
+convex/actions.ts:1364: // =================== FAST VOICE REMINDER (no base64, TTS in background) ===================
+convex/actions.ts:1365: 
+convex/actions.ts:1366: /** The slice of an action ctx a deferred-audio take needs. */
+convex/actions.ts:1367: type FastTakeCtx = {
+convex/actions.ts:1368:   runMutation: (reference: any, args: any) => Promise<any>;
+convex/actions.ts:1369:   scheduler: { runAfter: (delayMs: number, reference: any, args: any) => Promise<any> };
+convex/actions.ts:1370: };
+lib/audioHydration.ts:1: import { api } from "../convex/_generated/api";
+lib/audioHydration.ts:2: import type { ConvexReactClient } from "convex/react";
+lib/audioHydration.ts:3: import { downloadPreReminderAudio, downloadReminderAudio, refreshNotificationWithAudio } from "./notifications";
+lib/audioHydration.ts:4: import { getDeviceId } from "./deviceId";
+lib/audioHydration.ts:5: 
+lib/audioHydration.ts:6: // Watchdog budgets. They were poll-attempt counts (30 and 40 attempts at one
+lib/audioHydration.ts:7: // second each) before this went reactive; the wall-clock they bought is kept
+lib/audioHydration.ts:8: // exactly, now as timeouts rather than loop counters.
+lib/audioHydration.ts:9: const BASE_TIMEOUT_MS = 30_000;
+lib/audioHydration.ts:10: // Fresh budget granted the moment the base line lands with the pre-alert still
+lib/audioHydration.ts:11: // coming (OLD-107), so a slow base cannot starve the second phase of its
+lib/audioHydration.ts:12: // window. It used to have to cover a heads-up line plus three replay variants
+lib/audioHydration.ts:13: // synthesized back to back against a two-request account ceiling (11s
+lib/audioHydration.ts:14: // measured); OLD-108 cut that to the heads-up alone, so the budget is now
+lib/audioHydration.ts:15: // generous rather than tight â€” which is the right side to be wrong on.
+lib/audioHydration.ts:16: const EXTRAS_TIMEOUT_MS = 40_000;
+lib/audioHydration.ts:17: // Only ever used to retry a failed *download*. The row itself arrives by push
+lib/audioHydration.ts:18: // now, so nothing here polls the server.
+lib/audioHydration.ts:19: const DOWNLOAD_RETRY_MS = 1000;
+lib/audioHydration.ts:20: const inFlight = new Map<string, Promise<void>>();
+lib/audioHydration.ts:21: 
+lib/audioHydration.ts:22: export type AudioExtrasStatus = 'pending' | 'ready' | 'failed';
+lib/audioHydration.ts:23: 
+lib/audioHydration.ts:24: /**
+lib/audioHydration.ts:25:  * Watch a reminder's Convex row for audio readiness and download when ready.
+lib/audioHydration.ts:26:  *
+lib/audioHydration.ts:27:  * Reactive since the creation-pipeline wave (spec Â§3.2): a `watchQuery`
+lib/audioHydration.ts:28:  * subscription replaces the one-second poll, so the download starts on the push
+lib/audioHydration.ts:29:  * that carries the URL instead of up to a second later, and an idle wait costs
+lib/audioHydration.ts:30:  * no queries at all.
+lib/audioHydration.ts:31:  *
+lib/audioHydration.ts:32:  * The subscription's one sharp edge is `localQueryResult()`, which answers with
+lib/audioHydration.ts:33:  * three things, not two:
+lib/audioHydration.ts:34:  *   - `undefined` â€” not loaded yet. Take NO action; a row that does not exist
+lib/audioHydration.ts:35:  *     and a row that has not arrived look identical here.
+lib/audioHydration.ts:36:  *   - `null` â€” loaded, and the server says there is no such row. Terminal.
+lib/audioHydration.ts:37:  *   - a row â€” act on it.
+lib/audioHydration.ts:38:  * It also throws if the query errored server-side, which buys one fresh watch
+lib/audioHydration.ts:39:  * and then a stop.
+lib/audioHydration.ts:40:  *
+lib/audioHydration.ts:41:  * Two phases since OLD-107, because the server stopped writing a reminder's
+lib/audioHydration.ts:42:  * audio in one patch. The base spoken line lands first and flips
+lib/audioHydration.ts:43:  * `audioStatus: "ready"` â€” that is the reminder playable, and it is what this
+lib/audioHydration.ts:44:  * function used to be the whole of. The pre-alert line follows in a second
+lib/audioHydration.ts:45:  * patch a few seconds later, announced ahead of time by
+lib/audioHydration.ts:46:  * `audioExtrasStatus: "pending"`, and phase two waits for it.
+lib/audioHydration.ts:47:  *
+lib/audioHydration.ts:48:  * The second phase covered the replay variant lines too until OLD-108 removed
+lib/audioHydration.ts:49:  * them; a reminder with no lead time now settles both statuses in one update.
+lib/audioHydration.ts:50:  *
+lib/audioHydration.ts:51:  * Every update handler runs on a single promise chain, so the base line is
+lib/audioHydration.ts:52:  * always applied before the extras patch is looked at and two patches can never
+lib/audioHydration.ts:53:  * be half-written over each other. The returned promise resolves when the row
+lib/audioHydration.ts:54:  * reaches a terminal state or the watchdog gives up; either way the
+lib/audioHydration.ts:55:  * subscription is disposed first.
+lib/audioHydration.ts:56:  */
+lib/audioHydration.ts:57: export async function hydrateReminderAudio(params: {
+lib/audioHydration.ts:58:   convexClient: ConvexReactClient;
+lib/audioHydration.ts:59:   convexId: string;
+lib/audioHydration.ts:60:   localReminderId: string;
+lib/audioHydration.ts:61:   updateLocal: (patch: { audioUrl?: string; wavUrl?: string; preAudioUrl?: string; audioStatus: 'ready' | 'failed'; audioExtrasStatus?: AudioExtrasStatus; audioError?: string }) => Promise<void>;
+lib/audioHydration.ts:62:   onSuccess?: (audioUrl: string) => Promise<void>;
+lib/audioHydration.ts:63: }): Promise<void> {
+lib/audioHydration.ts:64:   const { convexClient, convexId, localReminderId, updateLocal, onSuccess } = params;
+lib/audioHydration.ts:65:   const key = `${convexId}:${localReminderId}`;
+lib/audioHydration.ts:66:   const existing = inFlight.get(key);
+lib/audioHydration.ts:67:   if (existing) return existing;
+lib/audioHydration.ts:68: 
+lib/audioHydration.ts:69:   /**
+lib/audioHydration.ts:70:    * Write one Convex row onto the device: download whatever audio it carries,
+lib/audioHydration.ts:71:    * fold it into the local reminder, and re-stamp the scheduled notifications.
+lib/audioHydration.ts:72:    *
+lib/audioHydration.ts:73:    * Runs once per phase, and is safe to run twice â€” every download skips a file
+lib/audioHydration.ts:74:    * it already has, and refreshNotificationWithAudio no-ops when the trigger
+lib/audioHydration.ts:75:    * data already matches.
+lib/audioHydration.ts:76:    */
+lib/audioHydration.ts:77:   const apply = async (result: any, extrasStatus: AudioExtrasStatus): Promise<void> => {
+lib/audioHydration.ts:78:     // Download to local storage
+lib/audioHydration.ts:79:     await downloadReminderAudio(localReminderId, result.audioUrl);
+lib/audioHydration.ts:80: 
+lib/audioHydration.ts:81:     // Pre-alert line is optional: hydrate it when present, but never
+lib/audioHydration.ts:82:     // let it block the main audio (notification-only pre-alert is fine).
+lib/audioHydration.ts:83:     const preAudioUrl = result.preAudioUrl as string | undefined;
+lib/audioHydration.ts:84:     if (preAudioUrl) {
+lib/audioHydration.ts:85:       try {
+lib/audioHydration.ts:86:         await downloadPreReminderAudio(localReminderId, preAudioUrl);
+lib/audioHydration.ts:87:       } catch (preErr) {
+lib/audioHydration.ts:88:         console.log(`[VR] Hydration: pre-alert download failed for ${convexId}:`, preErr);
+lib/audioHydration.ts:89:       }
+lib/audioHydration.ts:90:     }
+lib/audioHydration.ts:91: 
+lib/audioHydration.ts:92:     // Update local reminder
+lib/audioHydration.ts:93:     await updateLocal({
+lib/audioHydration.ts:94:       audioUrl: result.audioUrl,
+lib/audioHydration.ts:95:       ...(result.wavUrl ? { wavUrl: result.wavUrl as string } : {}),
+lib/audioHydration.ts:96:       ...(preAudioUrl ? { preAudioUrl } : {}),
+lib/audioHydration.ts:97:       audioStatus: 'ready',
+lib/audioHydration.ts:98:       // Recorded locally so a launch that interrupted the pre-alert phase can
+lib/audioHydration.ts:99:       // be seen and resumed (app/_layout.tsx re-hydrates on "pending").
+lib/audioHydration.ts:100:       audioExtrasStatus: extrasStatus,
+lib/audioHydration.ts:101:     });
+lib/audioHydration.ts:102: 
+lib/audioHydration.ts:103:     // Refresh scheduled notifications with the new audio URLs
+lib/audioHydration.ts:104:     await refreshNotificationWithAudio(localReminderId, result.audioUrl, preAudioUrl || undefined);
+lib/audioHydration.ts:105:   };
+lib/audioHydration.ts:106: 
+lib/audioHydration.ts:107:   const task = (async () => {
+lib/audioHydration.ts:108:     try {
+lib/audioHydration.ts:109:       // Reminders are device-scoped (OLD-74): the backend only hands back rows
+lib/audioHydration.ts:110:       // belonging to this install.
+lib/audioHydration.ts:111:       const deviceId = await getDeviceId();
+lib/audioHydration.ts:112: 
+lib/audioHydration.ts:113:       await new Promise<void>((resolve) => {
+lib/audioHydration.ts:114:         let baseApplied = false;
+lib/audioHydration.ts:115:         let settled = false;
+lib/audioHydration.ts:116:         // A thrown query buys exactly one fresh subscription.
+lib/audioHydration.ts:117:         let rewatched = false;
+lib/audioHydration.ts:118:         let watch: { onUpdate(cb: () => void): () => void; localQueryResult(): any } | null = null;
+lib/audioHydration.ts:119:         let unsubscribe: (() => void) | null = null;
+lib/audioHydration.ts:120:         let deadline = Date.now() + BASE_TIMEOUT_MS;
+lib/audioHydration.ts:121:         let watchdog: ReturnType<typeof setTimeout> | null = null;
+lib/audioHydration.ts:122:         let retryTimer: ReturnType<typeof setTimeout> | null = null;
+lib/audioHydration.ts:123:         // Every handler queues here, so they run one at a time and in order.
+lib/audioHydration.ts:124:         let chain: Promise<void> = Promise.resolve();
+lib/audioHydration.ts:125: 
+lib/audioHydration.ts:126:         const disposeWatch = (): void => {
+lib/audioHydration.ts:127:           const off = unsubscribe;
+lib/audioHydration.ts:128:           unsubscribe = null;
+lib/audioHydration.ts:129:           watch = null;
+lib/audioHydration.ts:130:           if (!off) return;
+lib/audioHydration.ts:131:           try {
+lib/audioHydration.ts:132:             off();
+lib/audioHydration.ts:133:           } catch (e) {
+lib/audioHydration.ts:134:             console.log(`[VR] Hydration: unsubscribe failed for ${convexId}:`, e);
+lib/audioHydration.ts:135:           }
+lib/audioHydration.ts:136:         };
+lib/audioHydration.ts:137: 
+lib/audioHydration.ts:138:         /** Terminal for this hydration: drop the subscription and the timers. */
+lib/audioHydration.ts:139:         const stop = (): void => {
+lib/audioHydration.ts:140:           if (settled) return;
+lib/audioHydration.ts:141:           settled = true;
+lib/audioHydration.ts:142:           if (watchdog) {
+lib/audioHydration.ts:143:             clearTimeout(watchdog);
+lib/audioHydration.ts:144:             watchdog = null;
+lib/audioHydration.ts:145:           }
+lib/audioHydration.ts:146:           if (retryTimer) {
+lib/audioHydration.ts:147:             clearTimeout(retryTimer);
+lib/audioHydration.ts:148:             retryTimer = null;
+lib/audioHydration.ts:149:           }
+lib/audioHydration.ts:150:           disposeWatch();
+lib/audioHydration.ts:151:           resolve();
+lib/audioHydration.ts:152:         };
+lib/audioHydration.ts:153: 
+lib/audioHydration.ts:154:         const armWatchdog = (): void => {
+lib/audioHydration.ts:155:           if (watchdog) clearTimeout(watchdog);
+lib/audioHydration.ts:156:           watchdog = setTimeout(() => {
+lib/audioHydration.ts:157:             watchdog = null;
+lib/audioHydration.ts:158:             console.log(
+lib/audioHydration.ts:159:               `[VR] Hydration: timeout for ${convexId} (base ${baseApplied ? 'in' : 'missing'})`
+lib/audioHydration.ts:160:             );
+lib/audioHydration.ts:161:             stop();
+lib/audioHydration.ts:162:           }, Math.max(0, deadline - Date.now()));
+lib/audioHydration.ts:163:         };
+lib/audioHydration.ts:164: 
+lib/audioHydration.ts:165:         /**
+lib/audioHydration.ts:166:          * Re-read the same local result a second later. The row is unchanged â€”
+lib/audioHydration.ts:167:          * this exists so a transient download failure gets the retries the old
+lib/audioHydration.ts:168:          * poll loop gave it, inside the same watchdog budget.
+lib/audioHydration.ts:169:          */
+lib/audioHydration.ts:170:         const retryDownloadLater = (): void => {
+lib/audioHydration.ts:171:           if (settled || retryTimer) return;
+lib/audioHydration.ts:172:           retryTimer = setTimeout(() => {
+lib/audioHydration.ts:173:             retryTimer = null;
+lib/audioHydration.ts:174:             scheduleRead();
+lib/audioHydration.ts:175:           }, DOWNLOAD_RETRY_MS);
+lib/audioHydration.ts:176:         };
+lib/audioHydration.ts:177: 
+lib/audioHydration.ts:178:         const read = async (): Promise<void> => {
+lib/audioHydration.ts:179:           if (settled) return;
+lib/audioHydration.ts:180:           const current = watch;
+lib/audioHydration.ts:181:           if (!current) return;
+lib/audioHydration.ts:182: 
+lib/audioHydration.ts:183:           let result: any;
+lib/audioHydration.ts:184:           try {
+lib/audioHydration.ts:185:             result = current.localQueryResult();
+lib/audioHydration.ts:186:           } catch (e) {
+lib/audioHydration.ts:187:             console.error(`[VR] Hydration: query failed for ${convexId}:`, e);
+lib/audioHydration.ts:188:             if (rewatched) {
+lib/audioHydration.ts:189:               stop();
+lib/audioHydration.ts:190:               return;
+lib/audioHydration.ts:191:             }
+lib/audioHydration.ts:192:             rewatched = true;
+lib/audioHydration.ts:193:             disposeWatch();
+lib/audioHydration.ts:194:             subscribe();
+lib/audioHydration.ts:195:             return;
+lib/audioHydration.ts:196:           }
+lib/audioHydration.ts:197: 
+lib/audioHydration.ts:198:           // Not loaded yet â€” indistinguishable from a missing row here, so the
+lib/audioHydration.ts:199:           // only safe move is to wait for the update that resolves it.
+lib/audioHydration.ts:200:           if (result === undefined) return;
+lib/audioHydration.ts:201: 
+lib/audioHydration.ts:202:           if (result === null) {
+lib/audioHydration.ts:203:             console.log(`[VR] Hydration: reminder ${convexId} not found, stopping`);
+lib/audioHydration.ts:204:             stop();
+lib/audioHydration.ts:205:             return;
+lib/audioHydration.ts:206:           }
+lib/audioHydration.ts:207: 
+lib/audioHydration.ts:208:           const extrasStatus = result.audioExtrasStatus as AudioExtrasStatus | undefined;
+lib/audioHydration.ts:209:           // An absent status is a reminder with no pre-alert (and every row
+lib/audioHydration.ts:210:           // written before OLD-107) â€” nothing to wait for.
+lib/audioHydration.ts:211:           const extrasPending = extrasStatus === 'pending';
+lib/audioHydration.ts:212: 
+lib/audioHydration.ts:213:           // Check if audio is ready
+lib/audioHydration.ts:214:           if (result.audioUrl && !baseApplied) {
+lib/audioHydration.ts:215:             console.log(`[VR] Hydration: audio ready for ${convexId}, downloading...`);
+lib/audioHydration.ts:216:             try {
+lib/audioHydration.ts:217:               await apply(result, extrasPending ? 'pending' : (extrasStatus ?? 'ready'));
+lib/audioHydration.ts:218:               baseApplied = true;
+lib/audioHydration.ts:219: 
+lib/audioHydration.ts:220:               // Call optional success callback
+lib/audioHydration.ts:221:               if (onSuccess) {
+lib/audioHydration.ts:222:                 await onSuccess(result.audioUrl);
+lib/audioHydration.ts:223:               }
+lib/audioHydration.ts:224: 
+lib/audioHydration.ts:225:               if (!extrasPending) {
+lib/audioHydration.ts:226:                 console.log(`[VR] Hydration: complete for ${convexId}`);
+lib/audioHydration.ts:227:                 stop();
+lib/audioHydration.ts:228:                 return;
+lib/audioHydration.ts:229:               }
+lib/audioHydration.ts:230:               console.log(`[VR] Hydration: base line in for ${convexId}, waiting on extras...`);
+lib/audioHydration.ts:231:               deadline = Math.max(deadline, Date.now() + EXTRAS_TIMEOUT_MS);
+lib/audioHydration.ts:232:               armWatchdog();
+lib/audioHydration.ts:233:             } catch (e) {
+lib/audioHydration.ts:234:               console.error(`[VR] Hydration: download failed for ${convexId}:`, e);
+lib/audioHydration.ts:235:               // Keep the subscription - maybe transient error
+lib/audioHydration.ts:236:               retryDownloadLater();
+lib/audioHydration.ts:237:             }
+lib/audioHydration.ts:238:           } else if (baseApplied && !extrasPending) {
+lib/audioHydration.ts:239:             // Second patch landed (or gave up): collect whatever it produced.
+lib/audioHydration.ts:240:             // "failed" is applied too â€” the row still holds the base line, and
+lib/notifications.ts:1110:  * Same read-through as `withStoredWavUrls`, same reason: some create flows
+lib/notifications.ts:1111:  * still hand-build a ReminderNotification out of legacy fields only, while the
+lib/notifications.ts:1112:  * store always has a grid (it backfills one on every write). A caller that DOES
+lib/notifications.ts:1113:  * supply a grid always wins, so a freshly edited schedule is never overwritten
+lib/notifications.ts:1114:  * by the stored one.
+lib/notifications.ts:1115:  */
+lib/notifications.ts:1116: function withStoredSchedule(reminder: ReminderNotification): ReminderNotification {
+lib/notifications.ts:1117:   if (occurrenceGrid(reminder)) return reminder;
+lib/notifications.ts:1118:   try {
+lib/notifications.ts:1119:     const stored = useReminderStore.getState().getReminderById(reminder.id);
+lib/notifications.ts:1120:     if (stored?.schedule?.type === "grid") {
+lib/notifications.ts:1121:       return { ...reminder, schedule: stored.schedule };
+lib/notifications.ts:1122:     }
+lib/notifications.ts:1123:   } catch {
+lib/notifications.ts:1124:     // Store unavailable (headless task) â€” the legacy path below still works.
+lib/notifications.ts:1125:   }
+lib/notifications.ts:1126:   return reminder;
+lib/notifications.ts:1127: }
+lib/notifications.ts:1128: 
+lib/notifications.ts:1129: /** The grid a notification payload carries, or null on a pre-grid payload. */
+lib/notifications.ts:1130: function parseOccurrenceGrid(value: unknown): GridSchedule | null {
+lib/notifications.ts:1131:   if (typeof value !== "string" || !value) return null;
+lib/notifications.ts:1132:   try {
+lib/notifications.ts:1133:     const parsed = JSON.parse(value);
+lib/notifications.ts:1134:     return parsed && parsed.type === "grid" ? (parsed as GridSchedule) : null;
+lib/notifications.ts:1135:   } catch {
+lib/notifications.ts:1136:     return null;
+lib/notifications.ts:1137:   }
+lib/notifications.ts:1138: }
+lib/notifications.ts:1139: 
+lib/notifications.ts:1140: function getLocalAudioPath(reminderId: string): string {
+lib/notifications.ts:1141:   return `${documentDirectory}reminder_${reminderId}.mp3`;
+lib/notifications.ts:1142: }
+lib/notifications.ts:1143: 
+lib/notifications.ts:1144: function getLocalPreAudioPath(reminderId: string): string {
+lib/notifications.ts:1145:   return `${documentDirectory}reminder_${reminderId}_pre.mp3`;
+lib/notifications.ts:1146: }
+lib/notifications.ts:1147: 
+lib/notifications.ts:1148: export async function downloadReminderAudio(
+lib/notifications.ts:1149:   reminderId: string,
+lib/notifications.ts:1150:   audioUrl: string
+lib/notifications.ts:1151: ): Promise<string> {
+lib/notifications.ts:1152:   const localPath = getLocalAudioPath(reminderId);
+lib/notifications.ts:1153: 
+lib/notifications.ts:1154:   // Check if file already exists locally (skip download)
+lib/notifications.ts:1155:   const existingFile = await getInfoAsync(localPath);
+lib/notifications.ts:1156:   if (existingFile.exists && existingFile.size > 0) {
+lib/notifications.ts:1157:     console.log(`[VR] Audio already exists locally: ${localPath} (${existingFile.size} bytes)`);
+lib/notifications.ts:1158:     return localPath;
+lib/notifications.ts:1159:   }
+lib/notifications.ts:1160: 
+lib/notifications.ts:1161:   console.log(`[VR] Downloading audio from ${audioUrl}`);
+lib/notifications.ts:1162:   console.log(`[VR] Saving to: ${localPath}`);
+lib/notifications.ts:1163:   const result = await downloadAsync(audioUrl, localPath);
+lib/notifications.ts:1164:   console.log(`[VR] Download complete, status: ${result.status}, size: ${result.headers?.["content-length"] || "unknown"}`);
+lib/notifications.ts:1165: 
+lib/notifications.ts:1166:   // Verify file exists
+lib/notifications.ts:1167:   const fileInfo = await getInfoAsync(localPath);
+lib/notifications.ts:1168:   console.log(`[VR] Saved file exists: ${fileInfo.exists}, size: ${fileInfo.exists ? fileInfo.size : "N/A"}`);
+lib/notifications.ts:1169: 
+lib/notifications.ts:1170:   return localPath;
+lib/notifications.ts:1171: }
+lib/notifications.ts:1172: 
+lib/notifications.ts:1173: export async function downloadPreReminderAudio(
+lib/notifications.ts:1174:   reminderId: string,
+lib/notifications.ts:1175:   preAudioUrl: string
+lib/notifications.ts:1176: ): Promise<string> {
+lib/notifications.ts:1177:   const localPath = getLocalPreAudioPath(reminderId);
+lib/notifications.ts:1178: 
+lib/notifications.ts:1179:   const existingFile = await getInfoAsync(localPath);
+lib/notifications.ts:1180:   if (existingFile.exists && existingFile.size > 0) {
+lib/notifications.ts:1181:     return localPath;
+lib/notifications.ts:1182:   }
+lib/notifications.ts:1183: 
+lib/notifications.ts:1184:   console.log(`[VR] Downloading pre-alert audio from ${preAudioUrl}`);
+lib/notifications.ts:1185:   await downloadAsync(preAudioUrl, localPath);
+lib/notifications.ts:1186:   return localPath;
+lib/notifications.ts:1187: }
+lib/notifications.ts:1188: 
+lib/notifications.ts:1189: export async function deleteLocalAudio(reminderId: string): Promise<void> {
+lib/notifications.ts:1190:   const localPath = getLocalAudioPath(reminderId);
+lib/notifications.ts:1191:   try {
+lib/notifications.ts:1192:     await deleteAsync(localPath, { idempotent: true });
+lib/notifications.ts:1193:   } catch (e) {
+lib/notifications.ts:1194:     console.log("[VR] Failed to delete local audio:", e);
+lib/notifications.ts:1195:   }
+lib/notifications.ts:1196: }
+lib/notifications.ts:1197: 
+lib/notifications.ts:1198: export async function deleteLocalPreAudio(reminderId: string): Promise<void> {
+lib/notifications.ts:1199:   const localPath = getLocalPreAudioPath(reminderId);
+lib/notifications.ts:1200:   try {
+lib/notifications.ts:1201:     await deleteAsync(localPath, { idempotent: true });
+lib/notifications.ts:1202:   } catch (e) {
+lib/notifications.ts:1203:     console.log("[VR] Failed to delete local pre-alert audio:", e);
+lib/notifications.ts:1204:   }
+lib/notifications.ts:1205: }
+lib/notifications.ts:1206: 
+lib/notifications.ts:1207: /**
+lib/notifications.ts:1208:  * Sweep the replay variant mp3s a pre-OLD-108 build downloaded.
+lib/notifications.ts:1209:  *
+lib/notifications.ts:1210:  * Nothing writes these files any more â€” the nag repeats the base line, so there
+rg: modules: The system cannot find the file specified. (os error 2)
+lib/audioHydration.ts:61:  updateLocal: (patch: { audioUrl?: string; wavUrl?: string; preAudioUrl?: string; audioStatus: 'ready' | 'failed'; audioExtrasStatus?: AudioExtrasStatus; audioError?: string }) => Promise<void>;
+lib/audioHydration.ts:95:      ...(result.wavUrl ? { wavUrl: result.wavUrl as string } : {}),
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"ensureAlarmSound|deleteAlarmSound|removeAlarmSound|Library/Sounds|updateAudio =|synthesizeAndStoreLineTts|hydrateReminderAudio\" --glob '"'!package-lock.json'"' --glob '"'!yarn.lock'"' | Select-Object -First 90; "'$n=0; Get-Content lib/notifications.ts | ForEach-Object { $n++; if(($n -ge 2116 -and $n -le 2220) -or ($n -ge 1458 -and $n -le 1476) -or ($n -ge 1680 -and $n -le 1715)) { '"'{0}: {1}' -f "'$n,$_ } }' in C:\Dev\VR
+ succeeded in 935ms:
+1458: async function ensureAlarmSoundSafe(
+1459:   reminderId: string,
+1460:   wavUrl?: string | null
+1461: ): Promise<string | null> {
+1462:   if (!alarmSounds?.ensureAlarmSound) return null;
+1463:   try {
+1464:     return (await alarmSounds.ensureAlarmSound(reminderId, wavUrl ?? null)) ?? null;
+1465:   } catch (e) {
+1466:     vrLog("alarmkit", "sound_hydration_failed", { reminderId, error: String(e) });
+1467:     return null;
+1468:   }
+1469: }
+1470: 
+1471: async function removeAlarmSoundSafe(reminderId: string): Promise<void> {
+1472:   if (!alarmSounds?.removeAlarmSound) return;
+1473:   try {
+1474:     await alarmSounds.removeAlarmSound(reminderId);
+1475:   } catch (e) {
+1476:     vrLog("alarmkit", "sound_removal_failed", { reminderId, error: String(e) });
+1680:   return dedupeByAppKey(appKey, async () => {
+1681:     // Read the store at execution time: hydration may have landed the wav
+1682:     // between the caller building its reminder object and this work running.
+1683:     const hydrated = withStoredWavUrls(reminder);
+1684:     const withChain = options?.withNagChain !== false;
+1685:     const comebacks = withChain
+1686:       ? remainingNagComebacks(triggerTimestamp, Date.now())
+1687:       : [];
+1688:     const chainKeys = nagChainKeys(reminder.id, triggerTimestamp, comebacks);
+1689: 
+1690:     const keep = new Set(keepAppKeys ?? [appKey]);
+1691:     for (const key of chainKeys) keep.add(key);
+1692:     await cancelStaleAlarmKitAlarms(reminder.id, keep);
+1693: 
+1694:     const soundName = await ensureAlarmSoundSafe(reminder.id, hydrated.wavUrl);
+1695:     const uuid = await scheduleNativeAlarm({
+1696:       id: appKey,
+1697:       fireDate: triggerTimestamp,
+1698:       title: reminder.title,
+1699:       soundName,
+1700:       // The native Snooze button is the nag by another name â€” same interval.
+1701:       snoozeMinutes: NAG_DELAY_MINUTES,
+1702:       metadata: nagChainMetadata(
+1703:         hydrated,
+1704:         triggerTimestamp,
+1705:         triggerTimestamp,
+1706:         0,
+1707:         chainKeys,
+1708:         appKey
+1709:       ),
+1710:     });
+1711: 
+1712:     vrLog("alarmkit", "scheduled", {
+1713:       appKey,
+1714:       reminderId: reminder.id,
+1715:       fireDate: triggerTimestamp,
+2116: export async function scheduleReminder(
+2117:   input: ReminderNotification,
+2118:   _options?: { traceId?: string; occurrenceAfter?: number }
+2119: ): Promise<{ triggerTimestamp: number; notificationId: string }> {
+2120:   const reminder = withStoredSchedule(input);
+2121:   const hasPermission = await requestNotificationPermission();
+2122:   if (!hasPermission) {
+2123:     throw new Error("Notification permission not granted");
+2124:   }
+2125: 
+2126:   await assertAndroidExactAlarmAccess();
+2127: 
+2128:   // iOS 26 only: this occurrence becomes a system alarm instead of a notifee
+2129:   // trigger further down. False everywhere else, so the path below is untouched.
+2130:   const alarmKitActive = await alarmKitEnabled();
+2131: 
+2132:   // Download audio to device (skip if no audioUrl - will use default sound)
+2133:   let localAudioPath: string | null = null;
+2134:   if (reminder.audioUrl) {
+2135:     localAudioPath = await downloadReminderAudio(reminder.id, reminder.audioUrl);
+2136:   }
+2137: 
+2138:   // Create channel (uses default sound if no custom audio)
+2139:   const channelId = await createReminderChannel(
+2140:     reminder.id,
+2141:     reminder.title,
+2142:     localAudioPath || ""
+2143:   );
+2144: 
+2145:   // Calculate next trigger time using unified scheduling engine.
+2146:   // occurrenceAfter lets callers skip a still-future occurrence that was
+2147:   // handled early (pre-alert "Done") and land on the one after it.
+2148:   const occurrenceRef = Math.max(Date.now(), _options?.occurrenceAfter ?? 0);
+2149:   let triggerTimestamp: number;
+2150: 
+2151:   // OLD-98: a grid reminder rings N times a day, so it plans a SET of pending
+2152:   // occurrences. One occurrence is one registration on both platforms now
+2153:   // (OLD-96), so both budgets are the same.
+2154:   const grid = occurrenceGrid(reminder);
+2155:   let plannedOccurrences: number[] = [];
+2156: 
+2157:   if (grid) {
+2158:     plannedOccurrences = planGridOccurrences(grid, occurrenceRef, {
+2159:       max: MAX_PENDING_OCCURRENCES,
+2160:     });
+2161:     if (plannedOccurrences.length === 0) {
+2162:       // A dated one-off whose day passed keeps the old user-facing wording;
+2163:       // anything else is a recurrence that simply ran out (an `until` bound).
+2164:       if (grid.days.kind === "date") {
+2165:         throw new Error("Reminder time is in the past. Please choose a future time.");
+2166:       }
+2167:       throw new NoFutureOccurrenceError("No future occurrence for schedule grid", "grid");
+2168:     }
+2169:     triggerTimestamp = plannedOccurrences[0];
+2170:   } else if (reminder.scheduleType) {
+2171:     // Backward/fast-path safety: if we have a one-time scheduleType but no onceAt,
+2172:     // derive it from `date` + `time` on-device (local timezone).
+2173:     let onceAt = reminder.onceAt;
+2174:     if (reminder.scheduleType === "once" && !onceAt && reminder.time) {
+2175:       const [hours, minutes] = reminder.time.split(":").map(Number);
+2176:       if (reminder.date) {
+2177:         const [year, month, day] = reminder.date.split("-").map(Number);
+2178:         const derived = new Date(year, month - 1, day, hours, minutes, 0, 0).getTime();
+2179:         if (Number.isFinite(derived)) onceAt = derived;
+2180:       } else if (Number.isFinite(hours) && Number.isFinite(minutes)) {
+2181:         const target = new Date();
+2182:         target.setHours(hours, minutes, 0, 0);
+2183:         if (target.getTime() <= Date.now()) {
+2184:           target.setDate(target.getDate() + 1);
+2185:         }
+2186:         const derived = target.getTime();
+2187:         if (Number.isFinite(derived)) onceAt = derived;
+2188:       }
+2189:     }
+2190: 
+2191:     const schedule: Schedule = {
+2192:       type: reminder.scheduleType,
+2193:       onceAt,
+2194:       intervalMs: reminder.intervalMs,
+2195:       anchorAt: reminder.anchorAt,
+2196:       rrule: reminder.rrule,
+2197:       dtstart: reminder.dtstart,
+2198:       tzid: reminder.tzid,
+2199:       until: reminder.until,
+2200:     } as Schedule;
+2201: 
+2202:     const nextOccurrence = getNextOccurrence(schedule, occurrenceRef);
+2203:     if (nextOccurrence) {
+2204:       triggerTimestamp = nextOccurrence;
+2205:     } else {
+2206:       // No future occurrence (e.g., expired once reminder or bounded RRULE finished)
+2207:       throw new NoFutureOccurrenceError(
+2208:         `No future occurrence for schedule type ${reminder.scheduleType}`,
+2209:         reminder.scheduleType
+2210:       );
+2211:     }
+2212:   } else if (reminder.frequency === "interval" && reminder.anchorAt && reminder.intervalMs) {
+2213:     // Legacy interval support
+2214:     if (reminder.scheduledFor && reminder.scheduledFor > occurrenceRef) {
+2215:       triggerTimestamp = reminder.scheduledFor;
+2216:     } else {
+2217:       const { scheduledFor } = getNextIntervalOccurrence(
+2218:         reminder.anchorAt,
+2219:         reminder.intervalMs,
+2220:         occurrenceRef
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --hidden \"ensureAlarmSound|Library/Sounds\" ios plugins lib --glob '"'!**/Pods/**'"'; rg -n \"updateAudio|oldStorageId|newWavStorageId\" convex/reminders.ts; rg -n \"synthesizeAndStoreLineTts|wavStorageId|trim\\(\" convex/lib/tts.ts convex/actions.ts | Select-Object -First 40; rg -n \"hydrateReminderAudio\" app/_layout.tsx; Get-ChildItem -Force -Name" in C:\Dev\VR
+ succeeded in 1145ms:
+rg: ios: The system cannot find the file specified. (os error 2)
+lib\alarmKit.ts:24:  /** Bare filename in Library/Sounds (e.g. "reminder_abc.wav"); null = system default. */
+lib\alarmSounds.ts:12: * `Library/Sounds` directory (same rule as UNNotificationSound): wav/aiff/caf,
+lib\alarmSounds.ts:14: * Caches) — device-verified: makeDirectoryAsync on Library/Sounds is refused.
+lib\alarmSounds.ts:16: * copies it into Library/Sounds via FileManager.
+lib\alarmSounds.ts:23: * Library/Sounds and nothing else would ever take them out.
+lib\alarmSounds.ts:60:// Files already copied into Library/Sounds this session — skips repeat
+lib\alarmSounds.ts:112: * Place the reminder's spoken line in Library/Sounds as an alarm-ready wav and
+lib\alarmSounds.ts:117:export async function ensureAlarmSound(
+lib\alarmSounds.ts:131: * wav an older build left in Library/Sounds (deletion / re-record flows).
+lib\notifications.ts:99:  ensureAlarmSound?: (reminderId: string, wavUrl?: string | null) => Promise<string | null>;
+lib\notifications.ts:1457:/** AK-3's hydration, absent-safe. Returns the bare Library/Sounds filename. */
+lib\notifications.ts:1458:async function ensureAlarmSoundSafe(
+lib\notifications.ts:1462:  if (!alarmSounds?.ensureAlarmSound) return null;
+lib\notifications.ts:1464:    return (await alarmSounds.ensureAlarmSound(reminderId, wavUrl ?? null)) ?? null;
+lib\notifications.ts:1694:    const soundName = await ensureAlarmSoundSafe(reminder.id, hydrated.wavUrl);
+lib\notifications.ts:1755:      : await ensureAlarmSoundSafe(reminder.id, withStoredWavUrls(reminder).wavUrl);
+lib\notifications.ts:1823:  const soundName = await ensureAlarmSoundSafe(reminderId, reminder.wavUrl);
+lib\notifications.ts:2493:    // AlarmKit occurrences carry their sound as a Library/Sounds filename, not
+plugins\withAlarmKit.js:136:  /// Copies a staged wav into Library/Sounds, where AlarmKit resolves alarm
+plugins\withAlarmKit.js:440:    // Bare filename incl. extension, resolved from Library/Sounds (AK-3 writes it there).
+157:export const updateAudio = internalMutation({
+160:    oldStorageId: v.id("_storage"),
+163:    newWavStorageId: v.optional(v.id("_storage")),
+167:    await ctx.storage.delete(args.oldStorageId);
+174:      wavStorageId: args.newWavStorageId,
+rg: convex/lib/tts.ts: The system cannot find the path specified. (os error 3)
+convex/actions.ts:94:  const normalized = raw.trim().toLowerCase();
+convex/actions.ts:939:async function synthesizeAndStoreLineTts(
+convex/actions.ts:942:): Promise<{ audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> }> {
+convex/actions.ts:957:  const [audioStorageId, wavStorageId] = await Promise.all([
+convex/actions.ts:967:  return { audioStorageId, wavStorageId };
+convex/actions.ts:1065:  const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
+convex/actions.ts:1087:    wavStorageId,
+convex/actions.ts:1273:    const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
+convex/actions.ts:1289:        wavStorageId,
+convex/actions.ts:1328:    const { audioStorageId: newStorageId, wavStorageId: newWavStorageId } =
+convex/actions.ts:1329:      await synthesizeAndStoreLineTts(ctx, {
+convex/actions.ts:1340:        oldWavStorageId: reminder.wavStorageId,
+convex/actions.ts:1348:        wavStorageId: newWavStorageId,
+convex/actions.ts:1652:    const transcript = args.text.trim();
+convex/actions.ts:1724:    let base: { audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> };
+convex/actions.ts:1727:      base = await synthesizeAndStoreLineTts(ctx, {
+convex/actions.ts:1745:      wavStorageId: base.wavStorageId,
+25:import { hydrateReminderAudio } from "../lib/audioHydration";
+165:      hydrateReminderAudio({
+.claude
+.expo
+.git
+.github
+.vscode
+alarm
+android
+app
+assets
+components
+convex
+coverage
+dist
+docs
+legal-site
+lib
+listen-test
+marketing
+node_modules
+outputs
+patches
+plugins
+scripts
+tmp
+tmp-export
+tmp-screenshots
+tmp2
+updates
+voice-loop
+__evals__
+__mocks__
+__tests__
+__vitest__
+.env.example
+.env.local
+.eslintrc.json
+.gitignore
+.nvmrc
+.tmp.bundle.js
+app.json
+babel.config.js
+build_log.txt
+CLAUDE.md
+credentials.json
+dev-build-install-qr.png
+dev-client-qr-hotspot.png
+dev-client-qr.png
+eas.json
+grep.exe.stackdump
+index.ts
+jest.config.js
+jest.setup.ts
+medical_theme-screenshots.zip
+metro.config.js
+metro.err.log
+metro.out.log
+nul
+package-lock.json
+package.json
+pastebin.md
+plan.md
+README.md
+SubscriptionKey_F5RYL6NFDX.p8
+tempCodeRunnerFile.python
+tsconfig.json
+vitest.config.mts
+voicereminder.keystore
+
+web search: 
+web search: site.developer.apple.com AlarmKit AlertSound named Library Sounds
+codex
+The hydration path doesn’t wait for `audioStatus: "ready"`; it accepts any existing audio URL, so setting “pending” alone could reload the old voice. I’m checking the WAV cache and failure handling next.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$files = @(@('"'lib/alarmSounds.ts',1,190),@('plugins/withAlarmKit.js',136,186),@('convex/reminders.ts',157,182),@('convex/actions.ts',939,969),@('app/_layout.tsx',143,180),@('lib/notifications.ts',1080,1108)); foreach ("'$f in $files) { $n=0; Get-Content $f[0] | ForEach-Object { $n++; if($n -ge $f[1] -and $n -le $f[2]) { '"'{0}:{1}: {2}' -f "'$f[0],$n,$_ } } }; rg -n "audioUrl ===|audioUrl !==|removeAlarmSoundSafe|export async function cancelReminder|onSave=" lib/notifications.ts app/index.tsx' in C:\Dev\VR
+ succeeded in 1020ms:
+lib/alarmSounds.ts:1: import { NativeModules, Platform } from "react-native";
+lib/alarmSounds.ts:2: import {
+lib/alarmSounds.ts:3:   deleteAsync,
+lib/alarmSounds.ts:4:   documentDirectory,
+lib/alarmSounds.ts:5:   downloadAsync,
+lib/alarmSounds.ts:6:   getInfoAsync,
+lib/alarmSounds.ts:7: } from "expo-file-system/legacy";
+lib/alarmSounds.ts:8: /**
+lib/alarmSounds.ts:9:  * iOS AlarmKit sound placement (AK-3).
+lib/alarmSounds.ts:10:  *
+lib/alarmSounds.ts:11:  * AlarmKit resolves an alarm's sound by bare filename inside the app's
+lib/alarmSounds.ts:12:  * `Library/Sounds` directory (same rule as UNNotificationSound): wav/aiff/caf,
+lib/alarmSounds.ts:13:  * <= 30s. expo-file-system only writes inside its scoped directories (Documents,
+lib/alarmSounds.ts:14:  * Caches) â€” device-verified: makeDirectoryAsync on Library/Sounds is refused.
+lib/alarmSounds.ts:15:  * So the wav is staged into Documents and the AlarmKitBridge native method
+lib/alarmSounds.ts:16:  * copies it into Library/Sounds via FileManager.
+lib/alarmSounds.ts:17:  *
+lib/alarmSounds.ts:18:  * There is exactly ONE alarm sound per reminder (OLD-108). The cadence ladder
+lib/alarmSounds.ts:19:  * used to stage one wav per rung above the base â€” `reminder_<id>_v<k>.wav`,
+lib/alarmSounds.ts:20:  * holding replay variant k-1 â€” but the nag repeats the base line now, so
+lib/alarmSounds.ts:21:  * nothing places those files any longer. `removeAlarmSound` still sweeps them
+lib/alarmSounds.ts:22:  * by name, because installs that rang before the strip have them sitting in
+lib/alarmSounds.ts:23:  * Library/Sounds and nothing else would ever take them out.
+lib/alarmSounds.ts:24:  *
+lib/alarmSounds.ts:25:  * Everything here is a no-op off iOS â€” Android keeps its mp3 + notifee path
+lib/alarmSounds.ts:26:  * untouched â€” and nothing throws: a missing alarm sound must degrade to the
+lib/alarmSounds.ts:27:  * system default, never block scheduling.
+lib/alarmSounds.ts:28:  */
+lib/alarmSounds.ts:29: 
+lib/alarmSounds.ts:30: // Convex/local ids are already filename-safe, but a stray character would
+lib/alarmSounds.ts:31: // produce an unreachable path that AlarmKit reports only as silence.
+lib/alarmSounds.ts:32: function sanitizeId(reminderId: string): string {
+lib/alarmSounds.ts:33:   return String(reminderId).replace(/[^A-Za-z0-9_-]/g, "_");
+lib/alarmSounds.ts:34: }
+lib/alarmSounds.ts:35: 
+lib/alarmSounds.ts:36: /** Bare filename handed to the native `soundName` contract field. */
+lib/alarmSounds.ts:37: export function getAlarmSoundFileName(reminderId: string): string {
+lib/alarmSounds.ts:38:   return `reminder_${sanitizeId(reminderId)}.wav`;
+lib/alarmSounds.ts:39: }
+lib/alarmSounds.ts:40: 
+lib/alarmSounds.ts:41: /**
+lib/alarmSounds.ts:42:  * Rungs the retired cadence ladder could have staged (OLD-108). Only
+lib/alarmSounds.ts:43:  * `removeAlarmSound` reads this, to sweep files left behind by an install that
+lib/alarmSounds.ts:44:  * rang before the strip.
+lib/alarmSounds.ts:45:  */
+lib/alarmSounds.ts:46: const LEGACY_LADDER_RUNGS = 3;
+lib/alarmSounds.ts:47: 
+lib/alarmSounds.ts:48: /** Bare filename a retired ladder rung was placed under. Cleanup only. */
+lib/alarmSounds.ts:49: function legacyVariantAlarmSoundFileName(reminderId: string, rung: number): string {
+lib/alarmSounds.ts:50:   return `reminder_${sanitizeId(reminderId)}_v${rung}.wav`;
+lib/alarmSounds.ts:51: }
+lib/alarmSounds.ts:52: 
+lib/alarmSounds.ts:53: /** Documents-scoped staging path â€” the only place expo-file-system may write. */
+lib/alarmSounds.ts:54: export function getAlarmSoundStagingPath(reminderId: string): string | null {
+lib/alarmSounds.ts:55:   if (Platform.OS !== "ios") return null;
+lib/alarmSounds.ts:56:   if (!documentDirectory) return null;
+lib/alarmSounds.ts:57:   return `${documentDirectory}alarm_staging_${sanitizeId(reminderId)}.wav`;
+lib/alarmSounds.ts:58: }
+lib/alarmSounds.ts:59: 
+lib/alarmSounds.ts:60: // Files already copied into Library/Sounds this session â€” skips repeat
+lib/alarmSounds.ts:61: // download+copy work when hydration and scheduling both ask for the sound.
+lib/alarmSounds.ts:62: const placedThisSession = new Set<string>();
+lib/alarmSounds.ts:63: 
+lib/alarmSounds.ts:64: function alarmKitBridge(): { placeAlarmSound?: Function; removeAlarmSound?: Function } | null {
+lib/alarmSounds.ts:65:   const bridge = NativeModules.AlarmKitBridge;
+lib/alarmSounds.ts:66:   return bridge || null;
+lib/alarmSounds.ts:67: }
+lib/alarmSounds.ts:68: 
+lib/alarmSounds.ts:69: /**
+lib/alarmSounds.ts:70:  * Download `wavUrl` and hand it to the native bridge under `fileName`.
+lib/alarmSounds.ts:71:  * Returns the bare filename, or null when anything at all went wrong.
+lib/alarmSounds.ts:72:  */
+lib/alarmSounds.ts:73: async function placeAlarmSoundFile(
+lib/alarmSounds.ts:74:   fileName: string,
+lib/alarmSounds.ts:75:   stagingPath: string | null,
+lib/alarmSounds.ts:76:   wavUrl: string | null | undefined,
+lib/alarmSounds.ts:77:   label: string
+lib/alarmSounds.ts:78: ): Promise<string | null> {
+lib/alarmSounds.ts:79:   if (Platform.OS !== "ios") return null;
+lib/alarmSounds.ts:80:   if (!wavUrl) return null;
+lib/alarmSounds.ts:81:   if (placedThisSession.has(fileName)) return fileName;
+lib/alarmSounds.ts:82: 
+lib/alarmSounds.ts:83:   const bridge = alarmKitBridge();
+lib/alarmSounds.ts:84:   if (!bridge || typeof bridge.placeAlarmSound !== "function") return null;
+lib/alarmSounds.ts:85:   if (!stagingPath) return null;
+lib/alarmSounds.ts:86: 
+lib/alarmSounds.ts:87:   try {
+lib/alarmSounds.ts:88:     await downloadAsync(wavUrl, stagingPath);
+lib/alarmSounds.ts:89:     const staged = await getInfoAsync(stagingPath);
+lib/alarmSounds.ts:90:     if (!staged.exists || !staged.size) {
+lib/alarmSounds.ts:91:       console.log(`[VR] Alarm sound download produced no file for ${label}`);
+lib/alarmSounds.ts:92:       return null;
+lib/alarmSounds.ts:93:     }
+lib/alarmSounds.ts:94: 
+lib/alarmSounds.ts:95:     await bridge.placeAlarmSound(stagingPath, fileName);
+lib/alarmSounds.ts:96:     placedThisSession.add(fileName);
+lib/alarmSounds.ts:97:     console.log(`[VR] Alarm sound placed: ${fileName} (${staged.size} bytes)`);
+lib/alarmSounds.ts:98:     return fileName;
+lib/alarmSounds.ts:99:   } catch (e) {
+lib/alarmSounds.ts:100:     console.log(`[VR] Failed to place alarm sound for ${label}:`, e);
+lib/alarmSounds.ts:101:     return null;
+lib/alarmSounds.ts:102:   } finally {
+lib/alarmSounds.ts:103:     try {
+lib/alarmSounds.ts:104:       await deleteAsync(stagingPath, { idempotent: true });
+lib/alarmSounds.ts:105:     } catch {
+lib/alarmSounds.ts:106:       // best-effort staging cleanup
+lib/alarmSounds.ts:107:     }
+lib/alarmSounds.ts:108:   }
+lib/alarmSounds.ts:109: }
+lib/alarmSounds.ts:110: 
+lib/alarmSounds.ts:111: /**
+lib/alarmSounds.ts:112:  * Place the reminder's spoken line in Library/Sounds as an alarm-ready wav and
+lib/alarmSounds.ts:113:  * return the bare filename for `AlarmKitBridge.scheduleAlarm({ soundName })`.
+lib/alarmSounds.ts:114:  * Returns null on Android, without a wav url, without the native bridge, or on
+lib/alarmSounds.ts:115:  * any failure â€” the caller then schedules with the system default alarm sound.
+lib/alarmSounds.ts:116:  */
+lib/alarmSounds.ts:117: export async function ensureAlarmSound(
+lib/alarmSounds.ts:118:   reminderId: string,
+lib/alarmSounds.ts:119:   wavUrl: string | null | undefined
+lib/alarmSounds.ts:120: ): Promise<string | null> {
+lib/alarmSounds.ts:121:   return placeAlarmSoundFile(
+lib/alarmSounds.ts:122:     getAlarmSoundFileName(reminderId),
+lib/alarmSounds.ts:123:     getAlarmSoundStagingPath(reminderId),
+lib/alarmSounds.ts:124:     wavUrl,
+lib/alarmSounds.ts:125:     reminderId
+lib/alarmSounds.ts:126:   );
+lib/alarmSounds.ts:127: }
+lib/alarmSounds.ts:128: 
+lib/alarmSounds.ts:129: /**
+lib/alarmSounds.ts:130:  * Drop a reminder's alarm sounds â€” its one wav, plus any retired ladder rung
+lib/alarmSounds.ts:131:  * wav an older build left in Library/Sounds (deletion / re-record flows).
+lib/alarmSounds.ts:132:  * No-op off iOS.
+lib/alarmSounds.ts:133:  */
+lib/alarmSounds.ts:134: export async function removeAlarmSound(reminderId: string): Promise<void> {
+lib/alarmSounds.ts:135:   if (Platform.OS !== "ios") return;
+lib/alarmSounds.ts:136: 
+lib/alarmSounds.ts:137:   const fileNames = [getAlarmSoundFileName(reminderId)];
+lib/alarmSounds.ts:138:   for (let rung = 1; rung <= LEGACY_LADDER_RUNGS; rung++) {
+lib/alarmSounds.ts:139:     fileNames.push(legacyVariantAlarmSoundFileName(reminderId, rung));
+lib/alarmSounds.ts:140:   }
+lib/alarmSounds.ts:141:   for (const fileName of fileNames) {
+lib/alarmSounds.ts:142:     placedThisSession.delete(fileName);
+lib/alarmSounds.ts:143:   }
+lib/alarmSounds.ts:144: 
+lib/alarmSounds.ts:145:   const bridge = alarmKitBridge();
+lib/alarmSounds.ts:146:   if (!bridge || typeof bridge.removeAlarmSound !== "function") return;
+lib/alarmSounds.ts:147:   for (const fileName of fileNames) {
+lib/alarmSounds.ts:148:     try {
+lib/alarmSounds.ts:149:       await bridge.removeAlarmSound(fileName);
+lib/alarmSounds.ts:150:     } catch (e) {
+lib/alarmSounds.ts:151:       console.log(`[VR] Failed to delete alarm sound ${fileName}:`, e);
+lib/alarmSounds.ts:152:     }
+lib/alarmSounds.ts:153:   }
+lib/alarmSounds.ts:154: }
+plugins/withAlarmKit.js:136:   /// Copies a staged wav into Library/Sounds, where AlarmKit resolves alarm
+plugins/withAlarmKit.js:137:   /// sounds by bare filename. Pure FileManager, no AlarmKit: expo-file-system
+plugins/withAlarmKit.js:138:   /// cannot write outside its scoped directories, so placement happens here.
+plugins/withAlarmKit.js:139:   @objc(placeAlarmSound:fileName:resolver:rejecter:)
+plugins/withAlarmKit.js:140:   func placeAlarmSound(_ sourcePath: NSString, fileName: NSString,
+plugins/withAlarmKit.js:141:                        resolver resolve: @escaping RCTPromiseResolveBlock,
+plugins/withAlarmKit.js:142:                        rejecter reject: @escaping RCTPromiseRejectBlock) {
+plugins/withAlarmKit.js:143:     do {
+plugins/withAlarmKit.js:144:       let fm = FileManager.default
+plugins/withAlarmKit.js:145:       let libraryUrl = try fm.url(for: .libraryDirectory, in: .userDomainMask,
+plugins/withAlarmKit.js:146:                                   appropriateFor: nil, create: true)
+plugins/withAlarmKit.js:147:       let soundsDir = libraryUrl.appendingPathComponent("Sounds", isDirectory: true)
+plugins/withAlarmKit.js:148:       if !fm.fileExists(atPath: soundsDir.path) {
+plugins/withAlarmKit.js:149:         try fm.createDirectory(at: soundsDir, withIntermediateDirectories: true)
+plugins/withAlarmKit.js:150:       }
+plugins/withAlarmKit.js:151:       var src = sourcePath as String
+plugins/withAlarmKit.js:152:       if src.hasPrefix("file://"), let srcUrl = URL(string: src) {
+plugins/withAlarmKit.js:153:         src = srcUrl.path
+plugins/withAlarmKit.js:154:       }
+plugins/withAlarmKit.js:155:       let dest = soundsDir.appendingPathComponent(fileName as String)
+plugins/withAlarmKit.js:156:       if fm.fileExists(atPath: dest.path) {
+plugins/withAlarmKit.js:157:         try fm.removeItem(at: dest)
+plugins/withAlarmKit.js:158:       }
+plugins/withAlarmKit.js:159:       try fm.copyItem(atPath: src, toPath: dest.path)
+plugins/withAlarmKit.js:160:       resolve(dest.path)
+plugins/withAlarmKit.js:161:     } catch {
+plugins/withAlarmKit.js:162:       reject("place_sound_failed",
+plugins/withAlarmKit.js:163:              "Failed to place alarm sound: " + error.localizedDescription, error)
+plugins/withAlarmKit.js:164:     }
+plugins/withAlarmKit.js:165:   }
+plugins/withAlarmKit.js:166: 
+plugins/withAlarmKit.js:167:   /// Removes a placed alarm sound (deletion / re-record flows). Never rejects.
+plugins/withAlarmKit.js:168:   @objc(removeAlarmSound:resolver:rejecter:)
+plugins/withAlarmKit.js:169:   func removeAlarmSound(_ fileName: NSString,
+plugins/withAlarmKit.js:170:                         resolver resolve: @escaping RCTPromiseResolveBlock,
+plugins/withAlarmKit.js:171:                         rejecter reject: @escaping RCTPromiseRejectBlock) {
+plugins/withAlarmKit.js:172:     do {
+plugins/withAlarmKit.js:173:       let fm = FileManager.default
+plugins/withAlarmKit.js:174:       let libraryUrl = try fm.url(for: .libraryDirectory, in: .userDomainMask,
+plugins/withAlarmKit.js:175:                                   appropriateFor: nil, create: false)
+plugins/withAlarmKit.js:176:       let dest = libraryUrl.appendingPathComponent("Sounds", isDirectory: true)
+plugins/withAlarmKit.js:177:         .appendingPathComponent(fileName as String)
+plugins/withAlarmKit.js:178:       if fm.fileExists(atPath: dest.path) {
+plugins/withAlarmKit.js:179:         try fm.removeItem(at: dest)
+plugins/withAlarmKit.js:180:       }
+plugins/withAlarmKit.js:181:       resolve(true)
+plugins/withAlarmKit.js:182:     } catch {
+plugins/withAlarmKit.js:183:       resolve(false)
+plugins/withAlarmKit.js:184:     }
+plugins/withAlarmKit.js:185:   }
+plugins/withAlarmKit.js:186: }
+convex/reminders.ts:157: export const updateAudio = internalMutation({
+convex/reminders.ts:158:   args: {
+convex/reminders.ts:159:     id: v.id("reminders"),
+convex/reminders.ts:160:     oldStorageId: v.id("_storage"),
+convex/reminders.ts:161:     newStorageId: v.id("_storage"),
+convex/reminders.ts:162:     oldWavStorageId: v.optional(v.id("_storage")),
+convex/reminders.ts:163:     newWavStorageId: v.optional(v.id("_storage")),
+convex/reminders.ts:164:   },
+convex/reminders.ts:165:   handler: async (ctx, args) => {
+convex/reminders.ts:166:     // Delete old audio files
+convex/reminders.ts:167:     await ctx.storage.delete(args.oldStorageId);
+convex/reminders.ts:168:     if (args.oldWavStorageId) {
+convex/reminders.ts:169:       await ctx.storage.delete(args.oldWavStorageId);
+convex/reminders.ts:170:     }
+convex/reminders.ts:171:     // An absent new wav clears the field so a stale alarm sound is never referenced.
+convex/reminders.ts:172:     await ctx.db.patch(args.id, {
+convex/reminders.ts:173:       audioStorageId: args.newStorageId,
+convex/reminders.ts:174:       wavStorageId: args.newWavStorageId,
+convex/reminders.ts:175:     });
+convex/reminders.ts:176:   },
+convex/reminders.ts:177: });
+convex/reminders.ts:178: 
+convex/reminders.ts:179: export const generateAudioUploadUrl = mutation({
+convex/reminders.ts:180:   args: {},
+convex/reminders.ts:181:   handler: async (ctx) => {
+convex/reminders.ts:182:     const uploadUrl = await ctx.storage.generateUploadUrl();
+convex/actions.ts:939: async function synthesizeAndStoreLineTts(
+convex/actions.ts:940:   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
+convex/actions.ts:941:   args: { text: string; title?: string }
+convex/actions.ts:942: ): Promise<{ audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> }> {
+convex/actions.ts:943:   const started = Date.now();
+convex/actions.ts:944:   const [ttsBuffer, wavBytes] = await Promise.all([
+convex/actions.ts:945:     synthesizeReminderTts(args),
+convex/actions.ts:946:     synthesizeAlarmWav(args.text).catch((e) => {
+convex/actions.ts:947:       console.error("[VR] Alarm WAV synthesis failed (system default alarm sound will be used):", e);
+convex/actions.ts:948:       return null;
+convex/actions.ts:949:     }),
+convex/actions.ts:950:   ]);
+convex/actions.ts:951:   const synthMs = Date.now() - started;
+convex/actions.ts:952: 
+convex/actions.ts:953:   // Both blobs at once (OLD-107). The two synths were already parallel, then
+convex/actions.ts:954:   // their stores queued one behind the other for no reason â€” they share
+convex/actions.ts:955:   // nothing, and neither result is read here.
+convex/actions.ts:956:   const tStore = Date.now();
+convex/actions.ts:957:   const [audioStorageId, wavStorageId] = await Promise.all([
+convex/actions.ts:958:     ctx.storage.store(new Blob([new Uint8Array(ttsBuffer)], { type: "audio/mpeg" })),
+convex/actions.ts:959:     wavBytes
+convex/actions.ts:960:       ? ctx.storage.store(new Blob([new Uint8Array(wavBytes)], { type: "audio/wav" }))
+convex/actions.ts:961:       : Promise.resolve(undefined),
+convex/actions.ts:962:   ]);
+convex/actions.ts:963: 
+convex/actions.ts:964:   console.log(
+convex/actions.ts:965:     `[VR][tts] line model=${ttsModelLabel(args.text)} chars=${args.text.length} wav=${wavBytes ? 1 : 0} synthMs=${synthMs} storeMs=${Date.now() - tStore} totalMs=${Date.now() - started}`
+convex/actions.ts:966:   );
+convex/actions.ts:967:   return { audioStorageId, wavStorageId };
+convex/actions.ts:968: }
+convex/actions.ts:969: 
+app/_layout.tsx:143:   // A reminder that has its base line but is still owed its pre-alert line
+app/_layout.tsx:144:   // qualifies too (OLD-107): that lands in a second server patch a few seconds
+app/_layout.tsx:145:   // later, so an app killed inside that window would otherwise keep the base
+app/_layout.tsx:146:   // line and silently lose its heads-up audio for good.
+app/_layout.tsx:147:   useEffect(() => {
+app/_layout.tsx:148:     const pendingReminders = reminders.filter(
+app/_layout.tsx:149:       (r) =>
+app/_layout.tsx:150:         r.convexId &&
+app/_layout.tsx:151:         r.audioStatus !== "failed" &&
+app/_layout.tsx:152:         (!r.audioUrl || r.audioExtrasStatus === "pending")
+app/_layout.tsx:153:     );
+app/_layout.tsx:154: 
+app/_layout.tsx:155:     if (pendingReminders.length === 0) return;
+app/_layout.tsx:156: 
+app/_layout.tsx:157:     console.log(`[VR] Startup: ${pendingReminders.length} reminders need audio hydration`);
+app/_layout.tsx:158: 
+app/_layout.tsx:159:     // Cap concurrency at 2
+app/_layout.tsx:160:     const toHydrate = pendingReminders.slice(0, 2);
+app/_layout.tsx:161: 
+app/_layout.tsx:162:     for (const reminder of toHydrate) {
+app/_layout.tsx:163:       if (!reminder.convexId) continue;
+app/_layout.tsx:164: 
+app/_layout.tsx:165:       hydrateReminderAudio({
+app/_layout.tsx:166:         convexClient: convex,
+app/_layout.tsx:167:         convexId: reminder.convexId,
+app/_layout.tsx:168:         localReminderId: reminder.id,
+app/_layout.tsx:169:         updateLocal: async (patch) => {
+app/_layout.tsx:170:           const store = useReminderStore.getState();
+app/_layout.tsx:171:           const current = store.getReminderById(reminder.id);
+app/_layout.tsx:172:           if (current) {
+app/_layout.tsx:173:             await store.updateReminder({ ...current, ...patch });
+app/_layout.tsx:174:           }
+app/_layout.tsx:175:         },
+app/_layout.tsx:176:       }).catch((e) => {
+app/_layout.tsx:177:         console.error(`[VR] Startup hydration failed for ${reminder.id}:`, e);
+app/_layout.tsx:178:       });
+app/_layout.tsx:179:     }
+app/_layout.tsx:180:   }, [reminders]);
+lib/notifications.ts:1080:    * The days Ã— times grid (OLD-97). Authoritative for WHEN this rings whenever
+lib/notifications.ts:1081:    * it is present: the execution layer plans off the grid and only falls back
+lib/notifications.ts:1082:    * to `scheduleType`/`frequency` for reminders created before it existed.
+lib/notifications.ts:1083:    */
+lib/notifications.ts:1084:   schedule?: GridSchedule;
+lib/notifications.ts:1085: 
+lib/notifications.ts:1086:   // New unified schedule system ('grid' is OLD-97's days Ã— times model)
+lib/notifications.ts:1087:   scheduleType?: 'once' | 'interval' | 'rrule' | 'grid';
+lib/notifications.ts:1088:   onceAt?: number;
+lib/notifications.ts:1089:   rrule?: string;
+lib/notifications.ts:1090:   dtstart?: number;
+lib/notifications.ts:1091:   tzid?: string;
+lib/notifications.ts:1092:   until?: number;
+lib/notifications.ts:1093:   parseWarnings?: string[];
+lib/notifications.ts:1094: }
+lib/notifications.ts:1095: 
+lib/notifications.ts:1096: // â”€â”€â”€ Occurrence set (OLD-98) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+lib/notifications.ts:1097: //
+lib/notifications.ts:1098: // A grid reminder rings N times a day, so it owns N pending triggers rather
+lib/notifications.ts:1099: // than one. The id scheme already separates them â€” `reminder_<id>_<ts>` is
+lib/notifications.ts:1100: // unique per ring â€” so the work is keeping the SET intact wherever the old code
+lib/notifications.ts:1101: // assumed a single trigger it could freely cancel.
+lib/notifications.ts:1102: 
+lib/notifications.ts:1103: function occurrenceGrid(reminder: ReminderNotification): GridSchedule | null {
+lib/notifications.ts:1104:   return reminder.schedule?.type === "grid" ? reminder.schedule : null;
+lib/notifications.ts:1105: }
+lib/notifications.ts:1106: 
+lib/notifications.ts:1107: /**
+lib/notifications.ts:1108:  * Read the grid back off the store when the caller's object predates it.
+app/index.tsx:1827:          onSave={handleEditSheetSave}
+lib/notifications.ts:1471:async function removeAlarmSoundSafe(reminderId: string): Promise<void> {
+lib/notifications.ts:2426:export async function cancelReminder(reminderId: string): Promise<void> {
+lib/notifications.ts:2477:    await removeAlarmSoundSafe(reminderId);
+lib/notifications.ts:2515:        const mainCurrent = data.audioUrl === audioUrl;
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$files = @(@('"'lib/notifications.ts',2426,2508)); foreach ("'$f in $files) { $n=0; Get-Content $f[0] | ForEach-Object { $n++; if($n -ge $f[1] -and $n -le $f[2]) { '"'{0}:{1}: {2}' -f "'$f[0],$n,$_ } } }; rg -n "withStoredWavUrls|handleEditSheetSave" lib/notifications.ts app/index.tsx; rg -n --hidden --glob AGENTS.md --glob '"'"'!node_modules/**'"' --glob '"'!.git/**'"' . ." in C:\Dev\VR
+ exited 1 in 1012ms:
+Get-Content : Cannot find path 'C:\Dev\VR\l' because it does not exist.
+At line:2 char:81
++ ... 2426,2508)); foreach ($f in $files) { $n=0; Get-Content $f[0] | ForEa ...
++                                                 ~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Dev\VR\l:String) [Get-Content], ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+ 
+Get-Content : Cannot find path 'C:\Dev\VR\2426' because it does not exist.
+At line:2 char:81
++ ... 2426,2508)); foreach ($f in $files) { $n=0; Get-Content $f[0] | ForEa ...
++                                                 ~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Dev\VR\2426:String) [Get-Content], ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+ 
+Get-Content : Cannot find path 'C:\Dev\VR\2508' because it does not exist.
+At line:2 char:81
++ ... 2426,2508)); foreach ($f in $files) { $n=0; Get-Content $f[0] | ForEa ...
++                                                 ~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Dev\VR\2508:String) [Get-Content], ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+ 
+app/index.tsx:1486:  const handleEditSheetSave = useCallback((_updated: Reminder) => {
+app/index.tsx:1827:          onSave={handleEditSheetSave}
+lib/notifications.ts:1110: * Same read-through as `withStoredWavUrls`, same reason: some create flows
+lib/notifications.ts:1590:function withStoredWavUrls(reminder: ReminderNotification): ReminderNotification {
+lib/notifications.ts:1683:    const hydrated = withStoredWavUrls(reminder);
+lib/notifications.ts:1755:      : await ensureAlarmSoundSafe(reminder.id, withStoredWavUrls(reminder).wavUrl);
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content lib/notifications.ts | ForEach-Object { $n++; if(($n -ge 2426 -and $n -le 2508) -or ($n -ge 1590 -and $n -le 1608)) { '"'{0}: {1}' -f "'$n,$_ } }' in C:\Dev\VR
+ succeeded in 768ms:
+1590: function withStoredWavUrls(reminder: ReminderNotification): ReminderNotification {
+1591:   if (reminder.wavUrl) return reminder;
+1592:   const stored = useReminderStore.getState().getReminderById(reminder.id);
+1593:   if (!stored) return reminder;
+1594:   return { ...reminder, wavUrl: toReminderNotification(stored).wavUrl };
+1595: }
+1596: 
+1597: /**
+1598:  * How many of a reminder's pending occurrences get their comebacks armed up
+1599:  * front â€” the registration budget knob.
+1600:  *
+1601:  * The arithmetic, because AlarmKit's cap (`AlarmError.maximumLimitReached`) is
+1602:  * real and Apple publishes no number: a reminder plans up to
+1603:  * MAX_PENDING_OCCURRENCES (4) rings, each chain costs 3 more registrations, and
+1604:  * the free tier allows 5 active reminders. Arming every chain would be
+1605:  * 5 Ã— (4 + 4Ã—3) = 80 concurrent alarms. At horizon 2 it is 5 Ã— (4 + 2Ã—3) = 50.
+1606:  *
+1607:  * Horizon 2 covers the rings the app genuinely cannot react to (the next hour of
+1608:  * an interval reminder, tonight and tomorrow morning of a clock one). Anything
+2426: export async function cancelReminder(reminderId: string): Promise<void> {
+2427:   const channelId = `reminder_${reminderId}`;
+2428: 
+2429:   // Cancel all scheduled notifications for this reminder (occurrence + snooze + pre-alert)
+2430:   const scheduledIds = await notifee.getTriggerNotificationIds();
+2431:   const toCancel = scheduledIds.filter(
+2432:     (id) =>
+2433:       id.startsWith(`reminder_${reminderId}_`) ||
+2434:       id.startsWith(`snooze_${reminderId}_`) ||
+2435:       id.startsWith(`prealert_${reminderId}_`)
+2436:   );
+2437: 
+2438:   for (const id of toCancel) {
+2439:     await notifee.cancelNotification(id);
+2440:   }
+2441: 
+2442:   // A pre-alert that already fired is displayed, not scheduled â€” clear it too.
+2443:   try {
+2444:     const displayed = await notifee.getDisplayedNotifications();
+2445:     for (const d of displayed) {
+2446:       const id = d.notification?.id || d.id;
+2447:       if (id && id.startsWith(`prealert_${reminderId}_`)) {
+2448:         await notifee.cancelDisplayedNotification(id);
+2449:       }
+2450:     }
+2451:   } catch {
+2452:     // ignore
+2453:   }
+2454: 
+2455:   // AlarmKit mirror: those occurrences have no notifee trigger to cancel.
+2456:   if (await alarmKitEnabled()) {
+2457:     await cancelAlarmKitForReminder(reminderId);
+2458:     await clearAlarmKitState(reminderId);
+2459:   }
+2460: 
+2461:   // Delete the channel
+2462:   await notifee.deleteChannel(channelId);
+2463: 
+2464:   // Note: NOT deleting local audio file here - it's needed for rescheduling
+2465:   // Audio is only deleted when reminder is fully deleted via deleteReminderWithAudio()
+2466: 
+2467:   console.log(`[VR] Cancelled ${toCancel.length} trigger notifications for reminder ${reminderId}`);
+2468: }
+2469: 
+2470: // Use this when fully deleting a reminder (not just rescheduling)
+2471: export async function deleteReminderWithAudio(reminderId: string): Promise<void> {
+2472:   await cancelReminder(reminderId);
+2473:   await deleteLocalAudio(reminderId);
+2474:   await deleteLocalPreAudio(reminderId);
+2475:   await deleteLocalVariantAudios(reminderId);
+2476:   if (Platform.OS === "ios") {
+2477:     await removeAlarmSoundSafe(reminderId);
+2478:   }
+2479:   console.log(`[VR] Deleted reminder ${reminderId} with audio`);
+2480: }
+2481: 
+2482: /**
+2483:  * Refresh scheduled notification data after audio becomes available.
+2484:  * Updates the notification data to include the audioUrl (and, when provided,
+2485:  * the pre-alert's preAudioUrl) without changing the trigger times.
+2486:  */
+2487: export async function refreshNotificationWithAudio(
+2488:   reminderId: string,
+2489:   audioUrl: string,
+2490:   preAudioUrl?: string
+2491: ): Promise<void> {
+2492:   try {
+2493:     // AlarmKit occurrences carry their sound as a Library/Sounds filename, not
+2494:     // as notification data, so hydration has to re-register them instead.
+2495:     if (await alarmKitEnabled()) {
+2496:       await refreshAlarmKitSound(reminderId);
+2497:     }
+2498: 
+2499:     // Get all trigger notifications
+2500:     const allNotifications = await notifee.getTriggerNotifications();
+2501: 
+2502:     for (const notification of allNotifications) {
+2503:       const id = notification.notification.id;
+2504:       if (!id) continue;
+2505: 
+2506:       const isMainTrigger = id.startsWith(`reminder_${reminderId}_`);
+2507:       const isPreAlertTrigger = id.startsWith(`prealert_${reminderId}_`);
+2508:       if (!isMainTrigger && !isPreAlertTrigger) continue;
+
+codex
+**1. Corrections / Q1–Q3**
+
+- **Q1: Inline is reasonable, but the modal rationale is wrong.** Hydration also runs from the app layout, independent of the sheet ([app/_layout.tsx:165](/C:/Dev/VR/app/_layout.tsx:165)). It accepts an existing `audioUrl`, not a transition to `"ready"` ([lib/audioHydration.ts:214](/C:/Dev/VR/lib/audioHydration.ts:214)); setting `"pending"` alone won’t implement regeneration.
+- **Q2: WAV invalidation must clear the in-memory cache too.** It caches by filename, ignoring URL changes ([lib/alarmSounds.ts:81](/C:/Dev/VR/lib/alarmSounds.ts:81)). Use `removeAlarmSound`, which clears that cache and the native file ([lib/alarmSounds.ts:134](/C:/Dev/VR/lib/alarmSounds.ts:134)). `cancelReminder` preserves audio.
+- AlarmKit uses a local filename in `Library/Sounds` ([Apple](https://developer.apple.com/videos/play/wwdc2025/230/)). Cancel/re-create is appropriate; await WAV download/placement before registration. The native bridge overwrites the file ([plugins/withAlarmKit.js:155](/C:/Dev/VR/plugins/withAlarmKit.js:155)). Same-filename playback still deserves one physical-device check.
+- **Q3: No URL-identity dependency in ring planning.** Scheduling calls the downloader, whose cache checks reminder-ID/file existence; planning uses the schedule and current time ([lib/notifications.ts:1152](/C:/Dev/VR/lib/notifications.ts:1152), [lib/notifications.ts:2132](/C:/Dev/VR/lib/notifications.ts:2132)). A new URL alone won’t refresh cached audio.
+
+**2. Four practical edge cases**
+
+- **MP3 succeeds, WAV fails:** the action still succeeds because WAV synthesis errors are swallowed ([convex/actions.ts:946](/C:/Dev/VR/convex/actions.ts:946)). WAV placement errors also return `null` ([lib/alarmSounds.ts:99](/C:/Dev/VR/lib/alarmSounds.ts:99)). Handle this explicitly; don’t announce voice success on iOS. Clear stale store `wavUrl` before scheduling, otherwise the scheduler reads it back ([lib/notifications.ts:1590](/C:/Dev/VR/lib/notifications.ts:1590)).
+- **Network drops after generation:** the backend already deleted the old blobs ([convex/reminders.ts:167](/C:/Dev/VR/convex/reminders.ts:167)). Deleting local audio next makes “fall back to OLD URLs” unreliable. Stage/validate replacements before discarding local fallback; distinguish generation failure from download/install failure.
+- **Save again after failed regeneration:** text now equals `reminder.description`, so the change-only guard never retries. Keep a voice-outdated marker or an explicit retry affordance; no background queue needed.
+- **Reminder becomes due during the wait:** scheduling calculates from *after* downloads and can reject an expired one-off ([lib/notifications.ts:2148](/C:/Dev/VR/lib/notifications.ts:2148)). The existing save path cancels first and mostly logs scheduling failures ([components/EditReminderSheet.tsx:335](/C:/Dev/VR/components/EditReminderSheet.tsx:335), [:370](/C:/Dev/VR/components/EditReminderSheet.tsx:370)). Surface that failure instead of reporting a successful save with no alarm.
+
+**3. Verdict: agree with these changes.**
+
+Keep inline regeneration and the additive `wavUrl` return. Fix cache invalidation, preserve fallback until replacement is usable, handle missing WAV explicitly, and allow retry after failure. Add focused missing-WAV/download-failure tests plus one same-reminder iPhone playback check.
+tokens used
+41,763
+**1. Corrections / Q1–Q3**
+
+- **Q1: Inline is reasonable, but the modal rationale is wrong.** Hydration also runs from the app layout, independent of the sheet ([app/_layout.tsx:165](/C:/Dev/VR/app/_layout.tsx:165)). It accepts an existing `audioUrl`, not a transition to `"ready"` ([lib/audioHydration.ts:214](/C:/Dev/VR/lib/audioHydration.ts:214)); setting `"pending"` alone won’t implement regeneration.
+- **Q2: WAV invalidation must clear the in-memory cache too.** It caches by filename, ignoring URL changes ([lib/alarmSounds.ts:81](/C:/Dev/VR/lib/alarmSounds.ts:81)). Use `removeAlarmSound`, which clears that cache and the native file ([lib/alarmSounds.ts:134](/C:/Dev/VR/lib/alarmSounds.ts:134)). `cancelReminder` preserves audio.
+- AlarmKit uses a local filename in `Library/Sounds` ([Apple](https://developer.apple.com/videos/play/wwdc2025/230/)). Cancel/re-create is appropriate; await WAV download/placement before registration. The native bridge overwrites the file ([plugins/withAlarmKit.js:155](/C:/Dev/VR/plugins/withAlarmKit.js:155)). Same-filename playback still deserves one physical-device check.
+- **Q3: No URL-identity dependency in ring planning.** Scheduling calls the downloader, whose cache checks reminder-ID/file existence; planning uses the schedule and current time ([lib/notifications.ts:1152](/C:/Dev/VR/lib/notifications.ts:1152), [lib/notifications.ts:2132](/C:/Dev/VR/lib/notifications.ts:2132)). A new URL alone won’t refresh cached audio.
+
+**2. Four practical edge cases**
+
+- **MP3 succeeds, WAV fails:** the action still succeeds because WAV synthesis errors are swallowed ([convex/actions.ts:946](/C:/Dev/VR/convex/actions.ts:946)). WAV placement errors also return `null` ([lib/alarmSounds.ts:99](/C:/Dev/VR/lib/alarmSounds.ts:99)). Handle this explicitly; don’t announce voice success on iOS. Clear stale store `wavUrl` before scheduling, otherwise the scheduler reads it back ([lib/notifications.ts:1590](/C:/Dev/VR/lib/notifications.ts:1590)).
+- **Network drops after generation:** the backend already deleted the old blobs ([convex/reminders.ts:167](/C:/Dev/VR/convex/reminders.ts:167)). Deleting local audio next makes “fall back to OLD URLs” unreliable. Stage/validate replacements before discarding local fallback; distinguish generation failure from download/install failure.
+- **Save again after failed regeneration:** text now equals `reminder.description`, so the change-only guard never retries. Keep a voice-outdated marker or an explicit retry affordance; no background queue needed.
+- **Reminder becomes due during the wait:** scheduling calculates from *after* downloads and can reject an expired one-off ([lib/notifications.ts:2148](/C:/Dev/VR/lib/notifications.ts:2148)). The existing save path cancels first and mostly logs scheduling failures ([components/EditReminderSheet.tsx:335](/C:/Dev/VR/components/EditReminderSheet.tsx:335), [:370](/C:/Dev/VR/components/EditReminderSheet.tsx:370)). Surface that failure instead of reporting a successful save with no alarm.
+
+**3. Verdict: agree with these changes.**
+
+Keep inline regeneration and the additive `wavUrl` return. Fix cache invalidation, preserve fallback until replacement is usable, handle missing WAV explicitly, and allow retry after failure. Add focused missing-WAV/download-failure tests plus one same-reminder iPhone playback check.

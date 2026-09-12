@@ -10,7 +10,8 @@
       "env": {
         "SENTRY_ALLOW_FAILURE": "true",
         "SENTRY_URL": "https://de.sentry.io/",
-        "SENTRY_ORG": "oldowan"
+        "SENTRY_ORG": "oldowan",
+        "EXPO_PUBLIC_VR_PERF_LOGS": "1"
       },
       "android": {
         "buildType": "apk",
@@ -31,7 +32,8 @@
       "env": {
         "SENTRY_ALLOW_FAILURE": "true",
         "SENTRY_URL": "https://de.sentry.io/",
-        "SENTRY_ORG": "oldowan"
+        "SENTRY_ORG": "oldowan",
+        "EXPO_PUBLIC_VR_PERF_LOGS": "1"
       },
       "android": {
         "buildType": "apk",
@@ -70,6 +72,10 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "ascAppId": "6801797784"
+      }
+    }
   }
 }

@@ -1,0 +1,1096 @@
+2026-09-10T05:39:49.749261Z ERROR codex_core::session::session: failed to load skill C:\Users\AtheA\.agents\skills\ptc-microsoft-todo\SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Dev\VR
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a089d4-4399-7f12-83d3-ed83a0ef4d7e
+--------
+user
+Short pass (not deep) on a UI idea. Context: the feedback feature from outputs/codex/2026-09-10-feedback-simple-brief.md is now shipped and working (composer sheet, outbox, status list, founder email). Read-only; no file changes; no convex/eas. Answer in under 40 lines: (1) corrections with file:line; (2) answers to Q1-Q4; (3) verdict with a concrete recommendation. Explore the repo for the current layout: bottom bar `components/BottomBar.tsx` (three tabs + a big blue mic button, floating pill at the bottom), page headers in `app/index.tsx` (Reminders has a "+" top-right), `components/days/DaysPage.tsx` (header has a month chip top-right), `app/settings.tsx`. Feedback opener store `lib/feedbackUi.ts`, composer `components/FeedbackSheet.tsx`, host `components/FeedbackHost.tsx` mounted in `app/_layout.tsx`.
+
+## The user's idea (quoting intent)
+"Sneak a bug icon that is always on all three pages such that the user can easily send an issue. From time to time a prompt would float above it like 'report bugs' or 'need help?' to clue the user in that this is where you send issues. Intent: ease and convenience, making it much more likely users share feedback on any issue."
+
+## Claude's take (to be grilled)
+- A permanently floating button competes with the mic, which is the app's one primary action, and the bottom pill already carries three tabs. A second floating element on every page is visual noise in an otherwise minimal UI.
+- Counter-proposal A: a small, consistent icon in each page header (top-right on Settings and Days, next to the existing "+" on Reminders, same size/weight as those chips) — always present, one tap to the composer, no float.
+- Counter-proposal B: keep the floating element but fold it INTO the bottom pill as a fourth small item rather than a separate blob.
+- Nudge: not "from time to time" on a timer (that trains users to ignore it and reads as nagging). Trigger-based instead: (1) after a take fails, (2) after the user edits the title or spoken line of a reminder created in the last 2 minutes (a parse-miss signal), (3) once, on the 3rd day of use. A small tooltip bubble anchored to the icon ("Something off? Tell me here"), auto-dismiss 6 s, tap to open the composer, never while recording or while a sheet is open, at most once per week, stored locally.
+
+## Questions
+- Q1: Which placement do you pick and why — floating blob, header icon (A), or bottom-pill item (B)? Consider thumb reach on an iPhone 12, the mic's dominance, and that the composer already opens from the failed card and the edit sheet.
+- Q2: The nudge triggers above — keep, cut, or change? Any trigger that will fire at the wrong moment for a normal user?
+- Q3: Any iOS HIG / App Review concern with a persistent "report a bug" affordance or a tooltip (none expected — confirm)?
+- Q4: Copy: one label for the icon's accessibility name and one line for the tooltip, plain and non-provider-specific.
+
+2026-09-10T05:39:50.755357Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\"error\":{\"message\":\"Invalid API key: ak_**mXj4\",\"code\":801,\"status\":401,\"request_id\":\"e6ed1198-c5dd-4b85-885f-258a636cab9e\"}}")
+codex
+I’ll check the current layout and feedback entry points, then give a short recommendation and verify the iOS guidance.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content outputs/codex/2026-09-10-feedback-simple-brief.md; rg -n "feedback|Feedback|header|month|Settings|Reminders|Plus|mic|Mic|tab" components/BottomBar.tsx app/index.tsx components/days/DaysPage.tsx app/settings.tsx lib/feedbackUi.ts components/FeedbackSheet.tsx components/FeedbackHost.tsx app/_layout.tsx' in C:\Dev\VR
+ succeeded in 4205ms:
+Short sanity pass (not deep) on a simplified version of the feedback feature you reviewed earlier today (see outputs/codex/2026-09-10-snag-feedback-brief.md and your answer in outputs/codex/2026-09-10-snag-feedback.md â€” read both first). The user cut scope to: "very simple and convenient to send us feedback, and users see next time they open the app whether their request was attended to." Read-only; no file changes; no convex/eas. Answer in under 40 lines: (1) corrections with file:line; (2) answers to Q1-Q4; (3) at most 3 edge cases a normal user will hit; (4) verdict. Bar: "less likely to surprise the user", not exhaustive.
+
+## Simplified plan
+Backend (Convex, new table `feedback`): `{clientId (uuid idempotency key), deviceId, text (1..2000), createdAt, receivedAt, context?: any (â‰¤8 KB), status: "received"|"looking"|"fixed", note?: string, updatedAt}`; indexes by_device [deviceId, createdAt], by_client [deviceId, clientId]. `feedback.submit` mutation (idempotent on deviceId+clientId; schedules an internal action), `feedback.listForDevice` query (newest 50, no context/deviceId), `feedback.setStatus` internal mutation the founder runs from the dashboard function runner ({id, status, note?} â†’ bumps updatedAt), `feedback.notify` internal action that emails the founder via the Resend REST API (env RESEND_API_KEY + FEEDBACK_EMAIL_TO already set; from onboarding@resend.dev; plain-text body with the text + a whitelisted context block; never deviceId; no retries).
+Client: one composer sheet (text box + Send; "Includes this reminder's details" line when opened from a reminder) reachable from (a) a Settings row "Send feedback", (b) the failed-take card, (c) the reminder edit sheet ("Report a problem" â€” does not save or discard the user's unsaved edits). No email field. Context attached automatically: kind, reminder title/spoken line/schedule (from the store row â€” current values), errorKind/serverErrorCode/creationId/sttSource for failed takes, buildNumber, updateId, iOS version, timezone, local time. Durable AsyncStorage outbox (`lib/feedbackOutbox.ts`): persist first â†’ "Saved. Sends next time Remi is online." â†’ flush on app foreground/reconnect/after submit â†’ "Sent" only after the mutation returns. Status view: Settings â†’ "Your feedback" list from `listForDevice` (status chip Received / Looking into it / Fixed + note). On app open, if any item's `updatedAt` is newer than the locally stored last-seen timestamp, show a one-line banner "Your feedback was updated" that opens the list; tapping/opening marks it seen (local).
+
+## Questions
+- Q1: Is `updatedAt`-vs-local-last-seen the right "attended to" signal, or should the server carry a per-item `seenByUserAt`? (Two devices are not a case here â€” one device per user.)
+- Q2: Reactivity â€” a `useQuery(listForDevice)` mounted at app root for the banner is one live subscription for the whole app life; acceptable, or gate it (subscribe only when the outbox has ever sent something, i.e. a local "hasFeedback" flag)?
+- Q3: The edit-sheet entry: the sheet already has title/spoken-line/schedule inputs and a Save button. Where would a user expect "Report a problem" (a row under the schedule, or in the â‹¯/delete area) so it is not mistaken for Save/Delete?
+- Q4: Anything in the App Store privacy labels or the privacy policy (legal-site/privacy.html) that this simplified version still changes, given no email is collected and the text is user-provided content tied to a device id?
+lib/feedbackUi.ts:2:import type { FeedbackContext } from "./feedbackOutbox";
+lib/feedbackUi.ts:5: * The feedback UI, driven from anywhere.
+lib/feedbackUi.ts:7: * The composer and the "Your feedback" list are mounted once, high in the tree
+lib/feedbackUi.ts:8: * (components/FeedbackHost, rendered above every screen and sheet). Every
+lib/feedbackUi.ts:9: * entrance — a Settings row, the failed-take card, the edit sheet's "Report a
+lib/feedbackUi.ts:15:export type FeedbackComposer = {
+lib/feedbackUi.ts:17:  context: FeedbackContext;
+lib/feedbackUi.ts:22:interface FeedbackUiState {
+lib/feedbackUi.ts:23:  composer: FeedbackComposer | null;
+lib/feedbackUi.ts:25:  openComposer: (context: FeedbackContext, notice?: string) => void;
+lib/feedbackUi.ts:31:export const useFeedbackUi = create<FeedbackUiState>((set) => ({
+lib/feedbackUi.ts:41:export const feedbackUi = {
+lib/feedbackUi.ts:42:  openComposer: (context: FeedbackContext, notice?: string) =>
+lib/feedbackUi.ts:43:    useFeedbackUi.getState().openComposer(context, notice),
+lib/feedbackUi.ts:44:  openList: () => useFeedbackUi.getState().openList(),
+components/BottomBar.tsx:4:import { Calendar, List, Mic, Settings } from "lucide-react-native";
+components/BottomBar.tsx:11:    onTab: (tab: BottomBarTab) => void;
+components/BottomBar.tsx:17:    { key: "today", label: "Reminders", Icon: List },
+components/BottomBar.tsx:19:    { key: "settings", label: "Settings", Icon: Settings },
+components/BottomBar.tsx:27:            {/* Dock and mic travel as one centered group. */}
+components/BottomBar.tsx:38:                                accessibilityRole="tab"
+components/BottomBar.tsx:60:                        <Mic size={24} color="white" strokeWidth={1.75} />
+components/BottomBar.tsx:100:    // Tiimo-style active tab: dark rounded square, light icon.
+components/FeedbackSheet.tsx:17:  newFeedbackClientId,
+components/FeedbackSheet.tsx:18:  type FeedbackContext,
+components/FeedbackSheet.tsx:19:  type FeedbackSubmitInput,
+components/FeedbackSheet.tsx:20:  type FeedbackSubmitResult,
+components/FeedbackSheet.tsx:21:} from "../lib/feedbackOutbox";
+components/FeedbackSheet.tsx:22:import { buildFeedbackContext } from "../lib/feedbackContext";
+components/FeedbackSheet.tsx:27:export type FeedbackSheetProps = {
+components/FeedbackSheet.tsx:30:  context: FeedbackContext | null;
+components/FeedbackSheet.tsx:37: * The feedback composer (bottom sheet).
+components/FeedbackSheet.tsx:45:export default function FeedbackSheet({ visible, context, notice, onClose }: FeedbackSheetProps) {
+components/FeedbackSheet.tsx:46:  const submitFeedback = useMutation(api.feedback.submit);
+components/FeedbackSheet.tsx:70:    const clientId = newFeedbackClientId();
+components/FeedbackSheet.tsx:71:    const fullContext = buildFeedbackContext(context ?? {});
+components/FeedbackSheet.tsx:91:    const submit = (input: FeedbackSubmitInput): Promise<FeedbackSubmitResult> =>
+components/FeedbackSheet.tsx:92:      submitFeedback({ deviceId, ...input }) as Promise<FeedbackSubmitResult>;
+components/FeedbackSheet.tsx:106:  }, [text, sending, context, submitFeedback, toast, handleClose]);
+components/FeedbackSheet.tsx:141:        <Text style={styles.title}>Send feedback</Text>
+components/FeedbackSheet.tsx:153:            editable={!sending}
+app/index.tsx:22:import { Plus } from "lucide-react-native";
+app/index.tsx:35:  persistReminders,
+app/index.tsx:40:import { useSettingsStore } from "../lib/settingsStore";
+app/index.tsx:54:import { SettingsContent } from "./settings";
+app/index.tsx:80:  intakeTakeReminders,
+app/index.tsx:83:  scheduleTakeReminders,
+app/index.tsx:109:import { feedbackUi } from "../lib/feedbackUi";
+app/index.tsx:125:// Pager pages: 0 = Reminders, 1 = Days, 2 = Settings (see docs/ui-redesign.md gesture map).
+app/index.tsx:176:// out here with a stable identity, which is what lets the memoized card sit
+app/index.tsx:183:  feedbackUi.openComposer(
+app/index.tsx:227:  const loadReminders = useReminderStore((state) => state.loadReminders);
+app/index.tsx:229:  const hasLoadedReminders = useReminderStore((state) => state.hasLoadedReminders);
+app/index.tsx:231:  const activeReminders = useMemo(() => {
+app/index.tsx:253:  // Typed composer (OLD-101) — opened from the header's + button (Tiimo pattern).
+app/index.tsx:434:    const settingsState = useSettingsStore.getState();
+app/index.tsx:435:    if (!settingsState.hasLoadedSettings) {
+app/index.tsx:436:      await settingsState.loadSettings();
+app/index.tsx:438:    if (useSettingsStore.getState().settings.aiConsentAcceptedAt === null) {
+app/index.tsx:459:    // synchronous cache read and the mic opens in the same render as the
+app/index.tsx:468:    // Reminders load at startup, so an unloaded store here is the rare
+app/index.tsx:470:    if (!hasLoadedReminders && !cachedPro) {
+app/index.tsx:475:      await loadReminders().catch(() => {});
+app/index.tsx:486:      hasLoadedReminders,
+app/index.tsx:528:  }, [showRecording, isConnected, hasLoadedReminders, loadReminders, lockRecordingForLimit]);
+app/index.tsx:531:  // the system mic prompt and then continues into the recording the user
+app/index.tsx:556:  const scheduleCreatedReminders = useCallback(
+app/index.tsx:563:        void scheduleTakeReminders(
+app/index.tsx:698:      const outcome = await intakeTakeReminders({
+app/index.tsx:750:      // Store already updated - no need for setReminders
+app/index.tsx:752:      const feedback = describeTakeOutcome({
+app/index.tsx:760:      if (feedback) {
+app/index.tsx:764:          title: feedback.title,
+app/index.tsx:765:          message: feedback.message,
+app/index.tsx:766:          type: feedback.type,
+app/index.tsx:767:          durationMs: feedback.upgrade ? 4000 : undefined,
+app/index.tsx:768:          onPress: !feedback.upgrade
+app/index.tsx:770:            : feedback.upgradeContext === "interval"
+app/index.tsx:778:      scheduleCreatedReminders(outcome.created, traceId);
+app/index.tsx:785:      scheduleCreatedReminders,
+app/index.tsx:796:   * The same gates the mic runs, minus the ones that are about a microphone:
+app/index.tsx:799:   * straight into the system mic prompt.
+app/index.tsx:820:    // Free cap, counted exactly the way the mic counts it — and read the same
+app/index.tsx:825:    if (!hasLoadedReminders && !cachedPro) {
+app/index.tsx:826:      await loadReminders().catch(() => {});
+app/index.tsx:835:      // mic's overlay gets unlocked — so the refresh here only heals the
+app/index.tsx:873:    hasLoadedReminders,
+app/index.tsx:874:    loadReminders,
+app/index.tsx:965:  // Kicked off by RecordingOverlay the moment the mic is cleared to start, so
+app/index.tsx:975:    const { voiceLanguage, voiceEngine } = useSettingsStore.getState().settings;
+app/index.tsx:1010:      const store = useSettingsStore.getState();
+app/index.tsx:1011:      if (!store.hasLoadedSettings) await store.loadSettings().catch(() => {});
+app/index.tsx:1012:      if (useSettingsStore.getState().settings.aiConsentAcceptedAt === null) return;
+app/index.tsx:1103:        // foreground — the dispatch table already turns failed + committed into
+app/index.tsx:1306:      // pending card renders in the Reminders list header. So once the take is
+app/index.tsx:1308:      // above), switch back to the Reminders list and pin it to the top so the
+app/index.tsx:1311:      // same setter the tab tap uses.
+app/index.tsx:1363:        const { voiceLanguage, voiceEngine } = useSettingsStore.getState().settings;
+app/index.tsx:1433:      const feedback = describeTakeOutcome({
+app/index.tsx:1441:      if (feedback) {
+app/index.tsx:1443:          title: feedback.title,
+app/index.tsx:1444:          message: feedback.message,
+app/index.tsx:1445:          type: feedback.type,
+app/index.tsx:1446:          durationMs: feedback.upgrade ? 4000 : undefined,
+app/index.tsx:1447:          onPress: !feedback.upgrade
+app/index.tsx:1449:            : feedback.upgradeContext === "interval"
+app/index.tsx:1456:      scheduleCreatedReminders(created, take.creationId, () => {
+app/index.tsx:1465:    [toast, openPaywall, openIntervalPaywall, scheduleCreatedReminders, startHydration]
+app/index.tsx:1483:        convex.query(api.creationJobs.getReminders, {
+app/index.tsx:1499:          persistStore: persistReminders,
+app/index.tsx:1565:          loadReminders().catch(() => {}),
+app/index.tsx:1583:    loadReminders,
+app/index.tsx:1743:  const handleTab = useCallback((tab: BottomBarTab) => {
+app/index.tsx:1744:    setPage(tab === "today" ? PAGE_TODAY : tab === "days" ? PAGE_DAYS : PAGE_SETTINGS);
+app/index.tsx:1750:      month: "short",
+app/index.tsx:1810:        {/* ---- Page 0: Reminders ---- */}
+app/index.tsx:1812:          <View style={styles.header}>
+app/index.tsx:1813:            <View style={styles.headerTop}>
+app/index.tsx:1814:              <View style={styles.headerTitleWrap}>
+app/index.tsx:1815:                <Text style={styles.headerTitle}>Reminders</Text>
+app/index.tsx:1816:                <Text style={styles.headerDate}>{dateLabel}</Text>
+app/index.tsx:1818:              <View style={styles.headerActions}>
+app/index.tsx:1836:                  <Plus size={20} color={colors.textHeading} strokeWidth={2} />
+app/index.tsx:1889:            // Deliberately no ListEmptyComponent: an empty Reminders list stays silent,
+app/index.tsx:1906:        {/* ---- Page 2: Settings ---- */}
+app/index.tsx:1911:          <SettingsContent embedded visible={page === PAGE_SETTINGS} />
+app/index.tsx:1915:      {/* Tiimo-style dock on every page, mic anchored bottom-right.
+app/index.tsx:1950:      {/* Typed composer — same parse, same sheet, no microphone (OLD-101) */}
+app/index.tsx:1988:  header: {
+app/index.tsx:1993:  headerTop: {
+app/index.tsx:1998:  headerTitleWrap: {
+app/index.tsx:2001:  headerTitle: {
+app/index.tsx:2008:  headerDate: {
+app/index.tsx:2014:  headerActions: {
+app/index.tsx:2036:  // Tiimo-style header +: quiet white circle, top-right. The composer's only door.
+app/_layout.tsx:15:import { useSettingsStore } from "../lib/settingsStore";
+app/_layout.tsx:16:import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, enforcePendingAlarmTimeout, reconcileAlarmKitEvents } from "../lib/notifications";
+app/_layout.tsx:29:import FeedbackHost from "../components/FeedbackHost";
+app/_layout.tsx:58:  const loadReminders = useReminderStore((s) => s.loadReminders);
+app/_layout.tsx:63:    void loadReminders();
+app/_layout.tsx:64:    void useSettingsStore.getState().loadSettings();
+app/_layout.tsx:94:  }, [loadReminders, loadHistory]);
+app/_layout.tsx:128:      const result = await syncRemindersOnStartup(reminders, history);
+app/_layout.tsx:149:    const pendingReminders = reminders.filter(
+app/_layout.tsx:156:    if (pendingReminders.length === 0) return;
+app/_layout.tsx:158:    console.log(`[VR] Startup: ${pendingReminders.length} reminders need audio hydration`);
+app/_layout.tsx:161:    const toHydrate = pendingReminders.slice(0, 2);
+app/_layout.tsx:351:                    ? { headerShown: false, freezeOnBlur: true }
+app/_layout.tsx:353:                        headerShown: false,
+app/_layout.tsx:411:              {/* Feedback composer + status list, mounted above every screen
+app/_layout.tsx:413:              <FeedbackHost />
+components/FeedbackHost.tsx:9:import { useFeedbackUi } from "../lib/feedbackUi";
+components/FeedbackHost.tsx:10:import { hasUnseenResponses, nextWatermark } from "../lib/feedbackSeen";
+components/FeedbackHost.tsx:13:  type FeedbackSubmitInput,
+components/FeedbackHost.tsx:14:  type FeedbackSubmitResult,
+components/FeedbackHost.tsx:15:} from "../lib/feedbackOutbox";
+components/FeedbackHost.tsx:16:import FeedbackSheet from "./FeedbackSheet";
+components/FeedbackHost.tsx:17:import FeedbackList, { type ServerFeedback } from "./FeedbackList";
+components/FeedbackHost.tsx:19:const SEEN_WATERMARK_KEY = "@feedback_seen_responded_at";
+components/FeedbackHost.tsx:22: * The single mount point for the feedback UI, placed above every screen and
+components/FeedbackHost.tsx:25: * It also owns the one subscription to the device's feedback and the "your
+components/FeedbackHost.tsx:26: * feedback was answered" banner: when a note has been responded to more recently
+components/FeedbackHost.tsx:31:export default function FeedbackHost() {
+components/FeedbackHost.tsx:32:  const composer = useFeedbackUi((s) => s.composer);
+components/FeedbackHost.tsx:33:  const closeComposer = useFeedbackUi((s) => s.closeComposer);
+components/FeedbackHost.tsx:34:  const listVisible = useFeedbackUi((s) => s.listVisible);
+components/FeedbackHost.tsx:35:  const openList = useFeedbackUi((s) => s.openList);
+components/FeedbackHost.tsx:36:  const closeList = useFeedbackUi((s) => s.closeList);
+components/FeedbackHost.tsx:38:  const submitFeedback = useMutation(api.feedback.submit);
+components/FeedbackHost.tsx:66:    api.feedback.listForDevice,
+components/FeedbackHost.tsx:68:  ) as ServerFeedback[] | undefined;
+components/FeedbackHost.tsx:77:      const submit = (input: FeedbackSubmitInput): Promise<FeedbackSubmitResult> =>
+components/FeedbackHost.tsx:78:        submitFeedback({ deviceId, ...input }) as Promise<FeedbackSubmitResult>;
+components/FeedbackHost.tsx:93:  }, [deviceId, submitFeedback]);
+components/FeedbackHost.tsx:103:      title: "Your feedback was updated",
+components/FeedbackHost.tsx:122:      <FeedbackSheet
+components/FeedbackHost.tsx:128:      <FeedbackList visible={listVisible} items={items} onClose={closeList} />
+app/settings.tsx:26:import { useSettingsStore } from "../lib/settingsStore";
+app/settings.tsx:27:import { useFeedbackUi } from "../lib/feedbackUi";
+app/settings.tsx:37:type SettingsRowProps = {
+app/settings.tsx:44:function SettingsRow({ icon, label, subtitle, onPress }: SettingsRowProps) {
+app/settings.tsx:66:type SettingsContentProps = {
+app/settings.tsx:78:export function SettingsContent({ embedded = false, visible = true }: SettingsContentProps) {
+app/settings.tsx:97:  const voiceLanguage = useSettingsStore((s) => s.settings.voiceLanguage);
+app/settings.tsx:98:  const voiceEngine = useSettingsStore((s) => s.settings.voiceEngine);
+app/settings.tsx:99:  const setVoiceLanguage = useSettingsStore((s) => s.setVoiceLanguage);
+app/settings.tsx:100:  const setVoiceEngine = useSettingsStore((s) => s.setVoiceEngine);
+app/settings.tsx:102:  // In-app feedback: the composer and the "your feedback" list are mounted once
+app/settings.tsx:103:  // at the root (components/FeedbackHost); these rows just open them.
+app/settings.tsx:104:  const openFeedbackComposer = useFeedbackUi((s) => s.openComposer);
+app/settings.tsx:105:  const openFeedbackList = useFeedbackUi((s) => s.openList);
+app/settings.tsx:107:    void useSettingsStore.getState().loadSettings().catch(() => {});
+app/settings.tsx:161:  // Arriving at the Settings page by swipe/tab tap changes no route, so it
+app/settings.tsx:226:        "Manage your subscription under Settings › your Apple Account › Subscriptions."
+app/settings.tsx:247:      <View style={styles.header}>
+app/settings.tsx:257:        <Text style={styles.headerTitle}>Settings</Text>
+app/settings.tsx:289:        <SettingsRow
+app/settings.tsx:296:        <SettingsRow
+app/settings.tsx:307:        <SettingsRow
+app/settings.tsx:308:          icon="mic"
+app/settings.tsx:316:            <SettingsRow
+app/settings.tsx:326:      {/* Feedback: a direct line to the developer, and where past notes stand */}
+app/settings.tsx:327:      <Text style={styles.sectionLabel}>Feedback</Text>
+app/settings.tsx:329:        <SettingsRow
+app/settings.tsx:331:          label="Send feedback"
+app/settings.tsx:333:          onPress={() => openFeedbackComposer({ kind: "settings" })}
+app/settings.tsx:336:        <SettingsRow
+app/settings.tsx:338:          label="Your feedback"
+app/settings.tsx:340:          onPress={openFeedbackList}
+app/settings.tsx:348:        <SettingsRow
+app/settings.tsx:355:        <SettingsRow
+app/settings.tsx:369:export default function SettingsScreen() {
+app/settings.tsx:372:      <SettingsContent />
+app/settings.tsx:393:  header: {
+app/settings.tsx:408:  headerTitle: {
+components/days/DaysPage.tsx:56: * ring. Reminders written before the grid existed (and any the store has not
+components/days/DaysPage.tsx:119:  const [monthSheetVisible, setMonthSheetVisible] = useState(false);
+components/days/DaysPage.tsx:240:  const monthLabel = `${selected
+components/days/DaysPage.tsx:241:    .toLocaleDateString([], { month: "short" })
+components/days/DaysPage.tsx:246:      <View style={styles.header}>
+components/days/DaysPage.tsx:249:          style={styles.monthButton}
+components/days/DaysPage.tsx:252:          accessibilityLabel="Open month picker"
+components/days/DaysPage.tsx:254:          <Text style={styles.monthButtonText}>{monthLabel}</Text>
+components/days/DaysPage.tsx:270:        visible={monthSheetVisible}
+components/days/DaysPage.tsx:285:  header: {
+components/days/DaysPage.tsx:300:  monthButton: {
+components/days/DaysPage.tsx:308:  monthButtonText: {
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths = @('"'components/BottomBar.tsx','lib/feedbackUi.ts','components/FeedbackHost.tsx'); foreach ("'$p in $paths) { $n=0; Get-Content $p | ForEach-Object { $n++; '"'{0}:{1}: {2}' -f "'$p,$n,$_ } }; rg -n "openComposer|Report a problem|feedback|createdAt" components/ReminderEditSheet.tsx components/*Take* lib/feedbackOutbox.ts; $ranges = @(@('"'app/index.tsx',1808,1842),@('app/index.tsx',1900,1948),@('app/index.tsx',2014,2054),@('components/days/DaysPage.tsx',240,315),@('app/settings.tsx',238,265),@('components/FeedbackSheet.tsx',108,171)); foreach("'$r in $ranges) { $n=0; Get-Content $r[0] | ForEach-Object { $n++; if($n -ge $r[1] -and $n -le $r[2]) { '"'{0}:{1}: {2}' -f "'$r[0],$n,$_ } } }' in C:\Dev\VR
+ succeeded in 970ms:
+components/BottomBar.tsx:1: import React from "react";
+components/BottomBar.tsx:2: import { StyleSheet, TouchableOpacity, View } from "react-native";
+components/BottomBar.tsx:3: import { useSafeAreaInsets } from "react-native-safe-area-context";
+components/BottomBar.tsx:4: import { Calendar, List, Mic, Settings } from "lucide-react-native";
+components/BottomBar.tsx:5: import { borderRadius, colors, shadows } from "../lib/theme";
+components/BottomBar.tsx:6: 
+components/BottomBar.tsx:7: export type BottomBarTab = "today" | "days" | "settings";
+components/BottomBar.tsx:8: 
+components/BottomBar.tsx:9: type BottomBarProps = {
+components/BottomBar.tsx:10:     activeTab: BottomBarTab;
+components/BottomBar.tsx:11:     onTab: (tab: BottomBarTab) => void;
+components/BottomBar.tsx:12:     /** When set, renders the round record button anchored bottom-right (Tiimo style). */
+components/BottomBar.tsx:13:     onRecord?: () => void;
+components/BottomBar.tsx:14: };
+components/BottomBar.tsx:15: 
+components/BottomBar.tsx:16: const TABS: { key: BottomBarTab; label: string; Icon: typeof List }[] = [
+components/BottomBar.tsx:17:     { key: "today", label: "Reminders", Icon: List },
+components/BottomBar.tsx:18:     { key: "days", label: "Days", Icon: Calendar },
+components/BottomBar.tsx:19:     { key: "settings", label: "Settings", Icon: Settings },
+components/BottomBar.tsx:20: ];
+components/BottomBar.tsx:21: 
+components/BottomBar.tsx:22: export default function BottomBar({ activeTab, onTab, onRecord }: BottomBarProps) {
+components/BottomBar.tsx:23:     const insets = useSafeAreaInsets();
+components/BottomBar.tsx:24: 
+components/BottomBar.tsx:25:     return (
+components/BottomBar.tsx:26:         <View pointerEvents="box-none" style={[styles.wrap, { bottom: Math.max(insets.bottom - 6, 10) }]}>
+components/BottomBar.tsx:27:             {/* Dock and mic travel as one centered group. */}
+components/BottomBar.tsx:28:             <View style={styles.dockRow} pointerEvents="box-none">
+components/BottomBar.tsx:29:                 <View style={styles.bar}>
+components/BottomBar.tsx:30:                     {TABS.map(({ key, label, Icon }) => {
+components/BottomBar.tsx:31:                         const active = key === activeTab;
+components/BottomBar.tsx:32:                         return (
+components/BottomBar.tsx:33:                             <TouchableOpacity
+components/BottomBar.tsx:34:                                 key={key}
+components/BottomBar.tsx:35:                                 style={[styles.item, active && styles.itemActive]}
+components/BottomBar.tsx:36:                                 onPress={() => onTab(key)}
+components/BottomBar.tsx:37:                                 activeOpacity={0.7}
+components/BottomBar.tsx:38:                                 accessibilityRole="tab"
+components/BottomBar.tsx:39:                                 accessibilityLabel={label}
+components/BottomBar.tsx:40:                                 accessibilityState={{ selected: active }}
+components/BottomBar.tsx:41:                             >
+components/BottomBar.tsx:42:                                 <Icon
+components/BottomBar.tsx:43:                                     size={22}
+components/BottomBar.tsx:44:                                     color={active ? colors.card : colors.textTertiary}
+components/BottomBar.tsx:45:                                     strokeWidth={1.75}
+components/BottomBar.tsx:46:                                 />
+components/BottomBar.tsx:47:                             </TouchableOpacity>
+components/BottomBar.tsx:48:                         );
+components/BottomBar.tsx:49:                     })}
+components/BottomBar.tsx:50:                 </View>
+components/BottomBar.tsx:51: 
+components/BottomBar.tsx:52:                 {onRecord && (
+components/BottomBar.tsx:53:                     <TouchableOpacity
+components/BottomBar.tsx:54:                         style={styles.recordButton}
+components/BottomBar.tsx:55:                         onPress={onRecord}
+components/BottomBar.tsx:56:                         activeOpacity={0.9}
+components/BottomBar.tsx:57:                         accessibilityRole="button"
+components/BottomBar.tsx:58:                         accessibilityLabel="Record a reminder"
+components/BottomBar.tsx:59:                     >
+components/BottomBar.tsx:60:                         <Mic size={24} color="white" strokeWidth={1.75} />
+components/BottomBar.tsx:61:                     </TouchableOpacity>
+components/BottomBar.tsx:62:                 )}
+components/BottomBar.tsx:63:             </View>
+components/BottomBar.tsx:64:         </View>
+components/BottomBar.tsx:65:     );
+components/BottomBar.tsx:66: }
+components/BottomBar.tsx:67: 
+components/BottomBar.tsx:68: const styles = StyleSheet.create({
+components/BottomBar.tsx:69:     wrap: {
+components/BottomBar.tsx:70:         position: "absolute",
+components/BottomBar.tsx:71:         left: 0,
+components/BottomBar.tsx:72:         right: 0,
+components/BottomBar.tsx:73:         alignItems: "center",
+components/BottomBar.tsx:74:     },
+components/BottomBar.tsx:75:     dockRow: {
+components/BottomBar.tsx:76:         flexDirection: "row",
+components/BottomBar.tsx:77:         alignItems: "center",
+components/BottomBar.tsx:78:         gap: 14,
+components/BottomBar.tsx:79:     },
+components/BottomBar.tsx:80:     bar: {
+components/BottomBar.tsx:81:         flexDirection: "row",
+components/BottomBar.tsx:82:         alignItems: "center",
+components/BottomBar.tsx:83:         gap: 10,
+components/BottomBar.tsx:84:         backgroundColor: colors.card,
+components/BottomBar.tsx:85:         borderRadius: borderRadius.bar,
+components/BottomBar.tsx:86:         paddingHorizontal: 14,
+components/BottomBar.tsx:87:         paddingVertical: 8,
+components/BottomBar.tsx:88:         ...shadows.card,
+components/BottomBar.tsx:89:         shadowOpacity: 0.12,
+components/BottomBar.tsx:90:         shadowRadius: 12,
+components/BottomBar.tsx:91:         elevation: 5,
+components/BottomBar.tsx:92:     },
+components/BottomBar.tsx:93:     item: {
+components/BottomBar.tsx:94:         width: 52,
+components/BottomBar.tsx:95:         height: 52,
+components/BottomBar.tsx:96:         borderRadius: 17,
+components/BottomBar.tsx:97:         alignItems: "center",
+components/BottomBar.tsx:98:         justifyContent: "center",
+components/BottomBar.tsx:99:     },
+components/BottomBar.tsx:100:     // Tiimo-style active tab: dark rounded square, light icon.
+components/BottomBar.tsx:101:     itemActive: {
+components/BottomBar.tsx:102:         backgroundColor: colors.textHeading,
+components/BottomBar.tsx:103:     },
+components/BottomBar.tsx:104:     recordButton: {
+components/BottomBar.tsx:105:         width: 58,
+components/BottomBar.tsx:106:         height: 58,
+components/BottomBar.tsx:107:         borderRadius: 29,
+components/BottomBar.tsx:108:         backgroundColor: colors.accent,
+components/BottomBar.tsx:109:         alignItems: "center",
+components/BottomBar.tsx:110:         justifyContent: "center",
+components/BottomBar.tsx:111:         ...shadows.card,
+components/BottomBar.tsx:112:         shadowOpacity: 0.16,
+components/BottomBar.tsx:113:         shadowRadius: 12,
+components/BottomBar.tsx:114:         elevation: 6,
+components/BottomBar.tsx:115:     },
+components/BottomBar.tsx:116: });
+lib/feedbackUi.ts:1: import { create } from "zustand";
+lib/feedbackUi.ts:2: import type { FeedbackContext } from "./feedbackOutbox";
+lib/feedbackUi.ts:3: 
+lib/feedbackUi.ts:4: /**
+lib/feedbackUi.ts:5:  * The feedback UI, driven from anywhere.
+lib/feedbackUi.ts:6:  *
+lib/feedbackUi.ts:7:  * The composer and the "Your feedback" list are mounted once, high in the tree
+lib/feedbackUi.ts:8:  * (components/FeedbackHost, rendered above every screen and sheet). Every
+lib/feedbackUi.ts:9:  * entrance â€” a Settings row, the failed-take card, the edit sheet's "Report a
+lib/feedbackUi.ts:10:  * problem" row, the on-open banner â€” just calls one of these actions. Because
+lib/feedbackUi.ts:11:  * the host sits above the edit sheet, opening the composer from inside an edit
+lib/feedbackUi.ts:12:  * leaves that sheet mounted and its unsaved edits exactly as they were.
+lib/feedbackUi.ts:13:  */
+lib/feedbackUi.ts:14: 
+lib/feedbackUi.ts:15: export type FeedbackComposer = {
+lib/feedbackUi.ts:16:   /** The entrance's context, merged with device/build fields at submit time. */
+lib/feedbackUi.ts:17:   context: FeedbackContext;
+lib/feedbackUi.ts:18:   /** The single grey notice line under the box; empty means no line. */
+lib/feedbackUi.ts:19:   notice: string;
+lib/feedbackUi.ts:20: };
+lib/feedbackUi.ts:21: 
+lib/feedbackUi.ts:22: interface FeedbackUiState {
+lib/feedbackUi.ts:23:   composer: FeedbackComposer | null;
+lib/feedbackUi.ts:24:   listVisible: boolean;
+lib/feedbackUi.ts:25:   openComposer: (context: FeedbackContext, notice?: string) => void;
+lib/feedbackUi.ts:26:   closeComposer: () => void;
+lib/feedbackUi.ts:27:   openList: () => void;
+lib/feedbackUi.ts:28:   closeList: () => void;
+lib/feedbackUi.ts:29: }
+lib/feedbackUi.ts:30: 
+lib/feedbackUi.ts:31: export const useFeedbackUi = create<FeedbackUiState>((set) => ({
+lib/feedbackUi.ts:32:   composer: null,
+lib/feedbackUi.ts:33:   listVisible: false,
+lib/feedbackUi.ts:34:   openComposer: (context, notice = "") => set({ composer: { context, notice } }),
+lib/feedbackUi.ts:35:   closeComposer: () => set({ composer: null }),
+lib/feedbackUi.ts:36:   openList: () => set({ listVisible: true }),
+lib/feedbackUi.ts:37:   closeList: () => set({ listVisible: false }),
+lib/feedbackUi.ts:38: }));
+lib/feedbackUi.ts:39: 
+lib/feedbackUi.ts:40: /** Imperative openers, for call sites that aren't React components. */
+lib/feedbackUi.ts:41: export const feedbackUi = {
+lib/feedbackUi.ts:42:   openComposer: (context: FeedbackContext, notice?: string) =>
+lib/feedbackUi.ts:43:     useFeedbackUi.getState().openComposer(context, notice),
+lib/feedbackUi.ts:44:   openList: () => useFeedbackUi.getState().openList(),
+lib/feedbackUi.ts:45: };
+components/FeedbackHost.tsx:1: import { useEffect, useRef, useState } from "react";
+components/FeedbackHost.tsx:2: import { AppState } from "react-native";
+components/FeedbackHost.tsx:3: import AsyncStorage from "@react-native-async-storage/async-storage";
+components/FeedbackHost.tsx:4: import NetInfo from "@react-native-community/netinfo";
+components/FeedbackHost.tsx:5: import { useMutation, useQuery } from "convex/react";
+components/FeedbackHost.tsx:6: import { api } from "../convex/_generated/api";
+components/FeedbackHost.tsx:7: import { useToast } from "./ToastProvider";
+components/FeedbackHost.tsx:8: import { getDeviceId } from "../lib/deviceId";
+components/FeedbackHost.tsx:9: import { useFeedbackUi } from "../lib/feedbackUi";
+components/FeedbackHost.tsx:10: import { hasUnseenResponses, nextWatermark } from "../lib/feedbackSeen";
+components/FeedbackHost.tsx:11: import {
+components/FeedbackHost.tsx:12:   flush,
+components/FeedbackHost.tsx:13:   type FeedbackSubmitInput,
+components/FeedbackHost.tsx:14:   type FeedbackSubmitResult,
+components/FeedbackHost.tsx:15: } from "../lib/feedbackOutbox";
+components/FeedbackHost.tsx:16: import FeedbackSheet from "./FeedbackSheet";
+components/FeedbackHost.tsx:17: import FeedbackList, { type ServerFeedback } from "./FeedbackList";
+components/FeedbackHost.tsx:18: 
+components/FeedbackHost.tsx:19: const SEEN_WATERMARK_KEY = "@feedback_seen_responded_at";
+components/FeedbackHost.tsx:20: 
+components/FeedbackHost.tsx:21: /**
+components/FeedbackHost.tsx:22:  * The single mount point for the feedback UI, placed above every screen and
+components/FeedbackHost.tsx:23:  * sheet so opening the composer from inside an edit leaves that edit untouched.
+components/FeedbackHost.tsx:24:  *
+components/FeedbackHost.tsx:25:  * It also owns the one subscription to the device's feedback and the "your
+components/FeedbackHost.tsx:26:  * feedback was answered" banner: when a note has been responded to more recently
+components/FeedbackHost.tsx:27:  * than the local watermark, a tappable toast offers the status list. The
+components/FeedbackHost.tsx:28:  * watermark only advances once the list has actually been shown â€” to the newest
+components/FeedbackHost.tsx:29:  * response displayed, never to "now" â€” so a reply is never silently marked seen.
+components/FeedbackHost.tsx:30:  */
+components/FeedbackHost.tsx:31: export default function FeedbackHost() {
+components/FeedbackHost.tsx:32:   const composer = useFeedbackUi((s) => s.composer);
+components/FeedbackHost.tsx:33:   const closeComposer = useFeedbackUi((s) => s.closeComposer);
+components/FeedbackHost.tsx:34:   const listVisible = useFeedbackUi((s) => s.listVisible);
+components/FeedbackHost.tsx:35:   const openList = useFeedbackUi((s) => s.openList);
+components/FeedbackHost.tsx:36:   const closeList = useFeedbackUi((s) => s.closeList);
+components/FeedbackHost.tsx:37:   const toast = useToast();
+components/FeedbackHost.tsx:38:   const submitFeedback = useMutation(api.feedback.submit);
+components/FeedbackHost.tsx:39: 
+components/FeedbackHost.tsx:40:   const [deviceId, setDeviceId] = useState<string | null>(null);
+components/FeedbackHost.tsx:41:   const [watermark, setWatermark] = useState(0);
+components/FeedbackHost.tsx:42:   const [watermarkLoaded, setWatermarkLoaded] = useState(false);
+components/FeedbackHost.tsx:43:   const banneredForRef = useRef(0);
+components/FeedbackHost.tsx:44: 
+components/FeedbackHost.tsx:45:   useEffect(() => {
+components/FeedbackHost.tsx:46:     let cancelled = false;
+components/FeedbackHost.tsx:47:     void getDeviceId().then((id) => {
+components/FeedbackHost.tsx:48:       if (!cancelled) setDeviceId(id);
+components/FeedbackHost.tsx:49:     });
+components/FeedbackHost.tsx:50:     void AsyncStorage.getItem(SEEN_WATERMARK_KEY)
+components/FeedbackHost.tsx:51:       .then((raw) => {
+components/FeedbackHost.tsx:52:         if (cancelled) return;
+components/FeedbackHost.tsx:53:         const parsed = raw ? Number(raw) : 0;
+components/FeedbackHost.tsx:54:         setWatermark(Number.isFinite(parsed) ? parsed : 0);
+components/FeedbackHost.tsx:55:       })
+components/FeedbackHost.tsx:56:       .catch(() => {})
+components/FeedbackHost.tsx:57:       .finally(() => {
+components/FeedbackHost.tsx:58:         if (!cancelled) setWatermarkLoaded(true);
+components/FeedbackHost.tsx:59:       });
+components/FeedbackHost.tsx:60:     return () => {
+components/FeedbackHost.tsx:61:       cancelled = true;
+components/FeedbackHost.tsx:62:     };
+components/FeedbackHost.tsx:63:   }, []);
+components/FeedbackHost.tsx:64: 
+components/FeedbackHost.tsx:65:   const items = useQuery(
+components/FeedbackHost.tsx:66:     api.feedback.listForDevice,
+components/FeedbackHost.tsx:67:     deviceId ? { deviceId } : "skip"
+components/FeedbackHost.tsx:68:   ) as ServerFeedback[] | undefined;
+components/FeedbackHost.tsx:69: 
+components/FeedbackHost.tsx:70:   // Drain the outbox on the same signals the take pipeline uses: when the app
+components/FeedbackHost.tsx:71:   // returns to the foreground, when connectivity comes back, and once as soon as
+components/FeedbackHost.tsx:72:   // the device id is known (covers cold start). A post-enqueue flush lives in the
+components/FeedbackHost.tsx:73:   // composer itself; the outbox serializes them so nothing double-sends.
+components/FeedbackHost.tsx:74:   useEffect(() => {
+components/FeedbackHost.tsx:75:     if (!deviceId) return;
+components/FeedbackHost.tsx:76:     const drain = () => {
+components/FeedbackHost.tsx:77:       const submit = (input: FeedbackSubmitInput): Promise<FeedbackSubmitResult> =>
+components/FeedbackHost.tsx:78:         submitFeedback({ deviceId, ...input }) as Promise<FeedbackSubmitResult>;
+components/FeedbackHost.tsx:79:       void flush(submit).catch(() => {});
+components/FeedbackHost.tsx:80:     };
+components/FeedbackHost.tsx:81: 
+components/FeedbackHost.tsx:82:     drain();
+components/FeedbackHost.tsx:83:     const appStateSub = AppState.addEventListener("change", (state) => {
+components/FeedbackHost.tsx:84:       if (state === "active") drain();
+components/FeedbackHost.tsx:85:     });
+components/FeedbackHost.tsx:86:     const netSub = NetInfo.addEventListener((state) => {
+components/FeedbackHost.tsx:87:       if (state.isConnected) drain();
+components/FeedbackHost.tsx:88:     });
+components/FeedbackHost.tsx:89:     return () => {
+components/FeedbackHost.tsx:90:       appStateSub.remove();
+components/FeedbackHost.tsx:91:       netSub();
+components/FeedbackHost.tsx:92:     };
+components/FeedbackHost.tsx:93:   }, [deviceId, submitFeedback]);
+components/FeedbackHost.tsx:94: 
+components/FeedbackHost.tsx:95:   // The banner: a reply newer than the watermark, shown once per new reply.
+components/FeedbackHost.tsx:96:   useEffect(() => {
+components/FeedbackHost.tsx:97:     if (!watermarkLoaded || !items) return;
+components/FeedbackHost.tsx:98:     if (!hasUnseenResponses(items, watermark)) return;
+components/FeedbackHost.tsx:99:     const newest = nextWatermark(items, watermark);
+components/FeedbackHost.tsx:100:     if (newest <= banneredForRef.current) return;
+components/FeedbackHost.tsx:101:     banneredForRef.current = newest;
+components/FeedbackHost.tsx:102:     toast.show({
+components/FeedbackHost.tsx:103:       title: "Your feedback was updated",
+components/FeedbackHost.tsx:104:       message: "Tap to see",
+components/FeedbackHost.tsx:105:       type: "info",
+components/FeedbackHost.tsx:106:       onPress: openList,
+components/FeedbackHost.tsx:107:     });
+components/FeedbackHost.tsx:108:   }, [items, watermark, watermarkLoaded, toast, openList]);
+components/FeedbackHost.tsx:109: 
+components/FeedbackHost.tsx:110:   // Advance the watermark once the list is actually on screen, to the newest
+components/FeedbackHost.tsx:111:   // response displayed â€” not on banner tap, not to Date.now().
+components/FeedbackHost.tsx:112:   useEffect(() => {
+components/FeedbackHost.tsx:113:     if (!listVisible || !items) return;
+components/FeedbackHost.tsx:114:     const next = nextWatermark(items, watermark);
+components/FeedbackHost.tsx:115:     if (next <= watermark) return;
+components/FeedbackHost.tsx:116:     setWatermark(next);
+components/FeedbackHost.tsx:117:     void AsyncStorage.setItem(SEEN_WATERMARK_KEY, String(next)).catch(() => {});
+components/FeedbackHost.tsx:118:   }, [listVisible, items, watermark]);
+components/FeedbackHost.tsx:119: 
+components/FeedbackHost.tsx:120:   return (
+components/FeedbackHost.tsx:121:     <>
+components/FeedbackHost.tsx:122:       <FeedbackSheet
+components/FeedbackHost.tsx:123:         visible={!!composer}
+components/FeedbackHost.tsx:124:         context={composer?.context ?? null}
+components/FeedbackHost.tsx:125:         notice={composer?.notice ?? ""}
+components/FeedbackHost.tsx:126:         onClose={closeComposer}
+components/FeedbackHost.tsx:127:       />
+components/FeedbackHost.tsx:128:       <FeedbackList visible={listVisible} items={items} onClose={closeList} />
+components/FeedbackHost.tsx:129:     </>
+components/FeedbackHost.tsx:130:   );
+components/FeedbackHost.tsx:131: }
+rg: components/ReminderEditSheet.tsx: The system cannot find the file specified. (os error 2)
+rg: components/*Take*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+lib/feedbackOutbox.ts:4: * The in-app feedback outbox.
+lib/feedbackOutbox.ts:17: * Sent notes are kept for 30 days so the "Your feedback" list can still show
+lib/feedbackOutbox.ts:21:const FEEDBACK_OUTBOX_KEY = "@feedback_outbox";
+lib/feedbackOutbox.ts:34:  createdAt: number;
+lib/feedbackOutbox.ts:45:  createdAt: number;
+lib/feedbackOutbox.ts:95:    typeof item.createdAt === "number" &&
+lib/feedbackOutbox.ts:104:    (item) => item.state === "queued" || (item.sentAt ?? item.createdAt) >= cutoff
+lib/feedbackOutbox.ts:138:      console.log("[VR] feedbackOutbox: load failed, starting empty:", error);
+lib/feedbackOutbox.ts:183:    createdAt: input.createdAt,
+lib/feedbackOutbox.ts:221:      .sort((a, b) => a.createdAt - b.createdAt);
+lib/feedbackOutbox.ts:228:          createdAt: item.createdAt,
+app/index.tsx:1808:         swipeEnabled={false}
+app/index.tsx:1809:       >
+app/index.tsx:1810:         {/* ---- Page 0: Reminders ---- */}
+app/index.tsx:1811:         <View style={styles.page}>
+app/index.tsx:1812:           <View style={styles.header}>
+app/index.tsx:1813:             <View style={styles.headerTop}>
+app/index.tsx:1814:               <View style={styles.headerTitleWrap}>
+app/index.tsx:1815:                 <Text style={styles.headerTitle}>Reminders</Text>
+app/index.tsx:1816:                 <Text style={styles.headerDate}>{dateLabel}</Text>
+app/index.tsx:1817:               </View>
+app/index.tsx:1818:               <View style={styles.headerActions}>
+app/index.tsx:1819:                 {!isPro && (
+app/index.tsx:1820:                   <TouchableOpacity
+app/index.tsx:1821:                     style={styles.proPill}
+app/index.tsx:1822:                     activeOpacity={0.85}
+app/index.tsx:1823:                     onPress={openPaywall}
+app/index.tsx:1824:                   >
+app/index.tsx:1825:                     <AppIcon name="crown" size={14} color="white" style={styles.proIcon} />
+app/index.tsx:1826:                     <Text style={styles.proPillText}>Get Pro</Text>
+app/index.tsx:1827:                   </TouchableOpacity>
+app/index.tsx:1828:                 )}
+app/index.tsx:1829:                 <TouchableOpacity
+app/index.tsx:1830:                   style={styles.addButton}
+app/index.tsx:1831:                   activeOpacity={0.85}
+app/index.tsx:1832:                   onPress={() => void handleOpenComposer()}
+app/index.tsx:1833:                   accessibilityRole="button"
+app/index.tsx:1834:                   accessibilityLabel="Add a reminder by typing"
+app/index.tsx:1835:                 >
+app/index.tsx:1836:                   <Plus size={20} color={colors.textHeading} strokeWidth={2} />
+app/index.tsx:1837:                 </TouchableOpacity>
+app/index.tsx:1838:               </View>
+app/index.tsx:1839:             </View>
+app/index.tsx:1840:           </View>
+app/index.tsx:1841: 
+app/index.tsx:1842:           <FlatList
+app/index.tsx:1900:             onToggleComplete={handleDayToggleComplete}
+app/index.tsx:1901:             onDelete={handleDelete}
+app/index.tsx:1902:             active={page === PAGE_DAYS}
+app/index.tsx:1903:           />
+app/index.tsx:1904:         </View>
+app/index.tsx:1905: 
+app/index.tsx:1906:         {/* ---- Page 2: Settings ---- */}
+app/index.tsx:1907:         <View style={[styles.page, { paddingTop: insets.top + 8 }]}>
+app/index.tsx:1908:           {/* Mounted from cold start like every pager page, so it needs to be
+app/index.tsx:1909:               told when it is the one on screen â€” that is its cue to re-check
+app/index.tsx:1910:               the subscription (same pattern as DaysPage's `active`). */}
+app/index.tsx:1911:           <SettingsContent embedded visible={page === PAGE_SETTINGS} />
+app/index.tsx:1912:         </View>
+app/index.tsx:1913:       </SwipePager>
+app/index.tsx:1914: 
+app/index.tsx:1915:       {/* Tiimo-style dock on every page, mic anchored bottom-right.
+app/index.tsx:1916:           Both yield the bottom edge while recording or editing. */}
+app/index.tsx:1917:       {!showRecording && !showComposer && !editingReminder && (
+app/index.tsx:1918:         <>
+app/index.tsx:1919:           {showOfflineMessage && (
+app/index.tsx:1920:             <View style={[styles.offlineMessage, { bottom: (Platform.OS === "ios" ? 110 : 100) + insets.bottom }]}>
+app/index.tsx:1921:               <AppIcon name="wifi-off" size={18} color={colors.textSecondary} />
+app/index.tsx:1922:               <Text style={styles.offlineText}>No internet connection</Text>
+app/index.tsx:1923:               <TouchableOpacity onPress={() => setShowOfflineMessage(false)} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+app/index.tsx:1924:                 <AppIcon name="x" size={16} color={colors.textTertiary} />
+app/index.tsx:1925:               </TouchableOpacity>
+app/index.tsx:1926:             </View>
+app/index.tsx:1927:           )}
+app/index.tsx:1928: 
+app/index.tsx:1929:           <BottomBar
+app/index.tsx:1930:             activeTab={activeTab}
+app/index.tsx:1931:             onTab={handleTab}
+app/index.tsx:1932:             onRecord={handleOpenRecording}
+app/index.tsx:1933:           />
+app/index.tsx:1934:         </>
+app/index.tsx:1935:       )}
+app/index.tsx:1936: 
+app/index.tsx:1937:       <RecordingOverlay
+app/index.tsx:1938:         visible={showRecording}
+app/index.tsx:1939:         autoStart={true}
+app/index.tsx:1940:         initialTraceId={recordingTraceId ?? undefined}
+app/index.tsx:1941:         canStartRecording={canStartRecording}
+app/index.tsx:1942:         gateStatusText={gateStatusText}
+app/index.tsx:1943:         showUpgradeCta={showUpgradeCta}
+app/index.tsx:1944:         onUpgradePress={openPaywall}
+app/index.tsx:1945:         onClose={handleCloseRecording}
+app/index.tsx:1946:         onRecordingStart={handleRecordingStart}
+app/index.tsx:1947:         onRecordingComplete={handleRecordingComplete}
+app/index.tsx:1948:       />
+app/index.tsx:2014:   headerActions: {
+app/index.tsx:2015:     flexDirection: "row",
+app/index.tsx:2016:     alignItems: "center",
+app/index.tsx:2017:   },
+app/index.tsx:2018:   proPill: {
+app/index.tsx:2019:     flexDirection: "row",
+app/index.tsx:2020:     alignItems: "center",
+app/index.tsx:2021:     backgroundColor: colors.accent,
+app/index.tsx:2022:     paddingHorizontal: 12,
+app/index.tsx:2023:     paddingVertical: 7,
+app/index.tsx:2024:     borderRadius: 999,
+app/index.tsx:2025:     marginRight: 10,
+app/index.tsx:2026:   },
+app/index.tsx:2027:   proPillText: {
+app/index.tsx:2028:     color: "white",
+app/index.tsx:2029:     fontWeight: "600",
+app/index.tsx:2030:     fontSize: scaleFontSize(14),
+app/index.tsx:2031:     lineHeight: scaleFontSize(19),
+app/index.tsx:2032:   },
+app/index.tsx:2033:   proIcon: {
+app/index.tsx:2034:     marginRight: 6,
+app/index.tsx:2035:   },
+app/index.tsx:2036:   // Tiimo-style header +: quiet white circle, top-right. The composer's only door.
+app/index.tsx:2037:   addButton: {
+app/index.tsx:2038:     width: 36,
+app/index.tsx:2039:     height: 36,
+app/index.tsx:2040:     borderRadius: 18,
+app/index.tsx:2041:     backgroundColor: colors.card,
+app/index.tsx:2042:     alignItems: "center",
+app/index.tsx:2043:     justifyContent: "center",
+app/index.tsx:2044:     ...shadows.card,
+app/index.tsx:2045:     shadowOpacity: 0.1,
+app/index.tsx:2046:     shadowRadius: 8,
+app/index.tsx:2047:     elevation: 3,
+app/index.tsx:2048:   },
+app/index.tsx:2049:   content: {
+app/index.tsx:2050:     flex: 1,
+app/index.tsx:2051:   },
+app/index.tsx:2052:   contentContainer: {
+app/index.tsx:2053:     paddingHorizontal: 20,
+app/index.tsx:2054:     paddingTop: 8,
+components/days/DaysPage.tsx:240:   const monthLabel = `${selected
+components/days/DaysPage.tsx:241:     .toLocaleDateString([], { month: "short" })
+components/days/DaysPage.tsx:242:     .toUpperCase()} ${selected.getFullYear()}`;
+components/days/DaysPage.tsx:243: 
+components/days/DaysPage.tsx:244:   return (
+components/days/DaysPage.tsx:245:     <View style={styles.container}>
+components/days/DaysPage.tsx:246:       <View style={styles.header}>
+components/days/DaysPage.tsx:247:         <Text style={styles.weekdayTitle}>{weekdayName}</Text>
+components/days/DaysPage.tsx:248:         <Pressable
+components/days/DaysPage.tsx:249:           style={styles.monthButton}
+components/days/DaysPage.tsx:250:           onPress={() => setMonthSheetVisible(true)}
+components/days/DaysPage.tsx:251:           accessibilityRole="button"
+components/days/DaysPage.tsx:252:           accessibilityLabel="Open month picker"
+components/days/DaysPage.tsx:253:         >
+components/days/DaysPage.tsx:254:           <Text style={styles.monthButtonText}>{monthLabel}</Text>
+components/days/DaysPage.tsx:255:           <AppIcon name="chevron-right" size={16} color={colors.textSecondary} />
+components/days/DaysPage.tsx:256:         </Pressable>
+components/days/DaysPage.tsx:257:       </View>
+components/days/DaysPage.tsx:258: 
+components/days/DaysPage.tsx:259:       <WeekStrip
+components/days/DaysPage.tsx:260:         selectedDate={selectedDate}
+components/days/DaysPage.tsx:261:         todayDate={today}
+components/days/DaysPage.tsx:262:         overdueDates={overdueDates}
+components/days/DaysPage.tsx:263:         onSelectDate={setSelectedDate}
+components/days/DaysPage.tsx:264:       />
+components/days/DaysPage.tsx:265: 
+components/days/DaysPage.tsx:266:       <DayPager dateISO={selectedDate} onFlip={handleFlip} renderDay={renderDay} />
+components/days/DaysPage.tsx:267: 
+components/days/DaysPage.tsx:268:       <MonthSheet
+components/days/DaysPage.tsx:269:         overdueDates={overdueDates}
+components/days/DaysPage.tsx:270:         visible={monthSheetVisible}
+components/days/DaysPage.tsx:271:         selectedDate={selectedDate}
+components/days/DaysPage.tsx:272:         todayDate={today}
+components/days/DaysPage.tsx:273:         onSelect={handleMonthSelect}
+components/days/DaysPage.tsx:274:         onClose={() => setMonthSheetVisible(false)}
+components/days/DaysPage.tsx:275:       />
+components/days/DaysPage.tsx:276:     </View>
+components/days/DaysPage.tsx:277:   );
+components/days/DaysPage.tsx:278: }
+components/days/DaysPage.tsx:279: 
+components/days/DaysPage.tsx:280: const styles = StyleSheet.create({
+components/days/DaysPage.tsx:281:   container: {
+components/days/DaysPage.tsx:282:     flex: 1,
+components/days/DaysPage.tsx:283:     backgroundColor: colors.background,
+components/days/DaysPage.tsx:284:   },
+components/days/DaysPage.tsx:285:   header: {
+components/days/DaysPage.tsx:286:     flexDirection: "row",
+components/days/DaysPage.tsx:287:     alignItems: "center",
+components/days/DaysPage.tsx:288:     justifyContent: "space-between",
+components/days/DaysPage.tsx:289:     paddingHorizontal: spacing.md,
+components/days/DaysPage.tsx:290:     paddingTop: spacing.sm,
+components/days/DaysPage.tsx:291:     paddingBottom: 12,
+components/days/DaysPage.tsx:292:   },
+components/days/DaysPage.tsx:293:   weekdayTitle: {
+components/days/DaysPage.tsx:294:     fontFamily: FONT_DISPLAY,
+components/days/DaysPage.tsx:295:     fontSize: scaleFontSize(32),
+components/days/DaysPage.tsx:296:     lineHeight: scaleFontSize(38),
+components/days/DaysPage.tsx:297:     letterSpacing: -0.3,
+components/days/DaysPage.tsx:298:     color: colors.textHeading,
+components/days/DaysPage.tsx:299:   },
+components/days/DaysPage.tsx:300:   monthButton: {
+components/days/DaysPage.tsx:301:     flexDirection: "row",
+components/days/DaysPage.tsx:302:     alignItems: "center",
+components/days/DaysPage.tsx:303:     gap: 2,
+components/days/DaysPage.tsx:304:     paddingVertical: spacing.xs,
+components/days/DaysPage.tsx:305:     paddingHorizontal: spacing.sm,
+components/days/DaysPage.tsx:306:     borderRadius: borderRadius.full,
+components/days/DaysPage.tsx:307:   },
+components/days/DaysPage.tsx:308:   monthButtonText: {
+components/days/DaysPage.tsx:309:     fontSize: scaleFontSize(12),
+components/days/DaysPage.tsx:310:     fontWeight: "500",
+components/days/DaysPage.tsx:311:     lineHeight: scaleFontSize(16),
+components/days/DaysPage.tsx:312:     letterSpacing: 0.7,
+components/days/DaysPage.tsx:313:     color: colors.textSecondary,
+components/days/DaysPage.tsx:314:   },
+components/days/DaysPage.tsx:315:   dayScroll: {
+app/settings.tsx:238:     }
+app/settings.tsx:239:   };
+app/settings.tsx:240: 
+app/settings.tsx:241:   return (
+app/settings.tsx:242:     <ScrollView
+app/settings.tsx:243:       style={styles.scroll}
+app/settings.tsx:244:       contentContainerStyle={[styles.scrollContent, embedded && styles.scrollContentEmbedded]}
+app/settings.tsx:245:       showsVerticalScrollIndicator={false}
+app/settings.tsx:246:     >
+app/settings.tsx:247:       <View style={styles.header}>
+app/settings.tsx:248:         {!embedded ? (
+app/settings.tsx:249:           <TouchableOpacity
+app/settings.tsx:250:             onPress={() => router.back()}
+app/settings.tsx:251:             style={styles.backButton}
+app/settings.tsx:252:             activeOpacity={0.7}
+app/settings.tsx:253:           >
+app/settings.tsx:254:             <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
+app/settings.tsx:255:           </TouchableOpacity>
+app/settings.tsx:256:         ) : null}
+app/settings.tsx:257:         <Text style={styles.headerTitle}>Settings</Text>
+app/settings.tsx:258:       </View>
+app/settings.tsx:259: 
+app/settings.tsx:260:       {/* Pro card: the upgrade pitch for a confirmed free user, the
+app/settings.tsx:261:           subscription's status (with a way into the store) for a subscriber,
+app/settings.tsx:262:           and a retry for the state where we don't know which they are */}
+app/settings.tsx:263:       <TouchableOpacity
+app/settings.tsx:264:         style={styles.proCard}
+app/settings.tsx:265:         onPress={
+components/FeedbackSheet.tsx:108:   const renderBackdrop = useCallback(
+components/FeedbackSheet.tsx:109:     (props: any) => (
+components/FeedbackSheet.tsx:110:       <BottomSheetBackdrop
+components/FeedbackSheet.tsx:111:         {...props}
+components/FeedbackSheet.tsx:112:         disappearsOnIndex={-1}
+components/FeedbackSheet.tsx:113:         appearsOnIndex={0}
+components/FeedbackSheet.tsx:114:         opacity={0.35}
+components/FeedbackSheet.tsx:115:         pressBehavior="close"
+components/FeedbackSheet.tsx:116:       />
+components/FeedbackSheet.tsx:117:     ),
+components/FeedbackSheet.tsx:118:     []
+components/FeedbackSheet.tsx:119:   );
+components/FeedbackSheet.tsx:120: 
+components/FeedbackSheet.tsx:121:   if (!visible) return null;
+components/FeedbackSheet.tsx:122: 
+components/FeedbackSheet.tsx:123:   const sendDisabled = sending || text.trim().length === 0;
+components/FeedbackSheet.tsx:124: 
+components/FeedbackSheet.tsx:125:   return (
+components/FeedbackSheet.tsx:126:     <BottomSheet
+components/FeedbackSheet.tsx:127:       ref={sheetRef}
+components/FeedbackSheet.tsx:128:       snapPoints={snapPoints}
+components/FeedbackSheet.tsx:129:       index={0}
+components/FeedbackSheet.tsx:130:       enablePanDownToClose
+components/FeedbackSheet.tsx:131:       animateOnMount
+components/FeedbackSheet.tsx:132:       keyboardBehavior="interactive"
+components/FeedbackSheet.tsx:133:       keyboardBlurBehavior="restore"
+components/FeedbackSheet.tsx:134:       android_keyboardInputMode="adjustResize"
+components/FeedbackSheet.tsx:135:       backdropComponent={renderBackdrop}
+components/FeedbackSheet.tsx:136:       onClose={handleClose}
+components/FeedbackSheet.tsx:137:       handleIndicatorStyle={styles.handleIndicator}
+components/FeedbackSheet.tsx:138:       backgroundStyle={styles.sheetBackground}
+components/FeedbackSheet.tsx:139:     >
+components/FeedbackSheet.tsx:140:       <BottomSheetView style={styles.content}>
+components/FeedbackSheet.tsx:141:         <Text style={styles.title}>Send feedback</Text>
+components/FeedbackSheet.tsx:142: 
+components/FeedbackSheet.tsx:143:         <View style={styles.inputCard}>
+components/FeedbackSheet.tsx:144:           <BottomSheetTextInput
+components/FeedbackSheet.tsx:145:             style={styles.input}
+components/FeedbackSheet.tsx:146:             value={text}
+components/FeedbackSheet.tsx:147:             onChangeText={setText}
+components/FeedbackSheet.tsx:148:             placeholder="What happened? What were you trying to do?"
+components/FeedbackSheet.tsx:149:             placeholderTextColor={colors.textTertiary}
+components/FeedbackSheet.tsx:150:             multiline
+components/FeedbackSheet.tsx:151:             autoFocus
+components/FeedbackSheet.tsx:152:             maxLength={MAX_FEEDBACK_CHARS}
+components/FeedbackSheet.tsx:153:             editable={!sending}
+components/FeedbackSheet.tsx:154:           />
+components/FeedbackSheet.tsx:155:         </View>
+components/FeedbackSheet.tsx:156: 
+components/FeedbackSheet.tsx:157:         {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+components/FeedbackSheet.tsx:158: 
+components/FeedbackSheet.tsx:159:         <View style={styles.actions}>
+components/FeedbackSheet.tsx:160:           <TouchableOpacity
+components/FeedbackSheet.tsx:161:             style={styles.cancelButton}
+components/FeedbackSheet.tsx:162:             onPress={handleClose}
+components/FeedbackSheet.tsx:163:             activeOpacity={0.7}
+components/FeedbackSheet.tsx:164:             disabled={sending}
+components/FeedbackSheet.tsx:165:           >
+components/FeedbackSheet.tsx:166:             <Text style={styles.cancelText}>Cancel</Text>
+components/FeedbackSheet.tsx:167:           </TouchableOpacity>
+components/FeedbackSheet.tsx:168: 
+components/FeedbackSheet.tsx:169:           <TouchableOpacity
+components/FeedbackSheet.tsx:170:             style={[styles.sendButton, sendDisabled && styles.sendButtonDisabled]}
+components/FeedbackSheet.tsx:171:             onPress={() => void handleSend()}
+
+web search: 
+web search: site.developer.apple.com design human interface guidelines tab bars actions buttons tips 44 points ...
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "Report a problem|openComposer|onReport" components app/index.tsx; $ranges = @(@('"'components/days/DaysPage.tsx',244,267),@('app/settings.tsx',240,263),@('app/index.tsx',1915,1931),@('app/index.tsx',2036,2047),@('lib/feedbackOutbox.ts',12,42),@('components/FeedbackSheet.tsx',110,141)); foreach("'$r in $ranges) { $n=0; Get-Content $r[0] | ForEach-Object { $n++; if($n -ge $r[1] -and $n -le $r[2]) { '"'{0}:{1}: {2}' -f "'$r[0],$n,$_ } } }' in C:\Dev\VR
+ succeeded in 1133ms:
+app/index.tsx:183:  feedbackUi.openComposer(
+app/index.tsx:1881:                    onReport={onPendingTakeReport}
+components\EditReminderSheet.tsx:132:    const openFeedbackComposer = useFeedbackUi((state) => state.openComposer);
+components\EditReminderSheet.tsx:785:                    {/* Report a problem — deliberately set apart from Done and
+components\EditReminderSheet.tsx:794:                        <Text style={styles.reportRowLabel}>Report a problem</Text>
+components\EditReminderSheet.tsx:1032:    // Report a problem row (set apart from the footer by its own spacing)
+components\PendingTakeCard.tsx:48:  onReport?: (take: PendingTake) => void;
+components\PendingTakeCard.tsx:57:  onReport,
+components\PendingTakeCard.tsx:161:          {isError && onReport && (
+components\PendingTakeCard.tsx:163:              onPress={() => onReport(take)}
+components\PendingTakeCard.tsx:167:              accessibilityLabel="Report a problem with this recording"
+components\PendingTakeCard.tsx:170:              <Text style={styles.reportText}>Report a problem</Text>
+components\PendingTakeCard.tsx:197:  onReport?: (take: PendingTake) => void;
+components\PendingTakeCard.tsx:210:          onReport={props.onReport}
+components/days/DaysPage.tsx:244:   return (
+components/days/DaysPage.tsx:245:     <View style={styles.container}>
+components/days/DaysPage.tsx:246:       <View style={styles.header}>
+components/days/DaysPage.tsx:247:         <Text style={styles.weekdayTitle}>{weekdayName}</Text>
+components/days/DaysPage.tsx:248:         <Pressable
+components/days/DaysPage.tsx:249:           style={styles.monthButton}
+components/days/DaysPage.tsx:250:           onPress={() => setMonthSheetVisible(true)}
+components/days/DaysPage.tsx:251:           accessibilityRole="button"
+components/days/DaysPage.tsx:252:           accessibilityLabel="Open month picker"
+components/days/DaysPage.tsx:253:         >
+components/days/DaysPage.tsx:254:           <Text style={styles.monthButtonText}>{monthLabel}</Text>
+components/days/DaysPage.tsx:255:           <AppIcon name="chevron-right" size={16} color={colors.textSecondary} />
+components/days/DaysPage.tsx:256:         </Pressable>
+components/days/DaysPage.tsx:257:       </View>
+components/days/DaysPage.tsx:258: 
+components/days/DaysPage.tsx:259:       <WeekStrip
+components/days/DaysPage.tsx:260:         selectedDate={selectedDate}
+components/days/DaysPage.tsx:261:         todayDate={today}
+components/days/DaysPage.tsx:262:         overdueDates={overdueDates}
+components/days/DaysPage.tsx:263:         onSelectDate={setSelectedDate}
+components/days/DaysPage.tsx:264:       />
+components/days/DaysPage.tsx:265: 
+components/days/DaysPage.tsx:266:       <DayPager dateISO={selectedDate} onFlip={handleFlip} renderDay={renderDay} />
+components/days/DaysPage.tsx:267: 
+app/settings.tsx:240: 
+app/settings.tsx:241:   return (
+app/settings.tsx:242:     <ScrollView
+app/settings.tsx:243:       style={styles.scroll}
+app/settings.tsx:244:       contentContainerStyle={[styles.scrollContent, embedded && styles.scrollContentEmbedded]}
+app/settings.tsx:245:       showsVerticalScrollIndicator={false}
+app/settings.tsx:246:     >
+app/settings.tsx:247:       <View style={styles.header}>
+app/settings.tsx:248:         {!embedded ? (
+app/settings.tsx:249:           <TouchableOpacity
+app/settings.tsx:250:             onPress={() => router.back()}
+app/settings.tsx:251:             style={styles.backButton}
+app/settings.tsx:252:             activeOpacity={0.7}
+app/settings.tsx:253:           >
+app/settings.tsx:254:             <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
+app/settings.tsx:255:           </TouchableOpacity>
+app/settings.tsx:256:         ) : null}
+app/settings.tsx:257:         <Text style={styles.headerTitle}>Settings</Text>
+app/settings.tsx:258:       </View>
+app/settings.tsx:259: 
+app/settings.tsx:260:       {/* Pro card: the upgrade pitch for a confirmed free user, the
+app/settings.tsx:261:           subscription's status (with a way into the store) for a subscriber,
+app/settings.tsx:262:           and a retry for the state where we don't know which they are */}
+app/settings.tsx:263:       <TouchableOpacity
+app/index.tsx:1915:       {/* Tiimo-style dock on every page, mic anchored bottom-right.
+app/index.tsx:1916:           Both yield the bottom edge while recording or editing. */}
+app/index.tsx:1917:       {!showRecording && !showComposer && !editingReminder && (
+app/index.tsx:1918:         <>
+app/index.tsx:1919:           {showOfflineMessage && (
+app/index.tsx:1920:             <View style={[styles.offlineMessage, { bottom: (Platform.OS === "ios" ? 110 : 100) + insets.bottom }]}>
+app/index.tsx:1921:               <AppIcon name="wifi-off" size={18} color={colors.textSecondary} />
+app/index.tsx:1922:               <Text style={styles.offlineText}>No internet connection</Text>
+app/index.tsx:1923:               <TouchableOpacity onPress={() => setShowOfflineMessage(false)} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+app/index.tsx:1924:                 <AppIcon name="x" size={16} color={colors.textTertiary} />
+app/index.tsx:1925:               </TouchableOpacity>
+app/index.tsx:1926:             </View>
+app/index.tsx:1927:           )}
+app/index.tsx:1928: 
+app/index.tsx:1929:           <BottomBar
+app/index.tsx:1930:             activeTab={activeTab}
+app/index.tsx:1931:             onTab={handleTab}
+app/index.tsx:2036:   // Tiimo-style header +: quiet white circle, top-right. The composer's only door.
+app/index.tsx:2037:   addButton: {
+app/index.tsx:2038:     width: 36,
+app/index.tsx:2039:     height: 36,
+app/index.tsx:2040:     borderRadius: 18,
+app/index.tsx:2041:     backgroundColor: colors.card,
+app/index.tsx:2042:     alignItems: "center",
+app/index.tsx:2043:     justifyContent: "center",
+app/index.tsx:2044:     ...shadows.card,
+app/index.tsx:2045:     shadowOpacity: 0.1,
+app/index.tsx:2046:     shadowRadius: 8,
+app/index.tsx:2047:     elevation: 3,
+lib/feedbackOutbox.ts:12:  * only then resolves, so a note the user was told is "saved on this phone" is a
+lib/feedbackOutbox.ts:13:  * note that survives the app being killed the next instant. `flush` drains what
+lib/feedbackOutbox.ts:14:  * is queued, oldest first, and stops on the first network failure â€” a note that
+lib/feedbackOutbox.ts:15:  * could not be sent stays queued for the next trigger rather than being lost.
+lib/feedbackOutbox.ts:16:  *
+lib/feedbackOutbox.ts:17:  * Sent notes are kept for 30 days so the "Your feedback" list can still show
+lib/feedbackOutbox.ts:18:  * them (and the founder's reply), then pruned.
+lib/feedbackOutbox.ts:19:  */
+lib/feedbackOutbox.ts:20: 
+lib/feedbackOutbox.ts:21: const FEEDBACK_OUTBOX_KEY = "@feedback_outbox";
+lib/feedbackOutbox.ts:22: 
+lib/feedbackOutbox.ts:23: /** Sent notes linger this long for the status list, then are pruned on load. */
+lib/feedbackOutbox.ts:24: export const SENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+lib/feedbackOutbox.ts:25: 
+lib/feedbackOutbox.ts:26: export type FeedbackOutboxState = "queued" | "sent";
+lib/feedbackOutbox.ts:27: 
+lib/feedbackOutbox.ts:28: export type FeedbackContext = Record<string, unknown>;
+lib/feedbackOutbox.ts:29: 
+lib/feedbackOutbox.ts:30: export type FeedbackOutboxItem = {
+lib/feedbackOutbox.ts:31:   /** Idempotency key â€” reused as the server's dedupe key on submit. */
+lib/feedbackOutbox.ts:32:   clientId: string;
+lib/feedbackOutbox.ts:33:   text: string;
+lib/feedbackOutbox.ts:34:   createdAt: number;
+lib/feedbackOutbox.ts:35:   context?: FeedbackContext;
+lib/feedbackOutbox.ts:36:   state: FeedbackOutboxState;
+lib/feedbackOutbox.ts:37:   /** When the server accepted it (ms epoch). Only present once `state === "sent"`. */
+lib/feedbackOutbox.ts:38:   sentAt?: number;
+lib/feedbackOutbox.ts:39: };
+lib/feedbackOutbox.ts:40: 
+lib/feedbackOutbox.ts:41: /** What `flush`'s injected sender is handed â€” everything the mutation needs bar the device id. */
+lib/feedbackOutbox.ts:42: export type FeedbackSubmitInput = {
+components/FeedbackSheet.tsx:110:       <BottomSheetBackdrop
+components/FeedbackSheet.tsx:111:         {...props}
+components/FeedbackSheet.tsx:112:         disappearsOnIndex={-1}
+components/FeedbackSheet.tsx:113:         appearsOnIndex={0}
+components/FeedbackSheet.tsx:114:         opacity={0.35}
+components/FeedbackSheet.tsx:115:         pressBehavior="close"
+components/FeedbackSheet.tsx:116:       />
+components/FeedbackSheet.tsx:117:     ),
+components/FeedbackSheet.tsx:118:     []
+components/FeedbackSheet.tsx:119:   );
+components/FeedbackSheet.tsx:120: 
+components/FeedbackSheet.tsx:121:   if (!visible) return null;
+components/FeedbackSheet.tsx:122: 
+components/FeedbackSheet.tsx:123:   const sendDisabled = sending || text.trim().length === 0;
+components/FeedbackSheet.tsx:124: 
+components/FeedbackSheet.tsx:125:   return (
+components/FeedbackSheet.tsx:126:     <BottomSheet
+components/FeedbackSheet.tsx:127:       ref={sheetRef}
+components/FeedbackSheet.tsx:128:       snapPoints={snapPoints}
+components/FeedbackSheet.tsx:129:       index={0}
+components/FeedbackSheet.tsx:130:       enablePanDownToClose
+components/FeedbackSheet.tsx:131:       animateOnMount
+components/FeedbackSheet.tsx:132:       keyboardBehavior="interactive"
+components/FeedbackSheet.tsx:133:       keyboardBlurBehavior="restore"
+components/FeedbackSheet.tsx:134:       android_keyboardInputMode="adjustResize"
+components/FeedbackSheet.tsx:135:       backdropComponent={renderBackdrop}
+components/FeedbackSheet.tsx:136:       onClose={handleClose}
+components/FeedbackSheet.tsx:137:       handleIndicatorStyle={styles.handleIndicator}
+components/FeedbackSheet.tsx:138:       backgroundStyle={styles.sheetBackground}
+components/FeedbackSheet.tsx:139:     >
+components/FeedbackSheet.tsx:140:       <BottomSheetView style={styles.content}>
+components/FeedbackSheet.tsx:141:         <Text style={styles.title}>Send feedback</Text>
+
+web search: 
+web search: site:developer.apple.com/design/human-interface-guidelines/tips dismissal ...
+codex
+**Corrections**
+- A isn’t a drop-in: Reminders has **Get Pro plus “+”** ([app/index.tsx:1818](/C:/Dev/VR/app/index.tsx:1818)); Days already occupies top-right with its month picker ([DaysPage.tsx:248](/C:/Dev/VR/components/days/DaysPage.tsx:248)). Both need deliberate spacing.
+- Settings’ header sits **inside its ScrollView**, so a header icon would scroll away ([app/settings.tsx:242](/C:/Dev/VR/app/settings.tsx:242)). Pin it to meet “always available.”
+- Match visual weight, not existing target size: “+” is only 36×36 ([app/index.tsx:2037](/C:/Dev/VR/app/index.tsx:2037)); give feedback a 44×44-point target.
+- B mixes a composer action into actual navigation tabs (`accessibilityRole="tab"`), while the mic is already separate ([BottomBar.tsx:38](/C:/Dev/VR/components/BottomBar.tsx:38), [BottomBar.tsx:52](/C:/Dev/VR/components/BottomBar.tsx:52)).
+- “Never while a sheet is open” needs broader gating: the feedback store tracks only its composer/list ([feedbackUi.ts:22](/C:/Dev/VR/lib/feedbackUi.ts:22)); recording/editing visibility lives elsewhere ([app/index.tsx:1917](/C:/Dev/VR/app/index.tsx:1917)).
+
+**Q1 — Pick A, with qualifications.**
+Header placement costs thumb reach on an iPhone 12; the bottom options win there. But feedback already has contextual access in the failed card and edit sheet ([PendingTakeCard.tsx:161](/C:/Dev/VR/components/PendingTakeCard.tsx:161), [EditReminderSheet.tsx:785](/C:/Dev/VR/components/EditReminderSheet.tsx:785)). A supplies general discovery while preserving the mic’s dominance.
+Use the same trailing header position across all three pages, with existing controls immediately left; pin Settings’ header. Prefer a quiet speech-bubble icon: “bug” assumes users understand the problem technically. Claude’s “visual noise” is a design judgment, not proof that floating feedback cannot work.
+
+**Q2 — Cut two triggers; simplify the third.**
+- **Failure: cut the extra tooltip.** The failed card already offers reporting; let users retry without another competing prompt.
+- **Edit within two minutes: cut.** Renaming, polishing wording, or changing one’s mind is normal. This is weak evidence of a parse miss and prompts precisely while users are correcting something.
+- **Third day: change to one discovery tip on the third distinct usage day**, at the next idle, unobstructed page view. Skip permanently if feedback was already opened; store “tip shown” locally. No weekly recurrence.
+- Suppress during recording, processing, keyboard entry, sheets, and other banners. Drop the rigid six-second dismissal; offer explicit dismissal without blocking the page.
+
+**Q3 — No inherent App Review concern; two HIG qualifications.**
+My reading: persistent reporting and a modest tip are acceptable; Apple explicitly expects accessible contact/support information ([Review §1.5](https://developer.apple.com/app-store/review/guidelines/#safety)).
+B conflicts with guidance that tabs navigate rather than perform actions ([Tab bars](https://developer.apple.com/design/human-interface-guidelines/tab-bars)). Six-second tips raise accessibility concerns; Apple prefers explicit dismissal for timed UI. Use adequately sized targets ([Accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility), [Touch targets](https://developer.apple.com/design/tips/)). These are design considerations, not automatic rejection grounds.
+
+**Q4 — Copy**
+Accessibility name: **“Send feedback”**  
+Tooltip: **“Something wrong? Send feedback here.”**  
+Avoid “Need help?” unless the composer actually provides help; it currently collects a message.
+
+**Verdict:** Ship **A with a pinned Settings header, consistent 44×44 targets, and one discovery tip**. Reuse `feedbackUi.openComposer`; keep the existing contextual entries. This is a small, coherent addition without speculative error detection.
+tokens used
+43,099
+**Corrections**
+- A isn’t a drop-in: Reminders has **Get Pro plus “+”** ([app/index.tsx:1818](/C:/Dev/VR/app/index.tsx:1818)); Days already occupies top-right with its month picker ([DaysPage.tsx:248](/C:/Dev/VR/components/days/DaysPage.tsx:248)). Both need deliberate spacing.
+- Settings’ header sits **inside its ScrollView**, so a header icon would scroll away ([app/settings.tsx:242](/C:/Dev/VR/app/settings.tsx:242)). Pin it to meet “always available.”
+- Match visual weight, not existing target size: “+” is only 36×36 ([app/index.tsx:2037](/C:/Dev/VR/app/index.tsx:2037)); give feedback a 44×44-point target.
+- B mixes a composer action into actual navigation tabs (`accessibilityRole="tab"`), while the mic is already separate ([BottomBar.tsx:38](/C:/Dev/VR/components/BottomBar.tsx:38), [BottomBar.tsx:52](/C:/Dev/VR/components/BottomBar.tsx:52)).
+- “Never while a sheet is open” needs broader gating: the feedback store tracks only its composer/list ([feedbackUi.ts:22](/C:/Dev/VR/lib/feedbackUi.ts:22)); recording/editing visibility lives elsewhere ([app/index.tsx:1917](/C:/Dev/VR/app/index.tsx:1917)).
+
+**Q1 — Pick A, with qualifications.**
+Header placement costs thumb reach on an iPhone 12; the bottom options win there. But feedback already has contextual access in the failed card and edit sheet ([PendingTakeCard.tsx:161](/C:/Dev/VR/components/PendingTakeCard.tsx:161), [EditReminderSheet.tsx:785](/C:/Dev/VR/components/EditReminderSheet.tsx:785)). A supplies general discovery while preserving the mic’s dominance.
+Use the same trailing header position across all three pages, with existing controls immediately left; pin Settings’ header. Prefer a quiet speech-bubble icon: “bug” assumes users understand the problem technically. Claude’s “visual noise” is a design judgment, not proof that floating feedback cannot work.
+
+**Q2 — Cut two triggers; simplify the third.**
+- **Failure: cut the extra tooltip.** The failed card already offers reporting; let users retry without another competing prompt.
+- **Edit within two minutes: cut.** Renaming, polishing wording, or changing one’s mind is normal. This is weak evidence of a parse miss and prompts precisely while users are correcting something.
+- **Third day: change to one discovery tip on the third distinct usage day**, at the next idle, unobstructed page view. Skip permanently if feedback was already opened; store “tip shown” locally. No weekly recurrence.
+- Suppress during recording, processing, keyboard entry, sheets, and other banners. Drop the rigid six-second dismissal; offer explicit dismissal without blocking the page.
+
+**Q3 — No inherent App Review concern; two HIG qualifications.**
+My reading: persistent reporting and a modest tip are acceptable; Apple explicitly expects accessible contact/support information ([Review §1.5](https://developer.apple.com/app-store/review/guidelines/#safety)).
+B conflicts with guidance that tabs navigate rather than perform actions ([Tab bars](https://developer.apple.com/design/human-interface-guidelines/tab-bars)). Six-second tips raise accessibility concerns; Apple prefers explicit dismissal for timed UI. Use adequately sized targets ([Accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility), [Touch targets](https://developer.apple.com/design/tips/)). These are design considerations, not automatic rejection grounds.
+
+**Q4 — Copy**
+Accessibility name: **“Send feedback”**  
+Tooltip: **“Something wrong? Send feedback here.”**  
+Avoid “Need help?” unless the composer actually provides help; it currently collects a message.
+
+**Verdict:** Ship **A with a pinned Settings header, consistent 44×44 targets, and one discovery tip**. Reuse `feedbackUi.openComposer`; keep the existing contextual entries. This is a small, coherent addition without speculative error detection.

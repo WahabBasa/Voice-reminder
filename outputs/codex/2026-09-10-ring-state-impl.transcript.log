@@ -1,0 +1,1329 @@
+2026-09-10T17:49:39.484590Z ERROR codex_core::session::session: failed to load skill C:\Users\AtheA\.agents\skills\ptc-microsoft-todo\SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Dev\VR
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a08c70-82da-7341-a288-e2d7dff3b0c5
+--------
+user
+Follow-up to your investigation in outputs/codex/2026-09-10-ring-state.md (read it and the brief outputs/codex/2026-09-10-ring-state-brief.md first). Short implementation pass, not deep: read-only, no file changes, no convex/eas. Answer in under 60 lines: (1) corrections with file:line; (2) answers to Q1-Q5; (3) verdict on the split. The product owner will test on an internal build with live syslog — no App Store submission — so native changes are in scope.
+
+## Product decisions (final)
+- The X is Apple's AlarmKit banner when the phone is unlocked: timer icon = Later, X = Stop. Stop = Done for THAT occurrence (already the native mapping); the card must reflect it promptly, not on the next foreground.
+- Later = ring 5 minutes FROM THE TAP, unlimited times. The 3-comeback cap applies only to IGNORED rings (auto-nag at +5/+10/+15 after the ring), after which the card shows "Missed".
+- Done finishes that occurrence only; other occurrences the same day stay owed.
+- While a ring is unresolved the card does not flip to Overdue. Resolution = Stop/Done, Later, or the nag chain exhausted (→ Missed).
+
+## Plan
+**Lifecycle contract** (new `lib/ringLifecycle.ts`, AsyncStorage-persisted, pure functions + a small store): records keyed `${reminderId}:${occurrenceAt}` = `{ reminderId, occurrenceAt, state: "ringing" | "snoozed" | "done" | "missed", snoozeUntil?, chainStep?: number, resolvedAt?, source: "alarmkit" | "fallback" }`. `markRinging(occ)` when the scheduled time passes for an armed occurrence (JS-side, from schedule + now; or from native "alerting" state), `markSnoozed(occ, until)`, `markDone(occ)`, `markMissed(occ)`; `resolveCardState(reminder, now, records)` → the card resolver input. Records older than 2 days pruned.
+**Card** (`lib/remindersMembership.ts`, `lib/time.ts`, `components/ReminderListItem.tsx`): consult lifecycle before the overdue rule: ringing → "Ringing now" (no red, pinned near top); snoozed → "Rings again 3:57 pm"; done → treated as completed occurrence (one-off removed / repeater advances); missed → "Missed · 3:52 pm" red (today's overdue look) — one-offs only, as today. Unknown (no record, time passed) → keep today's behavior but only after `occurrenceAt + 16 min` (nag chain exhausted) so an unobserved ring isn't red instantly.
+**Propagation**: (a) JS drains the native event log on the 30 s tick AND on foreground AND when native emits `VRAlarmEvent` (new RN event from the intents/app process via NotificationCenter → bridge); drain becomes apply-then-ack (idempotent) instead of delete-first. (b) On foreground and on tick, JS asks native `getAlarmStates()` → snapshot of `AlarmManager.shared.alarms` (id, state: scheduled/countdown/alerting/paused, fire date) to mark "ringing" from truth, and subscribes to `alarmUpdates` while the app runs (native forwards changes as `VRAlarmEvent`).
+**Later semantics** (native intents, `plugins/ios-src/VRAlarmIntents.swift`): on Snooze intent: keep the guard-first order; cancel the remaining pre-armed nag siblings for this occurrence; arm ONE comeback at `now + 5 min` (with its own nag siblings at +5/+10 relative to it, so an ignored comeback still nags); record `snoozed` with `snoozeUntil = now + 5 min` (the real armed time). On Stop: record `done` for the occurrence, cancel its siblings (as today). Both post the NotificationCenter event after the durable write.
+**Done unification**: card Done while ringing → stop the native alarm for that occurrence + cancel its chain, record done, one-off removed / repeater advances; the fallback overlay/notification Done routes through the same function. Notification *dismissal* on the notifee fallback route stays as-is (it is not a deliberate action).
+**Not changing**: nag cadence for ignored rings, guard-before-stop and background intents (lock-screen Later without Face ID), sound pipeline, grid-first scheduling.
+
+## Split for parallel Opus agents (file ownership, no overlap)
+- **N (native)**: `plugins/ios-src/VRAlarmIntents.swift`, the generated Swift in `plugins/withAlarmKit.js` (bridge methods `getAlarmStates`, event emitter `VRAlarmEvent`, `alarmUpdates` subscription), `lib/alarmKit.ts` (JS wrapper for the new methods/event only). Contract: `getAlarmStates(): Promise<Array<{alarmId, reminderId?, occurrenceAt?, state, fireAt?}>>`, event `VRAlarmEvent {kind: "stopped"|"snoozed"|"alerting"|"scheduled", alarmId, reminderId, occurrenceAt, snoozeUntil?}`.
+- **L (lifecycle + card)**: new `lib/ringLifecycle.ts`, `lib/remindersMembership.ts`, `lib/time.ts`, `components/ReminderListItem.tsx`, their tests.
+- **R (reconcile + Done)**: `lib/notifications.ts` (drain apply-then-ack, snooze mirror from real armed time, Done-by-occurrence that stops the ring and cancels the chain, fallback parity), `app/_layout.tsx` (event subscription + tick drain), `app/index.tsx` (card Done handler, 30 s tick calling drain + `getAlarmStates`), tests.
+L and R both consume the lifecycle contract; R calls L's `mark*` functions; N's contract is consumed by R. Then one internal EAS build + syslog test.
+
+## Questions
+- Q1: Can the Snooze intent, running in the app process in the background, reliably cancel the pre-armed siblings and arm a new alarm at now+5 (AlarmManager.schedule from an App Intent perform)? The existing code already arms follow-ups from the intent — confirm with file:line, and any iOS 26.6 gotcha (e.g. schedule limits, needing the alarm id in the intent parameters).
+- Q2: `AlarmManager.alarms` / `alarmUpdates`: which alarm states exist on iOS 26 and which one means "ringing now"? Is a snapshot on foreground + a subscription while running enough, given the app may be killed?
+- Q3: Is the "unknown → treat as overdue only after occurrenceAt + 16 min" fallback acceptable, or does it hide a genuinely missed one-off for too long? Alternative: overdue immediately when native says the alarm is no longer scheduled and no record exists.
+- Q4: The file-ownership split — any place L and R must both edit (e.g. the store type in `lib/store.ts`)? If so, assign it to one and define the field names now.
+- Q5: The nag siblings after a Later comeback: keep +5/+10 relative to the comeback (so an ignored comeback still nags twice) or a single comeback with no nags? Pick one with a reason.
+
+2026-09-10T17:49:40.362090Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\"error\":{\"message\":\"Invalid API key: ak_**mXj4\",\"code\":801,\"status\":401,\"request_id\":\"cf03019a-7fc7-41c6-8c1c-a4c07a1b206c\"}}")
+codex
+I’ll read both investigation notes first, then check the code and Apple’s AlarmKit docs. I’ll keep this read-only and won’t run Convex or EAS.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content outputs/codex/2026-09-10-ring-state.md; Get-Content outputs/codex/2026-09-10-ring-state-brief.md' in C:\Dev\VR
+ succeeded in 1069ms:
+**(1) How it works today**
+
+Read-only investigation completed; no file changes or Convex/EAS commands. The findings describe this checkout, whose configured build number is **5**, rather than proving the native contents of the reported build 4. [app.json:14](/C:/Dev/VR/app.json:14)
+
+- **Card state is computed, not driven by alarm lifecycle.** `nextDisplayDue` resolves live snooze â†’ schedule grid â†’ legacy `getReminderNextDueTimestamp`. Only incomplete **one-offs** become overdue, at `due.at <= now`, excluding live snoozes; overdue cards sort first. Repeaters instead advance through their grid. [lib/remindersMembership.ts:19](/C:/Dev/VR/lib/remindersMembership.ts:19), [lib/remindersMembership.ts:38](/C:/Dev/VR/lib/remindersMembership.ts:38)
+- **The wording adds no ringing grace period.** `Overdue` wins before `formatNextIn`; that formatter bottoms out at â€œNext in 1 min,â€ with no â€œNowâ€ or â€œRingingâ€ state. The component applies red styling from the supplied overdue flag. [lib/remindersMembership.ts:51](/C:/Dev/VR/lib/remindersMembership.ts:51), [lib/time.ts:517](/C:/Dev/VR/lib/time.ts:517), [components/ReminderListItem.tsx:129](/C:/Dev/VR/components/ReminderListItem.tsx:129)
+- **There are no `snoozedUntil`, `lastRing`, or `completedAt` fields on `Reminder`.** Completion lives in history as `timestamp`, `status`, optional `scheduledFor` and `action`. AlarmKit separately stores `snoozeUntil`, `nagCount`, `nagFor`, and `nagOrigins`; fallback `PendingAlarm` has `ringingAt`, `resolvedAt`, and `resolvedAction`. [lib/store.ts:30](/C:/Dev/VR/lib/store.ts:30), [lib/store.ts:109](/C:/Dev/VR/lib/store.ts:109), [lib/notifications.ts:1408](/C:/Dev/VR/lib/notifications.ts:1408), [lib/notifications.ts:233](/C:/Dev/VR/lib/notifications.ts:233)
+- **AlarmKit owns the primary iOS alarm.** Authorization selects that route, which skips the notifee occurrence trigger. Native Stop records `stopped` and cancels its comeback siblings; reconciliation already interprets this as completion, removes one-offs, and reschedules repeaters. [lib/alarmKit.ts:286](/C:/Dev/VR/lib/alarmKit.ts:286), [lib/notifications.ts:2268](/C:/Dev/VR/lib/notifications.ts:2268), [plugins/ios-src/VRAlarmIntents.swift:674](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:674), [lib/notifications.ts:2016](/C:/Dev/VR/lib/notifications.ts:2016)
+- **Native â†’ card synchronization is indirect:** intent â†’ UserDefaults event log â†’ startup/foreground drain â†’ AsyncStorage `@alarmkit_state` â†’ card snapshot on focus/foreground/30-second tick. There is no live event subscription in this bridge contract. App Group storage is optional; both native stores fall back to standard UserDefaults. These intents are linked into the app target, and prior device evidence places Later in the app processâ€”not a separate notification extension. [plugins/withAlarmKit.js:268](/C:/Dev/VR/plugins/withAlarmKit.js:268), [lib/alarmKit.ts:54](/C:/Dev/VR/lib/alarmKit.ts:54), [app/_layout.tsx:102](/C:/Dev/VR/app/_layout.tsx:102), [app/index.tsx:333](/C:/Dev/VR/app/index.tsx:333), [updates/2026-08-25_devlog.md:14](/C:/Dev/VR/updates/2026-08-25_devlog.md:14)
+
+**(2) Root causes of each symptom**
+
+- **Immediate overdue:** confirmed in an in-memory replay of the actual resolver: before trigger â†’ â€œNext in 1 minâ€; at trigger/+1 second â†’ â€œOverdueâ€; snooze snapshot supplied â†’ â€œRings againâ€; snooze expires â†’ original overdue time returns. A daily repeater instead showed tomorrow at its trigger. The implementation has neither active-occurrence identity nor ringing input. [lib/remindersMembership.ts:22](/C:/Dev/VR/lib/remindersMembership.ts:22), [lib/remindersMembership.ts:43](/C:/Dev/VR/lib/remindersMembership.ts:43)
+- **Later updates late:** foreground reconciliation and the card refresh run independently. The card can read storage before reconciliation writes it, then wait another tick. If an intent runs while JS remains foregrounded without an AppState transition, the tick only rereads AsyncStorageâ€”it does **not** drain native events. Therefore the delay is not necessarily bounded by 30 seconds. [app/_layout.tsx:108](/C:/Dev/VR/app/_layout.tsx:108), [app/index.tsx:337](/C:/Dev/VR/app/index.tsx:337), [lib/notifications.ts:1966](/C:/Dev/VR/lib/notifications.ts:1966)
+- **Later can display the wrong return time:** native code records `tap time + 5 minutes`, but normally retains the prearmed comeback at `original occurrence + 5/10/15 minutes`. At the cap, it can record a snooze even though follow-up scheduling returns without arming anything. Fallback snoozes also never populate the cardâ€™s AlarmKit-only snooze mirror. [plugins/ios-src/VRAlarmIntents.swift:525](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:525), [plugins/ios-src/VRAlarmIntents.swift:549](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:549), [plugins/ios-src/VRAlarmIntents.swift:593](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:593), [lib/alarmKit.ts:346](/C:/Dev/VR/lib/alarmKit.ts:346)
+- **The X:** our AlarmOverlay and alarm screen already show checkmark **Done**. AlarmKit also receives that configuration, but **iOS 26.1+ ignores the custom Stop appearance and supplies its own control**. On the authorized AlarmKit route, the reported X is therefore most consistent with the system Stop control, mapped to `VRStopIntent`; its completion reaches the card late through the path above. A plain notification dismissal is different: its handler nags rather than completes. Identifying the ownerâ€™s exact surface remains unverified. [components/AlarmOverlay.tsx:577](/C:/Dev/VR/components/AlarmOverlay.tsx:577), [app/alarm.tsx:445](/C:/Dev/VR/app/alarm.tsx:445), [plugins/withAlarmKit.js:407](/C:/Dev/VR/plugins/withAlarmKit.js:407), [lib/notifications.ts:2922](/C:/Dev/VR/lib/notifications.ts:2922); [Apple Stop-button documentation](https://developer.apple.com/documentation/alarmkit/alarmpresentation/alert-swift.struct/stopbutton).
+- **â€œTimeoutâ€ is currently an assumption on AlarmKit.** The 180-second constant only classifies `fired` events; native code does not currently produce those events or observe `alarmUpdates`. `getScheduledAlarms()` returns our registry, not actual daemon states. Consequently, neither elapsed time nor that registry proves ringing ended. [lib/alarmKit.ts:463](/C:/Dev/VR/lib/alarmKit.ts:463), [plugins/withAlarmKit.js:96](/C:/Dev/VR/plugins/withAlarmKit.js:96), [docs/cl4-escalation-research.md:17](/C:/Dev/VR/docs/cl4-escalation-research.md:17)
+
+**(3) Interaction matrix**
+
+â€œCard duringâ€ means its current computation when visible/reopened: **one-off overdue; repeater next grid occurrence**, unless a live snooze snapshot overrides it. Locked/background cards are not visibly updating. [lib/remindersMembership.ts:19](/C:/Dev/VR/lib/remindersMembership.ts:19)
+
+| Case | Surface / card during | After / state the app actually has |
+|---|---|---|
+| **(a) Locked, Stop** | System alarm; card computation as above. | Native `stopped` plus sibling cancellation immediately; JS history/card catch up on foreground. One-off disappears; repeater remains. [VRAlarmIntents.swift:674](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:674), [notifications.ts:2016](/C:/Dev/VR/lib/notifications.ts:2016) |
+| **(b) Later** | System secondary action stops sound and writes the guard first. | Native comeback remains/gets armed; card may remain overdue until drain + snapshot refresh, then â€œRings again.â€ Recorded time may differ from the armed sibling. [VRAlarmIntents.swift:527](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:527), [VRAlarmIntents.swift:556](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:556) |
+| **(c) Ignored** | AlarmKit has no configured ring-duration limit or automatic countdown snooze; repository device research reports looping until stopped. **An exact iOS 26.6 maximum is not established here.** | Prearmed comebacks are separate alarms, not proof that the current ring stopped. No native `fired` event means no reliable missed-history transition. Fallback JS explicitly stops at **3 minutes**, then nags, recording missed only when the chain is exhausted. [withAlarmKit.js:446](/C:/Dev/VR/plugins/withAlarmKit.js:446), [cl4 research:12](/C:/Dev/VR/docs/cl4-escalation-research.md:12), [notifications.ts:839](/C:/Dev/VR/lib/notifications.ts:839) |
+| **(d) Unlocked, app foreground** | Authorized route: system AlarmKit presentation over the app, not AlarmOverlay. Fallback: notifee banner plus pending-alarm-driven overlay. | Card follows time independently; native answers need reconciliation. Fallback overlay already offers âœ“ Done/Later. [notifications.ts:2268](/C:/Dev/VR/lib/notifications.ts:2268), [notifications.ts:2324](/C:/Dev/VR/lib/notifications.ts:2324), [app/_layout.tsx:222](/C:/Dev/VR/app/_layout.tsx:222), [alarm-banner research:21](/C:/Dev/VR/docs/alarm-banner-research.md:21) |
+| **(e) Killed/background, unlocked** | AlarmKit remains system-owned; no visible app card. Fallback is an ordinary system notification. | Native answers persist for foreground reconciliation. Fallback cannot rely on a background trigger `DELIVERED` event to start its JS timeout/overlay. [app/_layout.tsx:102](/C:/Dev/VR/app/_layout.tsx:102), [notifications.ts:2797](/C:/Dev/VR/lib/notifications.ts:2797); [Notifee events](https://notifee.app/react-native/docs/events/). |
+| **(f) Focus/DND** | AlarmKit is documented to break through. Fallback requests ordinary notification presentation, with no critical/time-sensitive override here. | No special card behavior; afterward use the same action paths. Fallback visibility depends on system/user allowance. [notifications.ts:2324](/C:/Dev/VR/lib/notifications.ts:2324), [focus research:147](/C:/Dev/VR/docs/alarmkit-focus-breakthrough.md:147); [Apple scheduling](https://developer.apple.com/documentation/AlarmKit/scheduling-an-alarm-with-alarmkit). |
+| **(g) Silent / volume 0** | AlarmKit breaks Silent; **volume-zero audibility is not established**. Its configuration supplies sound, not volume. | Same card/outcome logic. Separate fallback issue: overlay `Number(volumeStr) || 1` turns explicit zero into one. [withAlarmKit.js:440](/C:/Dev/VR/plugins/withAlarmKit.js:440), [focus research:40](/C:/Dev/VR/docs/alarmkit-focus-breakthrough.md:40), [AlarmOverlay.tsx:113](/C:/Dev/VR/components/AlarmOverlay.tsx:113) |
+| **(h) Low Power Mode** | No special handling in these scheduling/card paths; device behavior is unverified. | Do not promise that background JS timers enforce ring endings. Existing foreground reconciliation remains the recovery path. [withAlarmKit.js:446](/C:/Dev/VR/plugins/withAlarmKit.js:446), [notifications.ts:937](/C:/Dev/VR/lib/notifications.ts:937), [app/_layout.tsx:115](/C:/Dev/VR/app/_layout.tsx:115) |
+| **(i) Permissions denied/revoked** | Alarm authorization denied â†’ notifee fallback. Notification permission revoked does not itself disable an already authorized AlarmKit gate; if both are denied, no permitted notification surface. | Gate is session-cached. Card can still become overdue despite no displayed alert, since it only knows schedule/history/snooze. [alarmKit.ts:286](/C:/Dev/VR/lib/alarmKit.ts:286), [remindersMembership.ts:43](/C:/Dev/VR/lib/remindersMembership.ts:43); [Notifee permissions](https://notifee.app/react-native/docs/ios/permissions/). |
+| **(j) Repeating/persistent vs once** | Only one-offs get overdue. Repeaters can advanceâ€”and lose the Today completion affordanceâ€”while ringing. Current nag policy is fixed, not conditional on `persistent`. | All get capped comeback logic; one-off Done finishes the reminder, repeating Done records completion. Card completion is currently day-based. [remindersMembership.ts:24](/C:/Dev/VR/lib/remindersMembership.ts:24), [notifications.ts:1684](/C:/Dev/VR/lib/notifications.ts:1684), [notificationDecisions.ts:278](/C:/Dev/VR/lib/notificationDecisions.ts:278), [dayOccurrences.ts:196](/C:/Dev/VR/lib/dayOccurrences.ts:196) |
+| **(k) Opens app, taps ringing card** | If accessible beneath the alarm surface, tapping opens **EditReminderSheet**, not alarm controls. | Opening the sheet does not resolve the ring. Saving a reschedule separately cancels/rearms alarms and patches the row. [app/index.tsx:1604](/C:/Dev/VR/app/index.tsx:1604), [EditReminderSheet.tsx:403](/C:/Dev/VR/components/EditReminderSheet.tsx:403), [EditReminderSheet.tsx:483](/C:/Dev/VR/components/EditReminderSheet.tsx:483) |
+| **(l) Card Done while ringing** | If its tick is available, completion waits for a 250ms exit animation. | One-off removal eventually cancels native alarms. **Repeater only gets history written: this handler does not stop its current ring or cancel its nags.** [app/index.tsx:1640](/C:/Dev/VR/app/index.tsx:1640), [reminderRemoval.ts:16](/C:/Dev/VR/lib/reminderRemoval.ts:16), [notifications.ts:2455](/C:/Dev/VR/lib/notifications.ts:2455) |
+
+**(4) Proposed fix, reasoning and trade-offs**
+
+- **Introduce persisted occurrence lifecycle, not just `lastRingResolvedAt` on the reminder.** Key it by reminder + scheduled occurrence + native alarm identity, retaining comeback origin. This avoids one ring overwriting another on multi-time reminders; existing `nagOrigins` already demonstrates that requirement. Derive card presentation from it while retaining the existing schedule resolver. [lib/notifications.ts:1414](/C:/Dev/VR/lib/notifications.ts:1414)
+- **Observe actual native state.** Add an initial AlarmManager snapshot and `alarmUpdates` subscription; persist intent outcomes and notify active JS after writes. Foreground recovery should load reminders, reconcile native evidence, then publish one card snapshot. A notification is a wake-up hint, not the durable record. This requires native implementation and a new binary, beyond an OTA-only card change. [docs/alarmkit-focus-breakthrough.md:206](/C:/Dev/VR/docs/alarmkit-focus-breakthrough.md:206), [plugins/withAlarmKit.js:738](/C:/Dev/VR/plugins/withAlarmKit.js:738); [Apple alarm updates](https://developer.apple.com/documentation/alarmkit/alarmmanager/alarmupdates-swift.property).
+- **Freeze the ringing occurrenceâ€™s card presentation and ordering until resolution.** Apply this to repeaters and snooze comebacks too. Do not call elapsed scheduled time â€œconfirmed ringingâ€ when authorization/delivery is absent, and do not invent a 60â€“120-second AlarmKit timeout. An unresolved/unknown state is more honest than false completion or false â€œMissed.â€ [lib/remindersMembership.ts:38](/C:/Dev/VR/lib/remindersMembership.ts:38), [lib/alarmKit.ts:463](/C:/Dev/VR/lib/alarmKit.ts:463)
+- **Publish the actual armed next time immediately after successful Later/reschedule.** Keep the native race guard first, but separate it from the displayed comeback time; handle exhausted caps and failed registration without claiming another ring exists. Share the reactive snapshot with fallback handlers. Existing detached scheduling suppresses errors, so merely writing a timestamp earlier is insufficient. [plugins/ios-src/VRAlarmIntents.swift:530](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:530), [plugins/ios-src/VRAlarmIntents.swift:595](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:595), [plugins/withAlarmKit.js:508](/C:/Dev/VR/plugins/withAlarmKit.js:508)
+- **Unify Done by occurrence across system Stop, overlay, notification action and card.** Stop/cancel that ring and its comeback chain, publish completion promptly, retain future repeater occurrences. Make reconciliation idempotent and acknowledge events only after durable application: today the native drain deletes first, and even a `pending` outcome is then discarded. [app/index.tsx:1657](/C:/Dev/VR/app/index.tsx:1657), [lib/notifications.ts:1521](/C:/Dev/VR/lib/notifications.ts:1521), [plugins/withAlarmKit.js:362](/C:/Dev/VR/plugins/withAlarmKit.js:362), [lib/notifications.ts:1979](/C:/Dev/VR/lib/notifications.ts:1979)
+- **Treat â€œMissed Â· timeâ€ as presentation of an unanswered ring, not completion.** If another comeback is armed, also show its actual next time. Final missed history currently waits for chain exhaustion; changing that ledger policy would be a separate decision. [lib/notifications.ts:2055](/C:/Dev/VR/lib/notifications.ts:2055), [lib/notifications.ts:2094](/C:/Dev/VR/lib/notifications.ts:2094)
+
+**(5) What NOT to change, and why**
+
+- **Do not promise X â†’ tick on the iOS 26.6 system alert.** Stop appearance is system-controlled; its completion behavior is already wired and needs reliable propagation. Replacing the foreground surface requires a separate native stop-and-custom-UI/audio design. [plugins/withAlarmKit.js:407](/C:/Dev/VR/plugins/withAlarmKit.js:407), [docs/alarm-banner-research.md:21](/C:/Dev/VR/docs/alarm-banner-research.md:21)
+- **Keep snooze-nag policy and race guards:** same recording, five-minute cadence, at most three comebacks; no escalation resurrection or unlimited persistence. Preserve guard-before-stop and background intents, which protect Later and lock-screen operation without Face ID. [lib/notificationDecisions.ts:278](/C:/Dev/VR/lib/notificationDecisions.ts:278), [plugins/ios-src/VRAlarmIntents.swift:527](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:527), [updates/2026-08-25_devlog.md:14](/C:/Dev/VR/updates/2026-08-25_devlog.md:14)
+- **Keep the sound pipeline, grid-first scheduling, and â€œmissed remains owedâ€ rule.** None causes the missing lifecycle synchronization; altering them would change unrelated delivery, recurrence, and active-count behavior. [plugins/withAlarmKit.js:440](/C:/Dev/VR/plugins/withAlarmKit.js:440), [lib/remindersMembership.ts:27](/C:/Dev/VR/lib/remindersMembership.ts:27), [lib/reminderActive.ts:60](/C:/Dev/VR/lib/reminderActive.ts:60)
+
+**(6) Open questions for the product owner**
+
+1. Was the X on the system alarm with **Later**, or an ordinary notificationâ€”and was Remi itself foregrounded?
+2. Should Later retain the existing fixed comeback cadence, or guarantee five minutes **from the tap**, including what happens after the third comeback? [lib/notificationDecisions.ts:314](/C:/Dev/VR/lib/notificationDecisions.ts:314)
+3. For a reminder ringing several times daily, should Done complete **this occurrence** or **the whole day**? The card currently treats any completion that day as done for today. [lib/dayOccurrences.ts:196](/C:/Dev/VR/lib/dayOccurrences.ts:196)
+Investigation + discussion round (read-only; no file changes; no convex/eas). You investigate the repo FIRST, then reason. Claude has NOT pre-mapped this one on purpose â€” find the code paths yourself and cite file:line for every claim. Answer in under 120 lines, structured as: (1) how it works today, with citations; (2) root causes of each symptom; (3) the interaction matrix; (4) proposed fix with reasoning and the trade-offs; (5) what NOT to change and why; (6) open questions for the product owner (max 3).
+
+## Bug report from the product owner (iPhone 12, iOS 26.6, internal build 4 with today's OTA)
+"The alarm immediately moves to overdue status the moment I don't attend to it. This is when the phone is open or closed. It remains in that state even after I tap Later (delay/reschedule). Only after some time does the state update to show when it should next ring. I want to change that: while it is ringing we don't update the card's state; only after ringing ends â€” timeout, Done, or Later/reschedule â€” do we change state. Also, when the phone is unlocked and I tap the X on the alarm notification that pops up, the card shows overdue. Can we replace that X with a tick (Done) instead, and clear the alarm once we clear it?"
+
+## Where to start (anchors, not a map)
+- Card state text and ordering: `lib/remindersMembership.ts`, `lib/time.ts` (`formatNextIn`), `components/ReminderListItem.tsx`, the next-ring resolver (`getReminderNextDueTimestamp`, snooze â†’ `nextGridOccurrence` â†’ legacy, per the 09-08 devlog `updates/2026-09-08_devlog.md:22-35`), refresh cadence (30 s tick + AppState active).
+- Ringing: iOS 26 AlarmKit path in `plugins/withAlarmKit.js` (generated Swift, alert presentation ~`:413`), `plugins/ios-src/VRAlarmIntents.swift` (Stop/Snooze App Intents, snooze-guard races), `lib/alarmKit.ts`, the JS-side alarm surfaces `components/AlarmOverlay.tsx` and `app/alarm.tsx`, notifee/notification fallback in `lib/notifications.ts` (`scheduleReminder`, ring planning ~`:2132-2148`, snooze/`Later` handling, `persistent` nag repeats), `docs/alarmkit-focus-breakthrough.md`, `docs/alarmkit-test-plan.md`. Snooze state on the reminder row (`lib/store.ts`: fields like snoozedUntil / lastRing / completedAt â€” find the real names) and how the store learns that a ring ended (Stop/Snooze intents â†’ app? Darwin notification? next-launch reconcile?).
+- Which "X" the owner means: the AlarmKit alert has its own buttons (Stop = the X-style dismiss? and Snooze = Later); a notifee/foreground banner may have different actions. Identify exactly which surface shows an X and what it maps to.
+
+## Questions to answer in (3), the interaction matrix
+For each: what the user sees on the card during and after, and what state the app has. Rows: (a) phone locked, AlarmKit alert rings, user taps Stop; (b) taps Snooze/Later; (c) ignores it until the alert times out (what is the timeout? does AlarmKit auto-snooze, auto-stop, or keep ringing?); (d) phone unlocked, app in foreground when it rings (which surface shows â€” AlarmKit alert, AlarmOverlay, banner?); (e) app killed/backgrounded, phone unlocked; (f) Focus / Do Not Disturb on (AlarmKit breaks through? notifee fallback doesn't?); (g) silent switch / volume 0; (h) Low Power Mode; (i) notification permission revoked or alarm authorization denied (fallback path); (j) a repeating/persistent reminder vs a one-off; (k) the user opens the app WHILE it is ringing and taps the card; (l) the user taps Done on the card while it is ringing.
+
+## Claude's initial reasoning for the fix (grill it)
+- The card derives "Overdue" purely from `now > nextRing` with no notion of "currently ringing". Proposed: a ringing window â€” from the scheduled trigger until the ring resolves (Stop/Done, Snooze, or a max ring duration, e.g. AlarmKit's own timeout or a fixed 60-120 s for the fallback) â€” during which the card keeps showing the pre-ring state ("Now" / "Ringing"), not "Overdue". Persist the resolution (`lastRingResolvedAt`, outcome) on the reminder so a relaunch computes the same thing.
+- Snooze must write the new next-ring time to the store synchronously in the same handler that arms the snooze, and trigger the list refresh â€” not wait for the 30 s tick. If the Snooze happens in the AlarmKit intent (extension/system process) while the app is suspended, the app must reconcile on next foreground from a persisted source (App Group / UserDefaults / the AlarmKit alarm's state) â€” find what exists.
+- The X â†’ tick: if the surface is AlarmKit's system alert, Apple defines the button set (Stop + optional secondary); we can relabel/re-icon Stop as Done with a checkmark if the API allows (check `AlarmButton` in the generated Swift), and Stop should mark the reminder done (one-off) or advance it (repeater), not leave it "overdue". If it is our own in-app overlay/banner, we own it fully.
+- "Timed out" ring (ignored): after the window, it IS overdue â€” that's the honest state â€” but the card should say "Missed Â· 3:52 pm" rather than an alarming red the instant the ring starts.
+- What should NOT change: the nag/persistent semantics (CL-4 decision: no escalation, snooze-nag instead), the OLD-110/111 lock-screen Done-without-Face-ID behavior, the AlarmKit sound pipeline.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"supportedModes|alarmID|alarmId|schedule\\(|Task|nagCount|snoozeUntil|cancel|perform\\(|recordEvent\" plugins/ios-src/VRAlarmIntents.swift; rg -n \"drain|ack|alarms|alarmUpdates|RCT|event\" plugins/withAlarmKit.js; rg -n \"completed|scheduledFor|isDone|doneToday\" lib/dayOccurrences.ts lib/remindersMembership.ts lib/store.ts; rg -n \"complete|Done|done|snooze|resolveAlarm\" components/AlarmOverlay.tsx app/alarm.tsx lib/notificationDecisions.ts" in C:\Dev\VR
+ succeeded in 727ms:
+74:    static let siblingCancelledEvent = "sibling_cancelled"
+116:    static func isSnoozeActive(snoozeUntilMillis: Int?, nowMillis: Int) -> Bool {
+117:        guard let snoozeUntilMillis = snoozeUntilMillis else { return false }
+118:        return snoozeUntilMillis > nowMillis
+122:    static func shouldRecordStop(snoozeUntilMillis: Int?, nowMillis: Int) -> Bool {
+123:        return !isSnoozeActive(snoozeUntilMillis: snoozeUntilMillis, nowMillis: nowMillis)
+132:    static func snoozeUntilMillis(nowMillis: Int, snoozeMinutes: Int) -> Int {
+138:    static func eventIdentifier(appKey: String?, alarmID: String?) -> String {
+140:        if let alarmID = alarmID, !alarmID.isEmpty { return "uuid:" + alarmID }
+158:    /// key, not an alarm. It must never reach cancel, which is why the prefix
+165:    /// Which chain members an acknowledgment on `selfKey` should cancel. Pure so
+167:    /// itself) are decided here rather than inside the cancel loop.
+169:    /// Excluding `selfKey` is what keeps a snooze chain from cancelling itself:
+173:    /// stray token) is ever handed to cancel.
+241:    static func writeSnoozeGuard(appKey: String, snoozeUntilMillis: Int) {
+244:        store.set(snoozeUntilMillis, forKey: VRAlarmIntentKeys.snoozeGuard(for: appKey))
+271:    static func appendEvent(type: String, id: String, atMillis: Int, snoozeUntilMillis: Int?) {
+273:        if let snoozeUntilMillis = snoozeUntilMillis {
+274:            event["snoozeUntil"] = snoozeUntilMillis
+365:    /// Same eviction the scheduler's cancel performs. Called for cancelled rungs so
+380:/// existing. Only Done goes through the cancel — "Later" deliberately leaves the
+408:    /// (app key -> current UUID) belongs to the scheduler's cancel and is not
+413:    /// round of cancels.
+415:    static func cancelSiblings(of resolvedKey: String, atMillis: Int) -> [String] {
+425:        var cancelled: [String] = []
+429:            // Guard 5 lives in here: resolve the key's current UUID, cancel it,
+431:            VRFollowUpScheduler.cancel(appKey: key)
+433:            // the scheduler's cancel bails before its own eviction in that case.
+438:            cancelled.append(key)
+443:                snoozeUntilMillis: nil
+447:        return cancelled
+482:    /// iOS 26 deprecates openAppWhenRun in favour of supportedModes. Build 2's
+483:    /// compiled Metadata.appintents already carried supportedModes=1 (background —
+488:    static var supportedModes: IntentModes = [.background]
+491:    var alarmID: String
+507:    init(alarmID: UUID, appKey: String, alarmTitle: String?, soundName: String?, snoozeMinutes: Int) {
+508:        self.alarmID = alarmID.uuidString
+515:    func perform() async throws -> some IntentResult {
+518:        let resolvedKey = VRAlarmIntentResolution.appKey(appKey: appKey, alarmID: alarmID)
+519:        // First line of perform(): its timestamp against SpringBoard's unlock/biometric
+521:        VRAlarmIntentLog.logger.notice("VRSnoozeIntent perform start alarmID=\(alarmID, privacy: .public) appKey=\(resolvedKey, privacy: .public) tsMillis=\(nowMillis, privacy: .public)")
+525:        let snoozeUntil = VRAlarmIntentGuards.snoozeUntilMillis(nowMillis: nowMillis, snoozeMinutes: minutes)
+530:        VRAlarmIntentStore.writeSnoozeGuard(appKey: resolvedKey, snoozeUntilMillis: snoozeUntil)
+532:        // The ring itself. Nothing else silences it any more: rotation's cancel
+536:        // never cancel: the registry entry must survive for the sibling
+538:        if let ringing = UUID(uuidString: alarmID) {
+551:            id: VRAlarmIntentGuards.eventIdentifier(appKey: resolvedKey, alarmID: alarmID),
+553:            snoozeUntilMillis: snoozeUntil
+559:        // deliberately NOT cancelled here: cancelling it would collapse three owed
+567:            scheduleFollowUp(appKey: resolvedKey, fireAtMillis: snoozeUntil, snoozeMinutes: minutes)
+572:        // the follow-up silently never rings. `try?`: a cancelled sleep is not an
+574:        try? await Task.sleep(nanoseconds: 1_000_000_000)
+576:        VRAlarmIntentLog.logger.notice("VRSnoozeIntent perform end appKey=\(resolvedKey, privacy: .public) snoozeUntilMillis=\(snoozeUntil, privacy: .public)")
+580:    /// GUARD 5 (rotation) is the scheduler's job: it cancels the app key's previous
+601:        // sibling list forward would make Done on the follow-up re-cancel keys
+620:                id: VRAlarmIntentGuards.eventIdentifier(appKey: resolvedKey, alarmID: alarmID),
+622:                snoozeUntilMillis: nil
+640:    /// See VRSnoozeIntent.supportedModes — same reasoning, same diagnostic.
+641:    static var supportedModes: IntentModes = [.background]
+644:    var alarmID: String
+651:    init(alarmID: UUID, appKey: String) {
+652:        self.alarmID = alarmID.uuidString
+656:    func perform() async throws -> some IntentResult {
+658:        let resolvedKey = VRAlarmIntentResolution.appKey(appKey: appKey, alarmID: alarmID)
+659:        let snoozeUntil = VRAlarmIntentStore.readSnoozeGuard(appKey: resolvedKey)
+660:        // First line of perform() — see VRSnoozeIntent for why the timestamp matters.
+661:        VRAlarmIntentLog.logger.notice("VRStopIntent perform start alarmID=\(alarmID, privacy: .public) appKey=\(resolvedKey, privacy: .public) tsMillis=\(nowMillis, privacy: .public) snoozeGuardMillis=\(snoozeUntil ?? -1, privacy: .public)")
+664:        // snooze is in flight this invocation is spurious: log nothing, cancel
+667:        if !VRAlarmIntentGuards.shouldRecordStop(snoozeUntilMillis: snoozeUntil, nowMillis: nowMillis) {
+670:        guard VRAlarmIntentGuards.shouldRecordStop(snoozeUntilMillis: snoozeUntil, nowMillis: nowMillis) else {
+676:            id: VRAlarmIntentGuards.eventIdentifier(appKey: resolvedKey, alarmID: alarmID),
+678:            snoozeUntilMillis: nil
+683:        // alongside a Later tap must cancel nothing at all, or the comebacks the
+685:        VRAlarmNagChain.cancelSiblings(of: resolvedKey, atMillis: nowMillis)
+706:    static func appKey(appKey: String?, alarmID: String?) -> String {
+708:        if let alarmID = alarmID, let recovered = VRAlarmIntentStore.appKey(forUUID: alarmID) { return recovered }
+720:    /// Must perform guard 5: cancel the app key's existing UUID, schedule a new
+722:    /// the main actor (an intent's `perform()` has no MainActor guarantee).
+732:    /// Ladder sibling-cancel. Must be rotation-aware — resolve the app key's
+733:    /// CURRENT UUID from the registry, cancel that, then drop the registry and
+736:    static func cancel(appKey: String)
+767:        expect(isSnoozeActive(snoozeUntilMillis: nil, nowMillis: now) == false, "no guard => not active")
+768:        expect(isSnoozeActive(snoozeUntilMillis: now - 1, nowMillis: now) == false, "past guard => not active")
+769:        expect(isSnoozeActive(snoozeUntilMillis: now, nowMillis: now) == false, "guard at fire moment => spent")
+770:        expect(isSnoozeActive(snoozeUntilMillis: now + 1, nowMillis: now) == true, "future guard => active")
+771:        expect(shouldRecordStop(snoozeUntilMillis: now + 60_000, nowMillis: now) == false, "spurious stop suppressed")
+772:        expect(shouldRecordStop(snoozeUntilMillis: now - 60_000, nowMillis: now) == true, "real stop recorded")
+773:        expect(shouldRecordStop(snoozeUntilMillis: nil, nowMillis: now) == true, "unsnoozed stop recorded")
+781:        expect(snoozeUntilMillis(nowMillis: now, snoozeMinutes: 5) == now + 300_000, "5m window")
+782:        expect(snoozeUntilMillis(nowMillis: now, snoozeMinutes: 0) == now + 300_000, "0m falls back to 5m")
+785:        let until = snoozeUntilMillis(nowMillis: now, snoozeMinutes: 5)
+786:        expect(isSnoozeActive(snoozeUntilMillis: until, nowMillis: now) == true, "guard live during window")
+787:        expect(isSnoozeActive(snoozeUntilMillis: until, nowMillis: until) == false, "guard spent at follow-up ring")
+790:        expect(eventIdentifier(appKey: "reminder_a_1", alarmID: "U") == "reminder_a_1", "app key preferred")
+791:        expect(eventIdentifier(appKey: "", alarmID: "U") == "uuid:U", "uuid fallback")
+792:        expect(eventIdentifier(appKey: nil, alarmID: nil) == "unknown", "unknown fallback")
+801:        expect(siblingKeys(rawSiblings: nil, excluding: occurrence).isEmpty, "no siblings key => nothing to cancel")
+802:        expect(siblingKeys(rawSiblings: "", excluding: occurrence).isEmpty, "empty siblings => nothing to cancel")
+805:               "Done on the occurrence cancels all three comebacks")
+812:               "own key never cancelled")
+816:               "the snooze guard key never reaches cancel")
+818:               "both alarm key families are cancellable")
+843:        let guardValue = snoozeUntilMillis(nowMillis: now, snoozeMinutes: 5)
+844:        expect(shouldRecordStop(snoozeUntilMillis: guardValue, nowMillis: now + 40) == false,
+846:        expect(shouldRecordStop(snoozeUntilMillis: guardValue, nowMillis: now + 302_000) == true,
+7: * 2. AlarmKitBridge.m       - RCT_EXTERN_MODULE export for the Swift class
+8: * 3. VRAlarmScheduler.swift - AlarmManager wrapper, UUID registry, event log
+18:  "VoiceReminder uses alarms so spoken reminders ring even when your phone is silenced.";
+34:  func isSupported(_ resolve: @escaping RCTPromiseResolveBlock,
+35:                   rejecter reject: @escaping RCTPromiseRejectBlock) {
+40:  func requestAuthorization(_ resolve: @escaping RCTPromiseResolveBlock,
+41:                            rejecter reject: @escaping RCTPromiseRejectBlock) {
+53:                     resolver resolve: @escaping RCTPromiseResolveBlock,
+54:                     rejecter reject: @escaping RCTPromiseRejectBlock) {
+87:                   resolver resolve: @escaping RCTPromiseResolveBlock,
+88:                   rejecter reject: @escaping RCTPromiseRejectBlock) {
+97:  func getScheduledAlarms(_ resolve: @escaping RCTPromiseResolveBlock,
+98:                          rejecter reject: @escaping RCTPromiseRejectBlock) {
+103:  func getAndClearEventLog(_ resolve: @escaping RCTPromiseResolveBlock,
+104:                           rejecter reject: @escaping RCTPromiseRejectBlock) {
+105:    resolve(VRAlarmStore.drainEvents())
+111:                         resolver resolve: @escaping RCTPromiseResolveBlock,
+112:                         rejecter reject: @escaping RCTPromiseRejectBlock) {
+141:                       resolver resolve: @escaping RCTPromiseResolveBlock,
+142:                       rejecter reject: @escaping RCTPromiseRejectBlock) {
+170:                        resolver resolve: @escaping RCTPromiseResolveBlock,
+171:                        rejecter reject: @escaping RCTPromiseRejectBlock) {
+190:const ALARM_KIT_BRIDGE_OBJC = `#import <React/RCTBridgeModule.h>
+192:@interface RCT_EXTERN_MODULE(AlarmKitBridge, NSObject)
+194:RCT_EXTERN_METHOD(isSupported:(RCTPromiseResolveBlock)resolve
+195:                  rejecter:(RCTPromiseRejectBlock)reject)
+197:RCT_EXTERN_METHOD(requestAuthorization:(RCTPromiseResolveBlock)resolve
+198:                  rejecter:(RCTPromiseRejectBlock)reject)
+200:RCT_EXTERN_METHOD(scheduleAlarm:(NSDictionary *)opts
+201:                  resolver:(RCTPromiseResolveBlock)resolve
+202:                  rejecter:(RCTPromiseRejectBlock)reject)
+204:RCT_EXTERN_METHOD(cancelAlarm:(NSString *)appKey
+205:                  resolver:(RCTPromiseResolveBlock)resolve
+206:                  rejecter:(RCTPromiseRejectBlock)reject)
+208:RCT_EXTERN_METHOD(getScheduledAlarms:(RCTPromiseResolveBlock)resolve
+209:                  rejecter:(RCTPromiseRejectBlock)reject)
+211:RCT_EXTERN_METHOD(getAndClearEventLog:(RCTPromiseResolveBlock)resolve
+212:                  rejecter:(RCTPromiseRejectBlock)reject)
+214:RCT_EXTERN_METHOD(scheduleTestAlarm:(nonnull NSNumber *)secondsFromNow
+215:                  resolver:(RCTPromiseResolveBlock)resolve
+216:                  rejecter:(RCTPromiseRejectBlock)reject)
+218:RCT_EXTERN_METHOD(placeAlarmSound:(NSString *)sourcePath
+220:                  resolver:(RCTPromiseResolveBlock)resolve
+221:                  rejecter:(RCTPromiseRejectBlock)reject)
+223:RCT_EXTERN_METHOD(removeAlarmSound:(NSString *)fileName
+224:                  resolver:(RCTPromiseResolveBlock)resolve
+225:                  rejecter:(RCTPromiseRejectBlock)reject)
+254:/// UserDefaults-backed state shared between the bridge and the App Intents.
+258:  static let eventsKey = "vr_alarm_events"        // JSON array, drained by JS on foreground
+342:    var event: [String: Any] = ["type": type, "id": appKey, "at": nowMs()]
+343:    if let snoozeUntil = snoozeUntil { event["snoozeUntil"] = snoozeUntil }
+344:    var events = decodeEvents()
+345:    events.append(event)
+346:    // Bound the log: JS drains on every foreground, so anything older is dead weight.
+347:    if events.count > 200 { events.removeFirst(events.count - 200) }
+348:    guard let data = try? JSONSerialization.data(withJSONObject: events, options: []),
+350:    defaults.set(json, forKey: eventsKey)
+354:    guard let json = defaults.string(forKey: eventsKey),
+362:  static func drainEvents() -> [[String: Any]] {
+363:    let events = decodeEvents()
+364:    defaults.removeObject(forKey: eventsKey)
+365:    return events
+562:// and the intents read both back through those same records.
+566:// wired to the SECONDARY button, so it cannot express "dismiss then come back",
+676: * Swift RN modules need RCTPromiseResolveBlock/RCTBridgeModule visible via the
+717:  const importLine = "#import <React/RCTBridgeModule.h>";
+lib/store.ts:93:    scheduledFor?: number; // Next computed occurrence timestamp (stable cadence)
+lib/store.ts:114:    status: 'completed' | 'missed';
+lib/store.ts:117:    scheduledFor?: number;
+lib/store.ts:118:    action?: 'dismissed' | 'snoozed' | 'fired' | 'auto_completed' | 'auto_missed' | 'pre_alert_done';
+lib/store.ts:141:        status: 'completed' | 'missed',
+lib/store.ts:142:        options?: { scheduledFor?: number; action?: ReminderHistory['action'] }
+lib/store.ts:254:                            if (migrated.scheduledFor) {
+lib/store.ts:255:                                migrated.onceAt = migrated.scheduledFor;
+lib/store.ts:476:            scheduledFor: options?.scheduledFor,
+lib/dayOccurrences.ts:95:    const ts = reminder.scheduledFor ?? reminder.onceAt;
+lib/dayOccurrences.ts:102:      scheduledFor: reminder.scheduledFor,
+lib/dayOccurrences.ts:123:    const anchor = startOfLocalDayMs(reminder.scheduledFor ?? createdDayStartMs(reminder));
+lib/dayOccurrences.ts:147:  const { scheduledFor } = getNextIntervalOccurrence(anchorAt, intervalMs, dayStart - 1);
+lib/dayOccurrences.ts:148:  return scheduledFor;
+lib/dayOccurrences.ts:169:    const ts = reminder.scheduledFor ?? reminder.onceAt;
+lib/dayOccurrences.ts:196:/** True if the reminder was completed on the given day (any completion for one-offs). */
+lib/dayOccurrences.ts:205:    if (entry.status !== "completed") continue;
+lib/notificationDecisions.ts:12:  return kind === "reminder_occurrence" || kind === "snooze_occurrence";
+lib/notificationDecisions.ts:18:    (notificationId.startsWith("reminder_") || notificationId.startsWith("snooze_"))
+lib/notificationDecisions.ts:30:  return kind === "snooze_occurrence";
+lib/notificationDecisions.ts:167:  return actionId === "dismiss_action" || actionId === "snooze_action";
+lib/notificationDecisions.ts:276:// ─── Group 8: The snooze-nag (OLD-96) ───────────────────────────────────────
+lib/notificationDecisions.ts:280:// most MAX_NAG_COMEBACKS times, then goes quiet. "Done" ends the chain and
+components/AlarmOverlay.tsx:128:      source: kind?.includes('snooze') ? 'snooze' : 'reminder',
+components/AlarmOverlay.tsx:190:          console.log(`[VR] Download complete: status=${downloadResult.status}`);
+components/AlarmOverlay.tsx:340:            await store.recordCompletion(reminderId, reminder.title, "completed", {
+components/AlarmOverlay.tsx:410:          id: `snooze_${reminderId}_${Date.now()}`,
+components/AlarmOverlay.tsx:442:            kind: "snooze_occurrence",
+components/AlarmOverlay.tsx:534:          console.log("[VR] Failed interval snooze collision suppression:", e);
+components/AlarmOverlay.tsx:572:        <TouchableOpacity style={styles.snoozeButton} onPress={handleSnooze} activeOpacity={0.8}>
+components/AlarmOverlay.tsx:574:          <Text style={styles.snoozeText}>Later</Text>
+components/AlarmOverlay.tsx:579:          <Text style={styles.dismissText}>Done</Text>
+components/AlarmOverlay.tsx:655:  snoozeButton: {
+components/AlarmOverlay.tsx:665:  snoozeText: {
+app/alarm.tsx:106:            // Only stop audio if this is an explicit user action (dismiss/snooze)
+app/alarm.tsx:214:                        await store.recordCompletion(reminderId, reminder.title, "completed", {
+app/alarm.tsx:258:            // out, capped at MAX_NAG_COMEBACKS. There is no per-reminder snooze
+app/alarm.tsx:285:                    id: `snooze_${reminderId}_${Date.now()}`,
+app/alarm.tsx:310:                        kind: "snooze_occurrence",
+app/alarm.tsx:313:                        // Preserve interval metadata so repeated snoozes can still do collision suppression
+app/alarm.tsx:324:            // if the cadence would fire during snooze, cancel those and schedule the next cadence after snooze.
+app/alarm.tsx:390:                    console.log("[VR] Failed interval snooze collision suppression:", e);
+app/alarm.tsx:437:                    style={styles.snoozeButton}
+app/alarm.tsx:442:                    <Text style={styles.snoozeText}>Later</Text>
+app/alarm.tsx:451:                    <Text style={styles.dismissText}>Done</Text>
+app/alarm.tsx:522:    snoozeButton: {
+app/alarm.tsx:532:    snoozeText: {
+
+web search: 
+web search: site.developer.apple.com AlarmKit Alarm State alerting paused countdown scheduled alarmUpdates ...
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$parts = @(@('"'plugins/ios-src/VRAlarmIntents.swift',515,628),@('plugins/withAlarmKit.js',446,554),@('lib/notifications.ts',1960,2068),@('lib/dayOccurrences.ts',196,220),@('lib/remindersMembership.ts',1,110),@('lib/notificationDecisions.ts',278,337)); foreach ("'$p in $parts) { $lines=Get-Content $p[0]; for($i=[int]$p[1];$i -le [int]$p[2];$i++){ '"'{0}:{1}: {2}' -f "'$p[0],$i,$lines[$i-1] } }; rg -n "isReminderCompleted|isCompletedOn|completedOn|hasCompletion|dayOccurrences|resolveReminder|setInterval|reconcileAlarmKit" app/index.tsx lib/remindersMembership.ts app/_layout.tsx; rg -n "MAX_NAG|getNag|nextNag|recordCompletion|scheduledFor|nagFor" components/AlarmOverlay.tsx app/alarm.tsx lib/notifications.ts' in C:\Dev\VR
+ succeeded in 479ms:
+plugins/ios-src/VRAlarmIntents.swift:515:     func perform() async throws -> some IntentResult {
+plugins/ios-src/VRAlarmIntents.swift:516:         let now = Date()
+plugins/ios-src/VRAlarmIntents.swift:517:         let nowMillis = VRAlarmIntentGuards.epochMillis(now)
+plugins/ios-src/VRAlarmIntents.swift:518:         let resolvedKey = VRAlarmIntentResolution.appKey(appKey: appKey, alarmID: alarmID)
+plugins/ios-src/VRAlarmIntents.swift:519:         // First line of perform(): its timestamp against SpringBoard's unlock/biometric
+plugins/ios-src/VRAlarmIntents.swift:520:         // lines in the same syslog answers whether the intent ran before any prompt.
+plugins/ios-src/VRAlarmIntents.swift:521:         VRAlarmIntentLog.logger.notice("VRSnoozeIntent perform start alarmID=\(alarmID, privacy: .public) appKey=\(resolvedKey, privacy: .public) tsMillis=\(nowMillis, privacy: .public)")
+plugins/ios-src/VRAlarmIntents.swift:522:         let minutes = VRAlarmIntentGuards.normalizedSnoozeMinutes(
+plugins/ios-src/VRAlarmIntents.swift:523:             snoozeMinutes ?? VRAlarmIntentStore.storedSnoozeMinutes(appKey: resolvedKey)
+plugins/ios-src/VRAlarmIntents.swift:524:         )
+plugins/ios-src/VRAlarmIntents.swift:525:         let snoozeUntil = VRAlarmIntentGuards.snoozeUntilMillis(nowMillis: nowMillis, snoozeMinutes: minutes)
+plugins/ios-src/VRAlarmIntents.swift:526: 
+plugins/ios-src/VRAlarmIntents.swift:527:         // GUARD 1 â€” before anything else, and before any await. iOS fires
+plugins/ios-src/VRAlarmIntents.swift:528:         // VRStopIntent spuriously on this same tap; the guard must already be on
+plugins/ios-src/VRAlarmIntents.swift:529:         // disk when that happens or GUARD 2 has nothing to read.
+plugins/ios-src/VRAlarmIntents.swift:530:         VRAlarmIntentStore.writeSnoozeGuard(appKey: resolvedKey, snoozeUntilMillis: snoozeUntil)
+plugins/ios-src/VRAlarmIntents.swift:531: 
+plugins/ios-src/VRAlarmIntents.swift:532:         // The ring itself. Nothing else silences it any more: rotation's cancel
+plugins/ios-src/VRAlarmIntents.swift:533:         // used to cut the audio as a side effect of Later always rescheduling
+plugins/ios-src/VRAlarmIntents.swift:534:         // its own key, and the pre-scheduled chain removed that reschedule for
+plugins/ios-src/VRAlarmIntents.swift:535:         // the common path â€” `.custom` leaves silencing entirely to us. Stop,
+plugins/ios-src/VRAlarmIntents.swift:536:         // never cancel: the registry entry must survive for the sibling
+plugins/ios-src/VRAlarmIntents.swift:537:         // bookkeeping Done relies on, and "Later" is not an acknowledgment.
+plugins/ios-src/VRAlarmIntents.swift:538:         if let ringing = UUID(uuidString: alarmID) {
+plugins/ios-src/VRAlarmIntents.swift:539:             VRFollowUpScheduler.stopRinging(uuid: ringing)
+plugins/ios-src/VRAlarmIntents.swift:540:             VRAlarmIntentLog.logger.notice("VRSnoozeIntent stopRinging uuid=\(ringing.uuidString, privacy: .public) source=param")
+plugins/ios-src/VRAlarmIntents.swift:541:         } else if let stored = VRAlarmIntentStore.uuidRegistry()[resolvedKey],
+plugins/ios-src/VRAlarmIntents.swift:542:                   let ringing = UUID(uuidString: stored) {
+plugins/ios-src/VRAlarmIntents.swift:543:             VRFollowUpScheduler.stopRinging(uuid: ringing)
+plugins/ios-src/VRAlarmIntents.swift:544:             VRAlarmIntentLog.logger.notice("VRSnoozeIntent stopRinging uuid=\(ringing.uuidString, privacy: .public) source=registry")
+plugins/ios-src/VRAlarmIntents.swift:545:         } else {
+plugins/ios-src/VRAlarmIntents.swift:546:             VRAlarmIntentLog.logger.error("VRSnoozeIntent stopRinging skipped: no uuid for appKey=\(resolvedKey, privacy: .public)")
+plugins/ios-src/VRAlarmIntents.swift:547:         }
+plugins/ios-src/VRAlarmIntents.swift:548: 
+plugins/ios-src/VRAlarmIntents.swift:549:         VRAlarmIntentStore.appendEvent(
+plugins/ios-src/VRAlarmIntents.swift:550:             type: "snoozed",
+plugins/ios-src/VRAlarmIntents.swift:551:             id: VRAlarmIntentGuards.eventIdentifier(appKey: resolvedKey, alarmID: alarmID),
+plugins/ios-src/VRAlarmIntents.swift:552:             atMillis: nowMillis,
+plugins/ios-src/VRAlarmIntents.swift:553:             snoozeUntilMillis: snoozeUntil
+plugins/ios-src/VRAlarmIntents.swift:554:         )
+plugins/ios-src/VRAlarmIntents.swift:555: 
+plugins/ios-src/VRAlarmIntents.swift:556:         // NAG (OLD-96): the comebacks for this ring were registered up front, so
+plugins/ios-src/VRAlarmIntents.swift:557:         // "Later" usually has nothing to schedule â€” the next pre-scheduled sibling
+plugins/ios-src/VRAlarmIntents.swift:558:         // IS the comeback, five minutes out with the identical audio. The chain is
+plugins/ios-src/VRAlarmIntents.swift:559:         // deliberately NOT cancelled here: cancelling it would collapse three owed
+plugins/ios-src/VRAlarmIntents.swift:560:         // comebacks into one and hand the counter back to zero, which is how the
+plugins/ios-src/VRAlarmIntents.swift:561:         // snooze button became unbounded in the first place.
+plugins/ios-src/VRAlarmIntents.swift:562:         //
+plugins/ios-src/VRAlarmIntents.swift:563:         // Only when nothing is owed (pre-scheduling failed, a legacy alarm, or the
+plugins/ios-src/VRAlarmIntents.swift:564:         // chain is spent) does Later arm a follow-up itself â€” and scheduleFollowUp
+plugins/ios-src/VRAlarmIntents.swift:565:         // then enforces the same cap the JS side uses.
+plugins/ios-src/VRAlarmIntents.swift:566:         if VRAlarmNagChain.owedComebackCount(of: resolvedKey, afterMillis: nowMillis) == 0 {
+plugins/ios-src/VRAlarmIntents.swift:567:             scheduleFollowUp(appKey: resolvedKey, fireAtMillis: snoozeUntil, snoozeMinutes: minutes)
+plugins/ios-src/VRAlarmIntents.swift:568:         }
+plugins/ios-src/VRAlarmIntents.swift:569: 
+plugins/ios-src/VRAlarmIntents.swift:570:         // GUARD 4 â€” hold the process alive so AlarmKit finishes registering the
+plugins/ios-src/VRAlarmIntents.swift:571:         // follow-up. Returning immediately lets iOS suspend us mid-registration and
+plugins/ios-src/VRAlarmIntents.swift:572:         // the follow-up silently never rings. `try?`: a cancelled sleep is not an
+plugins/ios-src/VRAlarmIntents.swift:573:         // error worth failing the intent over.
+plugins/ios-src/VRAlarmIntents.swift:574:         try? await Task.sleep(nanoseconds: 1_000_000_000)
+plugins/ios-src/VRAlarmIntents.swift:575: 
+plugins/ios-src/VRAlarmIntents.swift:576:         VRAlarmIntentLog.logger.notice("VRSnoozeIntent perform end appKey=\(resolvedKey, privacy: .public) snoozeUntilMillis=\(snoozeUntil, privacy: .public)")
+plugins/ios-src/VRAlarmIntents.swift:577:         return .result()
+plugins/ios-src/VRAlarmIntents.swift:578:     }
+plugins/ios-src/VRAlarmIntents.swift:579: 
+plugins/ios-src/VRAlarmIntents.swift:580:     /// GUARD 5 (rotation) is the scheduler's job: it cancels the app key's previous
+plugins/ios-src/VRAlarmIntents.swift:581:     /// UUID before registering the new one. Reusing the original app key is what
+plugins/ios-src/VRAlarmIntents.swift:582:     /// makes that rotation â€” and guard 3 on the JS side â€” line up.
+plugins/ios-src/VRAlarmIntents.swift:583:     private func scheduleFollowUp(appKey resolvedKey: String, fireAtMillis: Int, snoozeMinutes: Int) {
+plugins/ios-src/VRAlarmIntents.swift:584:         guard !resolvedKey.isEmpty else { return }
+plugins/ios-src/VRAlarmIntents.swift:585: 
+plugins/ios-src/VRAlarmIntents.swift:586:         var metadata = VRAlarmIntentStore.storedMetadata(appKey: resolvedKey)
+plugins/ios-src/VRAlarmIntents.swift:587: 
+plugins/ios-src/VRAlarmIntents.swift:588:         // THE CAP. The follow-up reuses the ring's own app key, so its metadata
+plugins/ios-src/VRAlarmIntents.swift:589:         // is what the next tap reads back â€” incrementing nagIndex here is what
+plugins/ios-src/VRAlarmIntents.swift:590:         // makes a chain of snoozes terminate at nagMax instead of running for
+plugins/ios-src/VRAlarmIntents.swift:591:         // ever. A missing counter reads as 0, so a legacy alarm still gets its
+plugins/ios-src/VRAlarmIntents.swift:592:         // full allowance rather than none.
+plugins/ios-src/VRAlarmIntents.swift:593:         let delivered = VRAlarmIntentGuards.nagIndex(metadata: metadata)
+plugins/ios-src/VRAlarmIntents.swift:594:         let allowance = VRAlarmIntentGuards.nagMax(metadata: metadata)
+plugins/ios-src/VRAlarmIntents.swift:595:         guard VRAlarmIntentGuards.shouldNagAgain(nagIndex: delivered, nagMax: allowance) else { return }
+plugins/ios-src/VRAlarmIntents.swift:596: 
+plugins/ios-src/VRAlarmIntents.swift:597:         metadata["snoozed"] = "1"
+plugins/ios-src/VRAlarmIntents.swift:598:         metadata[VRAlarmIntentKeys.nagIndexMetadataKey] = String(delivered + 1)
+plugins/ios-src/VRAlarmIntents.swift:599:         metadata[VRAlarmIntentKeys.nagMaxMetadataKey] = String(allowance)
+plugins/ios-src/VRAlarmIntents.swift:600:         // The follow-up is a single alarm, never a chain member: carrying the
+plugins/ios-src/VRAlarmIntents.swift:601:         // sibling list forward would make Done on the follow-up re-cancel keys
+plugins/ios-src/VRAlarmIntents.swift:602:         // this snooze already passed, and would let the follow-up's own key drift
+plugins/ios-src/VRAlarmIntents.swift:603:         // into a sibling list.
+plugins/ios-src/VRAlarmIntents.swift:604:         metadata.removeValue(forKey: VRAlarmIntentKeys.siblingsMetadataKey)
+plugins/ios-src/VRAlarmIntents.swift:605: 
+plugins/ios-src/VRAlarmIntents.swift:606:         do {
+plugins/ios-src/VRAlarmIntents.swift:607:             _ = try VRFollowUpScheduler.scheduleAlarm(
+plugins/ios-src/VRAlarmIntents.swift:608:                 appKey: VRAlarmIntentGuards.followUpAppKey(originalAppKey: resolvedKey),
+plugins/ios-src/VRAlarmIntents.swift:609:                 fireDate: Date(timeIntervalSince1970: Double(fireAtMillis) / 1000.0),
+plugins/ios-src/VRAlarmIntents.swift:610:                 title: alarmTitle ?? VRAlarmIntentStore.storedTitle(appKey: resolvedKey) ?? "Reminder",
+plugins/ios-src/VRAlarmIntents.swift:611:                 soundName: soundName ?? VRAlarmIntentStore.storedSoundName(appKey: resolvedKey),
+plugins/ios-src/VRAlarmIntents.swift:612:                 snoozeMinutes: snoozeMinutes,
+plugins/ios-src/VRAlarmIntents.swift:613:                 metadata: metadata
+plugins/ios-src/VRAlarmIntents.swift:614:             )
+plugins/ios-src/VRAlarmIntents.swift:615:         } catch {
+plugins/ios-src/VRAlarmIntents.swift:616:             // Never throw out of an intent: the snooze event is already logged, so JS
+plugins/ios-src/VRAlarmIntents.swift:617:             // reconciliation can still surface the miss on next foreground.
+plugins/ios-src/VRAlarmIntents.swift:618:             VRAlarmIntentStore.appendEvent(
+plugins/ios-src/VRAlarmIntents.swift:619:                 type: "snooze_failed",
+plugins/ios-src/VRAlarmIntents.swift:620:                 id: VRAlarmIntentGuards.eventIdentifier(appKey: resolvedKey, alarmID: alarmID),
+plugins/ios-src/VRAlarmIntents.swift:621:                 atMillis: VRAlarmIntentGuards.epochMillis(Date()),
+plugins/ios-src/VRAlarmIntents.swift:622:                 snoozeUntilMillis: nil
+plugins/ios-src/VRAlarmIntents.swift:623:             )
+plugins/ios-src/VRAlarmIntents.swift:624:         }
+plugins/ios-src/VRAlarmIntents.swift:625:     }
+plugins/ios-src/VRAlarmIntents.swift:626: }
+plugins/ios-src/VRAlarmIntents.swift:627: 
+plugins/ios-src/VRAlarmIntents.swift:628: // MARK: - Stop ("Done")
+plugins/withAlarmKit.js:446:     return AlarmManager.AlarmConfiguration(
+plugins/withAlarmKit.js:447:       schedule: .fixed(fireDate),
+plugins/withAlarmKit.js:448:       attributes: attributes,
+plugins/withAlarmKit.js:449:       stopIntent: VRStopIntent(alarmID: alarmID, appKey: appKey),
+plugins/withAlarmKit.js:450:       secondaryIntent: VRSnoozeIntent(alarmID: alarmID,
+plugins/withAlarmKit.js:451:                                       appKey: appKey,
+plugins/withAlarmKit.js:452:                                       alarmTitle: title,
+plugins/withAlarmKit.js:453:                                       soundName: soundName,
+plugins/withAlarmKit.js:454:                                       snoozeMinutes: snoozeMinutes),
+plugins/withAlarmKit.js:455:       sound: sound
+plugins/withAlarmKit.js:456:     )
+plugins/withAlarmKit.js:457:   }
+plugins/withAlarmKit.js:458: 
+plugins/withAlarmKit.js:459:   /// Bridge entry point: awaits AlarmKit so scheduling failures reach the JS promise.
+plugins/withAlarmKit.js:460:   static func schedule(appKey: String,
+plugins/withAlarmKit.js:461:                        fireDateMs: Double,
+plugins/withAlarmKit.js:462:                        title: String,
+plugins/withAlarmKit.js:463:                        soundName: String?,
+plugins/withAlarmKit.js:464:                        snoozeMinutes: Int,
+plugins/withAlarmKit.js:465:                        metadata: [String: String]) async throws -> String {
+plugins/withAlarmKit.js:466:     // PRD guard 5: AlarmKit has no cancelAll(); rotate the previous UUID first.
+plugins/withAlarmKit.js:467:     cancel(appKey: appKey)
+plugins/withAlarmKit.js:468: 
+plugins/withAlarmKit.js:469:     let alarmID = UUID()
+plugins/withAlarmKit.js:470:     let configuration = makeConfiguration(alarmID: alarmID,
+plugins/withAlarmKit.js:471:                                           appKey: appKey,
+plugins/withAlarmKit.js:472:                                           fireDate: Date(timeIntervalSince1970: fireDateMs / 1000),
+plugins/withAlarmKit.js:473:                                           title: title,
+plugins/withAlarmKit.js:474:                                           soundName: soundName,
+plugins/withAlarmKit.js:475:                                           snoozeMinutes: snoozeMinutes,
+plugins/withAlarmKit.js:476:                                           metadata: metadata)
+plugins/withAlarmKit.js:477: 
+plugins/withAlarmKit.js:478:     _ = try await AlarmManager.shared.schedule(id: alarmID, configuration: configuration)
+plugins/withAlarmKit.js:479:     VRAlarmStore.setUUID(alarmID, fireDate: fireDateMs, forAppKey: appKey)
+plugins/withAlarmKit.js:480:     VRAlarmStore.setMeta(appKey: appKey, title: title, soundName: soundName,
+plugins/withAlarmKit.js:481:                          snoozeMinutes: snoozeMinutes, metadata: metadata)
+plugins/withAlarmKit.js:482:     return alarmID.uuidString
+plugins/withAlarmKit.js:483:   }
+plugins/withAlarmKit.js:484: 
+plugins/withAlarmKit.js:485:   /// AK-2 seam (VRAlarmFollowUpScheduling): synchronous and nonisolated, because an
+plugins/withAlarmKit.js:486:   /// intent's perform() cannot await us and still write its guard first. Registry and
+plugins/withAlarmKit.js:487:   /// meta are committed here; the AlarmKit call rides a detached Task that PRD guard 4's
+plugins/withAlarmKit.js:488:   /// 1s sleep in VRSnoozeIntent gives time to land.
+plugins/withAlarmKit.js:489:   @discardableResult
+plugins/withAlarmKit.js:490:   static func scheduleAlarm(appKey: String,
+plugins/withAlarmKit.js:491:                             fireDate: Date,
+plugins/withAlarmKit.js:492:                             title: String,
+plugins/withAlarmKit.js:493:                             soundName: String?,
+plugins/withAlarmKit.js:494:                             snoozeMinutes: Int,
+plugins/withAlarmKit.js:495:                             metadata: [String: String]) throws -> UUID {
+plugins/withAlarmKit.js:496:     // PRD guard 5.
+plugins/withAlarmKit.js:497:     cancel(appKey: appKey)
+plugins/withAlarmKit.js:498: 
+plugins/withAlarmKit.js:499:     let alarmID = UUID()
+plugins/withAlarmKit.js:500:     let configuration = makeConfiguration(alarmID: alarmID,
+plugins/withAlarmKit.js:501:                                           appKey: appKey,
+plugins/withAlarmKit.js:502:                                           fireDate: fireDate,
+plugins/withAlarmKit.js:503:                                           title: title,
+plugins/withAlarmKit.js:504:                                           soundName: soundName,
+plugins/withAlarmKit.js:505:                                           snoozeMinutes: snoozeMinutes,
+plugins/withAlarmKit.js:506:                                           metadata: metadata)
+plugins/withAlarmKit.js:507: 
+plugins/withAlarmKit.js:508:     VRAlarmStore.setUUID(alarmID, fireDate: fireDate.timeIntervalSince1970 * 1000, forAppKey: appKey)
+plugins/withAlarmKit.js:509:     VRAlarmStore.setMeta(appKey: appKey, title: title, soundName: soundName,
+plugins/withAlarmKit.js:510:                          snoozeMinutes: snoozeMinutes, metadata: metadata)
+plugins/withAlarmKit.js:511: 
+plugins/withAlarmKit.js:512:     Task.detached {
+plugins/withAlarmKit.js:513:       _ = try? await AlarmManager.shared.schedule(id: alarmID, configuration: configuration)
+plugins/withAlarmKit.js:514:     }
+plugins/withAlarmKit.js:515:     return alarmID
+plugins/withAlarmKit.js:516:   }
+plugins/withAlarmKit.js:517: 
+plugins/withAlarmKit.js:518:   /// VRAlarmFollowUpScheduling.stopRinging: "Later" silences the alerting alarm
+plugins/withAlarmKit.js:519:   /// through here. Stop is not cancel â€” the alarm's registry and meta records
+plugins/withAlarmKit.js:520:   /// survive, because the ring stays part of its chain's bookkeeping until Done
+plugins/withAlarmKit.js:521:   /// ends it. AlarmKit's stop throws for an alarm that is not alerting; that is
+plugins/withAlarmKit.js:522:   /// the no-op case, not an error.
+plugins/withAlarmKit.js:523:   static func stopRinging(uuid: UUID) {
+plugins/withAlarmKit.js:524:     try? AlarmManager.shared.stop(id: uuid)
+plugins/withAlarmKit.js:525:   }
+plugins/withAlarmKit.js:526: 
+plugins/withAlarmKit.js:527:   /// Also the CL-2 seam (VRAlarmFollowUpScheduling.cancel): the intents cancel a
+plugins/withAlarmKit.js:528:   /// ladder's remaining rungs through here so rotation stays in exactly one place.
+plugins/withAlarmKit.js:529:   /// Must stay a silent no-op for an unknown key â€” a rung that already rotated
+plugins/withAlarmKit.js:530:   /// away is the normal case, not an error.
+plugins/withAlarmKit.js:531:   static func cancel(appKey: String) {
+plugins/withAlarmKit.js:532:     guard let uuid = VRAlarmStore.uuid(forAppKey: appKey) else { return }
+plugins/withAlarmKit.js:533:     try? AlarmManager.shared.cancel(id: uuid)
+plugins/withAlarmKit.js:534:     VRAlarmStore.setUUID(nil, fireDate: nil, forAppKey: appKey)
+plugins/withAlarmKit.js:535:     VRAlarmStore.clearMeta(appKey: appKey)
+plugins/withAlarmKit.js:536:   }
+plugins/withAlarmKit.js:537: }
+plugins/withAlarmKit.js:538: 
+plugins/withAlarmKit.js:539: #endif
+plugins/withAlarmKit.js:540: `;
+plugins/withAlarmKit.js:541: 
+plugins/withAlarmKit.js:542: // ---------------------------------------------------------------------------
+plugins/withAlarmKit.js:543: // INTENTS HOOK (AK-2)
+plugins/withAlarmKit.js:544: //
+plugins/withAlarmKit.js:545: // AK-2 owns VRAlarmIntents.swift. Drop the real implementation at
+plugins/withAlarmKit.js:546: // plugins/ios-src/VRAlarmIntents.swift and this plugin writes that file verbatim
+plugins/withAlarmKit.js:547: // instead of the placeholder below â€” no change needed here.
+plugins/withAlarmKit.js:548: //
+plugins/withAlarmKit.js:549: // Initializer signatures VRAlarmScheduler.makeConfiguration depends on â€” AK-2's
+plugins/withAlarmKit.js:550: // real file must keep these identical, and the placeholder below mirrors them:
+plugins/withAlarmKit.js:551: //   VRStopIntent(alarmID: UUID, appKey: String)
+plugins/withAlarmKit.js:552: //   VRSnoozeIntent(alarmID: UUID, appKey: String, alarmTitle: String?, soundName: String?, snoozeMinutes: Int)
+plugins/withAlarmKit.js:553: //
+plugins/withAlarmKit.js:554: // Static members the real file conforms VRAlarmScheduler to (OLD-96's nag chain â€”
+lib/notifications.ts:1960: 
+lib/notifications.ts:1961:   for (const outcome of outcomes) {
+lib/notifications.ts:1962:     const parsed = parseAlarmAppKey(outcome.id);
+lib/notifications.ts:1963:     if (!parsed) continue;
+lib/notifications.ts:1964:     const { reminderId, scheduledFor } = parsed;
+lib/notifications.ts:1965: 
+lib/notifications.ts:1966:     if (outcome.outcome === "snoozed") {
+lib/notifications.ts:1967:       // The native SnoozeIntent already registered the follow-up alarm â€” this
+lib/notifications.ts:1968:       // side records the guard only and never recalculates (PRD guard 3).
+lib/notifications.ts:1969:       summary.snoozed++;
+lib/notifications.ts:1970:       await patchAlarmKitState(reminderId, { snoozeUntil: outcome.snoozeUntil ?? 0 });
+lib/notifications.ts:1971:       vrLog("alarmkit", "reconciled_snoozed", {
+lib/notifications.ts:1972:         appKey: outcome.id,
+lib/notifications.ts:1973:         reminderId,
+lib/notifications.ts:1974:         snoozeUntil: outcome.snoozeUntil ?? 0,
+lib/notifications.ts:1975:       });
+lib/notifications.ts:1976:       continue;
+lib/notifications.ts:1977:     }
+lib/notifications.ts:1978: 
+lib/notifications.ts:1979:     if (outcome.outcome === "pending") {
+lib/notifications.ts:1980:       // Still inside the ring window â€” leave it for the next foreground.
+lib/notifications.ts:1981:       summary.pending++;
+lib/notifications.ts:1982:       continue;
+lib/notifications.ts:1983:     }
+lib/notifications.ts:1984: 
+lib/notifications.ts:1985:     if (outcome.outcome === "cancelled") {
+lib/notifications.ts:1986:       // An alarm the native side killed rather than the user answering it.
+lib/notifications.ts:1987:       // Whatever cancelled it recorded the outcome and drove the reschedule;
+lib/notifications.ts:1988:       // this key must add no history and resurrect nothing.
+lib/notifications.ts:1989:       summary.cancelled++;
+lib/notifications.ts:1990:       vrLog("alarmkit", "reconciled_cancelled", {
+lib/notifications.ts:1991:         appKey: outcome.id,
+lib/notifications.ts:1992:         reminderId,
+lib/notifications.ts:1993:         scheduledFor,
+lib/notifications.ts:1994:       });
+lib/notifications.ts:1995:       continue;
+lib/notifications.ts:1996:     }
+lib/notifications.ts:1997: 
+lib/notifications.ts:1998:     const store = useReminderStore.getState();
+lib/notifications.ts:1999:     const reminder = store.getReminderById(reminderId);
+lib/notifications.ts:2000:     if (!reminder) {
+lib/notifications.ts:2001:       vrLog("alarmkit", "reconcile_orphan", { appKey: outcome.id, reminderId });
+lib/notifications.ts:2002:       continue;
+lib/notifications.ts:2003:     }
+lib/notifications.ts:2004:     const isOneTime = isOneTimeReminder(reminder.scheduleType || null, reminder.frequency);
+lib/notifications.ts:2005: 
+lib/notifications.ts:2006:     // History and rescheduling belong to the OCCURRENCE, not to whichever
+lib/notifications.ts:2007:     // comeback rang last, so every branch below works off the chain's origin.
+lib/notifications.ts:2008:     const originAt = chainOriginOf(outcome.id, reminderId, scheduledFor);
+lib/notifications.ts:2009:     const chainId = `${reminderId}:${originAt}`;
+lib/notifications.ts:2010: 
+lib/notifications.ts:2011:     // A ring the user answered later in the chain is not a miss, and a ring
+lib/notifications.ts:2012:     // already resolved by an earlier outcome in this drain is not a second one.
+lib/notifications.ts:2013:     if (outcome.outcome === "missed" && answered.has(chainId)) continue;
+lib/notifications.ts:2014:     if (handledChains.has(chainId)) continue;
+lib/notifications.ts:2015: 
+lib/notifications.ts:2016:     if (outcome.outcome === "completed") {
+lib/notifications.ts:2017:       handledChains.add(chainId);
+lib/notifications.ts:2018:       summary.stopped++;
+lib/notifications.ts:2019:       await store.recordCompletion(reminderId, reminder.title, "completed", {
+lib/notifications.ts:2020:         scheduledFor: originAt,
+lib/notifications.ts:2021:         action: "dismissed",
+lib/notifications.ts:2022:       });
+lib/notifications.ts:2023:       // "Done" ends the chain wherever it was answered â€” the ring itself or one
+lib/notifications.ts:2024:       // of its comebacks. The native stop intent already cancelled the siblings;
+lib/notifications.ts:2025:       // this is the backstop for the case where it could not run (intents are
+lib/notifications.ts:2026:       // only available after first unlock).
+lib/notifications.ts:2027:       await cancelAlarmKitNagChain(reminderId, originAt);
+lib/notifications.ts:2028:       await patchAlarmKitState(reminderId, { snoozeUntil: 0, nagCount: 0 });
+lib/notifications.ts:2029:       vrLog("alarmkit", "reconciled_stopped", {
+lib/notifications.ts:2030:         appKey: outcome.id,
+lib/notifications.ts:2031:         reminderId,
+lib/notifications.ts:2032:         scheduledFor: originAt,
+lib/notifications.ts:2033:       });
+lib/notifications.ts:2034: 
+lib/notifications.ts:2035:       if (isOneTime) {
+lib/notifications.ts:2036:         const { removeReminderFully } = await import("./reminderRemoval");
+lib/notifications.ts:2037:         await removeReminderFully(reminderId);
+lib/notifications.ts:2038:       } else if (outcome.allowReschedule) {
+lib/notifications.ts:2039:         await rescheduleAlarmKitNextOccurrence(reminder, originAt);
+lib/notifications.ts:2040:       }
+lib/notifications.ts:2041:       continue;
+lib/notifications.ts:2042:     }
+lib/notifications.ts:2043: 
+lib/notifications.ts:2044:     // "missed": the ring went unanswered, which counts as a dismissal (OLD-96).
+lib/notifications.ts:2045:     // The comebacks were armed when the occurrence was registered â€” nothing of
+lib/notifications.ts:2046:     // ours runs at ring-timeout â€” so the job here is to notice whether the chain
+lib/notifications.ts:2047:     // still has one owed, NOT to create one.
+lib/notifications.ts:2048:     const armed = (await getScheduledNativeAlarms()).filter(
+lib/notifications.ts:2049:       (alarm) =>
+lib/notifications.ts:2050:         isNagAppKey(alarm.id) &&
+lib/notifications.ts:2051:         alarm.id.startsWith(`snooze_${reminderId}_`) &&
+lib/notifications.ts:2052:         alarm.fireDate > now &&
+lib/notifications.ts:2053:         (alarmKitState[reminderId]?.nagOrigins?.[alarm.id] ?? originAt) === originAt
+lib/notifications.ts:2054:     );
+lib/notifications.ts:2055: 
+lib/notifications.ts:2056:     if (armed.length > 0) {
+lib/notifications.ts:2057:       handledChains.add(chainId);
+lib/notifications.ts:2058:       summary.nagged++;
+lib/notifications.ts:2059:       await patchAlarmKitState(reminderId, {
+lib/notifications.ts:2060:         nagFor: originAt,
+lib/notifications.ts:2061:         nagCount: nagIndexForFireTime(originAt, scheduledFor),
+lib/notifications.ts:2062:       });
+lib/notifications.ts:2063:       vrLog("alarmkit", "nag_already_armed", {
+lib/notifications.ts:2064:         appKey: outcome.id,
+lib/notifications.ts:2065:         reminderId,
+lib/notifications.ts:2066:         originAt,
+lib/notifications.ts:2067:         owed: armed.length,
+lib/notifications.ts:2068:       });
+lib/dayOccurrences.ts:196: /** True if the reminder was completed on the given day (any completion for one-offs). */
+lib/dayOccurrences.ts:197: export function isCompletedOnDay(
+lib/dayOccurrences.ts:198:   reminder: Reminder,
+lib/dayOccurrences.ts:199:   history: ReminderHistory[],
+lib/dayOccurrences.ts:200:   dateISO: string
+lib/dayOccurrences.ts:201: ): boolean {
+lib/dayOccurrences.ts:202:   const { start, end } = dayBoundsMs(dateISO);
+lib/dayOccurrences.ts:203:   for (const entry of history) {
+lib/dayOccurrences.ts:204:     if (entry.reminderId !== reminder.id) continue;
+lib/dayOccurrences.ts:205:     if (entry.status !== "completed") continue;
+lib/dayOccurrences.ts:206:     if (reminder.frequency === "once") return true;
+lib/dayOccurrences.ts:207:     const ts = new Date(entry.timestamp).getTime();
+lib/dayOccurrences.ts:208:     if (ts >= start && ts < end) return true;
+lib/dayOccurrences.ts:209:   }
+lib/dayOccurrences.ts:210:   return false;
+lib/dayOccurrences.ts:211: }
+lib/dayOccurrences.ts:212: 
+lib/dayOccurrences.ts:213: 
+lib/dayOccurrences.ts:214: 
+lib/dayOccurrences.ts:215: 
+lib/dayOccurrences.ts:216: 
+lib/dayOccurrences.ts:217: 
+lib/dayOccurrences.ts:218: 
+lib/dayOccurrences.ts:219: 
+lib/dayOccurrences.ts:220: 
+lib/remindersMembership.ts:1: import type { Reminder, ReminderHistory } from "./store";
+lib/remindersMembership.ts:2: import { dayBoundsMs, isCompletedOnDay, todayISO, toISODate, addDaysISO } from "./dayOccurrences";
+lib/remindersMembership.ts:3: import { getReminderNextDueTimestamp, isReminderActive, statusOf } from "./reminderActive";
+lib/remindersMembership.ts:4: import { nextGridOccurrence } from "./schedule";
+lib/remindersMembership.ts:5: import { overdueRingTime, overdueSubtitle } from "./todayMembership";
+lib/remindersMembership.ts:6: import { formatClockAt, formatClockTime, formatNextIn, type ClockFormatOptions } from "./time";
+lib/remindersMembership.ts:7: import { describeGridSubtitle, formatEveryMinutes } from "../components/schedule/scheduleDraft";
+lib/remindersMembership.ts:8: 
+lib/remindersMembership.ts:9: export type SnoozeSnapshot = Readonly<Record<string, number>>;
+lib/remindersMembership.ts:10: export type DisplayDue = { at: number | null; source: "snooze" | "grid" | "legacy" | "unknown" };
+lib/remindersMembership.ts:11: export type ActiveCard = {
+lib/remindersMembership.ts:12:   reminder: Reminder;
+lib/remindersMembership.ts:13:   due: DisplayDue;
+lib/remindersMembership.ts:14:   overdue: boolean;
+lib/remindersMembership.ts:15:   dueToday: boolean;
+lib/remindersMembership.ts:16:   showCompletion: boolean;
+lib/remindersMembership.ts:17: };
+lib/remindersMembership.ts:18: 
+lib/remindersMembership.ts:19: export function nextDisplayDue(
+lib/remindersMembership.ts:20:   reminder: Reminder, history: ReminderHistory[], nowMs: number, snoozes: SnoozeSnapshot
+lib/remindersMembership.ts:21: ): DisplayDue {
+lib/remindersMembership.ts:22:   if (snoozes[reminder.id] > nowMs) return { at: snoozes[reminder.id], source: "snooze" };
+lib/remindersMembership.ts:23:   const today = todayISO(nowMs);
+lib/remindersMembership.ts:24:   const reference = isCompletedOnDay(reminder, history, today)
+lib/remindersMembership.ts:25:     ? dayBoundsMs(addDaysISO(today, 1)).start - 1
+lib/remindersMembership.ts:26:     : nowMs;
+lib/remindersMembership.ts:27:   if (reminder.schedule) {
+lib/remindersMembership.ts:28:     const next = nextGridOccurrence(reminder.schedule, reference);
+lib/remindersMembership.ts:29:     if (next !== null) return { at: next, source: "grid" };
+lib/remindersMembership.ts:30:     if (reminder.frequency !== "once") return { at: null, source: "unknown" };
+lib/remindersMembership.ts:31:     const original = overdueRingTime(reminder, history, nowMs);
+lib/remindersMembership.ts:32:     return { at: Number.isFinite(original) ? original : null, source: "grid" };
+lib/remindersMembership.ts:33:   }
+lib/remindersMembership.ts:34:   const next = getReminderNextDueTimestamp(reminder, history, reference);
+lib/remindersMembership.ts:35:   return { at: Number.isFinite(next) ? next : null, source: "legacy" };
+lib/remindersMembership.ts:36: }
+lib/remindersMembership.ts:37: 
+lib/remindersMembership.ts:38: export function activeCards(
+lib/remindersMembership.ts:39:   reminders: Reminder[], history: ReminderHistory[], nowMs: number, snoozes: SnoozeSnapshot
+lib/remindersMembership.ts:40: ): ActiveCard[] {
+lib/remindersMembership.ts:41:   return reminders.filter((r) => isReminderActive(r, history, nowMs)).map((reminder) => {
+lib/remindersMembership.ts:42:     const due = nextDisplayDue(reminder, history, nowMs, snoozes);
+lib/remindersMembership.ts:43:     const overdue = reminder.frequency === "once" && due.source !== "snooze" && due.at !== null && due.at <= nowMs;
+lib/remindersMembership.ts:44:     const dueToday = !overdue && due.at !== null && todayISO(due.at) === todayISO(nowMs);
+lib/remindersMembership.ts:45:     return { reminder, due, overdue, dueToday, showCompletion: overdue || dueToday };
+lib/remindersMembership.ts:46:   }).sort((a, b) => Number(b.overdue) - Number(a.overdue)
+lib/remindersMembership.ts:47:     || (a.due.at ?? Infinity) - (b.due.at ?? Infinity)
+lib/remindersMembership.ts:48:     || a.reminder.id.localeCompare(b.reminder.id));
+lib/remindersMembership.ts:49: }
+lib/remindersMembership.ts:50: 
+lib/remindersMembership.ts:51: export function nextLine(card: ActiveCard, nowMs: number, options: ClockFormatOptions = {}): string {
+lib/remindersMembership.ts:52:   const at = card.due.at;
+lib/remindersMembership.ts:53:   if (at === null) return "No next ring scheduled";
+lib/remindersMembership.ts:54:   if (card.due.source === "snooze") return `Rings again ${formatClockAt(at, options)}`;
+lib/remindersMembership.ts:55:   if (card.overdue) return `Overdue Â· ${overdueSubtitle(card.reminder, [], nowMs, options)}`;
+lib/remindersMembership.ts:56:   if (at - nowMs < 86_400_000) return formatNextIn(at, nowMs);
+lib/remindersMembership.ts:57:   const today = todayISO(nowMs);
+lib/remindersMembership.ts:58:   const date = todayISO(at);
+lib/remindersMembership.ts:59:   if (date === addDaysISO(today, 1)) return `Tomorrow Â· ${formatClockAt(at, options)}`;
+lib/remindersMembership.ts:60:   for (let days = 2; days <= 6; days++) {
+lib/remindersMembership.ts:61:     if (date === addDaysISO(today, days)) return `Next in ${days} days`;
+lib/remindersMembership.ts:62:   }
+lib/remindersMembership.ts:63:   return `${new Date(at).toLocaleDateString("en", { month: "short", day: "numeric" })} Â· ${formatClockAt(at, options)}`;
+lib/remindersMembership.ts:64: }
+lib/remindersMembership.ts:65: 
+lib/remindersMembership.ts:66: export function patternLine(
+lib/remindersMembership.ts:67:   reminder: Reminder, options: ClockFormatOptions = {}, nowMs: number = Date.now()
+lib/remindersMembership.ts:68: ): string {
+lib/remindersMembership.ts:69:   // A one-off's "pattern" is its date. Real `nowMs` matters for date-less one-offs, whose
+lib/remindersMembership.ts:70:   // target rolls forward from now; 0 would print a 1970 date.
+lib/remindersMembership.ts:71:   if (reminder.frequency === "once") return `Once Â· ${overdueSubtitle(reminder, [], nowMs, options)}`;
+lib/remindersMembership.ts:72:   if (reminder.schedule) {
+lib/remindersMembership.ts:73:     const description = describeGridSubtitle(reminder.schedule, options);
+lib/remindersMembership.ts:74:     if (reminder.schedule.times.kind === "interval") return description;
+lib/remindersMembership.ts:75:     const [times, days] = description.split(" Â· ");
+lib/remindersMembership.ts:76:     const pattern = reminder.schedule.days.kind === "weekdays" && reminder.schedule.days.days.length
+lib/remindersMembership.ts:77:       ? `Every ${days}` : days;
+lib/remindersMembership.ts:78:     return pattern ? `${pattern} Â· ${times}` : times;
+lib/remindersMembership.ts:79:   }
+lib/remindersMembership.ts:80:   if (reminder.frequency === "interval") {
+lib/remindersMembership.ts:81:     return reminder.intervalMs ? `Every ${formatEveryMinutes(reminder.intervalMs / 60_000)}` : "";
+lib/remindersMembership.ts:82:   }
+lib/remindersMembership.ts:83:   const time = formatClockTime(reminder.time ?? "", options);
+lib/remindersMembership.ts:84:   if (reminder.frequency === "daily") {
+lib/remindersMembership.ts:85:     const n = reminder.intervalDays ?? 1;
+lib/remindersMembership.ts:86:     return `${n > 1 ? `Every ${n} days` : "Daily"} Â· ${time}`;
+lib/remindersMembership.ts:87:   }
+lib/remindersMembership.ts:88:   const days = (reminder.days ?? []).map((day) => day[0].toUpperCase() + day.slice(1, 3).toLowerCase()).join(", ");
+lib/remindersMembership.ts:89:   return `${days ? `Every ${days}` : "Weekly"} Â· ${time}`;
+lib/remindersMembership.ts:90: }
+lib/remindersMembership.ts:91: 
+lib/remindersMembership.ts:92: export function overdueDays(reminders: Reminder[], history: ReminderHistory[], nowMs: number): Set<string> {
+lib/remindersMembership.ts:93:   return new Set(reminders.filter((r) => statusOf(r, history, nowMs) === "overdue")
+lib/remindersMembership.ts:94:     .map((r) => toISODate(new Date(overdueRingTime(r, history, nowMs)))));
+lib/remindersMembership.ts:95: }
+lib/remindersMembership.ts:96: 
+lib/remindersMembership.ts:97: 
+lib/remindersMembership.ts:98: 
+lib/remindersMembership.ts:99: 
+lib/remindersMembership.ts:100: 
+lib/remindersMembership.ts:101: 
+lib/remindersMembership.ts:102: 
+lib/remindersMembership.ts:103: 
+lib/remindersMembership.ts:104: 
+lib/remindersMembership.ts:105: 
+lib/remindersMembership.ts:106: 
+lib/remindersMembership.ts:107: 
+lib/remindersMembership.ts:108: 
+lib/remindersMembership.ts:109: 
+lib/remindersMembership.ts:110: 
+lib/notificationDecisions.ts:278: // One ring per occurrence, then a fixed nag. A ring the user dismisses â€” or
+lib/notificationDecisions.ts:279: // never answers â€” comes back with the SAME audio NAG_DELAY_MINUTES later, at
+lib/notificationDecisions.ts:280: // most MAX_NAG_COMEBACKS times, then goes quiet. "Done" ends the chain and
+lib/notificationDecisions.ts:281: // resets the counter.
+lib/notificationDecisions.ts:282: //
+lib/notificationDecisions.ts:283: // Deliberately fixed: no per-reminder tuning, no settings screen, no escalating
+lib/notificationDecisions.ts:284: // re-worded lines. This is the whole escalation policy â€” it replaces the
+lib/notificationDecisions.ts:285: // tier-dependent sibling ladder and the persistent-follow-up counters, which
+lib/notificationDecisions.ts:286: // were the wrong voice for the product.
+lib/notificationDecisions.ts:287: 
+lib/notificationDecisions.ts:288: /** Minutes between a ring going unanswered and its comeback. */
+lib/notificationDecisions.ts:289: export const NAG_DELAY_MINUTES = 5;
+lib/notificationDecisions.ts:290: 
+lib/notificationDecisions.ts:291: /** Comebacks a single ring gets before the chain goes quiet. */
+lib/notificationDecisions.ts:292: export const MAX_NAG_COMEBACKS = 3;
+lib/notificationDecisions.ts:293: 
+lib/notificationDecisions.ts:294: /** Comebacks already delivered for this ring (notification data / alarm state). */
+lib/notificationDecisions.ts:295: export function parseNagCount(value: unknown): number {
+lib/notificationDecisions.ts:296:   return Math.max(0, Number(value ?? "0") || 0);
+lib/notificationDecisions.ts:297: }
+lib/notificationDecisions.ts:298: 
+lib/notificationDecisions.ts:299: /** Whether comeback number `nagCount + 1` is still owed. */
+lib/notificationDecisions.ts:300: export function shouldNagAgain(
+lib/notificationDecisions.ts:301:   nagCount: number,
+lib/notificationDecisions.ts:302:   maxComebacks: number = MAX_NAG_COMEBACKS
+lib/notificationDecisions.ts:303: ): boolean {
+lib/notificationDecisions.ts:304:   return nagCount < maxComebacks;
+lib/notificationDecisions.ts:305: }
+lib/notificationDecisions.ts:306: 
+lib/notificationDecisions.ts:307: // â”€â”€â”€ Group 8b: the chain as a schedule, not a reaction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+lib/notificationDecisions.ts:308: //
+lib/notificationDecisions.ts:309: // On iOS the comebacks CANNOT be scheduled when a ring goes unanswered: no app
+lib/notificationDecisions.ts:310: // code runs at that moment (docs/alarmkit-focus-breakthrough.md Â§7 â€” "unattended
+lib/notificationDecisions.ts:311: // timeout â†’ comeback: must be pre-scheduled, not reactive"). A nag that is only
+lib/notificationDecisions.ts:312: // armed from the next foreground silently does nothing on a locked phone.
+lib/notificationDecisions.ts:313: //
+lib/notificationDecisions.ts:314: // So the whole chain is derived from the occurrence time up front and registered
+lib/notificationDecisions.ts:315: // as sibling alarms, then cancelled when the user finally answers. That only
+lib/notificationDecisions.ts:316: // works because the chain is deterministic: origin + 5/10/15 minutes, always,
+lib/notificationDecisions.ts:317: // recomputable from the occurrence timestamp alone with no stored counter.
+lib/notificationDecisions.ts:318: 
+lib/notificationDecisions.ts:319: /**
+lib/notificationDecisions.ts:320:  * Absolute fire times of the comebacks a ring at `occurrenceAt` is owed.
+lib/notificationDecisions.ts:321:  * `[T+5m, T+10m, T+15m]` â€” the occurrence itself is not in the list.
+lib/notificationDecisions.ts:322:  */
+lib/notificationDecisions.ts:323: export function planNagChain(
+lib/notificationDecisions.ts:324:   occurrenceAt: number,
+lib/notificationDecisions.ts:325:   maxComebacks: number = MAX_NAG_COMEBACKS,
+lib/notificationDecisions.ts:326:   delayMinutes: number = NAG_DELAY_MINUTES
+lib/notificationDecisions.ts:327: ): number[] {
+lib/notificationDecisions.ts:328:   if (!Number.isFinite(occurrenceAt)) return [];
+lib/notificationDecisions.ts:329:   const step = Math.max(1, Math.round(delayMinutes)) * 60_000;
+lib/notificationDecisions.ts:330:   const count = Math.max(0, Math.floor(maxComebacks));
+lib/notificationDecisions.ts:331:   return Array.from({ length: count }, (_, index) => occurrenceAt + (index + 1) * step);
+lib/notificationDecisions.ts:332: }
+lib/notificationDecisions.ts:333: 
+lib/notificationDecisions.ts:334: /**
+lib/notificationDecisions.ts:335:  * The links of that chain that have not happened yet.
+lib/notificationDecisions.ts:336:  *
+lib/notificationDecisions.ts:337:  * This is the one question both the scheduler and the reconciler ask: at
+lib/remindersMembership.ts:2:import { dayBoundsMs, isCompletedOnDay, todayISO, toISODate, addDaysISO } from "./dayOccurrences";
+lib/remindersMembership.ts:24:  const reference = isCompletedOnDay(reminder, history, today)
+app/_layout.tsx:16:import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, enforcePendingAlarmTimeout, reconcileAlarmKitEvents } from "../lib/notifications";
+app/_layout.tsx:109:      void reconcileAlarmKitEvents().catch((e) => {
+app/_layout.tsx:296:    interval = setInterval(() => {
+app/index.tsx:112:import { historyOnDay, todayISO } from "../lib/dayOccurrences";
+app/index.tsx:350:      const interval = setInterval(() => void refresh(), 30_000);
+app/alarm.tsx:55:        scheduledFor?: string;
+app/alarm.tsx:79:        const scheduledFor = params.scheduledFor;
+app/alarm.tsx:80:        const traceId = buildTraceId({ id: notificationId, data: { reminderId, kind: 'reminder_occurrence', scheduledFor } as any });
+app/alarm.tsx:210:                        const scheduledForRaw = params.scheduledFor ? Number(params.scheduledFor) : undefined;
+app/alarm.tsx:211:                        const scheduledFor = Number.isFinite(scheduledForRaw as number)
+app/alarm.tsx:212:                            ? (scheduledForRaw as number)
+app/alarm.tsx:214:                        await store.recordCompletion(reminderId, reminder.title, "completed", {
+app/alarm.tsx:215:                            scheduledFor,
+app/alarm.tsx:258:            // out, capped at MAX_NAG_COMEBACKS. There is no per-reminder snooze
+app/alarm.tsx:311:                        originalScheduledFor: params.scheduledFor ?? "",
+app/alarm.tsx:316:                        scheduledFor: String(triggerTimestamp),
+app/alarm.tsx:343:                    const { scheduledFor: nextTrigger } = getNextIntervalOccurrence(
+app/alarm.tsx:383:                                scheduledFor: String(nextTriggerSafe),
+components/AlarmOverlay.tsx:62:  scheduledFor: string;
+components/AlarmOverlay.tsx:91:  scheduledFor,
+components/AlarmOverlay.tsx:122:    const traceId = buildTraceId({ id: notificationId, data: { reminderId, kind, scheduledFor } as any });
+components/AlarmOverlay.tsx:336:            const scheduledForRaw = scheduledFor ? Number(scheduledFor) : undefined;
+components/AlarmOverlay.tsx:337:            const scheduledForNum = Number.isFinite(scheduledForRaw as number)
+components/AlarmOverlay.tsx:338:              ? (scheduledForRaw as number)
+components/AlarmOverlay.tsx:340:            await store.recordCompletion(reminderId, reminder.title, "completed", {
+components/AlarmOverlay.tsx:341:              scheduledFor: scheduledForNum,
+components/AlarmOverlay.tsx:382:      // MAX_NAG_COMEBACKS, with nothing per-reminder to turn it off. Once the
+components/AlarmOverlay.tsx:443:            originalScheduledFor: scheduledFor ?? "",
+components/AlarmOverlay.tsx:446:            scheduledFor: String(triggerTimestamp),
+components/AlarmOverlay.tsx:476:          const { scheduledFor: nextTrigger } = getNextIntervalOccurrence(
+components/AlarmOverlay.tsx:523:                scheduledFor: String(nextTriggerSafe),
+lib/notifications.ts:74:  MAX_NAG_COMEBACKS,
+lib/notifications.ts:439:        originalScheduledFor: data.scheduledFor || "",
+lib/notifications.ts:440:        scheduledFor: String(triggerTimestamp),
+lib/notifications.ts:450: * Returns false when the chain is over (MAX_NAG_COMEBACKS already delivered),
+lib/notifications.ts:537:      const scheduledForKey =
+lib/notifications.ts:538:        typeof data.scheduledFor === "string" && data.scheduledFor
+lib/notifications.ts:539:          ? data.scheduledFor
+lib/notifications.ts:541:      const repostId = `alarm_display_${reminderId || "na"}_${scheduledForKey}_${Date.now()}`;
+lib/notifications.ts:888:          const scheduledForRaw = Number(data.scheduledFor);
+lib/notifications.ts:889:          const scheduledFor = Number.isFinite(scheduledForRaw) ? scheduledForRaw : undefined;
+lib/notifications.ts:890:          await store.recordCompletion(reminderId, reminder.title, "missed", {
+lib/notifications.ts:891:            scheduledFor,
+lib/notifications.ts:1077:  scheduledFor?: number;
+lib/notifications.ts:1367:        scheduledFor: String(preTimestamp),
+lib/notifications.ts:1413:  nagFor?: number;
+lib/notifications.ts:1417:   * `nagFor` cannot say which ring a comeback is repeating.
+lib/notifications.ts:1536:  await forgetNagOrigins(reminderId, keys);
+lib/notifications.ts:1549:  await forgetNagOrigins(reminderId, cancelled);
+lib/notifications.ts:1564:async function forgetNagOrigins(reminderId: string, appKeys: string[]): Promise<void> {
+lib/notifications.ts:1645:    scheduledFor: String(fireDate),
+lib/notifications.ts:1647:    nagFor: String(originAt),
+lib/notifications.ts:1649:    nagMax: String(MAX_NAG_COMEBACKS),
+lib/notifications.ts:1941:  const chainOriginOf = (appKey: string, reminderId: string, scheduledFor: number) =>
+lib/notifications.ts:1944:        alarmKitState[reminderId]?.nagFor ??
+lib/notifications.ts:1945:        scheduledFor
+lib/notifications.ts:1946:      : scheduledFor;
+lib/notifications.ts:1956:      `${parsed.reminderId}:${chainOriginOf(outcome.id, parsed.reminderId, parsed.scheduledFor)}`
+lib/notifications.ts:1964:    const { reminderId, scheduledFor } = parsed;
+lib/notifications.ts:1993:        scheduledFor,
+lib/notifications.ts:2008:    const originAt = chainOriginOf(outcome.id, reminderId, scheduledFor);
+lib/notifications.ts:2019:      await store.recordCompletion(reminderId, reminder.title, "completed", {
+lib/notifications.ts:2020:        scheduledFor: originAt,
+lib/notifications.ts:2032:        scheduledFor: originAt,
+lib/notifications.ts:2060:        nagFor: originAt,
+lib/notifications.ts:2061:        nagCount: nagIndexForFireTime(originAt, scheduledFor),
+lib/notifications.ts:2082:        nagFor: originAt,
+lib/notifications.ts:2083:        nagCount: nagIndexForFireTime(originAt, scheduledFor),
+lib/notifications.ts:2096:    await store.recordCompletion(reminderId, reminder.title, "missed", {
+lib/notifications.ts:2097:      scheduledFor: originAt,
+lib/notifications.ts:2105:      scheduledFor: originAt,
+lib/notifications.ts:2214:    if (reminder.scheduledFor && reminder.scheduledFor > occurrenceRef) {
+lib/notifications.ts:2215:      triggerTimestamp = reminder.scheduledFor;
+lib/notifications.ts:2217:      const { scheduledFor } = getNextIntervalOccurrence(
+lib/notifications.ts:2222:      triggerTimestamp = scheduledFor;
+lib/notifications.ts:2232:      scheduledFor: reminder.scheduledFor,
+lib/notifications.ts:2309:  // own `scheduledFor`, so whichever one fires can plan the set again from the
+lib/notifications.ts:2370:          scheduledFor: String(occurrence),
+lib/notifications.ts:2575:    scheduledFor: reminder.scheduledFor,
+lib/notifications.ts:2713:    await store.recordCompletion(reminderId, reminder.title, "completed", {
+lib/notifications.ts:2714:      scheduledFor: Number.isFinite(mainScheduledFor) && mainScheduledFor > 0 ? mainScheduledFor : undefined,
+lib/notifications.ts:2736:    if (current && current.scheduledFor !== triggerTimestamp) {
+lib/notifications.ts:2737:      await store.updateReminder({ ...current, scheduledFor: triggerTimestamp });
+lib/notifications.ts:2753:  const scheduledFor = String(notificationData?.scheduledFor || "");
+lib/notifications.ts:2766:    scheduledFor,
+lib/notifications.ts:2784:    isStaleDelivery(Number(scheduledFor), Date.now());
+lib/notifications.ts:2815:        typeof existingData?.scheduledFor === "string" ? (existingData.scheduledFor as string) : String(existingData?.scheduledFor ?? "");
+lib/notifications.ts:2819:      if (existingReminderId && existingReminderId === reminderId && existingScheduledFor && existingScheduledFor === scheduledFor) {
+lib/notifications.ts:2825:          scheduledFor,
+lib/notifications.ts:3019:        await store.recordCompletion(reminderId, reminder.title, "completed", {
+lib/notifications.ts:3063:        scheduledFor,
+lib/notifications.ts:3064:        lateMs: Date.now() - Number(scheduledFor),
+lib/notifications.ts:3077:            const scheduledForNum = Number(scheduledFor);
+lib/notifications.ts:3078:            await store.recordCompletion(reminderId, reminder.title, "missed", {
+lib/notifications.ts:3079:              scheduledFor: Number.isFinite(scheduledForNum) ? scheduledForNum : undefined,
+lib/notifications.ts:3092:    if (shouldHandleAsAlarm && !isRepostNotification && reminderId && scheduledFor) {
+lib/notifications.ts:3094:        await notifee.cancelDisplayedNotification(`prealert_${reminderId}_${scheduledFor}`);
+lib/notifications.ts:3129:          const scheduledForKey =
+lib/notifications.ts:3130:            typeof (data as any)?.scheduledFor === "string" && (data as any).scheduledFor
+lib/notifications.ts:3131:              ? String((data as any).scheduledFor)
+lib/notifications.ts:3133:          const repostId = `alarm_display_${reminderId}_${scheduledForKey}`;
+lib/notifications.ts:3134:          console.log(`[VR] repost_create from=${notificationId} to=${repostId} scheduledFor=${scheduledForKey}`);
+lib/notifications.ts:3285:          const scheduledFor = Number(data.scheduledFor);
+lib/notifications.ts:3288:            // Stable cadence + skip missed: compute from the later of (scheduledFor, now)
+lib/notifications.ts:3289:            const ref = Math.max(scheduledFor || Date.now(), Date.now());
+lib/notifications.ts:3290:            const { scheduledFor: next } = getNextIntervalOccurrence(anchorAt, intervalMs, ref);
+lib/notifications.ts:3299:            scheduledFor: Number(data.scheduledFor),
+lib/notifications.ts:3368:              scheduledFor: String(occurrence),
+lib/notifications.ts:3429:    const pendingScheduledFor = Number(pending?.notification?.data?.scheduledFor);
+lib/notifications.ts:3475:              scheduledFor: reminder.scheduledFor,
+lib/notifications.ts:3485:            await store.recordCompletion(reminder.id, reminder.title, "missed", {
+lib/notifications.ts:3486:              scheduledFor: Number.isFinite(due) ? due : undefined,
+lib/notifications.ts:3625:          if (current && current.scheduledFor !== triggerTimestamp) {
+lib/notifications.ts:3626:            await store.updateReminder({ ...current, scheduledFor: triggerTimestamp });
+
+web search: 
+web search: https://developer.apple.com/documentation/alarmkit/alarmmanager/alarmupdates-swift.property
+codex
+The split needs a few additions: fallback Done/Later handlers also live in the overlay and alarm screen, day-level completion can hide other occurrences, and apply-then-ack needs native bridge methods. The existing intent schedules follow-ups, but its detached task suppresses scheduling failures, so it doesn’t establish reliability.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$parts = @(@('"'lib/remindersMembership.ts',15,60),@('lib/dayOccurrences.ts',196,218),@('app/index.tsx',1638,1675),@('lib/notifications.ts',1966,1988),@('lib/notifications.ts',2016,2055),@('lib/alarmKit.ts',45,80),@('components/AlarmOverlay.tsx',378,402),@('app/alarm.tsx',254,278)); foreach ("'$p in $parts) { $lines=Get-Content $p[0]; for($i=[int]$p[1];$i -le [int]$p[2];$i++){ '"'{0}:{1}: {2}' -f "'$p[0],$i,$lines[$i-1] } }' in C:\Dev\VR
+ succeeded in 457ms:
+lib/remindersMembership.ts:15:   dueToday: boolean;
+lib/remindersMembership.ts:16:   showCompletion: boolean;
+lib/remindersMembership.ts:17: };
+lib/remindersMembership.ts:18: 
+lib/remindersMembership.ts:19: export function nextDisplayDue(
+lib/remindersMembership.ts:20:   reminder: Reminder, history: ReminderHistory[], nowMs: number, snoozes: SnoozeSnapshot
+lib/remindersMembership.ts:21: ): DisplayDue {
+lib/remindersMembership.ts:22:   if (snoozes[reminder.id] > nowMs) return { at: snoozes[reminder.id], source: "snooze" };
+lib/remindersMembership.ts:23:   const today = todayISO(nowMs);
+lib/remindersMembership.ts:24:   const reference = isCompletedOnDay(reminder, history, today)
+lib/remindersMembership.ts:25:     ? dayBoundsMs(addDaysISO(today, 1)).start - 1
+lib/remindersMembership.ts:26:     : nowMs;
+lib/remindersMembership.ts:27:   if (reminder.schedule) {
+lib/remindersMembership.ts:28:     const next = nextGridOccurrence(reminder.schedule, reference);
+lib/remindersMembership.ts:29:     if (next !== null) return { at: next, source: "grid" };
+lib/remindersMembership.ts:30:     if (reminder.frequency !== "once") return { at: null, source: "unknown" };
+lib/remindersMembership.ts:31:     const original = overdueRingTime(reminder, history, nowMs);
+lib/remindersMembership.ts:32:     return { at: Number.isFinite(original) ? original : null, source: "grid" };
+lib/remindersMembership.ts:33:   }
+lib/remindersMembership.ts:34:   const next = getReminderNextDueTimestamp(reminder, history, reference);
+lib/remindersMembership.ts:35:   return { at: Number.isFinite(next) ? next : null, source: "legacy" };
+lib/remindersMembership.ts:36: }
+lib/remindersMembership.ts:37: 
+lib/remindersMembership.ts:38: export function activeCards(
+lib/remindersMembership.ts:39:   reminders: Reminder[], history: ReminderHistory[], nowMs: number, snoozes: SnoozeSnapshot
+lib/remindersMembership.ts:40: ): ActiveCard[] {
+lib/remindersMembership.ts:41:   return reminders.filter((r) => isReminderActive(r, history, nowMs)).map((reminder) => {
+lib/remindersMembership.ts:42:     const due = nextDisplayDue(reminder, history, nowMs, snoozes);
+lib/remindersMembership.ts:43:     const overdue = reminder.frequency === "once" && due.source !== "snooze" && due.at !== null && due.at <= nowMs;
+lib/remindersMembership.ts:44:     const dueToday = !overdue && due.at !== null && todayISO(due.at) === todayISO(nowMs);
+lib/remindersMembership.ts:45:     return { reminder, due, overdue, dueToday, showCompletion: overdue || dueToday };
+lib/remindersMembership.ts:46:   }).sort((a, b) => Number(b.overdue) - Number(a.overdue)
+lib/remindersMembership.ts:47:     || (a.due.at ?? Infinity) - (b.due.at ?? Infinity)
+lib/remindersMembership.ts:48:     || a.reminder.id.localeCompare(b.reminder.id));
+lib/remindersMembership.ts:49: }
+lib/remindersMembership.ts:50: 
+lib/remindersMembership.ts:51: export function nextLine(card: ActiveCard, nowMs: number, options: ClockFormatOptions = {}): string {
+lib/remindersMembership.ts:52:   const at = card.due.at;
+lib/remindersMembership.ts:53:   if (at === null) return "No next ring scheduled";
+lib/remindersMembership.ts:54:   if (card.due.source === "snooze") return `Rings again ${formatClockAt(at, options)}`;
+lib/remindersMembership.ts:55:   if (card.overdue) return `Overdue Â· ${overdueSubtitle(card.reminder, [], nowMs, options)}`;
+lib/remindersMembership.ts:56:   if (at - nowMs < 86_400_000) return formatNextIn(at, nowMs);
+lib/remindersMembership.ts:57:   const today = todayISO(nowMs);
+lib/remindersMembership.ts:58:   const date = todayISO(at);
+lib/remindersMembership.ts:59:   if (date === addDaysISO(today, 1)) return `Tomorrow Â· ${formatClockAt(at, options)}`;
+lib/remindersMembership.ts:60:   for (let days = 2; days <= 6; days++) {
+lib/dayOccurrences.ts:196: /** True if the reminder was completed on the given day (any completion for one-offs). */
+lib/dayOccurrences.ts:197: export function isCompletedOnDay(
+lib/dayOccurrences.ts:198:   reminder: Reminder,
+lib/dayOccurrences.ts:199:   history: ReminderHistory[],
+lib/dayOccurrences.ts:200:   dateISO: string
+lib/dayOccurrences.ts:201: ): boolean {
+lib/dayOccurrences.ts:202:   const { start, end } = dayBoundsMs(dateISO);
+lib/dayOccurrences.ts:203:   for (const entry of history) {
+lib/dayOccurrences.ts:204:     if (entry.reminderId !== reminder.id) continue;
+lib/dayOccurrences.ts:205:     if (entry.status !== "completed") continue;
+lib/dayOccurrences.ts:206:     if (reminder.frequency === "once") return true;
+lib/dayOccurrences.ts:207:     const ts = new Date(entry.timestamp).getTime();
+lib/dayOccurrences.ts:208:     if (ts >= start && ts < end) return true;
+lib/dayOccurrences.ts:209:   }
+lib/dayOccurrences.ts:210:   return false;
+lib/dayOccurrences.ts:211: }
+lib/dayOccurrences.ts:212: 
+lib/dayOccurrences.ts:213: 
+lib/dayOccurrences.ts:214: 
+lib/dayOccurrences.ts:215: 
+lib/dayOccurrences.ts:216: 
+lib/dayOccurrences.ts:217: 
+lib/dayOccurrences.ts:218: 
+app/index.tsx:1638:   const [exitingIds, setExitingIds] = useState<Set<string>>(new Set());
+app/index.tsx:1639: 
+app/index.tsx:1640:   const handleMarkDone = useCallback(
+app/index.tsx:1641:     (reminderId: string, reminderTitle: string) => {
+app/index.tsx:1642:       // Mark as exiting to trigger animation
+app/index.tsx:1643:       setExitingIds((prev) => new Set(prev).add(reminderId));
+app/index.tsx:1644: 
+app/index.tsx:1645:       // Delay actual state update to let animation play
+app/index.tsx:1646:       setTimeout(() => {
+app/index.tsx:1647:         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+app/index.tsx:1648:         setExitingIds((prev) => {
+app/index.tsx:1649:           const next = new Set(prev);
+app/index.tsx:1650:           next.delete(reminderId);
+app/index.tsx:1651:           return next;
+app/index.tsx:1652:         });
+app/index.tsx:1653: 
+app/index.tsx:1654:         void (async () => {
+app/index.tsx:1655:           const reminder = useReminderStore.getState().getReminderById(reminderId);
+app/index.tsx:1656: 
+app/index.tsx:1657:           // Record completion (always)
+app/index.tsx:1658:           await storeRecordCompletion(reminderId, reminderTitle, "completed").catch((e) => {
+app/index.tsx:1659:             console.log("[VR] Failed to record completion:", e);
+app/index.tsx:1660:           });
+app/index.tsx:1661: 
+app/index.tsx:1662:           // One-time reminders become inactive after completion.
+app/index.tsx:1663:           if (reminder?.frequency === "once") {
+app/index.tsx:1664:             await removeReminderFully(reminderId, {
+app/index.tsx:1665:               removeConvexById: async (id) => {
+app/index.tsx:1666:                 await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
+app/index.tsx:1667:               },
+app/index.tsx:1668:             });
+app/index.tsx:1669:           }
+app/index.tsx:1670:         })();
+app/index.tsx:1671: 
+app/index.tsx:1672:         // No toast for individual mark-done (too noisy)
+app/index.tsx:1673:       }, 250); // Match animation duration
+app/index.tsx:1674:     },
+app/index.tsx:1675:     [storeRecordCompletion]
+lib/notifications.ts:1966:     if (outcome.outcome === "snoozed") {
+lib/notifications.ts:1967:       // The native SnoozeIntent already registered the follow-up alarm â€” this
+lib/notifications.ts:1968:       // side records the guard only and never recalculates (PRD guard 3).
+lib/notifications.ts:1969:       summary.snoozed++;
+lib/notifications.ts:1970:       await patchAlarmKitState(reminderId, { snoozeUntil: outcome.snoozeUntil ?? 0 });
+lib/notifications.ts:1971:       vrLog("alarmkit", "reconciled_snoozed", {
+lib/notifications.ts:1972:         appKey: outcome.id,
+lib/notifications.ts:1973:         reminderId,
+lib/notifications.ts:1974:         snoozeUntil: outcome.snoozeUntil ?? 0,
+lib/notifications.ts:1975:       });
+lib/notifications.ts:1976:       continue;
+lib/notifications.ts:1977:     }
+lib/notifications.ts:1978: 
+lib/notifications.ts:1979:     if (outcome.outcome === "pending") {
+lib/notifications.ts:1980:       // Still inside the ring window â€” leave it for the next foreground.
+lib/notifications.ts:1981:       summary.pending++;
+lib/notifications.ts:1982:       continue;
+lib/notifications.ts:1983:     }
+lib/notifications.ts:1984: 
+lib/notifications.ts:1985:     if (outcome.outcome === "cancelled") {
+lib/notifications.ts:1986:       // An alarm the native side killed rather than the user answering it.
+lib/notifications.ts:1987:       // Whatever cancelled it recorded the outcome and drove the reschedule;
+lib/notifications.ts:1988:       // this key must add no history and resurrect nothing.
+lib/notifications.ts:2016:     if (outcome.outcome === "completed") {
+lib/notifications.ts:2017:       handledChains.add(chainId);
+lib/notifications.ts:2018:       summary.stopped++;
+lib/notifications.ts:2019:       await store.recordCompletion(reminderId, reminder.title, "completed", {
+lib/notifications.ts:2020:         scheduledFor: originAt,
+lib/notifications.ts:2021:         action: "dismissed",
+lib/notifications.ts:2022:       });
+lib/notifications.ts:2023:       // "Done" ends the chain wherever it was answered â€” the ring itself or one
+lib/notifications.ts:2024:       // of its comebacks. The native stop intent already cancelled the siblings;
+lib/notifications.ts:2025:       // this is the backstop for the case where it could not run (intents are
+lib/notifications.ts:2026:       // only available after first unlock).
+lib/notifications.ts:2027:       await cancelAlarmKitNagChain(reminderId, originAt);
+lib/notifications.ts:2028:       await patchAlarmKitState(reminderId, { snoozeUntil: 0, nagCount: 0 });
+lib/notifications.ts:2029:       vrLog("alarmkit", "reconciled_stopped", {
+lib/notifications.ts:2030:         appKey: outcome.id,
+lib/notifications.ts:2031:         reminderId,
+lib/notifications.ts:2032:         scheduledFor: originAt,
+lib/notifications.ts:2033:       });
+lib/notifications.ts:2034: 
+lib/notifications.ts:2035:       if (isOneTime) {
+lib/notifications.ts:2036:         const { removeReminderFully } = await import("./reminderRemoval");
+lib/notifications.ts:2037:         await removeReminderFully(reminderId);
+lib/notifications.ts:2038:       } else if (outcome.allowReschedule) {
+lib/notifications.ts:2039:         await rescheduleAlarmKitNextOccurrence(reminder, originAt);
+lib/notifications.ts:2040:       }
+lib/notifications.ts:2041:       continue;
+lib/notifications.ts:2042:     }
+lib/notifications.ts:2043: 
+lib/notifications.ts:2044:     // "missed": the ring went unanswered, which counts as a dismissal (OLD-96).
+lib/notifications.ts:2045:     // The comebacks were armed when the occurrence was registered â€” nothing of
+lib/notifications.ts:2046:     // ours runs at ring-timeout â€” so the job here is to notice whether the chain
+lib/notifications.ts:2047:     // still has one owed, NOT to create one.
+lib/notifications.ts:2048:     const armed = (await getScheduledNativeAlarms()).filter(
+lib/notifications.ts:2049:       (alarm) =>
+lib/notifications.ts:2050:         isNagAppKey(alarm.id) &&
+lib/notifications.ts:2051:         alarm.id.startsWith(`snooze_${reminderId}_`) &&
+lib/notifications.ts:2052:         alarm.fireDate > now &&
+lib/notifications.ts:2053:         (alarmKitState[reminderId]?.nagOrigins?.[alarm.id] ?? originAt) === originAt
+lib/notifications.ts:2054:     );
+lib/notifications.ts:2055: 
+lib/alarmKit.ts:45:   type: AlarmEventType;
+lib/alarmKit.ts:46:   /** App key. */
+lib/alarmKit.ts:47:   id: string;
+lib/alarmKit.ts:48:   at: number;
+lib/alarmKit.ts:49:   /** Present on "snoozed". */
+lib/alarmKit.ts:50:   snoozeUntil?: number;
+lib/alarmKit.ts:51: }
+lib/alarmKit.ts:52: 
+lib/alarmKit.ts:53: interface AlarmKitBridgeModule {
+lib/alarmKit.ts:54:   isSupported(): Promise<boolean>;
+lib/alarmKit.ts:55:   requestAuthorization(): Promise<string>;
+lib/alarmKit.ts:56:   scheduleAlarm(opts: AlarmKitScheduleOptions): Promise<string>;
+lib/alarmKit.ts:57:   cancelAlarm(id: string): Promise<void>;
+lib/alarmKit.ts:58:   getScheduledAlarms(): Promise<ScheduledAlarm[]>;
+lib/alarmKit.ts:59:   getAndClearEventLog(): Promise<AlarmEvent[]>;
+lib/alarmKit.ts:60: }
+lib/alarmKit.ts:61: 
+lib/alarmKit.ts:62: const bridge: AlarmKitBridgeModule | undefined = (
+lib/alarmKit.ts:63:   NativeModules as { AlarmKitBridge?: AlarmKitBridgeModule }
+lib/alarmKit.ts:64: ).AlarmKitBridge;
+lib/alarmKit.ts:65: 
+lib/alarmKit.ts:66: /** Ring window before an unanswered alarm counts as missed (matches notifications.ts). */
+lib/alarmKit.ts:67: export const ALARM_RING_TIMEOUT_MS = 180_000;
+lib/alarmKit.ts:68: 
+lib/alarmKit.ts:69: /**
+lib/alarmKit.ts:70:  * iOS can append the spurious StopIntent either side of the Snooze append, so
+lib/alarmKit.ts:71:  * the JS mirror of PRD guard 2 tolerates a stop landing slightly before the
+lib/alarmKit.ts:72:  * snooze it belongs to.
+lib/alarmKit.ts:73:  */
+lib/alarmKit.ts:74: const SPURIOUS_STOP_TOLERANCE_MS = 2000;
+lib/alarmKit.ts:75: 
+lib/alarmKit.ts:76: // Two key families share the scheme: `reminder_<id>_<ts>` is a scheduled
+lib/alarmKit.ts:77: // occurrence, `snooze_<id>_<ts>` is a nag comeback (OLD-96). They are kept
+lib/alarmKit.ts:78: // apart on purpose â€” cancelling a reminder's stale occurrences must never take
+lib/alarmKit.ts:79: // the live nag with it, and vice versa.
+lib/alarmKit.ts:80: const APP_KEY_PATTERN = /^(?:reminder|snooze)_(.+)_(\d+)$/;
+components/AlarmOverlay.tsx:378:       await cancelDisplayedAlarmNotifications(notificationId);
+components/AlarmOverlay.tsx:379: 
+components/AlarmOverlay.tsx:380:       // "Later" in the overlay is the same gesture as swiping the ring away, so
+components/AlarmOverlay.tsx:381:       // it feeds the same nag chain (OLD-96): fixed NAG_DELAY_MINUTES, capped at
+components/AlarmOverlay.tsx:382:       // MAX_NAG_COMEBACKS, with nothing per-reminder to turn it off. Once the
+components/AlarmOverlay.tsx:383:       // chain is spent the alarm just goes quiet.
+components/AlarmOverlay.tsx:384:       const nagCount = parseNagCount(nagCountStr);
+components/AlarmOverlay.tsx:385:       if (!reminderId || !shouldNagAgain(nagCount)) {
+components/AlarmOverlay.tsx:386:         await onSnooze();
+components/AlarmOverlay.tsx:387:         maybeExitApp();
+components/AlarmOverlay.tsx:388:         return;
+components/AlarmOverlay.tsx:389:       }
+components/AlarmOverlay.tsx:390: 
+components/AlarmOverlay.tsx:391:       const store = useReminderStore.getState();
+components/AlarmOverlay.tsx:392:       const reminder = store.getReminderById(reminderId);
+components/AlarmOverlay.tsx:393:       const remAudioUrl = audioUrl || reminder?.audioUrl || "";
+components/AlarmOverlay.tsx:394:       const remFrequency = frequency || reminder?.frequency || "once";
+components/AlarmOverlay.tsx:395:       const remTime = time || reminder?.time || "";
+components/AlarmOverlay.tsx:396:       const remDays = days || reminder?.days?.join(",") || "";
+components/AlarmOverlay.tsx:397:       const remIntervalDays =
+components/AlarmOverlay.tsx:398:         (intervalDays ? Number(intervalDays) : undefined) ?? reminder?.intervalDays;
+components/AlarmOverlay.tsx:399: 
+components/AlarmOverlay.tsx:400:       const channelId = `reminder_${reminderId}`;
+components/AlarmOverlay.tsx:401:       const triggerTimestamp = Date.now() + NAG_DELAY_MINUTES * 60_000;
+components/AlarmOverlay.tsx:402:       const trigger: TimestampTrigger = {
+app/alarm.tsx:254:             await cancelDisplayedAlarmNotifications(notificationId);
+app/alarm.tsx:255:             await clearPendingAlarm();
+app/alarm.tsx:256: 
+app/alarm.tsx:257:             // OLD-96: "Later" feeds the fixed nag â€” same audio, NAG_DELAY_MINUTES
+app/alarm.tsx:258:             // out, capped at MAX_NAG_COMEBACKS. There is no per-reminder snooze
+app/alarm.tsx:259:             // duration and no toggle any more.
+app/alarm.tsx:260:             const nagCount = parseNagCount(params.nagCount);
+app/alarm.tsx:261:             if (!reminderId || !shouldNagAgain(nagCount)) {
+app/alarm.tsx:262:                 closeAlarmScreen();
+app/alarm.tsx:263:                 return;
+app/alarm.tsx:264:             }
+app/alarm.tsx:265: 
+app/alarm.tsx:266:             const store = useReminderStore.getState();
+app/alarm.tsx:267:             const reminder = store.getReminderById(reminderId);
+app/alarm.tsx:268:             const audioUrl = params.audioUrl || reminder?.audioUrl || "";
+app/alarm.tsx:269:             const frequency = params.frequency || reminder?.frequency || "once";
+app/alarm.tsx:270:             const time = params.time || reminder?.time || "";
+app/alarm.tsx:271:             const days = params.days || reminder?.days?.join(",") || "";
+app/alarm.tsx:272:             const intervalDays =
+app/alarm.tsx:273:                 (params.intervalDays ? Number(params.intervalDays) : undefined) ?? reminder?.intervalDays;
+app/alarm.tsx:274: 
+app/alarm.tsx:275:             const channelId = `reminder_${reminderId}`;
+app/alarm.tsx:276:             const triggerTimestamp = Date.now() + NAG_DELAY_MINUTES * 60_000;
+app/alarm.tsx:277:             const trigger: TimestampTrigger = {
+app/alarm.tsx:278:                 type: TriggerType.TIMESTAMP,
+
+web search: 
+web search: 
+codex
+Read both notes and checked the implementation. No file changes or Convex/EAS commands.
+
+**(1) Corrections**
+
+- **Await native scheduling before recording successful snooze.** Today the intent calls the scheduler, but it launches a detached task with `try?`; the one-second sleep does not guarantee registration. Make that seam `async throws`, preserve guard-first, await cancellation/scheduling, then persist the real armed time and emit. [VRAlarmIntents.swift:607](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:607), [withAlarmKit.js:512](/C:/Dev/VR/plugins/withAlarmKit.js:512)
+- **Apply-then-ack requires N changes too:** replace delete-first draining with `peekEvents()` and `ackEvents(eventIds)`, using durable unique event IDs and serialized append/ack operations. R must make history writes and cancellation replay-safe before acknowledging. [withAlarmKit.js:362](/C:/Dev/VR/plugins/withAlarmKit.js:362), [alarmKit.ts:59](/C:/Dev/VR/lib/alarmKit.ts:59)
+- **Expand the native contract:** add occurrence-scoped stop/cancel, and a snapshot-change hint covering countdown, paused and removal—not just alerting/scheduled. Preserve scheduling-failure events. Native `alarmId` must mean UUID; retain `appKey` separately. Existing event `id` means app key. [alarmKit.ts:45](/C:/Dev/VR/lib/alarmKit.ts:45), [withAlarmKit.js:523](/C:/Dev/VR/plugins/withAlarmKit.js:523)
+- **Remove day-wide completion from card advancement.** Today one completion skips directly to tomorrow; record and compare `scheduledFor = original occurrenceAt`, including after multiple Laters. [remindersMembership.ts:24](/C:/Dev/VR/lib/remindersMembership.ts:24), [dayOccurrences.ts:197](/C:/Dev/VR/lib/dayOccurrences.ts:197), [index.tsx:1658](/C:/Dev/VR/app/index.tsx:1658)
+- **Fallback parity requires additional files:** overlay and alarm-screen handlers independently complete and cap Later. Assign both to R, plus `lib/notificationDecisions.ts`. [AlarmOverlay.tsx:340](/C:/Dev/VR/components/AlarmOverlay.tsx:340), [AlarmOverlay.tsx:384](/C:/Dev/VR/components/AlarmOverlay.tsx:384), [alarm.tsx:214](/C:/Dev/VR/app/alarm.tsx:214), [alarm.tsx:260](/C:/Dev/VR/app/alarm.tsx:260)
+- **Define exhaustion explicitly.** A last comeback firing at +15 does not prove ringing ended at +16. Current native configuration has no ring-duration cutoff; JS’s 180-second constant cannot supply one. Do not mark Missed while a current snapshot still says alerting. [withAlarmKit.js:446](/C:/Dev/VR/plugins/withAlarmKit.js:446), [alarmKit.ts:66](/C:/Dev/VR/lib/alarmKit.ts:66)
+- **Lifecycle needs ordering and chain identity:** add `chainId`, `chainStartedAt`, `lastFireAt`, `lastEventAt`, `lastEventId`; propagate chain identity through native metadata/events. Ignore stale generations; Done must not be resurrected by elapsed-time inference. Prune resolved records after two days, retaining unresolved rings/snoozes.
+- **Use one serialized reconciliation coordinator**, called by tick, foreground and native hints; publish a reactive lifecycle snapshot after reconciliation. Separate storage reads can reproduce today’s refresh race. [index.tsx:350](/C:/Dev/VR/app/index.tsx:350), [_layout.tsx:109](/C:/Dev/VR/app/_layout.tsx:109)
+
+**(2) Q1–Q5**
+
+- **Q1:** Yes, this is a viable background-intent path; this checkout already attempts follow-up scheduling from `perform()` and cancels siblings from Stop. It is **not currently reliable by construction**, because registration errors disappear in the detached task. Retain the concrete alarm UUID and stable occurrence metadata in each newly configured intent. [VRAlarmIntents.swift:567](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:567), [VRAlarmIntents.swift:685](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:685), [withAlarmKit.js:449](/C:/Dev/VR/plugins/withAlarmKit.js:449)
+  Apple documents a resource-dependent limit, with `maximumLimitReached`, rather than a fixed alarm count. Handle partial chain registration explicitly. I found no Apple guarantee specific to 26.6; your internal-build syslog test remains necessary. [Apple FAQ](https://developer.apple.com/forums/thread/797158)
+
+- **Q2:** States are `scheduled`, `countdown`, `paused`, `alerting`; **only `alerting` confirms ringing now**. A passed schedule is inferred delivery, not confirmation. [Apple state documentation](https://developer.apple.com/documentation/alarmkit/alarm/state-swift.enum/scheduled)
+  Snapshot plus subscription is sufficient for current state while running, **not historical outcomes while killed**. Keep durable intent events and native occurrence/chain metadata; subscribe before the initial snapshot and reconcile on launch/foreground. Successfully scheduled alarms persist through termination, but that does not make your observer execute continuously. [Apple FAQ](https://developer.apple.com/forums/thread/797158)
+
+- **Q3:** Accept +16 minutes as a conservative **unknown-state UI grace**, not evidence of exhaustion. It delays genuinely missed one-offs, but matches the intended initial nag window. Reject “absent from native → immediately overdue”: absence cannot distinguish Stop awaiting reconciliation, cancellation, failed scheduling or an unanswered alarm. Drain first; inspect the entire occurrence chain. Known snoozes use their replacement-chain timing, never the original +16 deadline.
+
+- **Q4:** No new `Reminder` fields are necessary: lifecycle owns its store; completion history already has `scheduledFor`. Give **R exclusive ownership of `lib/store.ts` if replay-safe completion requires changes**. Give **L `lib/dayOccurrences.ts` and occurrence-aware membership helpers/tests**. [store.ts:109](/C:/Dev/VR/lib/store.ts:109)
+  Freeze interfaces first: `OccurrenceRef {reminderId, occurrenceAt}`, `completeOccurrence(ref)`, lifecycle `hydrate/getSnapshot/subscribe`, and awaitable `mark*` persistence. Card resolver output must include `occurrenceAt`, so Done targets the displayed occurrence. N owns all of `lib/alarmKit.ts`; R consumes its agreed exports.
+
+- **Q5:** Pick **comeback plus +5/+10 nags** over a solitary comeback: it preserves recovery when the user taps Later and then ignores the return. Every Later replaces that chain and resets its counter; deliberate taps never consume the ignored-ring allowance.
+  Record this as an explicit exception: it gives **two ignored nags after a Later comeback**, whereas the original occurrence gets three at +5/+10/+15. Those are different policies; the existing shared cap must stop governing deliberate Later. [notificationDecisions.ts:292](/C:/Dev/VR/lib/notificationDecisions.ts:292)
+
+**(3) Verdict**
+
+**Proceed with the amended split.** N/L/R can work independently after freezing those contracts and assigning the omitted files. Native changes fit the internal-build scope. The remaining semantic gap is the final alert’s ending: +16 alone cannot guarantee both “Missed after exhaustion” and “never flip while still ringing.” Validate that transition, repeated Later beyond three taps, immediate foreground X→Done, killed-app recovery, and two same-day occurrences in the syslog build.
+tokens used
+45,585
+Read both notes and checked the implementation. No file changes or Convex/EAS commands.
+
+**(1) Corrections**
+
+- **Await native scheduling before recording successful snooze.** Today the intent calls the scheduler, but it launches a detached task with `try?`; the one-second sleep does not guarantee registration. Make that seam `async throws`, preserve guard-first, await cancellation/scheduling, then persist the real armed time and emit. [VRAlarmIntents.swift:607](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:607), [withAlarmKit.js:512](/C:/Dev/VR/plugins/withAlarmKit.js:512)
+- **Apply-then-ack requires N changes too:** replace delete-first draining with `peekEvents()` and `ackEvents(eventIds)`, using durable unique event IDs and serialized append/ack operations. R must make history writes and cancellation replay-safe before acknowledging. [withAlarmKit.js:362](/C:/Dev/VR/plugins/withAlarmKit.js:362), [alarmKit.ts:59](/C:/Dev/VR/lib/alarmKit.ts:59)
+- **Expand the native contract:** add occurrence-scoped stop/cancel, and a snapshot-change hint covering countdown, paused and removal—not just alerting/scheduled. Preserve scheduling-failure events. Native `alarmId` must mean UUID; retain `appKey` separately. Existing event `id` means app key. [alarmKit.ts:45](/C:/Dev/VR/lib/alarmKit.ts:45), [withAlarmKit.js:523](/C:/Dev/VR/plugins/withAlarmKit.js:523)
+- **Remove day-wide completion from card advancement.** Today one completion skips directly to tomorrow; record and compare `scheduledFor = original occurrenceAt`, including after multiple Laters. [remindersMembership.ts:24](/C:/Dev/VR/lib/remindersMembership.ts:24), [dayOccurrences.ts:197](/C:/Dev/VR/lib/dayOccurrences.ts:197), [index.tsx:1658](/C:/Dev/VR/app/index.tsx:1658)
+- **Fallback parity requires additional files:** overlay and alarm-screen handlers independently complete and cap Later. Assign both to R, plus `lib/notificationDecisions.ts`. [AlarmOverlay.tsx:340](/C:/Dev/VR/components/AlarmOverlay.tsx:340), [AlarmOverlay.tsx:384](/C:/Dev/VR/components/AlarmOverlay.tsx:384), [alarm.tsx:214](/C:/Dev/VR/app/alarm.tsx:214), [alarm.tsx:260](/C:/Dev/VR/app/alarm.tsx:260)
+- **Define exhaustion explicitly.** A last comeback firing at +15 does not prove ringing ended at +16. Current native configuration has no ring-duration cutoff; JS’s 180-second constant cannot supply one. Do not mark Missed while a current snapshot still says alerting. [withAlarmKit.js:446](/C:/Dev/VR/plugins/withAlarmKit.js:446), [alarmKit.ts:66](/C:/Dev/VR/lib/alarmKit.ts:66)
+- **Lifecycle needs ordering and chain identity:** add `chainId`, `chainStartedAt`, `lastFireAt`, `lastEventAt`, `lastEventId`; propagate chain identity through native metadata/events. Ignore stale generations; Done must not be resurrected by elapsed-time inference. Prune resolved records after two days, retaining unresolved rings/snoozes.
+- **Use one serialized reconciliation coordinator**, called by tick, foreground and native hints; publish a reactive lifecycle snapshot after reconciliation. Separate storage reads can reproduce today’s refresh race. [index.tsx:350](/C:/Dev/VR/app/index.tsx:350), [_layout.tsx:109](/C:/Dev/VR/app/_layout.tsx:109)
+
+**(2) Q1–Q5**
+
+- **Q1:** Yes, this is a viable background-intent path; this checkout already attempts follow-up scheduling from `perform()` and cancels siblings from Stop. It is **not currently reliable by construction**, because registration errors disappear in the detached task. Retain the concrete alarm UUID and stable occurrence metadata in each newly configured intent. [VRAlarmIntents.swift:567](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:567), [VRAlarmIntents.swift:685](/C:/Dev/VR/plugins/ios-src/VRAlarmIntents.swift:685), [withAlarmKit.js:449](/C:/Dev/VR/plugins/withAlarmKit.js:449)
+  Apple documents a resource-dependent limit, with `maximumLimitReached`, rather than a fixed alarm count. Handle partial chain registration explicitly. I found no Apple guarantee specific to 26.6; your internal-build syslog test remains necessary. [Apple FAQ](https://developer.apple.com/forums/thread/797158)
+
+- **Q2:** States are `scheduled`, `countdown`, `paused`, `alerting`; **only `alerting` confirms ringing now**. A passed schedule is inferred delivery, not confirmation. [Apple state documentation](https://developer.apple.com/documentation/alarmkit/alarm/state-swift.enum/scheduled)
+  Snapshot plus subscription is sufficient for current state while running, **not historical outcomes while killed**. Keep durable intent events and native occurrence/chain metadata; subscribe before the initial snapshot and reconcile on launch/foreground. Successfully scheduled alarms persist through termination, but that does not make your observer execute continuously. [Apple FAQ](https://developer.apple.com/forums/thread/797158)
+
+- **Q3:** Accept +16 minutes as a conservative **unknown-state UI grace**, not evidence of exhaustion. It delays genuinely missed one-offs, but matches the intended initial nag window. Reject “absent from native → immediately overdue”: absence cannot distinguish Stop awaiting reconciliation, cancellation, failed scheduling or an unanswered alarm. Drain first; inspect the entire occurrence chain. Known snoozes use their replacement-chain timing, never the original +16 deadline.
+
+- **Q4:** No new `Reminder` fields are necessary: lifecycle owns its store; completion history already has `scheduledFor`. Give **R exclusive ownership of `lib/store.ts` if replay-safe completion requires changes**. Give **L `lib/dayOccurrences.ts` and occurrence-aware membership helpers/tests**. [store.ts:109](/C:/Dev/VR/lib/store.ts:109)
+  Freeze interfaces first: `OccurrenceRef {reminderId, occurrenceAt}`, `completeOccurrence(ref)`, lifecycle `hydrate/getSnapshot/subscribe`, and awaitable `mark*` persistence. Card resolver output must include `occurrenceAt`, so Done targets the displayed occurrence. N owns all of `lib/alarmKit.ts`; R consumes its agreed exports.
+
+- **Q5:** Pick **comeback plus +5/+10 nags** over a solitary comeback: it preserves recovery when the user taps Later and then ignores the return. Every Later replaces that chain and resets its counter; deliberate taps never consume the ignored-ring allowance.
+  Record this as an explicit exception: it gives **two ignored nags after a Later comeback**, whereas the original occurrence gets three at +5/+10/+15. Those are different policies; the existing shared cap must stop governing deliberate Later. [notificationDecisions.ts:292](/C:/Dev/VR/lib/notificationDecisions.ts:292)
+
+**(3) Verdict**
+
+**Proceed with the amended split.** N/L/R can work independently after freezing those contracts and assigning the omitted files. Native changes fit the internal-build scope. The remaining semantic gap is the final alert’s ending: +16 alone cannot guarantee both “Missed after exhaustion” and “never flip while still ringing.” Validate that transition, repeated Later beyond three taps, immediate foreground X→Done, killed-app recovery, and two same-day occurrences in the syslog build.

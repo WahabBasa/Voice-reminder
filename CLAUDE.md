@@ -137,6 +137,10 @@ npx tsc --noEmit
 npm.cmd run test:coverage
 ```
 
+### 📱 Which EAS build profile — standing rule
+
+**Any build that is NOT going to Apple (TestFlight / App Store) is a `development` build.** `eas build --platform ios --profile development` — it is a dev client (shake → dev menu, update launcher) and carries `EXPO_PUBLIC_VR_PERF_LOGS=1` so `[VR PERF]` lines reach the syslog. `preview` is not to be used for device testing (no dev menu; the user rejected it 2026-09-11). `production` only when a build is being submitted to Apple. Install dev builds over USB with go-ios: `C:/Users/AtheA/AppData/Local/SideTap/bin/ios.exe install --path=<ipa>`.
+
 ### ☁️ Convex deployments — read before any deploy
 
 | Deployment | Who reads it | How code gets there |

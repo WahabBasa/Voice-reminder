@@ -1,0 +1,17 @@
+**1. Corrections / Q1–Q3**
+
+- **Q1: Inline is reasonable, but the modal rationale is wrong.** Hydration also runs from the app layout, independent of the sheet ([app/_layout.tsx:165](/C:/Dev/VR/app/_layout.tsx:165)). It accepts an existing `audioUrl`, not a transition to `"ready"` ([lib/audioHydration.ts:214](/C:/Dev/VR/lib/audioHydration.ts:214)); setting `"pending"` alone won’t implement regeneration.
+- **Q2: WAV invalidation must clear the in-memory cache too.** It caches by filename, ignoring URL changes ([lib/alarmSounds.ts:81](/C:/Dev/VR/lib/alarmSounds.ts:81)). Use `removeAlarmSound`, which clears that cache and the native file ([lib/alarmSounds.ts:134](/C:/Dev/VR/lib/alarmSounds.ts:134)). `cancelReminder` preserves audio.
+- AlarmKit uses a local filename in `Library/Sounds` ([Apple](https://developer.apple.com/videos/play/wwdc2025/230/)). Cancel/re-create is appropriate; await WAV download/placement before registration. The native bridge overwrites the file ([plugins/withAlarmKit.js:155](/C:/Dev/VR/plugins/withAlarmKit.js:155)). Same-filename playback still deserves one physical-device check.
+- **Q3: No URL-identity dependency in ring planning.** Scheduling calls the downloader, whose cache checks reminder-ID/file existence; planning uses the schedule and current time ([lib/notifications.ts:1152](/C:/Dev/VR/lib/notifications.ts:1152), [lib/notifications.ts:2132](/C:/Dev/VR/lib/notifications.ts:2132)). A new URL alone won’t refresh cached audio.
+
+**2. Four practical edge cases**
+
+- **MP3 succeeds, WAV fails:** the action still succeeds because WAV synthesis errors are swallowed ([convex/actions.ts:946](/C:/Dev/VR/convex/actions.ts:946)). WAV placement errors also return `null` ([lib/alarmSounds.ts:99](/C:/Dev/VR/lib/alarmSounds.ts:99)). Handle this explicitly; don’t announce voice success on iOS. Clear stale store `wavUrl` before scheduling, otherwise the scheduler reads it back ([lib/notifications.ts:1590](/C:/Dev/VR/lib/notifications.ts:1590)).
+- **Network drops after generation:** the backend already deleted the old blobs ([convex/reminders.ts:167](/C:/Dev/VR/convex/reminders.ts:167)). Deleting local audio next makes “fall back to OLD URLs” unreliable. Stage/validate replacements before discarding local fallback; distinguish generation failure from download/install failure.
+- **Save again after failed regeneration:** text now equals `reminder.description`, so the change-only guard never retries. Keep a voice-outdated marker or an explicit retry affordance; no background queue needed.
+- **Reminder becomes due during the wait:** scheduling calculates from *after* downloads and can reject an expired one-off ([lib/notifications.ts:2148](/C:/Dev/VR/lib/notifications.ts:2148)). The existing save path cancels first and mostly logs scheduling failures ([components/EditReminderSheet.tsx:335](/C:/Dev/VR/components/EditReminderSheet.tsx:335), [:370](/C:/Dev/VR/components/EditReminderSheet.tsx:370)). Surface that failure instead of reporting a successful save with no alarm.
+
+**3. Verdict: agree with these changes.**
+
+Keep inline regeneration and the additive `wavUrl` return. Fix cache invalidation, preserve fallback until replacement is usable, handle missing WAV explicitly, and allow retry after failure. Add focused missing-WAV/download-failure tests plus one same-reminder iPhone playback check.

@@ -1,0 +1,1788 @@
+2026-09-10T04:07:30.622736Z ERROR codex_core::session::session: failed to load skill C:\Users\AtheA\.agents\skills\ptc-microsoft-todo\SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Dev\VR
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a0897f-ca22-7132-8673-f13967c00d7e
+--------
+user
+Sanity round on a new feature plan from Claude (architect on this repo). The user's goal, quoting them: "get feedback immediately from users if they encounter a snag; account for situations where there is no net." Inspiration is Stripe's early days (every error emailed the founders; a 'The worst thing about X is…' box on every page; founders reaching out 15 minutes later saying 'we fixed it, try again'). Solo dev, consumer iOS app (voice reminders), no user accounts (devices identified by deviceId), pre-launch / tiny user base. Read-only; do not modify files; no convex/eas. Explore the repo for anything you need. Answer in under 70 lines: (1) factual corrections with file:line; (2) answers to Q1-Q6; (3) the 3-5 real edge cases; (4) verdict. Keep the bar "less likely to surprise the user", not "cover everything".
+
+## What exists
+- Sentry `@sentry/react-native ~7.2.0`, init in `lib/sentry.ts:46` with `creationBreadcrumb(stage, errorKind)` `:36`; used from `lib/audio.ts`, `components/ErrorBoundary.tsx`, `components/RecordingOverlay.tsx`. No user-feedback capture anywhere.
+- Failed takes: pending-take card with `errorKind: "network" | "unparseable" | "server" | "cap_unverified"` (`lib/pendingTakes.ts:37`, server code mapping `:203`), retry/reconcile in `lib/takeReconcile.ts`. Take outcome toasts via `describeTakeOutcome` (`app/index.tsx:739-754`).
+- Creation jobs on Convex (`convex/creationJobs.ts`, `convex/schema.ts:214`) keep `transcript`, `sttSource`, `errorCode`, perf. Reminders table `:131`. Device sends `[VR PERF]` lines only when a build flag is on.
+- Edit sheet for a reminder (`components/EditReminderSheet.tsx`) has title, spoken line, schedule. Settings screen `app/settings.tsx`. AI consent gate `lib/aiConsent.ts`. Offline banner state `showOfflineMessage` in `app/index.tsx`.
+- Convex React client queues mutations in memory while disconnected but loses them if the app is killed.
+
+## Plan
+1. **Snag report on a failed take** — the failed card gets a "Tell me what happened" tap: optional one-line text, Send. Auto-attaches creationId, errorKind, server errorCode, transcript if any, perf, build number, update id, iOS version, deviceId.
+2. **"This reminder came out wrong"** row in the edit sheet — sends the job transcript (what was heard), what the parse produced (title / spoken line / schedule), and the user's edits if they changed fields before reporting. This is the parse-quality signal.
+3. **Settings feedback box** with rotating placeholder prompts in the Stripe spirit but softened for a consumer app ("What's the most annoying thing about Remi?", "Which reminder came out wrong last?"), optional email for a reply.
+4. **Automatic snag alerts, no user action**: failed takes (server/unparseable) and STT fallbacks are also captured as Sentry events with the same context bundle, so the founder sees them even when the user says nothing. Sentry alert rule → email within minutes.
+5. **Transport + offline**: a local outbox in AsyncStorage (`lib/feedbackOutbox.ts`), items get an id at creation, UI immediately shows "Sent" or "Will send when you're back online"; flushed on app foreground and on reconnect; delivered via a Convex mutation `feedback.submit` (new `feedback` table, idempotent on item id), and a Convex action forwards each item to the founder through a webhook URL in a Convex env var (Slack / Telegram / Discord incoming webhook) so it lands on the phone within a minute. No email infra.
+6. **Closing the loop (phase 2, optional)**: the founder types a reply into the `feedback` row in the Convex dashboard; the app watches this device's feedback rows and shows the reply as a banner on next open ("From Abdul: fixed it, try again"). Uses existing Convex reactivity, no push infra.
+
+## Questions
+- Q1: Privacy — attaching the transcript and parse output to a report: is the existing AI consent enough, or does a report need its own one-line notice ("This sends what you said and how it was understood")? Anything here that changes the App Store privacy nutrition labels (the optional email = "contact info collected"; deviceId already there?) or needs an App Review note? Nothing here is ad tracking / ATT, correct?
+- Q2: Offline — is Sentry RN's on-disk offline caching real on iOS for captured messages (native SDK cache), so plan 4 works without the outbox? And is the AsyncStorage outbox the right minimal shape for plan 5, or should feedback ride the existing pending-take persistence?
+- Q3: Surfaces — three entry points (failed card, edit sheet, settings). Too many for a small app? Which one would you cut, and where would a user actually look when a reminder came out wrong?
+- Q4: The reply banner (plan 6) — worth it now or later? Any trap in showing a founder-typed string in-app (e.g. review guideline on remote-configured content)?
+- Q5: What context is actually useful to fix a snag in 15 minutes and what is noise? (creationId + errorCode + transcript + parse output + update id seem essential; perf line optional.)
+- Q6: Rotating negative prompts — fine in a consumer app, or does it prime users to complain about things that don't matter? Suggest 3 prompts that fit.
+
+2026-09-10T04:07:32.322980Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\"error\":{\"message\":\"Invalid API key: ak_**mXj4\",\"code\":801,\"status\":401,\"request_id\":\"95affc80-7e66-44bb-8365-5302c22f1fd7\"}}")
+codex
+I’ll check the failure flows, stored context, and consent wording, then verify the Sentry and Apple details against official docs. I’ll keep this read-only and won’t run Convex or EAS.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content C:/Users/AtheA/.agents/skills/review/SKILL.md; Get-Content C:/Users/AtheA/.agents/skills/vibe-security/SKILL.md' in C:\Dev\VR
+ succeeded in 1603ms:
+---
+name: review
+description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes â€” Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+---
+
+Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
+
+- **Standards** â€” does the code conform to this repo's documented coding standards?
+- **Spec** â€” does the code faithfully implement the originating issue / PRD / spec?
+
+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+
+The issue tracker should have been provided to you â€” run `/setup-matt-pocock-skills` if `docs/agents/issue-tracker.md` is missing.
+
+## Process
+
+### 1. Pin the fixed point
+
+Whatever the user said is the fixed point â€” a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
+
+Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+
+Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here â€” not inside two parallel sub-agents.
+
+### 2. Identify the spec source
+
+Look for the originating spec, in this order:
+
+1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) â€” fetch via the workflow in `docs/agents/issue-tracker.md`.
+2. A path the user passed as an argument.
+3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+
+### 3. Identify the standards sources
+
+Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
+
+### 4. Spawn both sub-agents in parallel
+
+Send a single message with two `Agent` tool calls. Use the `general-purpose` subagent for both.
+
+**Standards sub-agent prompt** â€” include:
+
+- The full diff command and commit list.
+- The list of standards-source files you found in step 3.
+- The brief: "Report â€” per file/hunk where relevant â€” every place the diff violates a documented standard. Cite the standard (file + the rule). Distinguish hard violations from judgement calls. Skip anything tooling enforces. Under 400 words."
+
+**Spec sub-agent prompt** â€” include:
+
+- The diff command and commit list.
+- The path or fetched contents of the spec.
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+
+If the spec is missing, skip the Spec sub-agent and note this in the final report.
+
+### 5. Aggregate
+
+Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings â€” the two axes are deliberately separate (see _Why two axes_).
+
+End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes â€” that's the reranking the separation exists to prevent.
+
+## Why two axes
+
+A change can pass one axis and fail the other:
+
+- Code that follows every standard but implements the wrong thing â†’ **Standards pass, Spec fail.**
+- Code that does exactly what the issue asked but breaks the project's conventions â†’ **Spec pass, Standards fail.**
+
+Reporting them separately stops one axis from masking the other.
+---
+name: vibe-security
+description: Audits codebases for common security vulnerabilities that AI coding assistants introduce in "vibe-coded" applications. Checks for exposed API keys, broken access control (Supabase RLS, Firebase rules), missing auth validation, client-side trust issues, insecure payment flows, and more. Use this skill whenever the user asks about security, wants a code review, mentions "vibe coding", or when you're writing or reviewing code that handles authentication, payments, database access, API keys, secrets, or user data â€” even if they don't explicitly mention security. Also trigger when the user says things like "is this safe?", "check my code", "audit this", "review for vulnerabilities", or "can someone hack this?".
+license: MIT
+metadata:
+  author: Chris Raroque
+  version: "1.0"
+---
+
+Audit code for security vulnerabilities commonly introduced by AI code generation. These issues are prevalent in "vibe-coded" apps â€” projects built rapidly with AI assistance where security fundamentals get skipped.
+
+AI assistants consistently get these patterns wrong, leading to real breaches, stolen API keys, and drained billing accounts. This skill exists to catch those mistakes before they ship.
+
+
+## The Core Principle
+
+Never trust the client. Every price, user ID, role, subscription status, feature flag, and rate limit counter must be validated or enforced server-side. If it exists only in the browser, mobile bundle, or request body, an attacker controls it.
+
+
+## Audit Process
+
+Examine the codebase systematically. For each step, load the relevant reference file only if the codebase uses that technology or pattern. Skip steps that aren't relevant.
+
+1. **Secrets & Environment Variables** â€” Scan for hardcoded API keys, tokens, or credentials. Check for secrets exposed via client-side env var prefixes (`NEXT_PUBLIC_`, `VITE_`, `EXPO_PUBLIC_`). Verify `.env` is in `.gitignore`. See `references/secrets-and-env.md`.
+
+2. **Database Access Control** â€” Check Supabase RLS policies, Firebase Security Rules, or Convex auth guards. This is the #1 source of critical vulnerabilities in vibe-coded apps. See `references/database-security.md`.
+
+3. **Authentication & Authorization** â€” Validate JWT handling, middleware auth, Server Action protection, and session management. See `references/authentication.md`.
+
+4. **Rate Limiting & Abuse Prevention** â€” Ensure auth endpoints, AI calls, and expensive operations have rate limits. Verify rate limit counters can't be tampered with. See `references/rate-limiting.md`.
+
+5. **Payment Security** â€” Check for client-side price manipulation, webhook signature verification, and subscription status validation. See `references/payments.md`.
+
+6. **Mobile Security** â€” Verify secure token storage, API key protection via backend proxy, and deep link validation. See `references/mobile.md`.
+
+7. **AI / LLM Integration** â€” Check for exposed AI API keys, missing usage caps, prompt injection vectors, and unsafe output rendering. See `references/ai-integration.md`.
+
+8. **Deployment Configuration** â€” Verify production settings, security headers, source map exposure, and environment separation. See `references/deployment.md`.
+
+9. **Data Access & Input Validation** â€” Check for SQL injection, ORM misuse, and missing input validation. See `references/data-access.md`.
+
+If doing a partial review or generating code in a specific area, load only the relevant reference files.
+
+
+## Core Instructions
+
+- Report only genuine security issues. Do not nitpick style or non-security concerns.
+- When multiple issues exist, prioritize by exploitability and real-world impact.
+- If the codebase doesn't use a particular technology (e.g., no Supabase), skip that section entirely.
+- When generating new code, consult the relevant reference files proactively to avoid introducing vulnerabilities in the first place.
+- If you find a critical issue (exposed secrets, disabled RLS, auth bypass), flag it immediately at the top of your response â€” don't bury it in a long list.
+
+
+## Output Format
+
+Organize findings by severity: **Critical** â†’ **High** â†’ **Medium** â†’ **Low**.
+
+For each issue:
+1. State the file and relevant line(s).
+2. Name the vulnerability.
+3. Explain what an attacker could do (concrete impact, not abstract risk).
+4. Show a before/after code fix.
+
+Skip areas with no issues. End with a prioritized summary.
+
+### Example Output
+
+#### Critical
+
+**`lib/supabase.ts:3` â€” Supabase `service_role` key exposed in client bundle**
+
+The `service_role` key bypasses all Row-Level Security. Anyone can extract it from the browser bundle and read, modify, or delete every row in your database.
+
+```typescript
+// Before
+const supabase = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_SERVICE_KEY!)
+
+// After â€” use the anon key client-side; service_role belongs only in server-side code
+const supabase = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
+```
+
+#### High
+
+**`app/api/checkout/route.ts:15` â€” Price taken from client request body**
+
+An attacker can set any price (including $0.01) by modifying the request. Prices must be looked up server-side.
+
+```typescript
+// Before
+const session = await stripe.checkout.sessions.create({
+  line_items: [{ price_data: { unit_amount: req.body.price } }]
+})
+
+// After â€” look up the price server-side
+const product = await db.products.findUnique({ where: { id: req.body.productId } })
+const session = await stripe.checkout.sessions.create({
+  line_items: [{ price: product.stripePriceId }]
+})
+```
+
+### Summary
+
+1. **Service role key exposed (Critical):** Anyone can bypass all database security. Rotate the key immediately and move it to server-side only.
+2. **Client-controlled pricing (High):** Attackers can purchase at any price. Use server-side price lookup.
+
+
+## When Generating Code
+
+These rules also apply proactively. Before writing code that touches auth, payments, database access, API keys, or user data, consult the relevant reference file to avoid introducing the vulnerability in the first place. Prevention is better than detection.
+
+
+## References
+
+- `references/secrets-and-env.md` â€” API keys, tokens, environment variable configuration, and `.gitignore` rules.
+- `references/database-security.md` â€” Supabase RLS, Firebase Security Rules, and Convex auth patterns.
+- `references/authentication.md` â€” JWT verification, middleware, Server Actions, and session management.
+- `references/rate-limiting.md` â€” Rate limiting strategies and abuse prevention.
+- `references/payments.md` â€” Stripe security, webhook verification, and price validation.
+- `references/mobile.md` â€” React Native and Expo security: secure storage, API proxy, deep links.
+- `references/ai-integration.md` â€” LLM API key protection, usage caps, prompt injection, and output sanitization.
+- `references/deployment.md` â€” Production configuration, security headers, and environment separation.
+- `references/data-access.md` â€” SQL injection prevention, ORM safety, and input validation.
+
+codex
+I’m using the security skill for the report-data and device-access questions. This is a plan review, so the repository’s diff-review workflow doesn’t apply.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-ChildItem -Path . -Filter AGENTS.md; rg --files -g AGENTS.md -g '*privacy*' -g '*consent*' -g '*sentry*'; Get-Content C:/Users/AtheA/.agents/skills/vibe-security/references/database-security.md; Get-Content lib/sentry.ts; Get-Content lib/aiConsent.ts" in C:\Dev\VR
+ succeeded in 2371ms:
+legal-site\privacy.html
+lib\sentry.ts
+# Database Access Control
+
+This is the #1 source of critical vulnerabilities in vibe-coded apps. AI assistants routinely generate database schemas without proper access control, leaving entire tables exposed.
+
+## Supabase Row-Level Security (RLS)
+
+### Enable RLS on Every Table
+
+Tables created via SQL Editor or migrations have RLS **disabled by default**. A table without RLS is fully readable and writable by anyone with the anon key (which is public). Run this in every migration to catch missed tables:
+
+```sql
+DO $$ DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY;', r.tablename);
+  END LOOP;
+END $$;
+```
+
+### Dangerous RLS Policies
+
+**Never use `USING (true)` or `USING (auth.uid() IS NOT NULL)` on SELECT/UPDATE/DELETE.** These let any authenticated user access every row in the table. Always scope to the row owner:
+
+```sql
+-- BAD: any logged-in user can read all rows
+CREATE POLICY "Users can view data" ON public.documents
+  FOR SELECT TO authenticated USING (true);
+
+-- BAD: any logged-in user can read all rows
+CREATE POLICY "Users can view data" ON public.documents
+  FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+
+-- GOOD: users can only read their own rows
+CREATE POLICY "Users can view own data" ON public.documents
+  FOR SELECT TO authenticated USING ((SELECT auth.uid()) = user_id);
+```
+
+### Missing WITH CHECK
+
+Always include `WITH CHECK` on INSERT and UPDATE policies. Without it, a user can reassign row ownership or insert rows as another user:
+
+```sql
+-- BAD: user can UPDATE user_id to someone else's ID
+CREATE POLICY "Users can update tasks" ON public.tasks
+  FOR UPDATE TO authenticated USING ((SELECT auth.uid()) = user_id);
+
+-- GOOD: WITH CHECK prevents changing user_id
+CREATE POLICY "Users can update tasks" ON public.tasks
+  FOR UPDATE TO authenticated
+  USING ((SELECT auth.uid()) = user_id)
+  WITH CHECK ((SELECT auth.uid()) = user_id);
+```
+
+### Sensitive Fields on User-Accessible Tables
+
+If a `profiles` table lets users UPDATE their own row, they can set `is_admin = true`, `credits = 99999`, or `subscription_tier = 'enterprise'`. Fixes:
+
+- **Option A:** Move sensitive fields to a `private` schema table not exposed via PostgREST. Access them through `SECURITY DEFINER` functions.
+- **Option B:** Use column-level privileges:
+  ```sql
+  REVOKE UPDATE ON profiles FROM authenticated;
+  GRANT UPDATE (display_name, avatar_url) ON profiles TO authenticated;
+  ```
+
+### Forgotten Related Tables
+
+Junction tables, audit logs, and metadata tables often lack RLS even when the main table has it. Every table exposed via the REST API needs its own policies. If a table has RLS enabled but no policies defined, it blocks all access â€” which is safe but may cause subtle bugs.
+
+### SECURITY DEFINER Functions
+
+`SECURITY DEFINER` functions bypass RLS entirely. If created in the `public` schema, they're callable via the REST API by anyone. Always:
+- Keep them in a `private` schema
+- Set `SET search_path = ''`
+- Validate all inputs inside the function
+
+### Storage Buckets
+
+Storage buckets need their own policies. Without them, any authenticated user can upload, read, or delete any file. Scope uploads to the user's UID folder:
+
+```sql
+CREATE POLICY "Users upload to own folder"
+  ON storage.objects FOR INSERT TO authenticated
+  WITH CHECK (
+    bucket_id = 'avatars'
+    AND (storage.foldername(name))[1] = (SELECT auth.uid())::TEXT
+  );
+```
+
+
+## Firebase Security Rules
+
+### Default Rules Are Dangerous
+
+Never ship these:
+```
+// BAD: world-readable and writable
+allow read, write: if true;
+
+// BAD: any logged-in user can access everything
+allow read, write: if request.auth != null;
+```
+
+Always validate ownership:
+```
+allow read, write: if request.auth.uid == userId;
+```
+
+### Field-Level Protection
+
+Without restricting which fields users can modify, they can set `isAdmin: true` or `credits: 99999`:
+
+```
+// GOOD: restrict modifiable fields on UPDATE
+allow update: if request.auth.uid == userId
+  && request.resource.data.diff(resource.data)
+     .affectedKeys()
+     .hasOnly(['displayName', 'avatarUrl']);
+```
+
+### Subcollection Trap
+
+Subcollections are **NOT** secured by parent rules. Each subcollection needs its own explicit rules. AI assistants frequently miss this.
+
+### Data Validation
+
+Validate data types and sizes on writes:
+```
+allow create: if request.resource.data.displayName is string
+  && request.resource.data.displayName.size() <= 50;
+```
+
+Enforce server timestamps:
+```
+allow create: if request.resource.data.createdAt == request.time;
+```
+
+### Role Checks
+
+Use custom claims (`request.auth.token.role`) instead of querying a users document. Custom claims can't be tampered with by the user and don't require extra reads.
+
+### Cloud Storage Rules
+
+Must validate `contentType`, `size`, and path ownership. Without this, users can upload executables or store files in other users' paths.
+
+
+## Convex
+
+- Every public `query` and `mutation` must call `ctx.auth.getUserIdentity()` and handle the unauthenticated case.
+- Mutations must verify ownership â€” checking auth is not enough. Verify the user owns the specific resource they're modifying.
+- Functions only called internally must use `internalQuery` / `internalMutation` / `internalAction`, not `query` / `mutation`. Public functions are callable by anyone.
+import { Platform } from "react-native";
+import * as Sentry from "@sentry/react-native";
+
+// Separate Sentry projects per platform (org: oldowan). DSNs from
+// sentry.io â†’ Project Settings â†’ Client Keys. Not secrets â€” they only let
+// clients send events. Empty string = Sentry stays disabled on that platform.
+const SENTRY_DSN_IOS =
+  "https://d460fa5e20112f13113114bc3aeb256d@o4511867657715712.ingest.de.sentry.io/4511867869921360";
+const SENTRY_DSN_ANDROID =
+  "https://79d26ed8d2fb18232e3887b8df2b69d3@o4511867657715712.ingest.de.sentry.io/4511867870052432";
+
+// Console output carries user content (reminder titles, notification bodies,
+// transcripts), so it only leaves the device on dev builds. Release builds send
+// crashes and nothing else. Fallback is false so anything that isn't provably a
+// dev build is treated as release.
+const CAPTURE_CONSOLE = typeof __DEV__ !== "undefined" ? __DEV__ : false;
+
+// Log bodies get truncated at this length before they're queued. The voice
+// pipeline emits [VR PERF] JSON lines; the useful part is always the front.
+const MAX_LOG_BODY_CHARS = 512;
+
+// Log sources that are pure noise and would otherwise dominate the stream.
+// [RevenueCat] fires from every catch handler in lib/purchases.ts while the iOS
+// key is a placeholder â€” dozens of identical lines per session.
+const LOG_NOISE_PREFIXES = ["[RevenueCat]"];
+
+/**
+ * One creation-pipeline stage transition, as a breadcrumb (spec Â§3.3).
+ *
+ * Content-free by construction: the stage name and, at most, an `errorKind`
+ * from the fixed set the pending card knows about. No transcript, no reminder
+ * title, no URI, no storage id â€” the creation path is the loudest carrier of
+ * user content in the app, and this is the one channel that survives to
+ * production.
+ */
+export function creationBreadcrumb(stage: string, errorKind?: string): void {
+  Sentry.addBreadcrumb({
+    category: "vr.creation",
+    type: "info",
+    level: "info",
+    message: stage,
+    ...(errorKind ? { data: { errorKind } } : {}),
+  });
+}
+
+export function initSentry(): void {
+  const dsn = Platform.OS === "ios" ? SENTRY_DSN_IOS : SENTRY_DSN_ANDROID;
+  if (!dsn) return;
+  Sentry.init({
+    dsn,
+
+    // ---- Performance instrumentation: OFF ----
+    // `tracesSampleRate: 0` does NOT do this. The RN SDK gates every tracing
+    // integration on `typeof tracesSampleRate === 'number'`, so 0 switched the
+    // whole stack ON and merely threw the spans away at send time
+    // (integrations/default.js: `const hasTracingEnabled = typeof
+    // options.tracesSampleRate === 'number' || ...`). Worse, core still emits
+    // `spanStart` for unsampled root spans (tracing/trace.js), so the listeners
+    // kept firing. That bought us, for zero data: a 50ms setTimeout stall-poll
+    // loop, native frame tracking on a display link, XHR patching that wrapped
+    // every upload and Convex call, app-start/TTID/AppRegistry hooks â€” all of it
+    // on the JS and main threads during the voice pipeline. Omitting the key
+    // entirely is what actually disables tracing; the explicit flags below are
+    // belt-and-braces in case a dependency ever sets a sampler.
+    enableAutoPerformanceTracing: false,
+    enableStallTracking: false,
+    enableNativeFramesTracking: false,
+    enableAppStartTracking: false,
+    enableUserInteractionTracing: false,
+
+    // Dev only: stream every console line (all [VR]/[AudioService] diagnostics)
+    // to Sentry Logs so device behavior is readable without a cable or a Mac.
+    // This is not optional convenience â€” the dev network blocks Metro from ever
+    // reaching the phone (see updates/2026-08-10), so Sentry Logs is the only
+    // window into a running build. Kept on; made cheap instead.
+    enableLogs: CAPTURE_CONSOLE,
+    // Runs before the log is serialized and buffered, so dropped lines cost
+    // nothing downstream. `message` here becomes `body` on the wire.
+    beforeSendLog: (log) => {
+      const message = typeof log.message === "string" ? log.message : "";
+      if (LOG_NOISE_PREFIXES.some((p) => message.startsWith(p))) return null;
+      if (message.length > MAX_LOG_BODY_CHARS) {
+        return {
+          ...log,
+          message: `${message.slice(0, MAX_LOG_BODY_CHARS)}â€¦[+${message.length - MAX_LOG_BODY_CHARS} chars]`,
+        };
+      }
+      return log;
+    },
+
+    // Screenshots and the view tree both render reminder text on screen.
+    attachScreenshot: false,
+    attachViewHierarchy: false,
+    sendDefaultPii: false,
+
+    // Every breadcrumb costs one synchronous native module call
+    // (scopeSync.ts â†’ NATIVE.addBreadcrumb) plus a copy of the whole breadcrumb
+    // array into scope data on each captured log. 100 was the default; we only
+    // ever read the last handful on a crash.
+    maxBreadcrumbs: 30,
+
+    integrations: [
+      // Replaces the default Breadcrumbs integration (a user instance wins over
+      // the default one of the same name).
+      //
+      // `console: false` unconditionally. Two reasons, in order of weight:
+      // (1) cost â€” every console line became a blocking JSâ†’native hop, and the
+      //     voice pipeline is the loudest path in the app; (2) privacy â€” the
+      //     default would staple the last console lines onto every crash report,
+      //     reminder text included. Nothing is lost: console output still
+      //     streams to Sentry Logs in dev via consoleLoggingIntegration below,
+      //     which is where we actually read it.
+      // Network breadcrumbs stay on â€” method/URL/status only, no bodies.
+      Sentry.breadcrumbsIntegration({ console: false }),
+      ...(CAPTURE_CONSOLE
+        ? [Sentry.consoleLoggingIntegration({ levels: ["log", "warn", "error"] })]
+        : []),
+    ],
+  });
+}
+import { requestMicrophonePermission, type PermissionStatus } from './audio';
+import { PRIVACY_POLICY_URL } from './legalLinks';
+import { useSettingsStore } from './settingsStore';
+
+/**
+ * First-run AI consent: the copy and the two button paths.
+ *
+ * App Review 5.1.2(i) needs explicit permission *before* a recording is shared
+ * with third-party AI, so this is a pre-permission card shown on the first mic
+ * tap â€” short enough to read, and Allow flows straight on into the system
+ * microphone prompt so the user answers one question after another instead of
+ * meeting two walls.
+ *
+ * Copy rule: never name a provider. The Privacy Policy is where processors get
+ * listed; in-app strings stay generic.
+ */
+export const AI_CONSENT_COPY = {
+    title: 'Before you record',
+    /** Sentence one: what happens to the recording. */
+    body: 'Your voice is processed by secure third-party AI services to create your reminder.',
+    /** Sentence two, wrapped around the link below. */
+    learnMorePrefix: 'Learn more in our ',
+    learnMoreLabel: 'Privacy Policy',
+    learnMoreSuffix: '.',
+    allowLabel: 'Allow',
+    declineLabel: 'Not now',
+} as const;
+
+/** "Learn more" goes to the same policy the paywall and Settings link to. */
+export const AI_CONSENT_LEARN_MORE_URL = PRIVACY_POLICY_URL;
+
+export type AiConsentChoice = 'allow' | 'not_now';
+
+export type AiConsentOutcome = {
+    /** True once the accepted-at timestamp is persisted. */
+    consented: boolean;
+    /** What the system microphone prompt answered, or null when it was never shown. */
+    mic: PermissionStatus | null;
+    /** True when the caller should carry on into the recording the user originally tapped for. */
+    proceedToRecording: boolean;
+    /** Set when the choice could not be saved â€” the caller shows a retry alert. */
+    error?: 'persist_failed';
+};
+
+/**
+ * Applies the user's choice from the consent card.
+ *
+ * `allow` persists consent and then chains straight into the system microphone
+ * request (one continuous flow: card â†’ OS alert â†’ recorder). A denied mic still
+ * proceeds â€” the recorder owns that message, and consent is unrelated to it.
+ *
+ * `not_now` writes nothing: consent stays unset, the recorder stays gated, and
+ * the card can be shown again on the next mic tap.
+ */
+export async function resolveAiConsent(choice: AiConsentChoice): Promise<AiConsentOutcome> {
+    if (choice === 'not_now') {
+        return { consented: false, mic: null, proceedToRecording: false };
+    }
+
+    try {
+        await useSettingsStore.getState().setAiConsent(true);
+    } catch {
+        return { consented: false, mic: null, proceedToRecording: false, error: 'persist_failed' };
+    }
+
+    let mic: PermissionStatus | null = null;
+    try {
+        mic = await requestMicrophonePermission();
+    } catch {
+        // The OS refused to answer; the recorder asks again when it opens.
+        mic = null;
+    }
+
+    return { consented: true, mic, proceedToRecording: true };
+}
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'creationId|transcript|errorCode|perf|sttSource|errorKind|AsyncStorage' lib/pendingTakes.ts lib/takeReconcile.ts convex/creationJobs.ts convex/schema.ts; rg -n 'creationId|transcript|spoken|title|schedule|onSave|reminder' components/EditReminderSheet.tsx; rg -n 'capture|fallback' lib/audio.ts components/RecordingOverlay.tsx components/ErrorBoundary.tsx; rg -n 'Sentry|transcript|diagnostic|device|email|retain|support' legal-site/privacy.html; rg -n 'deviceId|getUserIdentity' lib/device.ts convex/reminders.ts; rg -n 'sentry/react-native|convex' package.json; rg -n 'showOfflineMessage|describeTakeOutcome|pendingTake|EditReminderSheet' app/index.tsx" in C:\Dev\VR
+ succeeded in 579ms:
+convex/schema.ts:41: * AsyncStorage, so an edit round-tripped through Convex silently lost them.
+convex/schema.ts:71: * Every field of the perf summary a creation job accumulates. Optional
+convex/schema.ts:98:  // ── Device-STT provenance (spec §device transcript). "device" takes skip the
+convex/schema.ts:100:  //    timing/engine/locale so the perf line reads the same shape either way.
+convex/schema.ts:101:  sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+convex/schema.ts:112:  transcriptionCheckpointMs: v.optional(v.number()),
+convex/schema.ts:141:    creationId: v.optional(v.string()),
+convex/schema.ts:219:    creationId: v.string(),
+convex/schema.ts:226:    transcript: v.optional(v.string()),
+convex/schema.ts:229:    // (sttSource "device") never has one — its transcript arrived with `begin`.
+convex/schema.ts:231:    // Where the transcript came from. "device" = the phone transcribed on-device
+convex/schema.ts:235:    sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+convex/schema.ts:237:    // transcription took, which engine produced it, and the recognizer locale.
+convex/schema.ts:246:    errorCode: v.optional(v.string()),
+convex/schema.ts:254:    perf: v.optional(creationPerfValidator),
+convex/schema.ts:259:    .index("by_device_creation", ["deviceId", "creationId"])
+convex/creationJobs.ts:92:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:93:  errorCode: v.optional(v.string()),
+convex/creationJobs.ts:94:  perf: v.optional(creationPerfValidator),
+convex/creationJobs.ts:100:  creationId: v.string(),
+convex/creationJobs.ts:105:  // Transcript + provenance. A "device" take carries its transcript here and
+convex/creationJobs.ts:107:  // perf line. Absent sttSource means a pre-field (cloud) row.
+convex/creationJobs.ts:108:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:109:  sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+convex/creationJobs.ts:121:/** The watched document (spec 1.4). `perf` rides along so the client can log it. */
+convex/creationJobs.ts:125:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:127:  // and rebegin it from the transcript alone, no audio (spec §reconcile).
+convex/creationJobs.ts:128:  sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+convex/creationJobs.ts:129:  errorCode: v.optional(v.string()),
+convex/creationJobs.ts:131:  perf: v.optional(creationPerfValidator),
+convex/creationJobs.ts:138: * resolved urls. `_id` arrives as `id` and `creationId` rides on every row so a
+convex/creationJobs.ts:143:  creationId: v.optional(v.string()),
+convex/creationJobs.ts:182:  creationId: string
+convex/creationJobs.ts:187:      q.eq("deviceId", deviceId).eq("creationId", creationId)
+convex/creationJobs.ts:196:  transcript?: string;
+convex/creationJobs.ts:197:  errorCode?: string;
+convex/creationJobs.ts:198:  perf?: JobDoc["perf"];
+convex/creationJobs.ts:229: * Idempotent on (deviceId, creationId), which is the whole point: the client
+convex/creationJobs.ts:231: * pass, and a lost response must not cost a second transcription. Only the
+convex/creationJobs.ts:239:    creationId: v.string(),
+convex/creationJobs.ts:241:    // the transcript instead. `begin` requires exactly one of the two — see the
+convex/creationJobs.ts:242:    // handler. Absent audio with a device transcript is the whole point.
+convex/creationJobs.ts:244:    transcript: v.optional(v.string()),
+convex/creationJobs.ts:245:    sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+convex/creationJobs.ts:259:    const existing = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:269:    // transcribes it; a device take has a non-empty `transcript` with
+convex/creationJobs.ts:270:    // sttSource "device" and the worker skips STT. Neither or both is a bug in
+convex/creationJobs.ts:273:    const trimmed = args.transcript?.trim() ?? "";
+convex/creationJobs.ts:275:    const hasDeviceTranscript = trimmed.length > 0 && args.sttSource === "device";
+convex/creationJobs.ts:279:          'or a non-empty `transcript` with `sttSource: "device"` (on-device STT)'
+convex/creationJobs.ts:286:      creationId: args.creationId,
+convex/creationJobs.ts:292:            transcript: trimmed,
+convex/creationJobs.ts:293:            sttSource: "device" as const,
+convex/creationJobs.ts:300:            sttSource: "cloud" as const,
+convex/creationJobs.ts:323: * for another device's creationId — a job is not a shared object.
+convex/creationJobs.ts:326:  args: { deviceId: v.string(), creationId: v.string() },
+convex/creationJobs.ts:329:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:334:      transcript: job.transcript,
+convex/creationJobs.ts:335:      sttSource: job.sttSource,
+convex/creationJobs.ts:336:      errorCode: job.errorCode,
+convex/creationJobs.ts:338:      perf: job.perf,
+convex/creationJobs.ts:353:  args: { deviceId: v.string(), creationId: v.string() },
+convex/creationJobs.ts:359:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:376:        creationId: reminder.creationId,
+convex/creationJobs.ts:430:  args: { deviceId: v.string(), creationId: v.string() },
+convex/creationJobs.ts:433:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:456:      creationId: job.creationId,
+convex/creationJobs.ts:461:      transcript: job.transcript,
+convex/creationJobs.ts:462:      sttSource: job.sttSource,
+convex/creationJobs.ts:493: * One transaction inserts every row, stamps each with the take's `creationId`,
+convex/creationJobs.ts:527:        creationId: job.creationId,
+convex/creationJobs.ts:558:      perf: args.preCommitPerf,
+convex/creationJobs.ts:560:      errorCode: undefined,
+convex/creationJobs.ts:569: * Best-effort telemetry merge (C5). Touches `perf` and nothing else — not the
+convex/creationJobs.ts:573:export const perfPatch = internalMutation({
+convex/creationJobs.ts:574:  args: { jobId: v.id("creationJobs"), perf: creationPerfValidator },
+convex/creationJobs.ts:579:    await ctx.db.patch(args.jobId, { perf: { ...(job.perf ?? {}), ...args.perf } });
+convex/creationJobs.ts:601:    creationId: v.string(),
+convex/creationJobs.ts:609:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:628:    // transaction, so the CAS applyCas would perform has already been decided:
+convex/creationJobs.ts:655:    creationId: v.string(),
+convex/creationJobs.ts:657:    // A device take can be retried against a fresh on-device transcript, or —
+convex/creationJobs.ts:659:    // Passing `newStorageId` takes the cloud branch; passing a device transcript
+convex/creationJobs.ts:661:    transcript: v.optional(v.string()),
+convex/creationJobs.ts:662:    sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+convex/creationJobs.ts:673:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:687:    // are cleared. Otherwise a fresh device transcript replaces the stored one.
+convex/creationJobs.ts:689:    // transcript (no audio needed) and a cloud take reuses its stored blob.
+convex/creationJobs.ts:690:    const trimmed = args.transcript?.trim() ?? "";
+convex/creationJobs.ts:691:    const replacingDeviceTranscript = trimmed.length > 0 && args.sttSource === "device";
+convex/creationJobs.ts:695:        sttSource: "cloud" as const,
+convex/creationJobs.ts:702:        sttSource: "device" as const,
+convex/creationJobs.ts:703:        transcript: trimmed,
+convex/creationJobs.ts:714:      errorCode: undefined,
+convex/creationJobs.ts:738:  args: { deviceId: v.string(), creationId: v.string() },
+convex/creationJobs.ts:743:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:804:          errorCode: "internal",
+lib/takeReconcile.ts:3:  errorKindForServerCode,
+lib/takeReconcile.ts:28: * creationId, so two foregrounds in a second cannot import the same take twice,
+lib/takeReconcile.ts:34: * conclude that a perfectly good import never happened.
+lib/takeReconcile.ts:85:        // failed + no job: §2.6 owns this, by errorKind (D4).
+lib/takeReconcile.ts:113:  errorKind?: PendingErrorKind;
+lib/takeReconcile.ts:119:  const { errorKind, hasStorageId, hasRecording, server, serverErrorCode } = params;
+lib/takeReconcile.ts:126:  if (errorKind === "cap_unverified") {
+lib/takeReconcile.ts:143:  if (errorKind === "network") {
+lib/takeReconcile.ts:156:  fetchJob: (deviceId: string, creationId: string) => Promise<WatchedJob | null>;
+lib/takeReconcile.ts:160:      creationId: string;
+lib/takeReconcile.ts:167:          transcript: string;
+lib/takeReconcile.ts:168:          sttSource: "device";
+lib/takeReconcile.ts:177:    creationId: string;
+lib/takeReconcile.ts:182:    creationId: string;
+lib/takeReconcile.ts:185:  discard: (args: { deviceId: string; creationId: string }) => Promise<{ status: string }>;
+lib/takeReconcile.ts:194:  storeHasCreationId: (creationId: string) => boolean;
+lib/takeReconcile.ts:199:  onStage?: (creationId: string, stage: string, data?: Record<string, unknown>) => void;
+lib/takeReconcile.ts:236:export function enqueueReconcile(creationId: string): void {
+lib/takeReconcile.ts:237:  if (inFlight.has(creationId)) {
+lib/takeReconcile.ts:240:    requested.add(creationId);
+lib/takeReconcile.ts:243:  if (queue.includes(creationId)) return;
+lib/takeReconcile.ts:244:  queue.push(creationId);
+lib/takeReconcile.ts:255:      for (const take of takes) enqueueReconcile(take.creationId);
+lib/takeReconcile.ts:269:    const creationId = queue.shift() as string;
+lib/takeReconcile.ts:270:    inFlight.add(creationId);
+lib/takeReconcile.ts:272:    void runOne(creationId).finally(() => {
+lib/takeReconcile.ts:273:      inFlight.delete(creationId);
+lib/takeReconcile.ts:275:      if (requested.delete(creationId)) {
+lib/takeReconcile.ts:276:        queue.push(creationId);
+lib/takeReconcile.ts:292:async function runOne(creationId: string): Promise<void> {
+lib/takeReconcile.ts:297:    const take = getPendingTake(creationId);
+lib/takeReconcile.ts:301:    current.onStage?.(creationId, "reconcile_error", { error: String(e) });
+lib/takeReconcile.ts:307:  const job = await current.fetchJob(deviceId, take.creationId);
+lib/takeReconcile.ts:310:  current.onStage?.(take.creationId, `reconcile_${action}`);
+lib/takeReconcile.ts:352:  await removePendingTake(take.creationId);
+lib/takeReconcile.ts:356:async function failLocally(take: PendingTake, errorKind: PendingErrorKind): Promise<void> {
+lib/takeReconcile.ts:357:  await updatePendingTake(take.creationId, "failed", { errorKind });
+lib/takeReconcile.ts:361:  await updatePendingTake(take.creationId, "failed", {
+lib/takeReconcile.ts:362:    errorKind: errorKindForServerCode(job.errorCode),
+lib/takeReconcile.ts:363:    serverErrorCode: job.errorCode,
+lib/takeReconcile.ts:387:  await failLocally(take, take.errorKind === "cap_unverified" ? "cap_unverified" : "server");
+lib/takeReconcile.ts:408:  const uploading = await updatePendingTake(take.creationId, "uploading");
+lib/takeReconcile.ts:419:  const live = getPendingTake(take.creationId);
+lib/takeReconcile.ts:421:    await handOrphanBlob(current, deviceId, take.creationId, storageId);
+lib/takeReconcile.ts:425:  const stamped = await updatePendingTake(take.creationId, "uploading", {
+lib/takeReconcile.ts:437:  // A device take rebegins from its persisted transcript alone — no blob to
+lib/takeReconcile.ts:439:  const isDeviceTake = !audioStorageId && take.sttSource === "device" && !!take.transcript;
+lib/takeReconcile.ts:446:  const live = getPendingTake(take.creationId);
+lib/takeReconcile.ts:448:    // Only a blob can be orphaned; a device transcript references nothing.
+lib/takeReconcile.ts:450:      await handOrphanBlob(current, deviceId, take.creationId, audioStorageId);
+lib/takeReconcile.ts:459:          creationId: take.creationId,
+lib/takeReconcile.ts:467:          creationId: take.creationId,
+lib/takeReconcile.ts:468:          transcript: take.transcript as string,
+lib/takeReconcile.ts:469:          sttSource: "device",
+lib/takeReconcile.ts:479:    take.creationId,
+lib/takeReconcile.ts:490:  creationId: string,
+lib/takeReconcile.ts:495:      await current.cancel({ deviceId, creationId, orphanStorageId: storageId });
+lib/takeReconcile.ts:498:      current.onStage?.(creationId, "orphan_cancel_failed", { attempt, error: String(e) });
+lib/takeReconcile.ts:507: * A row stamped with this creationId proves the import persisted — the §2.4
+lib/takeReconcile.ts:512:  if (current.storeHasCreationId(take.creationId)) {
+lib/takeReconcile.ts:513:    current.onStage?.(take.creationId, "committing_recovered");
+lib/takeReconcile.ts:527:    creationId: take.creationId,
+lib/takeReconcile.ts:544:  await current.discard({ deviceId, creationId: take.creationId }).catch(() => ({ status: "error" }));
+lib/takeReconcile.ts:559:    errorKind: take.errorKind,
+lib/takeReconcile.ts:563:    serverErrorCode: job?.errorCode,
+lib/takeReconcile.ts:565:  current.onStage?.(take.creationId, `retry_${action}`, { trigger });
+lib/takeReconcile.ts:581:      const cleared = await updatePendingTake(take.creationId, "uploading");
+lib/takeReconcile.ts:591:      await updatePendingTake(take.creationId, "processing", { audioStorageId: storageId });
+lib/takeReconcile.ts:594:        creationId: take.creationId,
+lib/takeReconcile.ts:601:      const result = await current.serverRetry({ deviceId, creationId: take.creationId });
+lib/takeReconcile.ts:623:  const processing = await updatePendingTake(take.creationId, "processing", {
+lib/takeReconcile.ts:634: * offer — and with it, the old take goes: a re-record is a NEW creationId
+lib/takeReconcile.ts:651:    .discard({ deviceId, creationId: take.creationId })
+lib/takeReconcile.ts:665:export async function abandonOrphanBlob(creationId: string, storageId: string): Promise<void> {
+lib/takeReconcile.ts:669:  await handOrphanBlob(current, deviceId, creationId, storageId);
+lib/takeReconcile.ts:672:export async function retryTake(creationId: string): Promise<void> {
+lib/takeReconcile.ts:674:  const take = getPendingTake(creationId);
+lib/takeReconcile.ts:678:    const job = await current.fetchJob(deviceId, creationId);
+lib/takeReconcile.ts:681:    current.onStage?.(creationId, "retry_error", { error: String(e) });
+lib/takeReconcile.ts:685:export async function cancelTake(creationId: string): Promise<void> {
+lib/takeReconcile.ts:686:  const take = getPendingTake(creationId);
+lib/takeReconcile.ts:688:  await updatePendingTake(creationId, "cancelling");
+lib/takeReconcile.ts:689:  enqueueReconcile(creationId);
+lib/takeReconcile.ts:692:export async function discardTake(creationId: string): Promise<void> {
+lib/takeReconcile.ts:694:  const take = getPendingTake(creationId);
+lib/takeReconcile.ts:698:    await current.discard({ deviceId, creationId }).catch(() => ({ status: "error" }));
+lib/takeReconcile.ts:700:    current.onStage?.(creationId, "discard_error", { error: String(e) });
+lib/pendingTakes.ts:1:import AsyncStorage from "@react-native-async-storage/async-storage";
+lib/pendingTakes.ts:17: *   - a tiny persisted list on its own AsyncStorage key with a snapshot
+lib/pendingTakes.ts:21: * `errorKind:"cap_unverified"` (D3) — it is a failed take whose failure happens
+lib/pendingTakes.ts:40:  creationId: string;
+lib/pendingTakes.ts:42:  transcript?: string;
+lib/pendingTakes.ts:44:   * How this take's transcript was produced. A "device" take carries a
+lib/pendingTakes.ts:45:   * non-empty `transcript` and no `audioStorageId`, and reconcile rebegins it
+lib/pendingTakes.ts:46:   * from that transcript alone — no upload (spec §3/§4). Absent = cloud.
+lib/pendingTakes.ts:48:  sttSource?: "device" | "cloud";
+lib/pendingTakes.ts:52:  errorKind?: PendingErrorKind;
+lib/pendingTakes.ts:109:  transcript?: string;
+lib/pendingTakes.ts:110:  sttSource?: "device" | "cloud";
+lib/pendingTakes.ts:114:  errorKind?: PendingErrorKind;
+lib/pendingTakes.ts:138:    delete next.errorKind;
+lib/pendingTakes.ts:145:  creationId: string;
+lib/pendingTakes.ts:154:    creationId: params.creationId,
+lib/pendingTakes.ts:197: * The card's error kind for a server `errorCode`.
+lib/pendingTakes.ts:200: * blob, a transcription transport error and an internal fault are all "the app
+lib/pendingTakes.ts:203:export function errorKindForServerCode(code: string | undefined): PendingErrorKind {
+lib/pendingTakes.ts:236:    typeof take.creationId === "string" &&
+lib/pendingTakes.ts:255:      const raw = await AsyncStorage.getItem(PENDING_TAKES_KEY);
+lib/pendingTakes.ts:279:export function getPendingTake(creationId: string): PendingTake | undefined {
+lib/pendingTakes.ts:280:  return cache.find((take) => take.creationId === creationId);
+lib/pendingTakes.ts:292:  const index = before.findIndex((candidate) => candidate.creationId === take.creationId);
+lib/pendingTakes.ts:297:export async function removePendingTake(creationId: string): Promise<void> {
+lib/pendingTakes.ts:299:  const next = before.filter((take) => take.creationId !== creationId);
+lib/pendingTakes.ts:309:  creationId: string,
+lib/pendingTakes.ts:313:  const current = getPendingTake(creationId);
+lib/pendingTakes.ts:324:    await AsyncStorage.setItem(PENDING_TAKES_KEY, JSON.stringify(next));
+39:} from "./schedule/scheduleDraft";
+40:import { cancelReminder, deleteLocalAudio, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
+64:/** Deterministic pastel chip color per reminder id — stable forever. */
+111:    reminder: Reminder;
+113:    onSave: (updated: Reminder) => void;
+114:    onDelete: (reminder: Reminder) => void;
+117:export default function EditReminderSheet({ reminder: initialReminder, onClose, onSave, onDelete }: EditReminderSheetProps) {
+120:    const updateConvexReminder = useMutation(api.reminders.update);
+121:    const removeConvexReminder = useMutation(api.reminders.remove);
+133:    // audio fields on save, and skip the reschedule (audioUrl reads as "").
+134:    const reminder =
+135:        useReminderStore((state) => state.reminders.find((r) => r.id === initialReminder.id)) ??
+137:    const [title, setTitle] = useState(initialReminder.title || "");
+139:    // The spoken line the alarm says. Editing it regenerates the TTS on save
+142:    // True only while the regenerate-voice action + reschedule are in flight, so
+146:    // The whole schedule is one draft (components/schedule/scheduleDraft.ts):
+155:    // Interval mode is Pro (OLD-100). Only a switch INTO it is gated: a reminder
+197:        perfLog(traceId, "overlay.edit", "sheet_mount", { t: Date.now(), reminderId: initialReminder.id });
+226:        if (!reminder?.audioUrl) return;
+236:        let audioPath = reminder.audioUrl;
+238:            const localPath = `${FileSystem.documentDirectory}reminder_${reminder.id}.mp3`;
+271:                // would save a reminder that can never ring.
+283:        // A regeneration + reschedule is already awaiting; ignore the double-tap.
+285:        if (!title.trim()) {
+286:            Alert.alert("Error", "Please enter a reminder title");
+290:        // One place turns the draft into a schedule: the grid plus the legacy
+294:        // Turning a reminder into an interval one is a purchase, not an edit.
+296:        if (!startedOnInterval && isPremiumSchedule(save.schedule)) {
+299:                perfLog(traceId, "overlay.edit", "save_blocked_premium_schedule");
+306:            ...reminder,
+307:            title: title.trim(),
+314:            schedule: save.schedule,
+325:            // Canonical schedule fields
+326:            scheduleType: save.scheduleType,
+338:            const reminderId = reminder.id;
+339:            const convexId = reminder.convexId;
+340:            const oldAudioUrl = reminder.audioUrl;
+341:            const oldWavUrl = reminder.wavUrl;
+344:            // carry the description/schedule write above).
+346:                const current = useReminderStore.getState().getReminderById(reminderId);
+353:                console.log("[VR] Failed to reschedule reminder:", e);
+356:                        "Enable Alarms & reminders",
+357:                        "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+366:            // Cancel + reschedule with whatever audio applies. Returns the next
+368:            const reschedule = async (audio: { audioUrl?: string; wavUrl?: string }): Promise<number> => {
+369:                await cancelReminder(reminderId);
+370:                const { triggerTimestamp } = await scheduleReminder({
+371:                    id: reminderId,
+372:                    title: updatedReminder.title,
+380:                    schedule: save.schedule,
+384:                    preAudioUrl: reminder.preAudioUrl,
+385:                    urgency: reminder.urgency,
+393:                    scheduleType: save.scheduleType,
+403:            // Editing the spoken line means the alarm must speak the new line:
+405:            // reschedule with the fresh URLs (lib/voiceRegen.ts). BEFORE closing,
+410:                storedDescription: reminder.description ?? "",
+411:                audioStale: reminder.audioStale,
+417:                    const { patch, rescheduleError } = await regenerateVoiceOnSave(
+421:                                    reminderId: a.reminderId as any,
+428:                            reschedule,
+433:                            reminderId,
+441:                    if (rescheduleError) showExactAlarmAlertIfNeeded(rescheduleError);
+446:                // Spoken line unchanged: reschedule with the existing audio.
+448:                    const triggerTimestamp = await reschedule({ audioUrl: oldAudioUrl });
+449:                    await applyRowPatch({ scheduledFor: triggerTimestamp });
+456:            onSave(updatedReminder);
+460:            // Every schedule field goes back up (OLD-97 widened the mutation):
+466:                    title: updatedReminder.title,
+472:                    schedule: save.schedule,
+473:                    scheduleType: save.scheduleType,
+485:                    console.log("[VR] Failed to update Convex reminder:", e);
+490:            Alert.alert("Error", "Failed to save reminder");
+492:    }, [reminder, title, emoji, description, draft, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, regenerateReminderAudio, regeneratingVoice, toast, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
+495:        const reminderId = reminder.id;
+496:        const convexId = reminder.convexId;
+500:            await storeDeleteReminder(reminderId);
+502:            console.log("[VR] Failed to delete reminder:", e);
+503:            toast.show({ title: "Error", message: "Failed to delete reminder", type: "error" });
+507:        onDelete(reminder);
+511:            deleteReminderWithAudio(reminderId).catch((e) => {
+519:                        console.log("[VR] Failed to delete Convex reminder:", e);
+599:                    <View style={styles.titleCard}>
+601:                            style={styles.titleInput}
+602:                            value={title}
+624:                    <View style={styles.spokenCard}>
+625:                        <Text style={styles.spokenLabel}>Spoken line</Text>
+627:                            style={styles.spokenInput}
+703:                    {reminder.audioUrl || reminder.audioStatus === "pending" ? (
+709:                                disabled={!reminder.audioUrl}
+719:                                        {!reminder.audioUrl ? "Generating…" : isPlaying ? "Playing…" : "Play"}
+824:                title="Delete Reminder"
+825:                message={`Are you sure you want to delete "${title}"?`}
+870:    titleCard: {
+881:    titleInput: {
+900:    spokenCard: {
+909:    spokenLabel: {
+915:    spokenInput: {
+components/RecordingOverlay.tsx:299:        Sentry.captureException(error);
+components/RecordingOverlay.tsx:373:      // fallback only covers a lock that arrived without any — nothing in the
+components/ErrorBoundary.tsx:8:  fallbackTitle?: string;
+components/ErrorBoundary.tsx:26:    Sentry.captureException(error, { extra: { componentStack: info.componentStack } });
+components/ErrorBoundary.tsx:38:            {this.props.fallbackTitle ?? "Something went wrong"}
+lib/audio.ts:57:        Sentry.captureException(e, {
+5:<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+19:<p>VoiceReminder is built and run by an independent developer ("we", "us", "our"), who is the data controller for everything described here. There's no support department to get lost in &mdash; questions come straight to a person, at <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a>.</p>
+22:<p>VoiceReminder has no accounts and no sign-in. We never ask for your name, email address, phone number, or contacts, and we don't collect your location. Here is everything the app actually handles:</p>
+27:  <li><strong>An install identifier.</strong> A random string your device generates the first time you open the app. It is not your Apple Account, not a hardware serial number, and not tied to your identity. It exists so our backend can tell your reminders apart from everyone else's. Delete the app and it's gone; reinstall and a brand-new one is made.</li>
+28:  <li><strong>Crash and diagnostic reports.</strong> If something breaks, technical details &mdash; device model, operating system version, and where in the code the failure happened &mdash; go to our error-monitoring service so we can fix it.</li>
+42:<p>Because that work happens off your phone, the app asks for your explicit permission before your first recording and won't record until you agree. You stay in charge of it: you can stop at any time by turning off microphone access for VoiceReminder in your device's <strong>Settings</strong> &mdash; nothing further is recorded or processed from that moment, and reminders you've already made keep working. You can also skip voice entirely and type reminders by hand.</p>
+46:  <li><strong>Your consent</strong> &mdash; for processing your voice recordings as described in section 3. Freely given, and revocable at any time by turning off microphone access in your device's Settings.</li>
+58:  <li><strong>Hosting and storage</strong> &mdash; to keep your reminders and their audio available to your device.</li>
+70:  <li><strong>Reminders on your device:</strong> stored locally so the app works offline, and removed when you delete the reminder or uninstall the app.</li>
+71:  <li><strong>Crash reports:</strong> retained by our error-monitoring service for a limited period (typically up to 90 days) and then discarded.</li>
+86:<p>Everything travels over encrypted (HTTPS) connections and is stored by our backend provider on encrypted infrastructure. Reminders are scoped to the install identifier that created them, so one device can't read another's. In the App Store version of the app, diagnostic reporting is limited to crashes and errors: it doesn't send app logs, screenshots, or the contents of your screen. No system is perfectly secure, but we keep the amount of data we hold deliberately small &mdash; the less there is, the less there is to lose.</p>
+101:<p>Most of it you can do yourself, instantly: delete a reminder in the app and its text and audio are deleted from our backend too, and turning off microphone access for VoiceReminder in your device's Settings stops any further voice processing.</p>
+103:  <p>For anything else &mdash; a copy of your data, or deletion of everything associated with your install &mdash; email <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a> and say what you'd like. Because the app has no accounts, we can't look you up by name or email, so please include enough detail to identify your records (for example the titles and times of a few of your reminders); we may ask a follow-up question before acting. We'll respond within 30 days, free of charge.</p>
+108:<p>VoiceReminder is not directed at children under 13, and we don't knowingly collect data from them. If you believe a child has used the app and sent us data, email us and we'll delete it.</p>
+rg: lib/device.ts: The system cannot find the file specified. (os error 2)
+convex/reminders.ts:16: * install that created it, named by the `deviceId` the client generates once and
+convex/reminders.ts:17: * persists (lib/deviceId.ts). Every public entry point takes that id and sees
+convex/reminders.ts:20: * Rows written before scoping existed carry no deviceId. They are never
+convex/reminders.ts:28:  reminder: { deviceId?: string },
+convex/reminders.ts:29:  deviceId: string
+convex/reminders.ts:31:  return reminder.deviceId === undefined || reminder.deviceId === deviceId;
+convex/reminders.ts:35:  args: { deviceId: v.string() },
+convex/reminders.ts:39:      .withIndex("by_device", (q) => q.eq("deviceId", args.deviceId))
+convex/reminders.ts:54:  args: { id: v.id("reminders"), deviceId: v.string() },
+convex/reminders.ts:57:    if (!reminder || !ownsReminder(reminder, args.deviceId)) return null;
+convex/reminders.ts:76:    deviceId: v.string(),
+convex/reminders.ts:109:  args: { id: v.id("reminders"), deviceId: v.string() },
+convex/reminders.ts:112:    if (!reminder || !ownsReminder(reminder, args.deviceId)) return;
+convex/reminders.ts:138:    deviceId: v.string(),
+convex/reminders.ts:149:    const { id, deviceId, ...updates } = args;
+convex/reminders.ts:151:    if (!reminder || !ownsReminder(reminder, deviceId)) return;
+convex/reminders.ts:152:    // Writing deviceId back claims a legacy row for the editing device.
+convex/reminders.ts:153:    await ctx.db.patch(id, { ...updates, deviceId });
+15:    "test:convex": "vitest run --config vitest.config.mts"
+28:    "@sentry/react-native": "~7.2.0",
+29:    "convex": "^1.30.0",
+68:    "convex-test": "^0.0.56",
+43:import EditReminderSheet from "../components/EditReminderSheet";
+78:  describeTakeOutcome,
+96:} from "../lib/pendingTakes";
+251:  const pendingTakes = usePendingTakes();
+257:  const [showOfflineMessage, setShowOfflineMessage] = useState(false);
+269:    showOfflineMessage: false,
+278:      showOfflineMessage,
+280:  }, [reminders.length, history.length, isLoading, showOfflineMessage]);
+739:      const feedback = describeTakeOutcome({
+1420:      const feedback = describeTakeOutcome({
+1617:    // Store already updated by EditReminderSheet
+1621:    // Store already updated by EditReminderSheet
+1860:                {pendingTakes.map((take) => (
+1905:          {showOfflineMessage && (
+1954:        <EditReminderSheet
+
+web search: site.docs.sentry.io platforms react-native offline caching native transport messages ...
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'capture|fallback' lib/audio.ts components/RecordingOverlay.tsx components/ErrorBoundary.tsx; rg -n 'Sentry|transcript|diagnostic|device|email|retain|support' legal-site/privacy.html; rg --files lib | rg 'device|reminder|store'; rg -n 'creationId|transcript|parsed|reminderIds|delete|retention' convex/schema.ts convex/creationJobs.ts convex/crons.ts; rg -n 'nativeTransport|enableNative|makeNativeTransport|captureEnvelope' node_modules/@sentry/react-native/src/js/sdk.ts node_modules/@sentry/react-native/src/js/transports/native.ts; rg -n 'showOfflineMessage|describeTakeOutcome' app/index.tsx" in C:\Dev\VR
+ succeeded in 732ms:
+components/RecordingOverlay.tsx:299:        Sentry.captureException(error);
+components/RecordingOverlay.tsx:373:      // fallback only covers a lock that arrived without any — nothing in the
+components/ErrorBoundary.tsx:8:  fallbackTitle?: string;
+components/ErrorBoundary.tsx:26:    Sentry.captureException(error, { extra: { componentStack: info.componentStack } });
+components/ErrorBoundary.tsx:38:            {this.props.fallbackTitle ?? "Something went wrong"}
+lib/audio.ts:57:        Sentry.captureException(e, {
+5:<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+19:<p>VoiceReminder is built and run by an independent developer ("we", "us", "our"), who is the data controller for everything described here. There's no support department to get lost in &mdash; questions come straight to a person, at <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a>.</p>
+22:<p>VoiceReminder has no accounts and no sign-in. We never ask for your name, email address, phone number, or contacts, and we don't collect your location. Here is everything the app actually handles:</p>
+27:  <li><strong>An install identifier.</strong> A random string your device generates the first time you open the app. It is not your Apple Account, not a hardware serial number, and not tied to your identity. It exists so our backend can tell your reminders apart from everyone else's. Delete the app and it's gone; reinstall and a brand-new one is made.</li>
+28:  <li><strong>Crash and diagnostic reports.</strong> If something breaks, technical details &mdash; device model, operating system version, and where in the code the failure happened &mdash; go to our error-monitoring service so we can fix it.</li>
+42:<p>Because that work happens off your phone, the app asks for your explicit permission before your first recording and won't record until you agree. You stay in charge of it: you can stop at any time by turning off microphone access for VoiceReminder in your device's <strong>Settings</strong> &mdash; nothing further is recorded or processed from that moment, and reminders you've already made keep working. You can also skip voice entirely and type reminders by hand.</p>
+46:  <li><strong>Your consent</strong> &mdash; for processing your voice recordings as described in section 3. Freely given, and revocable at any time by turning off microphone access in your device's Settings.</li>
+58:  <li><strong>Hosting and storage</strong> &mdash; to keep your reminders and their audio available to your device.</li>
+70:  <li><strong>Reminders on your device:</strong> stored locally so the app works offline, and removed when you delete the reminder or uninstall the app.</li>
+71:  <li><strong>Crash reports:</strong> retained by our error-monitoring service for a limited period (typically up to 90 days) and then discarded.</li>
+86:<p>Everything travels over encrypted (HTTPS) connections and is stored by our backend provider on encrypted infrastructure. Reminders are scoped to the install identifier that created them, so one device can't read another's. In the App Store version of the app, diagnostic reporting is limited to crashes and errors: it doesn't send app logs, screenshots, or the contents of your screen. No system is perfectly secure, but we keep the amount of data we hold deliberately small &mdash; the less there is, the less there is to lose.</p>
+101:<p>Most of it you can do yourself, instantly: delete a reminder in the app and its text and audio are deleted from our backend too, and turning off microphone access for VoiceReminder in your device's Settings stops any further voice processing.</p>
+103:  <p>For anything else &mdash; a copy of your data, or deletion of everything associated with your install &mdash; email <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a> and say what you'd like. Because the app has no accounts, we can't look you up by name or email, so please include enough detail to identify your records (for example the titles and times of a few of your reminders); we may ask a follow-up question before acting. We'll respond within 30 days, free of charge.</p>
+108:<p>VoiceReminder is not directed at children under 13, and we don't knowingly collect data from them. If you believe a child has used the app and sent us data, email us and we'll delete it.</p>
+lib\store.ts
+lib\remindersMembership.ts
+lib\reminderRemoval.ts
+lib\reminderActive.ts
+lib\deviceStt.ts
+lib\deviceId.ts
+convex/creationJobs.ts:92:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:100:  creationId: v.string(),
+convex/creationJobs.ts:105:  // Transcript + provenance. A "device" take carries its transcript here and
+convex/creationJobs.ts:108:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:125:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:127:  // and rebegin it from the transcript alone, no audio (spec §reconcile).
+convex/creationJobs.ts:130:  reminderIds: v.optional(v.array(v.id("reminders"))),
+convex/creationJobs.ts:138: * resolved urls. `_id` arrives as `id` and `creationId` rides on every row so a
+convex/creationJobs.ts:143:  creationId: v.optional(v.string()),
+convex/creationJobs.ts:164:/** A row the user already deleted between commit and import (spec 1.4). */
+convex/creationJobs.ts:165:const deletedReminderValidator = v.object({
+convex/creationJobs.ts:167:  deleted: v.literal(true),
+convex/creationJobs.ts:182:  creationId: string
+convex/creationJobs.ts:187:      q.eq("deviceId", deviceId).eq("creationId", creationId)
+convex/creationJobs.ts:196:  transcript?: string;
+convex/creationJobs.ts:229: * Idempotent on (deviceId, creationId), which is the whole point: the client
+convex/creationJobs.ts:231: * pass, and a lost response must not cost a second transcription. Only the
+convex/creationJobs.ts:239:    creationId: v.string(),
+convex/creationJobs.ts:241:    // the transcript instead. `begin` requires exactly one of the two — see the
+convex/creationJobs.ts:242:    // handler. Absent audio with a device transcript is the whole point.
+convex/creationJobs.ts:244:    transcript: v.optional(v.string()),
+convex/creationJobs.ts:259:    const existing = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:269:    // transcribes it; a device take has a non-empty `transcript` with
+convex/creationJobs.ts:273:    const trimmed = args.transcript?.trim() ?? "";
+convex/creationJobs.ts:279:          'or a non-empty `transcript` with `sttSource: "device"` (on-device STT)'
+convex/creationJobs.ts:286:      creationId: args.creationId,
+convex/creationJobs.ts:292:            transcript: trimmed,
+convex/creationJobs.ts:323: * for another device's creationId — a job is not a shared object.
+convex/creationJobs.ts:326:  args: { deviceId: v.string(), creationId: v.string() },
+convex/creationJobs.ts:329:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:334:      transcript: job.transcript,
+convex/creationJobs.ts:337:      reminderIds: job.reminderIds,
+convex/creationJobs.ts:349: * already deleted comes back as a placeholder rather than being skipped, so the
+convex/creationJobs.ts:350: * client can tell "deleted" apart from "the read lost a row".
+convex/creationJobs.ts:353:  args: { deviceId: v.string(), creationId: v.string() },
+convex/creationJobs.ts:356:    v.array(v.union(committedReminderValidator, deletedReminderValidator))
+convex/creationJobs.ts:359:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:363:    for (const reminderId of job.reminderIds ?? []) {
+convex/creationJobs.ts:371:        rows.push({ id: reminderId as string, deleted: true as const });
+convex/creationJobs.ts:376:        creationId: reminder.creationId,
+convex/creationJobs.ts:430:  args: { deviceId: v.string(), creationId: v.string() },
+convex/creationJobs.ts:433:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:456:      creationId: job.creationId,
+convex/creationJobs.ts:461:      transcript: job.transcript,
+convex/creationJobs.ts:493: * One transaction inserts every row, stamps each with the take's `creationId`,
+convex/creationJobs.ts:511:    reminderIds: v.optional(v.array(v.id("reminders"))),
+convex/creationJobs.ts:520:    const reminderIds: Id<"reminders">[] = [];
+convex/creationJobs.ts:527:        creationId: job.creationId,
+convex/creationJobs.ts:537:      reminderIds.push(reminderId);
+convex/creationJobs.ts:550:      await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
+convex/creationJobs.ts:557:      reminderIds,
+convex/creationJobs.ts:564:    return { result: "applied" as const, reminderIds };
+convex/creationJobs.ts:601:    creationId: v.string(),
+convex/creationJobs.ts:606:    reminderIds: v.optional(v.array(v.id("reminders"))),
+convex/creationJobs.ts:609:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:613:        await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
+convex/creationJobs.ts:621:      return { status: job.status, reminderIds: job.reminderIds };
+convex/creationJobs.ts:636:      await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, { storageId });
+convex/creationJobs.ts:650: * id is not a swap and must not delete the blob the new run is about to read.
+convex/creationJobs.ts:655:    creationId: v.string(),
+convex/creationJobs.ts:657:    // A device take can be retried against a fresh on-device transcript, or —
+convex/creationJobs.ts:659:    // Passing `newStorageId` takes the cloud branch; passing a device transcript
+convex/creationJobs.ts:661:    transcript: v.optional(v.string()),
+convex/creationJobs.ts:673:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:687:    // are cleared. Otherwise a fresh device transcript replaces the stored one.
+convex/creationJobs.ts:689:    // transcript (no audio needed) and a cloud take reuses its stored blob.
+convex/creationJobs.ts:690:    const trimmed = args.transcript?.trim() ?? "";
+convex/creationJobs.ts:703:        transcript: trimmed,
+convex/creationJobs.ts:721:      await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
+convex/creationJobs.ts:738:  args: { deviceId: v.string(), creationId: v.string() },
+convex/creationJobs.ts:743:    const job = await findJob(ctx, args.deviceId, args.creationId);
+convex/creationJobs.ts:749:      await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
+convex/creationJobs.ts:753:    await ctx.db.delete(job._id);
+convex/creationJobs.ts:767: * retention rules in the schema comment. Committed jobs are collected as soon
+convex/creationJobs.ts:811:    // ── Half two: retention ────────────────────────────────────────────────
+convex/creationJobs.ts:845:    // (D5) — the one retention rule that is not an expiry, so it gets its own
+convex/creationJobs.ts:872:    await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
+convex/creationJobs.ts:876:  await ctx.db.delete(job._id);
+convex/schema.ts:98:  // ── Device-STT provenance (spec §device transcript). "device" takes skip the
+convex/schema.ts:112:  transcriptionCheckpointMs: v.optional(v.number()),
+convex/schema.ts:141:    creationId: v.optional(v.string()),
+convex/schema.ts:171:    // it deletes the blobs so an old reminder still cleans up after itself.
+convex/schema.ts:219:    creationId: v.string(),
+convex/schema.ts:226:    transcript: v.optional(v.string()),
+convex/schema.ts:228:    // deleted at commit, cancel, discard or GC. A device-transcribed take
+convex/schema.ts:229:    // (sttSource "device") never has one — its transcript arrived with `begin`.
+convex/schema.ts:231:    // Where the transcript came from. "device" = the phone transcribed on-device
+convex/schema.ts:237:    // transcription took, which engine produced it, and the recognizer locale.
+convex/schema.ts:244:    reminderIds: v.optional(v.array(v.id("reminders"))),
+convex/schema.ts:259:    .index("by_device_creation", ["deviceId", "creationId"])
+rg: node_modules/@sentry/react-native/src/js/sdk.ts: The system cannot find the file specified. (os error 2)
+rg: node_modules/@sentry/react-native/src/js/transports/native.ts: The system cannot find the path specified. (os error 3)
+78:  describeTakeOutcome,
+257:  const [showOfflineMessage, setShowOfflineMessage] = useState(false);
+269:    showOfflineMessage: false,
+278:      showOfflineMessage,
+280:  }, [reminders.length, history.length, isLoading, showOfflineMessage]);
+739:      const feedback = describeTakeOutcome({
+1420:      const feedback = describeTakeOutcome({
+1905:          {showOfflineMessage && (
+
+web search: 
+web search: https://developer.apple.com/app-store/app-privacy-details/
+codex
+The main gap is context lifetime: creation jobs are garbage-collected, so an older reminder won’t reliably have its transcript available. The existing Sentry setup also deliberately keeps reminder content out of production diagnostics; automatically attaching transcripts would change that privacy boundary.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths=@('"'convex/schema.ts','convex/creationJobs.ts','lib/pendingTakes.ts','lib/deviceId.ts','lib/store.ts','components/EditReminderSheet.tsx'); foreach("'$p in $paths){$n=0; Get-Content $p | ForEach-Object {$n++; if(($p -eq '"'convex/schema.ts' -and "'$n -ge 200 -and $n -le 259) -or ($p -eq '"'convex/creationJobs.ts' -and "'$n -ge 811 -and $n -le 856) -or ($p -eq '"'lib/pendingTakes.ts' -and (("'$n -ge 37 -and $n -le 63) -or $n -ge 315)) -or ($p -eq '"'lib/deviceId.ts') -or ("'$p -eq '"'lib/store.ts' -and "'$n -le 135) -or ($p -eq '"'components/EditReminderSheet.tsx' -and "'$n -ge 134 -and $n -le 155)){ '"'{0}:{1}: {2}' -f "'$p,$n,$_ }}}; rg -n '"'fallback|cloud' lib/deviceStt.ts lib/creationPipeline.ts; rg -n 'setShowOfflineMessage|connectionState' app/index.tsx; rg -n 'sentry/react-native' package.json package-lock.json" in C:\Dev\VR
+ succeeded in 659ms:
+convex/schema.ts:200:   /**
+convex/schema.ts:201:    * One voice take, from stop-tap to armed reminders.
+convex/schema.ts:202:    *
+convex/schema.ts:203:    * The row IS the pipeline's state: the client creates it (`begin`), a Node
+convex/schema.ts:204:    * worker walks it through STT â†’ parse â†’ commit, and the client watches it to
+convex/schema.ts:205:    * fill the pending card. Every write past `begin` is a compare-and-set on
+convex/schema.ts:206:    * `generation`, so a worker that was superseded by a retry â€” or by the stale
+convex/schema.ts:207:    * sweep â€” writes nothing (spec 1.3). `committed`, `failed` and `cancelled`
+convex/schema.ts:208:    * are terminal and never regress; `failed` is the retryable one.
+convex/schema.ts:209:    *
+convex/schema.ts:210:    * Rows outlive the take deliberately: a committed job survives until the
+convex/schema.ts:211:    * client acks the import or seven days pass, whichever comes first, so an
+convex/schema.ts:212:    * offline or force-quit client can still find its reminders (spec 1.1).
+convex/schema.ts:213:    */
+convex/schema.ts:214:   creationJobs: defineTable({
+convex/schema.ts:215:     // Owning install (OLD-74). Required here â€” every job has a creator.
+convex/schema.ts:216:     deviceId: v.string(),
+convex/schema.ts:217:     // Client-generated UUID. The idempotency key: a re-`begin` after a lost
+convex/schema.ts:218:     // response finds this row instead of starting a second take.
+convex/schema.ts:219:     creationId: v.string(),
+convex/schema.ts:220:     status: creationStatusValidator,
+convex/schema.ts:221:     // Bumped by `retry`. Every write CAS's on it, which is how a superseded
+convex/schema.ts:222:     // worker is silenced without having to be cancellable.
+convex/schema.ts:223:     generation: v.number(),
+convex/schema.ts:224:     // Worker runs so far, capped at 3 by `retry`.
+convex/schema.ts:225:     attempts: v.number(),
+convex/schema.ts:226:     transcript: v.optional(v.string()),
+convex/schema.ts:227:     // The uploaded recording. Retained while the job can still be retried and
+convex/schema.ts:228:     // deleted at commit, cancel, discard or GC. A device-transcribed take
+convex/schema.ts:229:     // (sttSource "device") never has one â€” its transcript arrived with `begin`.
+convex/schema.ts:230:     audioStorageId: v.optional(v.id("_storage")),
+convex/schema.ts:231:     // Where the transcript came from. "device" = the phone transcribed on-device
+convex/schema.ts:232:     // and `begin` carried the text, so the worker skips storage + cloud STT;
+convex/schema.ts:233:     // "cloud" = the worker transcribes the recording itself. Absent on rows
+convex/schema.ts:234:     // written before this field existed, which are all cloud.
+convex/schema.ts:235:     sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
+convex/schema.ts:236:     // Device-STT telemetry, only set on a "device" take. How long the on-device
+convex/schema.ts:237:     // transcription took, which engine produced it, and the recognizer locale.
+convex/schema.ts:238:     deviceSttMs: v.optional(v.number()),
+convex/schema.ts:239:     deviceSttEngine: v.optional(
+convex/schema.ts:240:       v.union(v.literal("dictation"), v.literal("transcriber"))
+convex/schema.ts:241:     ),
+convex/schema.ts:242:     deviceSttLocale: v.optional(v.string()),
+convex/schema.ts:243:     // Insertion order, written by `commit` â€” the order `getReminders` replays.
+convex/schema.ts:244:     reminderIds: v.optional(v.array(v.id("reminders"))),
+convex/schema.ts:245:     // storage_missing | stt_failed | parse_failed | unparseable | internal
+convex/schema.ts:246:     errorCode: v.optional(v.string()),
+convex/schema.ts:247:     // Set by `ack` once the client has durably imported the take (spec 1.4).
+convex/schema.ts:248:     ackedAt: v.optional(v.number()),
+convex/schema.ts:249:     // The user's own clock at stop-tap. A one-off's instant is resolved against
+convex/schema.ts:250:     // these and never the worker container's UTC clock (OLD-120).
+convex/schema.ts:251:     localDate: v.string(),
+convex/schema.ts:252:     localTime: v.string(),
+convex/schema.ts:253:     timezone: v.string(),
+convex/schema.ts:254:     perf: v.optional(creationPerfValidator),
+convex/schema.ts:255:     createdAt: v.number(),
+convex/schema.ts:256:     // Bumped by every CAS write. The stale sweep's clock and the GC's age.
+convex/schema.ts:257:     updatedAt: v.number(),
+convex/schema.ts:258:   })
+convex/schema.ts:259:     .index("by_device_creation", ["deviceId", "creationId"])
+convex/creationJobs.ts:811:     // â”€â”€ Half two: retention â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+convex/creationJobs.ts:812:     // Ranged, not filtered-after-the-fact. Taking the oldest N of a status and
+convex/creationJobs.ts:813:     // then deciding whether each one is old enough spends the budget on rows it
+convex/creationJobs.ts:814:     // KEEPS: a deployment holding thirty young cancelled takes would burn the
+convex/creationJobs.ts:815:     // whole sweep on them and never reach the week-old failed job behind them,
+convex/creationJobs.ts:816:     // every five minutes, forever. Ranging on `updatedAt` means only collectable
+convex/creationJobs.ts:817:     // rows are ever read, and the budget is decremented per DELETE.
+convex/creationJobs.ts:818:     const expiring: Array<{ status: CreationStatus; cutoff: number }> = [
+convex/creationJobs.ts:819:       // A cancelled take is worth a day, purely so a client that cancelled
+convex/creationJobs.ts:820:       // offline can still see why its card vanished.
+convex/creationJobs.ts:821:       { status: "cancelled", cutoff: now - CANCELLED_RETENTION_MS },
+convex/creationJobs.ts:822:       // A failed take stays retryable for a week.
+convex/creationJobs.ts:823:       { status: "failed", cutoff: now - TERMINAL_RETENTION_MS },
+convex/creationJobs.ts:824:       // An unacked committed take waits the same week, so an offline or
+convex/creationJobs.ts:825:       // force-quit client can still find its reminders (D5).
+convex/creationJobs.ts:826:       { status: "committed", cutoff: now - TERMINAL_RETENTION_MS },
+convex/creationJobs.ts:827:     ];
+convex/creationJobs.ts:828: 
+convex/creationJobs.ts:829:     for (const { status, cutoff } of expiring) {
+convex/creationJobs.ts:830:       if (budget <= 0) break;
+convex/creationJobs.ts:831:       const expired = await ctx.db
+convex/creationJobs.ts:832:         .query("creationJobs")
+convex/creationJobs.ts:833:         .withIndex("by_status_updated", (q) =>
+convex/creationJobs.ts:834:           q.eq("status", status).lt("updatedAt", cutoff)
+convex/creationJobs.ts:835:         )
+convex/creationJobs.ts:836:         .take(budget);
+convex/creationJobs.ts:837:       for (const job of expired) {
+convex/creationJobs.ts:838:         await collectJob(ctx, job);
+convex/creationJobs.ts:839:         budget--;
+convex/creationJobs.ts:840:         collected++;
+convex/creationJobs.ts:841:       }
+convex/creationJobs.ts:842:     }
+convex/creationJobs.ts:843: 
+convex/creationJobs.ts:844:     // A committed take the client has ACKED is collectable at whatever age
+convex/creationJobs.ts:845:     // (D5) â€” the one retention rule that is not an expiry, so it gets its own
+convex/creationJobs.ts:846:     // pass over the half of the index the loop above deliberately never reads.
+convex/creationJobs.ts:847:     // The filter is cheap in practice: a client acks within seconds of the
+convex/creationJobs.ts:848:     // import, so almost every young committed job carries `ackedAt` and the
+convex/creationJobs.ts:849:     // scan finds its budget's worth immediately.
+convex/creationJobs.ts:850:     if (budget > 0) {
+convex/creationJobs.ts:851:       const acked = await ctx.db
+convex/creationJobs.ts:852:         .query("creationJobs")
+convex/creationJobs.ts:853:         .withIndex("by_status_updated", (q) =>
+convex/creationJobs.ts:854:           q.eq("status", "committed").gte("updatedAt", now - TERMINAL_RETENTION_MS)
+convex/creationJobs.ts:855:         )
+convex/creationJobs.ts:856:         .filter((q) => q.neq(q.field("ackedAt"), undefined))
+lib/pendingTakes.ts:37: export type PendingErrorKind = "network" | "unparseable" | "server" | "cap_unverified";
+lib/pendingTakes.ts:38: 
+lib/pendingTakes.ts:39: export type PendingTake = {
+lib/pendingTakes.ts:40:   creationId: string;
+lib/pendingTakes.ts:41:   phase: PendingPhase;
+lib/pendingTakes.ts:42:   transcript?: string;
+lib/pendingTakes.ts:43:   /**
+lib/pendingTakes.ts:44:    * How this take's transcript was produced. A "device" take carries a
+lib/pendingTakes.ts:45:    * non-empty `transcript` and no `audioStorageId`, and reconcile rebegins it
+lib/pendingTakes.ts:46:    * from that transcript alone â€” no upload (spec Â§3/Â§4). Absent = cloud.
+lib/pendingTakes.ts:47:    */
+lib/pendingTakes.ts:48:   sttSource?: "device" | "cloud";
+lib/pendingTakes.ts:49:   deviceSttMs?: number;
+lib/pendingTakes.ts:50:   deviceSttEngine?: SpeechEngine;
+lib/pendingTakes.ts:51:   deviceSttLocale?: string;
+lib/pendingTakes.ts:52:   errorKind?: PendingErrorKind;
+lib/pendingTakes.ts:53:   /** Documents-dir copy of the recording â€” or the cache URI, if the copy failed. */
+lib/pendingTakes.ts:54:   recordingUri: string;
+lib/pendingTakes.ts:55:   /** True when the copy failed and we kept the cache URI, which may vanish (D10). */
+lib/pendingTakes.ts:56:   fragileUri?: boolean;
+lib/pendingTakes.ts:57:   audioStorageId?: string;
+lib/pendingTakes.ts:58:   serverErrorCode?: string;
+lib/pendingTakes.ts:59:   /** The device clock AT STOP-TAP. The import builds rows against this, not "now" (C14). */
+lib/pendingTakes.ts:60:   localDate: string;
+lib/pendingTakes.ts:61:   localTime: string;
+lib/pendingTakes.ts:62:   timezone: string;
+lib/pendingTakes.ts:63:   createdAt: number;
+lib/pendingTakes.ts:315:   const next = transitionTake(current, phase, patch);
+lib/pendingTakes.ts:316:   if (!next) return null;
+lib/pendingTakes.ts:317:   await putPendingTake(next);
+lib/pendingTakes.ts:318:   return next;
+lib/pendingTakes.ts:319: }
+lib/pendingTakes.ts:320: 
+lib/pendingTakes.ts:321: async function commit(next: PendingTake[], before: PendingTake[]): Promise<void> {
+lib/pendingTakes.ts:322:   publish(next);
+lib/pendingTakes.ts:323:   try {
+lib/pendingTakes.ts:324:     await AsyncStorage.setItem(PENDING_TAKES_KEY, JSON.stringify(next));
+lib/pendingTakes.ts:325:   } catch (error) {
+lib/pendingTakes.ts:326:     publish(before);
+lib/pendingTakes.ts:327:     throw error;
+lib/pendingTakes.ts:328:   }
+lib/pendingTakes.ts:329: }
+lib/pendingTakes.ts:330: 
+lib/pendingTakes.ts:331: /** Test seam: forget everything this module is holding. */
+lib/pendingTakes.ts:332: export function __resetPendingTakes(): void {
+lib/pendingTakes.ts:333:   cache = [];
+lib/pendingTakes.ts:334:   hasLoaded = false;
+lib/pendingTakes.ts:335:   loadInFlight = null;
+lib/pendingTakes.ts:336:   listeners.clear();
+lib/pendingTakes.ts:337: }
+lib/pendingTakes.ts:338: 
+lib/pendingTakes.ts:339: export const PENDING_TAKES_STORAGE_KEY = PENDING_TAKES_KEY;
+lib/deviceId.ts:1: import AsyncStorage from "@react-native-async-storage/async-storage";
+lib/deviceId.ts:2: 
+lib/deviceId.ts:3: /**
+lib/deviceId.ts:4:  * Per-install device identity (OLD-74).
+lib/deviceId.ts:5:  *
+lib/deviceId.ts:6:  * There are no accounts, so the backend scopes every reminder to the install
+lib/deviceId.ts:7:  * that created it. This is that install's id: generated once on first use,
+lib/deviceId.ts:8:  * persisted in AsyncStorage, and sent with every Convex call that reads or
+lib/deviceId.ts:9:  * writes reminders. Reinstalling the app mints a new id â€” the old rows become
+lib/deviceId.ts:10:  * unreachable, which is the same outcome as the local reminder list being wiped.
+lib/deviceId.ts:11:  */
+lib/deviceId.ts:12: const DEVICE_ID_KEY = "@device_id";
+lib/deviceId.ts:13: 
+lib/deviceId.ts:14: let cachedDeviceId: string | null = null;
+lib/deviceId.ts:15: let loadInFlight: Promise<string> | null = null;
+lib/deviceId.ts:16: 
+lib/deviceId.ts:17: /**
+lib/deviceId.ts:18:  * 32 hex chars (128 bits). Uses WebCrypto when the runtime exposes it and
+lib/deviceId.ts:19:  * falls back to Math.random otherwise â€” Hermes has no guaranteed getRandomValues
+lib/deviceId.ts:20:  * and pulling in a native crypto module would mean a new native build.
+lib/deviceId.ts:21:  */
+lib/deviceId.ts:22: function generateDeviceId(): string {
+lib/deviceId.ts:23:   const bytes = new Uint8Array(16);
+lib/deviceId.ts:24:   const webCrypto = (globalThis as any)?.crypto;
+lib/deviceId.ts:25:   if (typeof webCrypto?.getRandomValues === "function") {
+lib/deviceId.ts:26:     webCrypto.getRandomValues(bytes);
+lib/deviceId.ts:27:   } else {
+lib/deviceId.ts:28:     for (let i = 0; i < bytes.length; i++) {
+lib/deviceId.ts:29:       bytes[i] = Math.floor(Math.random() * 256);
+lib/deviceId.ts:30:     }
+lib/deviceId.ts:31:   }
+lib/deviceId.ts:32:   let hex = "";
+lib/deviceId.ts:33:   for (const byte of bytes) {
+lib/deviceId.ts:34:     hex += byte.toString(16).padStart(2, "0");
+lib/deviceId.ts:35:   }
+lib/deviceId.ts:36:   return hex;
+lib/deviceId.ts:37: }
+lib/deviceId.ts:38: 
+lib/deviceId.ts:39: /**
+lib/deviceId.ts:40:  * The stable id for this install, creating and persisting one on first call.
+lib/deviceId.ts:41:  * Concurrent callers share a single read so two callers can't mint two ids.
+lib/deviceId.ts:42:  *
+lib/deviceId.ts:43:  * A storage failure never throws: the caller gets an in-memory id for the rest
+lib/deviceId.ts:44:  * of the session, so reminder creation still works and the rows are simply
+lib/deviceId.ts:45:  * scoped to an id that won't survive a restart.
+lib/deviceId.ts:46:  */
+lib/deviceId.ts:47: export async function getDeviceId(): Promise<string> {
+lib/deviceId.ts:48:   if (cachedDeviceId) return cachedDeviceId;
+lib/deviceId.ts:49:   if (loadInFlight) return loadInFlight;
+lib/deviceId.ts:50: 
+lib/deviceId.ts:51:   loadInFlight = (async () => {
+lib/deviceId.ts:52:     try {
+lib/deviceId.ts:53:       const stored = await AsyncStorage.getItem(DEVICE_ID_KEY);
+lib/deviceId.ts:54:       if (stored) {
+lib/deviceId.ts:55:         cachedDeviceId = stored;
+lib/deviceId.ts:56:         return stored;
+lib/deviceId.ts:57:       }
+lib/deviceId.ts:58:     } catch (error) {
+lib/deviceId.ts:59:       console.log("[VR] deviceId: read failed, minting a session id:", error);
+lib/deviceId.ts:60:     }
+lib/deviceId.ts:61: 
+lib/deviceId.ts:62:     const generated = generateDeviceId();
+lib/deviceId.ts:63:     try {
+lib/deviceId.ts:64:       await AsyncStorage.setItem(DEVICE_ID_KEY, generated);
+lib/deviceId.ts:65:     } catch (error) {
+lib/deviceId.ts:66:       console.log("[VR] deviceId: persist failed, id lasts this session only:", error);
+lib/deviceId.ts:67:     }
+lib/deviceId.ts:68:     cachedDeviceId = generated;
+lib/deviceId.ts:69:     return generated;
+lib/deviceId.ts:70:   })();
+lib/deviceId.ts:71: 
+lib/deviceId.ts:72:   try {
+lib/deviceId.ts:73:     return await loadInFlight;
+lib/deviceId.ts:74:   } finally {
+lib/deviceId.ts:75:     loadInFlight = null;
+lib/deviceId.ts:76:   }
+lib/deviceId.ts:77: }
+lib/deviceId.ts:78: 
+lib/deviceId.ts:79: /** The id if it has already been loaded, else null. Never touches storage. */
+lib/deviceId.ts:80: export function getCachedDeviceId(): string | null {
+lib/deviceId.ts:81:   return cachedDeviceId;
+lib/deviceId.ts:82: }
+lib/store.ts:1: import { create } from 'zustand';
+lib/store.ts:2: import AsyncStorage from '@react-native-async-storage/async-storage';
+lib/store.ts:3: import { createTraceId, perfLog } from './perf';
+lib/store.ts:4: import { migrateLegacySchedule, gridFromLegacyReminder, type GridSchedule } from './schedule';
+lib/store.ts:5: import { checkCanCreateWithCount, ReminderLimitExceededError } from './usageGate';
+lib/store.ts:6: import { isReminderActive } from './reminderActive';
+lib/store.ts:7: 
+lib/store.ts:8: const REMINDERS_KEY = '@reminders';
+lib/store.ts:9: const HISTORY_KEY = '@reminder_history';
+lib/store.ts:10: const MAX_HISTORY_ENTRIES = 1000;
+lib/store.ts:11: 
+lib/store.ts:12: export const INTERVAL_MIN_MS = 5 * 60 * 1000; // 5 minutes (changed from 15)
+lib/store.ts:13: export const INTERVAL_MAX_MS = 365 * 24 * 60 * 60 * 1000; // 365 days (changed from 7)
+lib/store.ts:14: 
+lib/store.ts:15: export type VolumeStyle = 'standard' | 'progressive';
+lib/store.ts:16: 
+lib/store.ts:17: /**
+lib/store.ts:18:  * Stored shape version. 5 adds the days Ã— times grid (OLD-97): every reminder
+lib/store.ts:19:  * carries a `schedule`, and the old `frequency`/`time`/`days` trio is kept as
+lib/store.ts:20:  * its projection so pre-grid readers keep working.
+lib/store.ts:21:  */
+lib/store.ts:22: export const CURRENT_SCHEMA_VERSION = 5;
+lib/store.ts:23: 
+lib/store.ts:24: export const DEFAULT_ALARM_SETTINGS = {
+lib/store.ts:25:     volume: 1,
+lib/store.ts:26:     volumeStyle: 'standard' as VolumeStyle,
+lib/store.ts:27: };
+lib/store.ts:28: 
+lib/store.ts:29: // Reminder type
+lib/store.ts:30: export interface Reminder {
+lib/store.ts:31:     id: string;
+lib/store.ts:32:     convexId?: string;
+lib/store.ts:33:     /**
+lib/store.ts:34:      * The creation job this row was imported from (spec Â§2.4, N1).
+lib/store.ts:35:      *
+lib/store.ts:36:      * Absent on every reminder made before the job pipeline and on every typed
+lib/store.ts:37:      * one. Its only job is to be durable proof: when a job vanishes mid-import,
+lib/store.ts:38:      * a stored row carrying its creationId is how the reconciler knows the
+lib/store.ts:39:      * import already landed (D4).
+lib/store.ts:40:      */
+lib/store.ts:41:     creationId?: string;
+lib/store.ts:42:     title: string;
+lib/store.ts:43:     description: string;
+lib/store.ts:44:     // Legacy projection of `schedule` (see legacyFieldsFromGrid): `time` is the
+lib/store.ts:45:     // FIRST ring of the day, so a multi-time reminder's later rings live only in
+lib/store.ts:46:     // the grid. Kept because cards, the old notification path and the Convex
+lib/store.ts:47:     // columns still read them.
+lib/store.ts:48:     time: string;
+lib/store.ts:49:     date?: string; // YYYY-MM-DD for one-time reminders on specific days
+lib/store.ts:50:     frequency: string;
+lib/store.ts:51:     days: string[];
+lib/store.ts:52:     /**
+lib/store.ts:53:      * The days Ã— times grid (OLD-97) â€” authoritative for when this rings.
+lib/store.ts:54:      * Optional only on the type: the store fills it on load and on write, so a
+lib/store.ts:55:      * reminder that reached state always has one.
+lib/store.ts:56:      */
+lib/store.ts:57:     schedule?: GridSchedule;
+lib/store.ts:58:     emoji?: string; // single card-chip emoji from the parse (absent = neutral bell chip)
+lib/store.ts:59:     audioUrl?: string;
+lib/store.ts:60:     wavUrl?: string; // alarm-ready wav of the base spoken line (iOS AlarmKit sound)
+lib/store.ts:61:     audioStatus?: 'pending' | 'ready' | 'failed';
+lib/store.ts:62:     /**
+lib/store.ts:63:      * Local-only (never synced to Convex): the spoken line was edited and saved
+lib/store.ts:64:      * but its TTS could not be regenerated yet (offline / TTS error / a
+lib/store.ts:65:      * reschedule that failed after a good regen). While true the alarm still
+lib/store.ts:66:      * speaks the OLD line; the next save of this reminder retries the voice.
+lib/store.ts:67:      */
+lib/store.ts:68:     audioStale?: boolean;
+lib/store.ts:69:     /**
+lib/store.ts:70:      * The pre-alert line and replay variant lines, which arrive in a second
+lib/store.ts:71:      * server patch after the base line (OLD-107). "pending" here means the
+lib/store.ts:72:      * device has the base line but is still owed the rest â€” the startup sweep
+lib/store.ts:73:      * in app/_layout.tsx uses it to resume a hydration that a kill interrupted.
+lib/store.ts:74:      */
+lib/store.ts:75:     audioExtrasStatus?: 'pending' | 'ready' | 'failed';
+lib/store.ts:76:     audioError?: string;
+lib/store.ts:77:     preReminderMinutes?: number; // heads-up lead time in minutes (0/absent = none)
+lib/store.ts:78:     preAudioUrl?: string; // spoken heads-up line for the pre-alert
+lib/store.ts:79:     // Ring tier (OLD-53). The escalating replay lines that used to live beside
+lib/store.ts:80:     // these were removed in OLD-108 â€” the nag repeats the base line. Locally
+lib/store.ts:81:     // persisted reminders written before that still carry `variants` and
+lib/store.ts:82:     // `variantAudioUrls` in AsyncStorage; the extra keys are simply ignored.
+lib/store.ts:83:     urgency?: 'urgent' | 'notice' | 'routine'; // how hard the alarm pushes while it rings
+lib/store.ts:84:     persistent?: boolean; // keep following up until "Done"
+lib/store.ts:85:     createdAt: string;
+lib/store.ts:86:     volume?: number; // 0-1
+lib/store.ts:87:     volumeStyle?: VolumeStyle;
+lib/store.ts:88: 
+lib/store.ts:89:     // Interval recurrence
+lib/store.ts:90:     intervalMs?: number;
+lib/store.ts:91:     anchorAt?: number;
+lib/store.ts:92:     intervalDays?: number; // Every N days (calendar-based)
+lib/store.ts:93:     scheduledFor?: number; // Next computed occurrence timestamp (stable cadence)
+lib/store.ts:94: 
+lib/store.ts:95:     // New unified schedule system (Step 1-3)
+lib/store.ts:96:     scheduleType?: 'once' | 'interval' | 'rrule' | 'grid'; // Canonical schedule type
+lib/store.ts:97:     onceAt?: number; // Absolute timestamp for one-time reminders
+lib/store.ts:98:     rrule?: string; // RFC5545 RRULE string for complex recurrences
+lib/store.ts:99:     dtstart?: number; // Start date for RRULE in ms
+lib/store.ts:100:     tzid?: string; // Timezone identifier
+lib/store.ts:101:     until?: number; // End date for bounded recurrences in ms
+lib/store.ts:102:     parseWarnings?: string[]; // Warnings from parsing/normalization
+lib/store.ts:103: 
+lib/store.ts:104:     // Schema version for migrations
+lib/store.ts:105:     schemaVersion?: number; // 1 = legacy, 2 = interval support, 3 = custom repetition, 4 = unified schedule, 5 = daysÃ—times grid
+lib/store.ts:106: }
+lib/store.ts:107: 
+lib/store.ts:108: // History types
+lib/store.ts:109: export interface ReminderHistory {
+lib/store.ts:110:     id: string;
+lib/store.ts:111:     reminderId: string;
+lib/store.ts:112:     reminderTitle: string;
+lib/store.ts:113:     timestamp: string;
+lib/store.ts:114:     status: 'completed' | 'missed';
+lib/store.ts:115: 
+lib/store.ts:116:     // Occurrence tracking
+lib/store.ts:117:     scheduledFor?: number;
+lib/store.ts:118:     action?: 'dismissed' | 'snoozed' | 'fired' | 'auto_completed' | 'auto_missed' | 'pre_alert_done';
+lib/store.ts:119: }
+lib/store.ts:120: 
+lib/store.ts:121: // Store state interface
+lib/store.ts:122: interface ReminderState {
+lib/store.ts:123:     // Data
+lib/store.ts:124:     reminders: Reminder[];
+lib/store.ts:125:     history: ReminderHistory[];
+lib/store.ts:126:     isLoading: boolean;
+lib/store.ts:127:     hasLoadedReminders: boolean;
+lib/store.ts:128: 
+lib/store.ts:129:     // Actions - Reminders
+lib/store.ts:130:     loadReminders: () => Promise<void>;
+lib/store.ts:131:     addReminder: (reminder: Omit<Reminder, 'id' | 'createdAt'>) => Promise<Reminder>;
+lib/store.ts:132:     updateReminder: (updatedReminder: Reminder) => Promise<void>;
+lib/store.ts:133:     deleteReminder: (id: string) => Promise<void>;
+lib/store.ts:134:     getReminderById: (id: string) => Reminder | undefined;
+lib/store.ts:135: 
+components/EditReminderSheet.tsx:134:     const reminder =
+components/EditReminderSheet.tsx:135:         useReminderStore((state) => state.reminders.find((r) => r.id === initialReminder.id)) ??
+components/EditReminderSheet.tsx:136:         initialReminder;
+components/EditReminderSheet.tsx:137:     const [title, setTitle] = useState(initialReminder.title || "");
+components/EditReminderSheet.tsx:138:     const [emoji, setEmoji] = useState<string | undefined>(initialReminder.emoji);
+components/EditReminderSheet.tsx:139:     // The spoken line the alarm says. Editing it regenerates the TTS on save
+components/EditReminderSheet.tsx:140:     // (lib/voiceRegen.ts); leaving it untouched keeps the existing audio.
+components/EditReminderSheet.tsx:141:     const [description, setDescription] = useState(initialReminder.description || "");
+components/EditReminderSheet.tsx:142:     // True only while the regenerate-voice action + reschedule are in flight, so
+components/EditReminderSheet.tsx:143:     // the Save button can show progress and refuse a double-tap.
+components/EditReminderSheet.tsx:144:     const [regeneratingVoice, setRegeneratingVoice] = useState(false);
+components/EditReminderSheet.tsx:145: 
+components/EditReminderSheet.tsx:146:     // The whole schedule is one draft (components/schedule/scheduleDraft.ts):
+components/EditReminderSheet.tsx:147:     // both axes are always populated, so flipping between "weekly" and "every N
+components/EditReminderSheet.tsx:148:     // days" â€” or between set times and an interval â€” never loses the other side.
+components/EditReminderSheet.tsx:149:     const [draft, setDraft] = useState<ScheduleDraft>(() => draftFromReminder(initialReminder));
+components/EditReminderSheet.tsx:150:     const patchDraft = useCallback(
+components/EditReminderSheet.tsx:151:         (patch: Partial<ScheduleDraft>) => setDraft((prev) => ({ ...prev, ...patch })),
+components/EditReminderSheet.tsx:152:         []
+components/EditReminderSheet.tsx:153:     );
+components/EditReminderSheet.tsx:154: 
+components/EditReminderSheet.tsx:155:     // Interval mode is Pro (OLD-100). Only a switch INTO it is gated: a reminder
+rg: lib/creationPipeline.ts: The system cannot find the file specified. (os error 2)
+lib/deviceStt.ts:6: * to the cloud — is unit-testable without the native module or the screen. The
+lib/deviceStt.ts:37: * English, because the cloud fallback covers everything else anyway.
+lib/deviceStt.ts:123: * fast as `not_ready` so the cloud path takes over immediately. The native
+lib/deviceStt.ts:126: * latch), because by then the cloud path already owns the take.
+lib/deviceStt.ts:194: * / `device_stt_fallback` perf events are emitted through `onPerf`, keyed off
+lib/deviceStt.ts:199:  | { path: "cloud"; reason?: string };
+lib/deviceStt.ts:213:    event: "device_stt" | "device_stt_fallback",
+lib/deviceStt.ts:232:  // attempt has nothing to add, so this is just the normal cloud path.
+lib/deviceStt.ts:235:    return { path: "cloud" };
+lib/deviceStt.ts:250:  onPerf?.("device_stt_fallback", { reason: result.reason });
+lib/deviceStt.ts:252:  return { path: "cloud", reason: result.reason };
+257:  const [showOfflineMessage, setShowOfflineMessage] = useState(false);
+304:        setShowOfflineMessage(false);
+415:      setShowOfflineMessage(true);
+796:      setShowOfflineMessage(true);
+1909:              <TouchableOpacity onPress={() => setShowOfflineMessage(false)} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+package.json:28:    "@sentry/react-native": "~7.2.0",
+package-lock.json:22:        "@sentry/react-native": "~7.2.0",
+package-lock.json:6114:    "node_modules/@sentry/react-native": {
+package-lock.json:6116:      "resolved": "https://registry.npmjs.org/@sentry/react-native/-/react-native-7.2.0.tgz",
+
+web search: 
+web search: https://raw.githubusercontent.com/getsentry/sentry-react-native/7.2.0/packages/core/src/js/transports/native.ts
+web search: 
+web search: https://raw.githubusercontent.com/getsentry/sentry-react-native/7.2.0/src/js/transports/native.ts
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content lib/deviceId.ts; $n=0; Get-Content lib/pendingTakes.ts | ForEach-Object {$n++; if(($n -ge 48 -and $n -le 63) -or $n -ge 319){'"'{0}: {1}' -f "'$n,$_}}; $n=0; Get-Content lib/store.ts | ForEach-Object {$n++; if($n -ge 26 -and $n -le 43){'"'{0}: {1}' -f "'$n,$_}}; $n=0; Get-Content app/index.tsx | ForEach-Object {$n++; if(($n -ge 290 -and $n -le 309) -or ($n -ge 405 -and $n -le 421)){ '"'{0}: {1}' -f "'$n,$_}}' in C:\Dev\VR
+ succeeded in 481ms:
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+/**
+ * Per-install device identity (OLD-74).
+ *
+ * There are no accounts, so the backend scopes every reminder to the install
+ * that created it. This is that install's id: generated once on first use,
+ * persisted in AsyncStorage, and sent with every Convex call that reads or
+ * writes reminders. Reinstalling the app mints a new id â€” the old rows become
+ * unreachable, which is the same outcome as the local reminder list being wiped.
+ */
+const DEVICE_ID_KEY = "@device_id";
+
+let cachedDeviceId: string | null = null;
+let loadInFlight: Promise<string> | null = null;
+
+/**
+ * 32 hex chars (128 bits). Uses WebCrypto when the runtime exposes it and
+ * falls back to Math.random otherwise â€” Hermes has no guaranteed getRandomValues
+ * and pulling in a native crypto module would mean a new native build.
+ */
+function generateDeviceId(): string {
+  const bytes = new Uint8Array(16);
+  const webCrypto = (globalThis as any)?.crypto;
+  if (typeof webCrypto?.getRandomValues === "function") {
+    webCrypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  let hex = "";
+  for (const byte of bytes) {
+    hex += byte.toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+/**
+ * The stable id for this install, creating and persisting one on first call.
+ * Concurrent callers share a single read so two callers can't mint two ids.
+ *
+ * A storage failure never throws: the caller gets an in-memory id for the rest
+ * of the session, so reminder creation still works and the rows are simply
+ * scoped to an id that won't survive a restart.
+ */
+export async function getDeviceId(): Promise<string> {
+  if (cachedDeviceId) return cachedDeviceId;
+  if (loadInFlight) return loadInFlight;
+
+  loadInFlight = (async () => {
+    try {
+      const stored = await AsyncStorage.getItem(DEVICE_ID_KEY);
+      if (stored) {
+        cachedDeviceId = stored;
+        return stored;
+      }
+    } catch (error) {
+      console.log("[VR] deviceId: read failed, minting a session id:", error);
+    }
+
+    const generated = generateDeviceId();
+    try {
+      await AsyncStorage.setItem(DEVICE_ID_KEY, generated);
+    } catch (error) {
+      console.log("[VR] deviceId: persist failed, id lasts this session only:", error);
+    }
+    cachedDeviceId = generated;
+    return generated;
+  })();
+
+  try {
+    return await loadInFlight;
+  } finally {
+    loadInFlight = null;
+  }
+}
+
+/** The id if it has already been loaded, else null. Never touches storage. */
+export function getCachedDeviceId(): string | null {
+  return cachedDeviceId;
+}
+48:   sttSource?: "device" | "cloud";
+49:   deviceSttMs?: number;
+50:   deviceSttEngine?: SpeechEngine;
+51:   deviceSttLocale?: string;
+52:   errorKind?: PendingErrorKind;
+53:   /** Documents-dir copy of the recording â€” or the cache URI, if the copy failed. */
+54:   recordingUri: string;
+55:   /** True when the copy failed and we kept the cache URI, which may vanish (D10). */
+56:   fragileUri?: boolean;
+57:   audioStorageId?: string;
+58:   serverErrorCode?: string;
+59:   /** The device clock AT STOP-TAP. The import builds rows against this, not "now" (C14). */
+60:   localDate: string;
+61:   localTime: string;
+62:   timezone: string;
+63:   createdAt: number;
+319: }
+320: 
+321: async function commit(next: PendingTake[], before: PendingTake[]): Promise<void> {
+322:   publish(next);
+323:   try {
+324:     await AsyncStorage.setItem(PENDING_TAKES_KEY, JSON.stringify(next));
+325:   } catch (error) {
+326:     publish(before);
+327:     throw error;
+328:   }
+329: }
+330: 
+331: /** Test seam: forget everything this module is holding. */
+332: export function __resetPendingTakes(): void {
+333:   cache = [];
+334:   hasLoaded = false;
+335:   loadInFlight = null;
+336:   listeners.clear();
+337: }
+338: 
+339: export const PENDING_TAKES_STORAGE_KEY = PENDING_TAKES_KEY;
+26:     volumeStyle: 'standard' as VolumeStyle,
+27: };
+28: 
+29: // Reminder type
+30: export interface Reminder {
+31:     id: string;
+32:     convexId?: string;
+33:     /**
+34:      * The creation job this row was imported from (spec Â§2.4, N1).
+35:      *
+36:      * Absent on every reminder made before the job pipeline and on every typed
+37:      * one. Its only job is to be durable proof: when a job vanishes mid-import,
+38:      * a stored row carrying its creationId is how the reconciler knows the
+39:      * import already landed (D4).
+40:      */
+41:     creationId?: string;
+42:     title: string;
+43:     description: string;
+290:       ...tapDebugSnapshotRef.current,
+291:     });
+292:   }, []);
+293: 
+294:   useEffect(() => {
+295:     if (process.env.EXPO_PUBLIC_VR_STALL_MONITOR === "1") {
+296:       startStallMonitor();
+297:     }
+298:   }, []);
+299: 
+300:   useEffect(() => {
+301:     const unsubscribe = NetInfo.addEventListener((state) => {
+302:       setIsConnected(state.isConnected ?? true);
+303:       if (state.isConnected) {
+304:         setShowOfflineMessage(false);
+305:       }
+306:     });
+307:     return () => unsubscribe();
+308:   }, []);
+309: 
+405: 
+406:   const handleOpenRecording = useCallback(async () => {
+407:     if (showRecording) return;
+408:     const traceId = createTraceId("vr");
+409:     setRecordingTraceId(traceId);
+410:     recordTap(traceId);
+411:     perfLog(traceId, "ui.recording", "open_tap");
+412: 
+413:     if (!isConnected) {
+414:       perfLog(traceId, "ui.recording", "open_blocked_offline");
+415:       setShowOfflineMessage(true);
+416:       return;
+417:     }
+418: 
+419:     // Nothing is recorded until the user has agreed to their voice being
+420:     // processed off-device by the named AI providers (App Review 5.1.2(i)).
+421:     const settingsState = useSettingsStore.getState();
+
+web search: 
+web search: site:docs.sentry.io react-native "enableNative" "offline" ...
+web search: 
+web search: https://raw.githubusercontent.com/getsentry/sentry-react-native/v7.2.0/packages/core/src/js/transports/native.ts
+codex
+**(1) Factual corrections**
+
+- **Job context is temporary.** Acknowledged creation jobs become immediately eligible for garbage collection; unacknowledged committed jobs and failed jobs expire after a week. Plan 2 cannot reliably fetch an existing reminder’s transcript later. [convex/creationJobs.ts:818](C:/Dev/VR/convex/creationJobs.ts:818), [convex/creationJobs.ts:844](C:/Dev/VR/convex/creationJobs.ts:844).
+- **Current reminder ≠ original parse.** The edit sheet initializes from the current reminder; previous saved edits have already replaced earlier values. Preserve original output explicitly if that comparison matters. Typed/legacy reminders can lack `creationId`. [EditReminderSheet.tsx:137](C:/Dev/VR/components/EditReminderSheet.tsx:137), [lib/store.ts:34](C:/Dev/VR/lib/store.ts:34).
+- **Automatic transcript attachment changes the existing privacy boundary.** Production creation breadcrumbs deliberately exclude user content; AI consent describes processing voice *to create reminders*. The privacy policy also says email is never requested. [lib/sentry.ts:28](C:/Dev/VR/lib/sentry.ts:28), [lib/aiConsent.ts:21](C:/Dev/VR/lib/aiConsent.ts:21), [privacy.html:22](C:/Dev/VR/legal-site/privacy.html:22).
+- **Offline snags do not necessarily produce failed cards.** Opening recording while disconnected returns early with the banner. Settings feedback must remain usable then; consider a report link on that banner. [app/index.tsx:413](C:/Dev/VR/app/index.tsx:413).
+- **Cloud STT is not inherently a failure.** It is an intentional fallback, including when device transcription is unavailable. Alerting on every fallback creates noise. [lib/deviceStt.ts:123](C:/Dev/VR/lib/deviceStt.ts:123), [lib/deviceStt.ts:232](C:/Dev/VR/lib/deviceStt.ts:232).
+
+**(2) Q1–Q6**
+
+- **Q1 — Privacy:** Add a visible notice beside Send: “Sends your transcript, reminder details and any edits to Abdul to investigate.” Let users exclude those details. Existing AI consent does not clearly authorize this support use. Keep automatic Sentry alerts content-free; send webhook notifications containing a report ID/link, keeping transcripts in the feedback record.
+  Update the policy for feedback, optional email, recipients and retention. Review labels for Email Address, Customer Support/Other User Content, Device ID and diagnostics; device-linked reports are not anonymous merely because accounts are absent. Apple’s optional-feedback disclosure exception has several conditions—including displaying a name/account name—so this anonymous form should not assume exemption. No ATT is indicated by the described support use, absent advertising linkage/data-broker sharing. Actual submitted labels weren’t available to inspect. [Apple privacy details](https://developer.apple.com/app-store/app-privacy-details/).
+  A short Review note explaining entry points, attachments and optional email is useful; this does not call for a special approval process. [Review guidelines](https://developer.apple.com/app-store/review/guidelines/).
+
+- **Q2 — Offline:** Sentry RN supports native offline event storage, including message events through native transport; using that for best-effort automatic diagnostics is reasonable. It is not guaranteed delivery or a background-send SLA. I could verify the SDK’s documented offline support, but not this installed 7.2.0 binary’s kill/relaunch behavior; verify that on a release device before relying on it. [Official SDK](https://github.com/getsentry/sentry-react-native).
+  Use a **separate AsyncStorage feedback outbox**: feedback must survive take retry, deletion and reconciliation. Persist first; show “Saved on this phone—will send when Remi is open and connected.” Show “Sent” only after backend acknowledgement. Flush immediately, on foreground/reconnect, and with backoff while active; serialize outbox writes and flushes.
+
+- **Q3 — Surfaces:** Keep all three as entrances to one small composer. Users noticing a wrong reminder will open that reminder; users facing a failed take will stay at its card; Settings covers everything else. Cut the rotating Settings box in favor of a stable “Send feedback” row. “Report a problem” is clearer than “Tell me what happened,” which can sound like an explanation button.
+
+- **Q4 — Replies:** Later. Offer optional reply email in the shared composer now and answer manually—no email infrastructure required. A founder’s plain-text support reply is ordinary content; my reading is that Apple’s downloaded-code restriction does not prohibit it. [Guideline 2.5.2](https://developer.apple.com/app-store/review/guidelines/).
+  When added, make replies dismissible and persist their read state. “Fixed” must mean fixed for the version actually running; otherwise say an update is required.
+
+- **Q5 — Context:** Essential: expected versus actual behavior, report timestamp, creation/reminder ID when available, failure stage/code, app/build/update identity and iOS version. For parse problems: consented transcript, original output if retained, current values and unsaved edits as separately named snapshots.
+  Add recording-time timezone/local date/time, STT source/locale and job generation/attempt: these distinguish schedule interpretation and retry problems. Device ID helps correlation; it needn’t appear in phone alerts. Structured stage timings are useful for slowness; raw perf lines are usually noise. Missing context must never block sending.
+
+- **Q6 — Prompts:** Negative prompts can bias the feedback; don’t rotate them while someone is composing. Use contextual prompts: “What were you trying to do?” / “What happened instead?” / “What would make Remi easier to use?”
+
+**(3) Five real edge cases**
+
+1. **Offline save fails or app is killed:** Never confirm queued feedback before persistence succeeds. Keep the draft and offer retry on storage failure; uninstalling removes unsent reports.
+2. **Backend accepts, acknowledgement disappears:** Retry the same report ID; deduplicate server-side. Separately track webhook delivery and retry failures—scheduled Convex actions are not automatically retried. A webhook timeout can still cause duplicate notifications; include the report ID. [Convex scheduling](https://docs.convex.dev/scheduling/scheduled-functions).
+3. **Context changes before delivery:** Snapshot when reporting. Retrying can replace transcript/error state; garbage collection can remove it. For future parse-quality reports, retain a small original snapshot locally at import, with bounded retention; accept unavailable context for older reminders.
+4. **Reporting is mistaken for saving:** Sending from the edit sheet must preserve the draft and clearly say changes still require Save. Do not silently save or discard edits.
+5. **Identity and alerts leak or overwhelm:** Current job reads trust supplied `deviceId`; it is effectively a bearer identifier, not authenticated ownership. Don’t distribute it in webhook alerts or expose feedback rows through an equally loose read API. Bound submission size/rate; group automatic alerts by failure type and suppress recovered fallbacks. [convex/creationJobs.ts:326](C:/Dev/VR/convex/creationJobs.ts:326).
+
+**(4) Verdict**
+
+Proceed with three entrances, one composer, a separate durable outbox, optional email and content-free automatic alerts. Defer in-app replies and rotating prompts. Resolve context retention and truthful delivery wording before implementation; promise prompt attention, not a one-minute delivery or 15-minute fix. No files changed; no Convex/EAS commands run.
+tokens used
+61,485
+**(1) Factual corrections**
+
+- **Job context is temporary.** Acknowledged creation jobs become immediately eligible for garbage collection; unacknowledged committed jobs and failed jobs expire after a week. Plan 2 cannot reliably fetch an existing reminder’s transcript later. [convex/creationJobs.ts:818](C:/Dev/VR/convex/creationJobs.ts:818), [convex/creationJobs.ts:844](C:/Dev/VR/convex/creationJobs.ts:844).
+- **Current reminder ≠ original parse.** The edit sheet initializes from the current reminder; previous saved edits have already replaced earlier values. Preserve original output explicitly if that comparison matters. Typed/legacy reminders can lack `creationId`. [EditReminderSheet.tsx:137](C:/Dev/VR/components/EditReminderSheet.tsx:137), [lib/store.ts:34](C:/Dev/VR/lib/store.ts:34).
+- **Automatic transcript attachment changes the existing privacy boundary.** Production creation breadcrumbs deliberately exclude user content; AI consent describes processing voice *to create reminders*. The privacy policy also says email is never requested. [lib/sentry.ts:28](C:/Dev/VR/lib/sentry.ts:28), [lib/aiConsent.ts:21](C:/Dev/VR/lib/aiConsent.ts:21), [privacy.html:22](C:/Dev/VR/legal-site/privacy.html:22).
+- **Offline snags do not necessarily produce failed cards.** Opening recording while disconnected returns early with the banner. Settings feedback must remain usable then; consider a report link on that banner. [app/index.tsx:413](C:/Dev/VR/app/index.tsx:413).
+- **Cloud STT is not inherently a failure.** It is an intentional fallback, including when device transcription is unavailable. Alerting on every fallback creates noise. [lib/deviceStt.ts:123](C:/Dev/VR/lib/deviceStt.ts:123), [lib/deviceStt.ts:232](C:/Dev/VR/lib/deviceStt.ts:232).
+
+**(2) Q1–Q6**
+
+- **Q1 — Privacy:** Add a visible notice beside Send: “Sends your transcript, reminder details and any edits to Abdul to investigate.” Let users exclude those details. Existing AI consent does not clearly authorize this support use. Keep automatic Sentry alerts content-free; send webhook notifications containing a report ID/link, keeping transcripts in the feedback record.
+  Update the policy for feedback, optional email, recipients and retention. Review labels for Email Address, Customer Support/Other User Content, Device ID and diagnostics; device-linked reports are not anonymous merely because accounts are absent. Apple’s optional-feedback disclosure exception has several conditions—including displaying a name/account name—so this anonymous form should not assume exemption. No ATT is indicated by the described support use, absent advertising linkage/data-broker sharing. Actual submitted labels weren’t available to inspect. [Apple privacy details](https://developer.apple.com/app-store/app-privacy-details/).
+  A short Review note explaining entry points, attachments and optional email is useful; this does not call for a special approval process. [Review guidelines](https://developer.apple.com/app-store/review/guidelines/).
+
+- **Q2 — Offline:** Sentry RN supports native offline event storage, including message events through native transport; using that for best-effort automatic diagnostics is reasonable. It is not guaranteed delivery or a background-send SLA. I could verify the SDK’s documented offline support, but not this installed 7.2.0 binary’s kill/relaunch behavior; verify that on a release device before relying on it. [Official SDK](https://github.com/getsentry/sentry-react-native).
+  Use a **separate AsyncStorage feedback outbox**: feedback must survive take retry, deletion and reconciliation. Persist first; show “Saved on this phone—will send when Remi is open and connected.” Show “Sent” only after backend acknowledgement. Flush immediately, on foreground/reconnect, and with backoff while active; serialize outbox writes and flushes.
+
+- **Q3 — Surfaces:** Keep all three as entrances to one small composer. Users noticing a wrong reminder will open that reminder; users facing a failed take will stay at its card; Settings covers everything else. Cut the rotating Settings box in favor of a stable “Send feedback” row. “Report a problem” is clearer than “Tell me what happened,” which can sound like an explanation button.
+
+- **Q4 — Replies:** Later. Offer optional reply email in the shared composer now and answer manually—no email infrastructure required. A founder’s plain-text support reply is ordinary content; my reading is that Apple’s downloaded-code restriction does not prohibit it. [Guideline 2.5.2](https://developer.apple.com/app-store/review/guidelines/).
+  When added, make replies dismissible and persist their read state. “Fixed” must mean fixed for the version actually running; otherwise say an update is required.
+
+- **Q5 — Context:** Essential: expected versus actual behavior, report timestamp, creation/reminder ID when available, failure stage/code, app/build/update identity and iOS version. For parse problems: consented transcript, original output if retained, current values and unsaved edits as separately named snapshots.
+  Add recording-time timezone/local date/time, STT source/locale and job generation/attempt: these distinguish schedule interpretation and retry problems. Device ID helps correlation; it needn’t appear in phone alerts. Structured stage timings are useful for slowness; raw perf lines are usually noise. Missing context must never block sending.
+
+- **Q6 — Prompts:** Negative prompts can bias the feedback; don’t rotate them while someone is composing. Use contextual prompts: “What were you trying to do?” / “What happened instead?” / “What would make Remi easier to use?”
+
+**(3) Five real edge cases**
+
+1. **Offline save fails or app is killed:** Never confirm queued feedback before persistence succeeds. Keep the draft and offer retry on storage failure; uninstalling removes unsent reports.
+2. **Backend accepts, acknowledgement disappears:** Retry the same report ID; deduplicate server-side. Separately track webhook delivery and retry failures—scheduled Convex actions are not automatically retried. A webhook timeout can still cause duplicate notifications; include the report ID. [Convex scheduling](https://docs.convex.dev/scheduling/scheduled-functions).
+3. **Context changes before delivery:** Snapshot when reporting. Retrying can replace transcript/error state; garbage collection can remove it. For future parse-quality reports, retain a small original snapshot locally at import, with bounded retention; accept unavailable context for older reminders.
+4. **Reporting is mistaken for saving:** Sending from the edit sheet must preserve the draft and clearly say changes still require Save. Do not silently save or discard edits.
+5. **Identity and alerts leak or overwhelm:** Current job reads trust supplied `deviceId`; it is effectively a bearer identifier, not authenticated ownership. Don’t distribute it in webhook alerts or expose feedback rows through an equally loose read API. Bound submission size/rate; group automatic alerts by failure type and suppress recovered fallbacks. [convex/creationJobs.ts:326](C:/Dev/VR/convex/creationJobs.ts:326).
+
+**(4) Verdict**
+
+Proceed with three entrances, one composer, a separate durable outbox, optional email and content-free automatic alerts. Defer in-app replies and rotating prompts. Resolve context retention and truthful delivery wording before implementation; promise prompt attention, not a one-minute delivery or 15-minute fix. No files changed; no Convex/EAS commands run.

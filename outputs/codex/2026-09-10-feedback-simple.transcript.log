@@ -1,0 +1,467 @@
+2026-09-10T04:24:16.140923Z ERROR codex_core::session::session: failed to load skill C:\Users\AtheA\.agents\skills\ptc-microsoft-todo\SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Dev\VR
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a0898f-22ac-7f21-8e08-bf020b828b59
+--------
+user
+Short sanity pass (not deep) on a simplified version of the feedback feature you reviewed earlier today (see outputs/codex/2026-09-10-snag-feedback-brief.md and your answer in outputs/codex/2026-09-10-snag-feedback.md — read both first). The user cut scope to: "very simple and convenient to send us feedback, and users see next time they open the app whether their request was attended to." Read-only; no file changes; no convex/eas. Answer in under 40 lines: (1) corrections with file:line; (2) answers to Q1-Q4; (3) at most 3 edge cases a normal user will hit; (4) verdict. Bar: "less likely to surprise the user", not exhaustive.
+
+## Simplified plan
+Backend (Convex, new table `feedback`): `{clientId (uuid idempotency key), deviceId, text (1..2000), createdAt, receivedAt, context?: any (≤8 KB), status: "received"|"looking"|"fixed", note?: string, updatedAt}`; indexes by_device [deviceId, createdAt], by_client [deviceId, clientId]. `feedback.submit` mutation (idempotent on deviceId+clientId; schedules an internal action), `feedback.listForDevice` query (newest 50, no context/deviceId), `feedback.setStatus` internal mutation the founder runs from the dashboard function runner ({id, status, note?} → bumps updatedAt), `feedback.notify` internal action that emails the founder via the Resend REST API (env RESEND_API_KEY + FEEDBACK_EMAIL_TO already set; from onboarding@resend.dev; plain-text body with the text + a whitelisted context block; never deviceId; no retries).
+Client: one composer sheet (text box + Send; "Includes this reminder's details" line when opened from a reminder) reachable from (a) a Settings row "Send feedback", (b) the failed-take card, (c) the reminder edit sheet ("Report a problem" — does not save or discard the user's unsaved edits). No email field. Context attached automatically: kind, reminder title/spoken line/schedule (from the store row — current values), errorKind/serverErrorCode/creationId/sttSource for failed takes, buildNumber, updateId, iOS version, timezone, local time. Durable AsyncStorage outbox (`lib/feedbackOutbox.ts`): persist first → "Saved. Sends next time Remi is online." → flush on app foreground/reconnect/after submit → "Sent" only after the mutation returns. Status view: Settings → "Your feedback" list from `listForDevice` (status chip Received / Looking into it / Fixed + note). On app open, if any item's `updatedAt` is newer than the locally stored last-seen timestamp, show a one-line banner "Your feedback was updated" that opens the list; tapping/opening marks it seen (local).
+
+## Questions
+- Q1: Is `updatedAt`-vs-local-last-seen the right "attended to" signal, or should the server carry a per-item `seenByUserAt`? (Two devices are not a case here — one device per user.)
+- Q2: Reactivity — a `useQuery(listForDevice)` mounted at app root for the banner is one live subscription for the whole app life; acceptable, or gate it (subscribe only when the outbox has ever sent something, i.e. a local "hasFeedback" flag)?
+- Q3: The edit-sheet entry: the sheet already has title/spoken-line/schedule inputs and a Save button. Where would a user expect "Report a problem" (a row under the schedule, or in the ⋯/delete area) so it is not mistaken for Save/Delete?
+- Q4: Anything in the App Store privacy labels or the privacy policy (legal-site/privacy.html) that this simplified version still changes, given no email is collected and the text is user-provided content tied to a device id?
+
+2026-09-10T04:24:17.745168Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\"error\":{\"message\":\"Invalid API key: ak_**mXj4\",\"code\":801,\"status\":401,\"request_id\":\"9b4413db-632c-4dea-80ce-96d3472d5a98\"}}")
+codex
+I’ll read both earlier notes first, then check the relevant code and privacy wording for a short sanity pass.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content outputs/codex/2026-09-10-snag-feedback-brief.md; Get-Content outputs/codex/2026-09-10-snag-feedback.md' in C:\Dev\VR
+ succeeded in 919ms:
+Sanity round on a new feature plan from Claude (architect on this repo). The user's goal, quoting them: "get feedback immediately from users if they encounter a snag; account for situations where there is no net." Inspiration is Stripe's early days (every error emailed the founders; a 'The worst thing about X isâ€¦' box on every page; founders reaching out 15 minutes later saying 'we fixed it, try again'). Solo dev, consumer iOS app (voice reminders), no user accounts (devices identified by deviceId), pre-launch / tiny user base. Read-only; do not modify files; no convex/eas. Explore the repo for anything you need. Answer in under 70 lines: (1) factual corrections with file:line; (2) answers to Q1-Q6; (3) the 3-5 real edge cases; (4) verdict. Keep the bar "less likely to surprise the user", not "cover everything".
+
+## What exists
+- Sentry `@sentry/react-native ~7.2.0`, init in `lib/sentry.ts:46` with `creationBreadcrumb(stage, errorKind)` `:36`; used from `lib/audio.ts`, `components/ErrorBoundary.tsx`, `components/RecordingOverlay.tsx`. No user-feedback capture anywhere.
+- Failed takes: pending-take card with `errorKind: "network" | "unparseable" | "server" | "cap_unverified"` (`lib/pendingTakes.ts:37`, server code mapping `:203`), retry/reconcile in `lib/takeReconcile.ts`. Take outcome toasts via `describeTakeOutcome` (`app/index.tsx:739-754`).
+- Creation jobs on Convex (`convex/creationJobs.ts`, `convex/schema.ts:214`) keep `transcript`, `sttSource`, `errorCode`, perf. Reminders table `:131`. Device sends `[VR PERF]` lines only when a build flag is on.
+- Edit sheet for a reminder (`components/EditReminderSheet.tsx`) has title, spoken line, schedule. Settings screen `app/settings.tsx`. AI consent gate `lib/aiConsent.ts`. Offline banner state `showOfflineMessage` in `app/index.tsx`.
+- Convex React client queues mutations in memory while disconnected but loses them if the app is killed.
+
+## Plan
+1. **Snag report on a failed take** â€” the failed card gets a "Tell me what happened" tap: optional one-line text, Send. Auto-attaches creationId, errorKind, server errorCode, transcript if any, perf, build number, update id, iOS version, deviceId.
+2. **"This reminder came out wrong"** row in the edit sheet â€” sends the job transcript (what was heard), what the parse produced (title / spoken line / schedule), and the user's edits if they changed fields before reporting. This is the parse-quality signal.
+3. **Settings feedback box** with rotating placeholder prompts in the Stripe spirit but softened for a consumer app ("What's the most annoying thing about Remi?", "Which reminder came out wrong last?"), optional email for a reply.
+4. **Automatic snag alerts, no user action**: failed takes (server/unparseable) and STT fallbacks are also captured as Sentry events with the same context bundle, so the founder sees them even when the user says nothing. Sentry alert rule â†’ email within minutes.
+5. **Transport + offline**: a local outbox in AsyncStorage (`lib/feedbackOutbox.ts`), items get an id at creation, UI immediately shows "Sent" or "Will send when you're back online"; flushed on app foreground and on reconnect; delivered via a Convex mutation `feedback.submit` (new `feedback` table, idempotent on item id), and a Convex action forwards each item to the founder through a webhook URL in a Convex env var (Slack / Telegram / Discord incoming webhook) so it lands on the phone within a minute. No email infra.
+6. **Closing the loop (phase 2, optional)**: the founder types a reply into the `feedback` row in the Convex dashboard; the app watches this device's feedback rows and shows the reply as a banner on next open ("From Abdul: fixed it, try again"). Uses existing Convex reactivity, no push infra.
+
+## Questions
+- Q1: Privacy â€” attaching the transcript and parse output to a report: is the existing AI consent enough, or does a report need its own one-line notice ("This sends what you said and how it was understood")? Anything here that changes the App Store privacy nutrition labels (the optional email = "contact info collected"; deviceId already there?) or needs an App Review note? Nothing here is ad tracking / ATT, correct?
+- Q2: Offline â€” is Sentry RN's on-disk offline caching real on iOS for captured messages (native SDK cache), so plan 4 works without the outbox? And is the AsyncStorage outbox the right minimal shape for plan 5, or should feedback ride the existing pending-take persistence?
+- Q3: Surfaces â€” three entry points (failed card, edit sheet, settings). Too many for a small app? Which one would you cut, and where would a user actually look when a reminder came out wrong?
+- Q4: The reply banner (plan 6) â€” worth it now or later? Any trap in showing a founder-typed string in-app (e.g. review guideline on remote-configured content)?
+- Q5: What context is actually useful to fix a snag in 15 minutes and what is noise? (creationId + errorCode + transcript + parse output + update id seem essential; perf line optional.)
+- Q6: Rotating negative prompts â€” fine in a consumer app, or does it prime users to complain about things that don't matter? Suggest 3 prompts that fit.
+**(1) Factual corrections**
+
+- **Job context is temporary.** Acknowledged creation jobs become immediately eligible for garbage collection; unacknowledged committed jobs and failed jobs expire after a week. Plan 2 cannot reliably fetch an existing reminderâ€™s transcript later. [convex/creationJobs.ts:818](C:/Dev/VR/convex/creationJobs.ts:818), [convex/creationJobs.ts:844](C:/Dev/VR/convex/creationJobs.ts:844).
+- **Current reminder â‰  original parse.** The edit sheet initializes from the current reminder; previous saved edits have already replaced earlier values. Preserve original output explicitly if that comparison matters. Typed/legacy reminders can lack `creationId`. [EditReminderSheet.tsx:137](C:/Dev/VR/components/EditReminderSheet.tsx:137), [lib/store.ts:34](C:/Dev/VR/lib/store.ts:34).
+- **Automatic transcript attachment changes the existing privacy boundary.** Production creation breadcrumbs deliberately exclude user content; AI consent describes processing voice *to create reminders*. The privacy policy also says email is never requested. [lib/sentry.ts:28](C:/Dev/VR/lib/sentry.ts:28), [lib/aiConsent.ts:21](C:/Dev/VR/lib/aiConsent.ts:21), [privacy.html:22](C:/Dev/VR/legal-site/privacy.html:22).
+- **Offline snags do not necessarily produce failed cards.** Opening recording while disconnected returns early with the banner. Settings feedback must remain usable then; consider a report link on that banner. [app/index.tsx:413](C:/Dev/VR/app/index.tsx:413).
+- **Cloud STT is not inherently a failure.** It is an intentional fallback, including when device transcription is unavailable. Alerting on every fallback creates noise. [lib/deviceStt.ts:123](C:/Dev/VR/lib/deviceStt.ts:123), [lib/deviceStt.ts:232](C:/Dev/VR/lib/deviceStt.ts:232).
+
+**(2) Q1â€“Q6**
+
+- **Q1 â€” Privacy:** Add a visible notice beside Send: â€œSends your transcript, reminder details and any edits to Abdul to investigate.â€ Let users exclude those details. Existing AI consent does not clearly authorize this support use. Keep automatic Sentry alerts content-free; send webhook notifications containing a report ID/link, keeping transcripts in the feedback record.
+  Update the policy for feedback, optional email, recipients and retention. Review labels for Email Address, Customer Support/Other User Content, Device ID and diagnostics; device-linked reports are not anonymous merely because accounts are absent. Appleâ€™s optional-feedback disclosure exception has several conditionsâ€”including displaying a name/account nameâ€”so this anonymous form should not assume exemption. No ATT is indicated by the described support use, absent advertising linkage/data-broker sharing. Actual submitted labels werenâ€™t available to inspect. [Apple privacy details](https://developer.apple.com/app-store/app-privacy-details/).
+  A short Review note explaining entry points, attachments and optional email is useful; this does not call for a special approval process. [Review guidelines](https://developer.apple.com/app-store/review/guidelines/).
+
+- **Q2 â€” Offline:** Sentry RN supports native offline event storage, including message events through native transport; using that for best-effort automatic diagnostics is reasonable. It is not guaranteed delivery or a background-send SLA. I could verify the SDKâ€™s documented offline support, but not this installed 7.2.0 binaryâ€™s kill/relaunch behavior; verify that on a release device before relying on it. [Official SDK](https://github.com/getsentry/sentry-react-native).
+  Use a **separate AsyncStorage feedback outbox**: feedback must survive take retry, deletion and reconciliation. Persist first; show â€œSaved on this phoneâ€”will send when Remi is open and connected.â€ Show â€œSentâ€ only after backend acknowledgement. Flush immediately, on foreground/reconnect, and with backoff while active; serialize outbox writes and flushes.
+
+- **Q3 â€” Surfaces:** Keep all three as entrances to one small composer. Users noticing a wrong reminder will open that reminder; users facing a failed take will stay at its card; Settings covers everything else. Cut the rotating Settings box in favor of a stable â€œSend feedbackâ€ row. â€œReport a problemâ€ is clearer than â€œTell me what happened,â€ which can sound like an explanation button.
+
+- **Q4 â€” Replies:** Later. Offer optional reply email in the shared composer now and answer manuallyâ€”no email infrastructure required. A founderâ€™s plain-text support reply is ordinary content; my reading is that Appleâ€™s downloaded-code restriction does not prohibit it. [Guideline 2.5.2](https://developer.apple.com/app-store/review/guidelines/).
+  When added, make replies dismissible and persist their read state. â€œFixedâ€ must mean fixed for the version actually running; otherwise say an update is required.
+
+- **Q5 â€” Context:** Essential: expected versus actual behavior, report timestamp, creation/reminder ID when available, failure stage/code, app/build/update identity and iOS version. For parse problems: consented transcript, original output if retained, current values and unsaved edits as separately named snapshots.
+  Add recording-time timezone/local date/time, STT source/locale and job generation/attempt: these distinguish schedule interpretation and retry problems. Device ID helps correlation; it neednâ€™t appear in phone alerts. Structured stage timings are useful for slowness; raw perf lines are usually noise. Missing context must never block sending.
+
+- **Q6 â€” Prompts:** Negative prompts can bias the feedback; donâ€™t rotate them while someone is composing. Use contextual prompts: â€œWhat were you trying to do?â€ / â€œWhat happened instead?â€ / â€œWhat would make Remi easier to use?â€
+
+**(3) Five real edge cases**
+
+1. **Offline save fails or app is killed:** Never confirm queued feedback before persistence succeeds. Keep the draft and offer retry on storage failure; uninstalling removes unsent reports.
+2. **Backend accepts, acknowledgement disappears:** Retry the same report ID; deduplicate server-side. Separately track webhook delivery and retry failuresâ€”scheduled Convex actions are not automatically retried. A webhook timeout can still cause duplicate notifications; include the report ID. [Convex scheduling](https://docs.convex.dev/scheduling/scheduled-functions).
+3. **Context changes before delivery:** Snapshot when reporting. Retrying can replace transcript/error state; garbage collection can remove it. For future parse-quality reports, retain a small original snapshot locally at import, with bounded retention; accept unavailable context for older reminders.
+4. **Reporting is mistaken for saving:** Sending from the edit sheet must preserve the draft and clearly say changes still require Save. Do not silently save or discard edits.
+5. **Identity and alerts leak or overwhelm:** Current job reads trust supplied `deviceId`; it is effectively a bearer identifier, not authenticated ownership. Donâ€™t distribute it in webhook alerts or expose feedback rows through an equally loose read API. Bound submission size/rate; group automatic alerts by failure type and suppress recovered fallbacks. [convex/creationJobs.ts:326](C:/Dev/VR/convex/creationJobs.ts:326).
+
+**(4) Verdict**
+
+Proceed with three entrances, one composer, a separate durable outbox, optional email and content-free automatic alerts. Defer in-app replies and rotating prompts. Resolve context retention and truthful delivery wording before implementation; promise prompt attention, not a one-minute delivery or 15-minute fix. No files changed; no Convex/EAS commands run.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files -g AGENTS.md -g '*feedback*'; Get-Content C:/Users/AtheA/.agents/skills/review/SKILL.md; rg -n 'useEffect|visible|onClose|onSave|Delete|delete|schedule|Schedule|title|spoken' components/EditReminderSheet.tsx; rg -n 'email|collect|data|retain|third|support|device|Sentry|Convex' legal-site/privacy.html; rg -n 'deviceId|SecureStore|AsyncStorage' lib/deviceId.ts app/_layout.tsx; rg -n 'showOfflineMessage|isConnected|AppState' app/index.tsx app/_layout.tsx" in C:\Dev\VR
+ succeeded in 1846ms:
+outputs\codex\2026-09-10-snag-feedback.transcript.log
+outputs\codex\2026-09-10-snag-feedback.md
+outputs\codex\2026-09-10-snag-feedback-brief.md
+outputs\codex\2026-09-10-feedback-simple.transcript.log
+outputs\codex\2026-09-10-feedback-simple-brief.md
+---
+name: review
+description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes â€” Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+---
+
+Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
+
+- **Standards** â€” does the code conform to this repo's documented coding standards?
+- **Spec** â€” does the code faithfully implement the originating issue / PRD / spec?
+
+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+
+The issue tracker should have been provided to you â€” run `/setup-matt-pocock-skills` if `docs/agents/issue-tracker.md` is missing.
+
+## Process
+
+### 1. Pin the fixed point
+
+Whatever the user said is the fixed point â€” a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
+
+Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+
+Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here â€” not inside two parallel sub-agents.
+
+### 2. Identify the spec source
+
+Look for the originating spec, in this order:
+
+1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) â€” fetch via the workflow in `docs/agents/issue-tracker.md`.
+2. A path the user passed as an argument.
+3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+
+### 3. Identify the standards sources
+
+Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
+
+### 4. Spawn both sub-agents in parallel
+
+Send a single message with two `Agent` tool calls. Use the `general-purpose` subagent for both.
+
+**Standards sub-agent prompt** â€” include:
+
+- The full diff command and commit list.
+- The list of standards-source files you found in step 3.
+- The brief: "Report â€” per file/hunk where relevant â€” every place the diff violates a documented standard. Cite the standard (file + the rule). Distinguish hard violations from judgement calls. Skip anything tooling enforces. Under 400 words."
+
+**Spec sub-agent prompt** â€” include:
+
+- The diff command and commit list.
+- The path or fetched contents of the spec.
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+
+If the spec is missing, skip the Spec sub-agent and note this in the final report.
+
+### 5. Aggregate
+
+Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings â€” the two axes are deliberately separate (see _Why two axes_).
+
+End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes â€” that's the reranking the separation exists to prevent.
+
+## Why two axes
+
+A change can pass one axis and fail the other:
+
+- Code that follows every standard but implements the wrong thing â†’ **Standards pass, Spec fail.**
+- Code that does exactly what the issue asked but breaks the project's conventions â†’ **Spec pass, Standards fail.**
+
+Reporting them separately stops one axis from masking the other.
+1:import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+38:    type ScheduleDraft,
+39:} from "./schedule/scheduleDraft";
+40:import { cancelReminder, deleteLocalAudio, deleteReminderWithAudio, openAlarmPermissionSettingsSafe, scheduleReminder } from "../lib/notifications";
+47:import { checkCanUsePremiumSchedule, isPremiumSchedule } from "../lib/usageGate";
+112:    onClose: () => void;
+113:    onSave: (updated: Reminder) => void;
+114:    onDelete: (reminder: Reminder) => void;
+117:export default function EditReminderSheet({ reminder: initialReminder, onClose, onSave, onDelete }: EditReminderSheetProps) {
+126:    const storeDeleteReminder = useReminderStore((state) => state.deleteReminder);
+133:    // audio fields on save, and skip the reschedule (audioUrl reads as "").
+137:    const [title, setTitle] = useState(initialReminder.title || "");
+139:    // The spoken line the alarm says. Editing it regenerates the TTS on save
+142:    // True only while the regenerate-voice action + reschedule are in flight, so
+146:    // The whole schedule is one draft (components/schedule/scheduleDraft.ts):
+149:    const [draft, setDraft] = useState<ScheduleDraft>(() => draftFromReminder(initialReminder));
+151:        (patch: Partial<ScheduleDraft>) => setDraft((prev) => ({ ...prev, ...patch })),
+171:    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+196:    useEffect(() => {
+265:        (value: { mode: ScheduleDraft["daysMode"]; weekdays: string[]; everyNDays: number }) => {
+283:        // A regeneration + reschedule is already awaiting; ignore the double-tap.
+285:        if (!title.trim()) {
+286:            Alert.alert("Error", "Please enter a reminder title");
+290:        // One place turns the draft into a schedule: the grid plus the legacy
+296:        if (!startedOnInterval && isPremiumSchedule(save.schedule)) {
+297:            const { allowed } = await checkCanUsePremiumSchedule();
+299:                perfLog(traceId, "overlay.edit", "save_blocked_premium_schedule");
+307:            title: title.trim(),
+314:            schedule: save.schedule,
+325:            // Canonical schedule fields
+326:            scheduleType: save.scheduleType,
+344:            // carry the description/schedule write above).
+353:                console.log("[VR] Failed to reschedule reminder:", e);
+357:                        "On Android 12+, the app needs the system 'Alarms & reminders' permission to schedule exact alarms.",
+366:            // Cancel + reschedule with whatever audio applies. Returns the next
+368:            const reschedule = async (audio: { audioUrl?: string; wavUrl?: string }): Promise<number> => {
+370:                const { triggerTimestamp } = await scheduleReminder({
+372:                    title: updatedReminder.title,
+380:                    schedule: save.schedule,
+393:                    scheduleType: save.scheduleType,
+403:            // Editing the spoken line means the alarm must speak the new line:
+405:            // reschedule with the fresh URLs (lib/voiceRegen.ts). BEFORE closing,
+406:            // since onClose unmounts the component.
+417:                    const { patch, rescheduleError } = await regenerateVoiceOnSave(
+426:                            deleteLocalAudio,
+428:                            reschedule,
+441:                    if (rescheduleError) showExactAlarmAlertIfNeeded(rescheduleError);
+446:                // Spoken line unchanged: reschedule with the existing audio.
+448:                    const triggerTimestamp = await reschedule({ audioUrl: oldAudioUrl });
+449:                    await applyRowPatch({ scheduledFor: triggerTimestamp });
+456:            onSave(updatedReminder);
+457:            onClose();
+460:            // Every schedule field goes back up (OLD-97 widened the mutation):
+466:                    title: updatedReminder.title,
+472:                    schedule: save.schedule,
+473:                    scheduleType: save.scheduleType,
+492:    }, [reminder, title, emoji, description, draft, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, regenerateReminderAudio, regeneratingVoice, toast, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
+494:    const executeDelete = async () => {
+499:            // Delete via Zustand store (handles state + persistence)
+500:            await storeDeleteReminder(reminderId);
+502:            console.log("[VR] Failed to delete reminder:", e);
+503:            toast.show({ title: "Error", message: "Failed to delete reminder", type: "error" });
+507:        onDelete(reminder);
+508:        onClose();
+511:            deleteReminderWithAudio(reminderId).catch((e) => {
+519:                        console.log("[VR] Failed to delete Convex reminder:", e);
+541:            // Note: onClose is now called in onAnimate for faster FAB reappearance
+553:        onClose();
+554:    }, [onClose, traceId]);
+589:                        onClose();
+599:                    <View style={styles.titleCard}>
+601:                            style={styles.titleInput}
+602:                            value={title}
+624:                    <View style={styles.spokenCard}>
+625:                        <Text style={styles.spokenLabel}>Spoken line</Text>
+627:                            style={styles.spokenInput}
+639:                    {/* Schedule grid: days axis (Repeat, + Date when it needs one)
+701:                        visible but disabled, so it never just vanishes for the
+728:                            visible={showDatePicker}
+741:                            visible={showRepeatTaskModal}
+753:                            style={styles.deleteCircle}
+754:                            onPress={() => setShowDeleteConfirm(true)}
+779:                visible={showEmojiPicker}
+821:            {/* Delete Confirmation ActionSheet */}
+823:                visible={showDeleteConfirm}
+824:                title="Delete Reminder"
+825:                message={`Are you sure you want to delete "${title}"?`}
+828:                        key: "delete",
+829:                        label: "Delete",
+833:                            setShowDeleteConfirm(false);
+834:                            executeDelete();
+841:                        onPress: () => setShowDeleteConfirm(false),
+844:                onDismiss={() => setShowDeleteConfirm(false)}
+870:    titleCard: {
+881:    titleInput: {
+900:    spokenCard: {
+909:    spokenLabel: {
+915:    spokenInput: {
+993:    deleteCircle: {
+5:<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+7:<meta name="description" content="How VoiceReminder handles your voice recordings, reminder text, and other data.">
+19:<p>VoiceReminder is built and run by an independent developer ("we", "us", "our"), who is the data controller for everything described here. There's no support department to get lost in &mdash; questions come straight to a person, at <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a>.</p>
+21:<h2>2. What we collect</h2>
+22:<p>VoiceReminder has no accounts and no sign-in. We never ask for your name, email address, phone number, or contacts, and we don't collect your location. Here is everything the app actually handles:</p>
+27:  <li><strong>An install identifier.</strong> A random string your device generates the first time you open the app. It is not your Apple Account, not a hardware serial number, and not tied to your identity. It exists so our backend can tell your reminders apart from everyone else's. Delete the app and it's gone; reinstall and a brand-new one is made.</li>
+28:  <li><strong>Crash and diagnostic reports.</strong> If something breaks, technical details &mdash; device model, operating system version, and where in the code the failure happened &mdash; go to our error-monitoring service so we can fix it.</li>
+42:<p>Because that work happens off your phone, the app asks for your explicit permission before your first recording and won't record until you agree. You stay in charge of it: you can stop at any time by turning off microphone access for VoiceReminder in your device's <strong>Settings</strong> &mdash; nothing further is recorded or processed from that moment, and reminders you've already made keep working. You can also skip voice entirely and type reminders by hand.</p>
+46:  <li><strong>Your consent</strong> &mdash; for processing your voice recordings as described in section 3. Freely given, and revocable at any time by turning off microphone access in your device's Settings.</li>
+52:<p><strong>We do not sell your personal data.</strong> We never share it for advertising, and nobody receives it for their own use &mdash; not to train their models, not to build profiles, not for anything of theirs.</p>
+53:<p>Like nearly every app, VoiceReminder is delivered with the help of a small number of trusted providers. Each of them processes data on our behalf and on our instructions, and only for the one job it does for us:</p>
+58:  <li><strong>Hosting and storage</strong> &mdash; to keep your reminders and their audio available to your device.</li>
+62:<p>Each one sees only what its own job requires, is contractually bound to protect it, and is prohibited from using it for any purpose of its own. We pass on the smallest amount of data that lets each step work, and nothing beyond it.</p>
+64:<p>Some of these providers operate outside the country you live in. Where that means a transfer out of the UK or EEA, we only work with providers that keep recognised safeguards in place for it &mdash; standard contractual clauses approved by the European Commission, or an equivalent protection. We may also disclose data where the law genuinely requires it.</p>
+70:  <li><strong>Reminders on your device:</strong> stored locally so the app works offline, and removed when you delete the reminder or uninstall the app.</li>
+71:  <li><strong>Crash reports:</strong> retained by our error-monitoring service for a limited period (typically up to 90 days) and then discarded.</li>
+77:  <li>We don't sell or rent your data to anyone.</li>
+79:  <li>We don't collect your location, contacts, photos, or health records.</li>
+81:  <li>We don't let anyone else use your data for their own purposes &mdash; the providers that help run the app work for us, under contract, and that's the whole relationship.</li>
+85:<h2>8. How we keep your data safe</h2>
+86:<p>Everything travels over encrypted (HTTPS) connections and is stored by our backend provider on encrypted infrastructure. Reminders are scoped to the install identifier that created them, so one device can't read another's. In the App Store version of the app, diagnostic reporting is limited to crashes and errors: it doesn't send app logs, screenshots, or the contents of your screen. No system is perfectly secure, but we keep the amount of data we hold deliberately small &mdash; the less there is, the less there is to lose.</p>
+91:  <li><strong>Access</strong> the data we hold about you, and get a copy of it.</li>
+93:  <li><strong>Delete</strong> your data &mdash; the "right to be forgotten".</li>
+97:  <li><strong>Complain</strong> to your local data protection authority if you think we've got it wrong.</li>
+101:<p>Most of it you can do yourself, instantly: delete a reminder in the app and its text and audio are deleted from our backend too, and turning off microphone access for VoiceReminder in your device's Settings stops any further voice processing.</p>
+103:  <p>For anything else &mdash; a copy of your data, or deletion of everything associated with your install &mdash; email <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a> and say what you'd like. Because the app has no accounts, we can't look you up by name or email, so please include enough detail to identify your records (for example the titles and times of a few of your reminders); we may ask a follow-up question before acting. We'll respond within 30 days, free of charge.</p>
+108:<p>VoiceReminder is not directed at children under 13, and we don't knowingly collect data from them. If you believe a child has used the app and sent us data, email us and we'll delete it.</p>
+111:<p>If we change how the app handles data, we'll update this page and change the "last updated" date at the top. Material changes &mdash; a new category of data, or a new kind of provider &mdash; will also be surfaced in the app. Continuing to use VoiceReminder after a change means you accept the updated policy.</p>
+app/_layout.tsx:27:import { getDeviceId } from "../lib/deviceId";
+app/_layout.tsx:84:            await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
+lib/deviceId.ts:1:import AsyncStorage from "@react-native-async-storage/async-storage";
+lib/deviceId.ts:8: * persisted in AsyncStorage, and sent with every Convex call that reads or
+lib/deviceId.ts:53:      const stored = await AsyncStorage.getItem(DEVICE_ID_KEY);
+lib/deviceId.ts:59:      console.log("[VR] deviceId: read failed, minting a session id:", error);
+lib/deviceId.ts:64:      await AsyncStorage.setItem(DEVICE_ID_KEY, generated);
+lib/deviceId.ts:66:      console.log("[VR] deviceId: persist failed, id lasts this session only:", error);
+app/_layout.tsx:2:import { AppState, InteractionManager, LogBox, Platform } from "react-native";
+app/_layout.tsx:114:    const sub = AppState.addEventListener("change", (state) => {
+app/index.tsx:4:  AppState,
+app/index.tsx:256:  const [isConnected, setIsConnected] = useState(true);
+app/index.tsx:257:  const [showOfflineMessage, setShowOfflineMessage] = useState(false);
+app/index.tsx:269:    showOfflineMessage: false,
+app/index.tsx:278:      showOfflineMessage,
+app/index.tsx:280:  }, [reminders.length, history.length, isLoading, showOfflineMessage]);
+app/index.tsx:302:      setIsConnected(state.isConnected ?? true);
+app/index.tsx:303:      if (state.isConnected) {
+app/index.tsx:338:      const subscription = AppState.addEventListener("change", (state) => {
+app/index.tsx:413:    if (!isConnected) {
+app/index.tsx:515:  }, [showRecording, isConnected, hasLoadedReminders, loadReminders, lockRecordingForLimit]);
+app/index.tsx:794:    if (!isConnected) {
+app/index.tsx:859:    isConnected,
+app/index.tsx:1905:          {showOfflineMessage && (
+
+web search: 
+web search: site.developer.apple.com app privacy details customer support optional disclosure device ID ...
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'outputs/codex/2026-09-10-feedback-simple-brief.md'; "'$n=0; Get-Content $p | ForEach-Object { $n++; '"'{0}: {1}' -f "'$n,$_ }; $p='"'components/EditReminderSheet.tsx'; "'$s=Get-Content $p; foreach($r in @(@(128,150),@(733,775))){for($i=$r[0];$i -le $r[1];$i++){'"'{0}:{1}: {2}' -f "'$p,$i,$s[$i-1]}}; $p='"'legal-site/privacy.html'; "'$s=Get-Content $p; for($i=66;$i -le 73;$i++){'"'{0}:{1}: {2}' -f "'$p,$i,$s[$i-1]}' in C:\Dev\VR
+ succeeded in 722ms:
+1: Short sanity pass (not deep) on a simplified version of the feedback feature you reviewed earlier today (see outputs/codex/2026-09-10-snag-feedback-brief.md and your answer in outputs/codex/2026-09-10-snag-feedback.md â€” read both first). The user cut scope to: "very simple and convenient to send us feedback, and users see next time they open the app whether their request was attended to." Read-only; no file changes; no convex/eas. Answer in under 40 lines: (1) corrections with file:line; (2) answers to Q1-Q4; (3) at most 3 edge cases a normal user will hit; (4) verdict. Bar: "less likely to surprise the user", not exhaustive.
+2: 
+3: ## Simplified plan
+4: Backend (Convex, new table `feedback`): `{clientId (uuid idempotency key), deviceId, text (1..2000), createdAt, receivedAt, context?: any (â‰¤8 KB), status: "received"|"looking"|"fixed", note?: string, updatedAt}`; indexes by_device [deviceId, createdAt], by_client [deviceId, clientId]. `feedback.submit` mutation (idempotent on deviceId+clientId; schedules an internal action), `feedback.listForDevice` query (newest 50, no context/deviceId), `feedback.setStatus` internal mutation the founder runs from the dashboard function runner ({id, status, note?} â†’ bumps updatedAt), `feedback.notify` internal action that emails the founder via the Resend REST API (env RESEND_API_KEY + FEEDBACK_EMAIL_TO already set; from onboarding@resend.dev; plain-text body with the text + a whitelisted context block; never deviceId; no retries).
+5: Client: one composer sheet (text box + Send; "Includes this reminder's details" line when opened from a reminder) reachable from (a) a Settings row "Send feedback", (b) the failed-take card, (c) the reminder edit sheet ("Report a problem" â€” does not save or discard the user's unsaved edits). No email field. Context attached automatically: kind, reminder title/spoken line/schedule (from the store row â€” current values), errorKind/serverErrorCode/creationId/sttSource for failed takes, buildNumber, updateId, iOS version, timezone, local time. Durable AsyncStorage outbox (`lib/feedbackOutbox.ts`): persist first â†’ "Saved. Sends next time Remi is online." â†’ flush on app foreground/reconnect/after submit â†’ "Sent" only after the mutation returns. Status view: Settings â†’ "Your feedback" list from `listForDevice` (status chip Received / Looking into it / Fixed + note). On app open, if any item's `updatedAt` is newer than the locally stored last-seen timestamp, show a one-line banner "Your feedback was updated" that opens the list; tapping/opening marks it seen (local).
+6: 
+7: ## Questions
+8: - Q1: Is `updatedAt`-vs-local-last-seen the right "attended to" signal, or should the server carry a per-item `seenByUserAt`? (Two devices are not a case here â€” one device per user.)
+9: - Q2: Reactivity â€” a `useQuery(listForDevice)` mounted at app root for the banner is one live subscription for the whole app life; acceptable, or gate it (subscribe only when the outbox has ever sent something, i.e. a local "hasFeedback" flag)?
+10: - Q3: The edit-sheet entry: the sheet already has title/spoken-line/schedule inputs and a Save button. Where would a user expect "Report a problem" (a row under the schedule, or in the â‹¯/delete area) so it is not mistaken for Save/Delete?
+11: - Q4: Anything in the App Store privacy labels or the privacy policy (legal-site/privacy.html) that this simplified version still changes, given no email is collected and the text is user-provided content tied to a device id?
+components/EditReminderSheet.tsx:128:     const bottomSheetRef = useRef<BottomSheet>(null);
+components/EditReminderSheet.tsx:129:     const snapPoints = useMemo(() => ["60%", "95%"], []);
+components/EditReminderSheet.tsx:130: 
+components/EditReminderSheet.tsx:131:     // Live store row, not a mount-time snapshot: audio hydration lands seconds
+components/EditReminderSheet.tsx:132:     // after creation, and a frozen copy would hide the voice note, wipe the
+components/EditReminderSheet.tsx:133:     // audio fields on save, and skip the reschedule (audioUrl reads as "").
+components/EditReminderSheet.tsx:134:     const reminder =
+components/EditReminderSheet.tsx:135:         useReminderStore((state) => state.reminders.find((r) => r.id === initialReminder.id)) ??
+components/EditReminderSheet.tsx:136:         initialReminder;
+components/EditReminderSheet.tsx:137:     const [title, setTitle] = useState(initialReminder.title || "");
+components/EditReminderSheet.tsx:138:     const [emoji, setEmoji] = useState<string | undefined>(initialReminder.emoji);
+components/EditReminderSheet.tsx:139:     // The spoken line the alarm says. Editing it regenerates the TTS on save
+components/EditReminderSheet.tsx:140:     // (lib/voiceRegen.ts); leaving it untouched keeps the existing audio.
+components/EditReminderSheet.tsx:141:     const [description, setDescription] = useState(initialReminder.description || "");
+components/EditReminderSheet.tsx:142:     // True only while the regenerate-voice action + reschedule are in flight, so
+components/EditReminderSheet.tsx:143:     // the Save button can show progress and refuse a double-tap.
+components/EditReminderSheet.tsx:144:     const [regeneratingVoice, setRegeneratingVoice] = useState(false);
+components/EditReminderSheet.tsx:145: 
+components/EditReminderSheet.tsx:146:     // The whole schedule is one draft (components/schedule/scheduleDraft.ts):
+components/EditReminderSheet.tsx:147:     // both axes are always populated, so flipping between "weekly" and "every N
+components/EditReminderSheet.tsx:148:     // days" â€” or between set times and an interval â€” never loses the other side.
+components/EditReminderSheet.tsx:149:     const [draft, setDraft] = useState<ScheduleDraft>(() => draftFromReminder(initialReminder));
+components/EditReminderSheet.tsx:150:     const patchDraft = useCallback(
+components/EditReminderSheet.tsx:733:                                 patchDraft({ date: date ? toDateString(date) : null });
+components/EditReminderSheet.tsx:734:                                 setShowDatePicker(false);
+components/EditReminderSheet.tsx:735:                             }}
+components/EditReminderSheet.tsx:736:                         />
+components/EditReminderSheet.tsx:737:                     ) : null}
+components/EditReminderSheet.tsx:738: 
+components/EditReminderSheet.tsx:739:                     {showRepeatTaskModal && (
+components/EditReminderSheet.tsx:740:                         <RepeatTaskModal
+components/EditReminderSheet.tsx:741:                             visible={showRepeatTaskModal}
+components/EditReminderSheet.tsx:742:                             mode={draft.daysMode}
+components/EditReminderSheet.tsx:743:                             weekdays={draft.weekdays}
+components/EditReminderSheet.tsx:744:                             everyNDays={draft.everyNDays}
+components/EditReminderSheet.tsx:745:                             onCancel={() => setShowRepeatTaskModal(false)}
+components/EditReminderSheet.tsx:746:                             onConfirm={handleRepeatConfirm}
+components/EditReminderSheet.tsx:747:                         />
+components/EditReminderSheet.tsx:748:                     )}
+components/EditReminderSheet.tsx:749: 
+components/EditReminderSheet.tsx:750:                     {/* Trash / Done */}
+components/EditReminderSheet.tsx:751:                     <View style={styles.bottomActions}>
+components/EditReminderSheet.tsx:752:                         <TouchableOpacity
+components/EditReminderSheet.tsx:753:                             style={styles.deleteCircle}
+components/EditReminderSheet.tsx:754:                             onPress={() => setShowDeleteConfirm(true)}
+components/EditReminderSheet.tsx:755:                             activeOpacity={0.7}
+components/EditReminderSheet.tsx:756:                         >
+components/EditReminderSheet.tsx:757:                             <AppIcon name="trash-2" size={20} color={colors.destructive} />
+components/EditReminderSheet.tsx:758:                         </TouchableOpacity>
+components/EditReminderSheet.tsx:759: 
+components/EditReminderSheet.tsx:760:                         <TouchableOpacity
+components/EditReminderSheet.tsx:761:                             style={[styles.doneButton, regeneratingVoice && styles.doneButtonDisabled]}
+components/EditReminderSheet.tsx:762:                             onPress={handleSave}
+components/EditReminderSheet.tsx:763:                             activeOpacity={0.7}
+components/EditReminderSheet.tsx:764:                             disabled={regeneratingVoice}
+components/EditReminderSheet.tsx:765:                         >
+components/EditReminderSheet.tsx:766:                             <Text style={styles.doneButtonText}>
+components/EditReminderSheet.tsx:767:                                 {regeneratingVoice ? "Updating voiceâ€¦" : "Done"}
+components/EditReminderSheet.tsx:768:                             </Text>
+components/EditReminderSheet.tsx:769:                             {!regeneratingVoice && <AppIcon name="check" size={18} color="white" />}
+components/EditReminderSheet.tsx:770:                         </TouchableOpacity>
+components/EditReminderSheet.tsx:771:                     </View>
+components/EditReminderSheet.tsx:772: 
+components/EditReminderSheet.tsx:773:                     <View style={{ height: 40 }} />
+components/EditReminderSheet.tsx:774:                 </BottomSheetScrollView>
+components/EditReminderSheet.tsx:775:             </BottomSheet>
+legal-site/privacy.html:66: <h2>6. How long we keep it</h2>
+legal-site/privacy.html:67: <ul>
+legal-site/privacy.html:68:   <li><strong>Voice recordings:</strong> deleted from our backend as soon as processing finishes &mdash; normally within seconds of you speaking. We do not keep an archive of your recordings.</li>
+legal-site/privacy.html:69:   <li><strong>Reminder text and generated audio:</strong> kept until you delete the reminder. Deleting a reminder in the app deletes its stored text and its audio files from our backend as well.</li>
+legal-site/privacy.html:70:   <li><strong>Reminders on your device:</strong> stored locally so the app works offline, and removed when you delete the reminder or uninstall the app.</li>
+legal-site/privacy.html:71:   <li><strong>Crash reports:</strong> retained by our error-monitoring service for a limited period (typically up to 90 days) and then discarded.</li>
+legal-site/privacy.html:72:   <li><strong>Subscription records:</strong> kept by our subscription-management service and by Apple for as long as needed for billing and tax purposes.</li>
+legal-site/privacy.html:73: </ul>
+
+web search: 
+web search: https://developer.apple.com/app-store/app-privacy-details/
+codex
+**(1) Corrections**
+
+- [EditReminderSheet.tsx:767](C:/Dev/VR/components/EditReminderSheet.tsx:767): the save button currently says **Done**; the bottom area contains Trash/Done, with no ⋯ menu.
+- [EditReminderSheet.tsx:134](C:/Dev/VR/components/EditReminderSheet.tsx:134): the store row is the **saved** reminder; visible unsaved inputs are separate state. Say “Includes saved reminder details. Your edits stay here.” Keep the edit sheet mounted beneath the composer.
+- [Simplified brief:5](C:/Dev/VR/outputs/codex/2026-09-10-feedback-simple-brief.md:5): use “Saved on this phone. Sends when Remi is open and online.” Include queued items in “Your feedback” as **Waiting to send**, so an offline submission does not disappear.
+- [Simplified brief:4](C:/Dev/VR/outputs/codex/2026-09-10-feedback-simple-brief.md:4): `onboarding@resend.dev` works only when the recipient is your Resend account email; otherwise use a verified domain. Env variables being set does not establish this. [Resend restriction](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain).
+- [privacy.html:69](C:/Dev/VR/legal-site/privacy.html:69): deleting a reminder will now leave copies in feedback and founder email. Explain that exception and its retention.
+
+**(2) Q1–Q4**
+
+- **Q1:** Keep read state local; no server `seenByUserAt` needed. But submission is not attention: give records an optional server timestamp such as `respondedAt`, set only when the founder changes status/note. Compare that against a local watermark. `updatedAt` works only with equally explicit exclusion of initial receipt and bookkeeping changes.
+- Advance the watermark to the greatest **server response timestamp actually displayed**, after the list loads—not phone `Date.now()` or the banner tap. That avoids clock skew and marking unseen responses read. “Received” means stored; “Looking into it” or a founder note means attended to.
+- **Q2:** Keep the root subscription for this tiny app and 50-row bound. A durable `hasFeedback` flag adds another state that can become inconsistent for little benefit. Wait for device identity before subscribing; Convex supports `"skip"` for that. [Convex React](https://docs.convex.dev/client/react/overview).
+- **Q3:** A quiet, labeled row below the schedule/settings fields and above the Trash/Done footer. Use “Report a problem,” a neutral icon, and its own spacing. Returning from Send or Cancel should reveal the unchanged draft.
+- **Q4:** Yes: disclose **Customer Support**, review **Other User Content** for attached reminder content, **Device ID**, and **Other Diagnostic Data**, with App Functionality/support purposes and device-linked treatment. No new Email Address category solely because the founder receives an email. This anonymous form should not assume Apple’s optional-feedback exemption; its conditions include displaying a name/account name. Actual submitted labels were not inspected. [Apple privacy details](https://developer.apple.com/app-store/app-privacy-details/).
+- Update [privacy.html:21](C:/Dev/VR/legal-site/privacy.html:21), [53](C:/Dev/VR/legal-site/privacy.html:53), and [66](C:/Dev/VR/legal-site/privacy.html:66) for feedback content/context, support use, Resend/mailbox handling, retention and deletion. Show a short attachment notice for failed takes too. The described support use does not introduce ATT tracking. [Apple definitions](https://developer.apple.com/app-store/app-privacy-details/).
+
+**(3) Three normal-user edge cases**
+
+1. **Offline or interrupted send:** preserve the draft if persistence fails; serialize outbox writes/flushes and reuse the same UUID after lost acknowledgement. A duplicate submission must not schedule another email.
+2. **Email fails:** the report can say Received while the founder never gets alerted. No retries is acceptable only with a routine dashboard inbox check; scheduled actions are not automatically retried. [Convex scheduling](https://docs.convex.dev/scheduling/scheduled-functions).
+3. **“Fixed” requires a newer app:** include “Fixed in version X—please update” in the note, rather than implying the installed version now works.
+
+**(4) Verdict:** Proceed with this scope, including in-app status—it now directly serves the stated goal. Fix the attention signal, queued-list visibility, draft preservation and privacy wording before shipping. Read-only; no files changed or Convex/EAS commands run.
+tokens used
+39,697
+**(1) Corrections**
+
+- [EditReminderSheet.tsx:767](C:/Dev/VR/components/EditReminderSheet.tsx:767): the save button currently says **Done**; the bottom area contains Trash/Done, with no ⋯ menu.
+- [EditReminderSheet.tsx:134](C:/Dev/VR/components/EditReminderSheet.tsx:134): the store row is the **saved** reminder; visible unsaved inputs are separate state. Say “Includes saved reminder details. Your edits stay here.” Keep the edit sheet mounted beneath the composer.
+- [Simplified brief:5](C:/Dev/VR/outputs/codex/2026-09-10-feedback-simple-brief.md:5): use “Saved on this phone. Sends when Remi is open and online.” Include queued items in “Your feedback” as **Waiting to send**, so an offline submission does not disappear.
+- [Simplified brief:4](C:/Dev/VR/outputs/codex/2026-09-10-feedback-simple-brief.md:4): `onboarding@resend.dev` works only when the recipient is your Resend account email; otherwise use a verified domain. Env variables being set does not establish this. [Resend restriction](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain).
+- [privacy.html:69](C:/Dev/VR/legal-site/privacy.html:69): deleting a reminder will now leave copies in feedback and founder email. Explain that exception and its retention.
+
+**(2) Q1–Q4**
+
+- **Q1:** Keep read state local; no server `seenByUserAt` needed. But submission is not attention: give records an optional server timestamp such as `respondedAt`, set only when the founder changes status/note. Compare that against a local watermark. `updatedAt` works only with equally explicit exclusion of initial receipt and bookkeeping changes.
+- Advance the watermark to the greatest **server response timestamp actually displayed**, after the list loads—not phone `Date.now()` or the banner tap. That avoids clock skew and marking unseen responses read. “Received” means stored; “Looking into it” or a founder note means attended to.
+- **Q2:** Keep the root subscription for this tiny app and 50-row bound. A durable `hasFeedback` flag adds another state that can become inconsistent for little benefit. Wait for device identity before subscribing; Convex supports `"skip"` for that. [Convex React](https://docs.convex.dev/client/react/overview).
+- **Q3:** A quiet, labeled row below the schedule/settings fields and above the Trash/Done footer. Use “Report a problem,” a neutral icon, and its own spacing. Returning from Send or Cancel should reveal the unchanged draft.
+- **Q4:** Yes: disclose **Customer Support**, review **Other User Content** for attached reminder content, **Device ID**, and **Other Diagnostic Data**, with App Functionality/support purposes and device-linked treatment. No new Email Address category solely because the founder receives an email. This anonymous form should not assume Apple’s optional-feedback exemption; its conditions include displaying a name/account name. Actual submitted labels were not inspected. [Apple privacy details](https://developer.apple.com/app-store/app-privacy-details/).
+- Update [privacy.html:21](C:/Dev/VR/legal-site/privacy.html:21), [53](C:/Dev/VR/legal-site/privacy.html:53), and [66](C:/Dev/VR/legal-site/privacy.html:66) for feedback content/context, support use, Resend/mailbox handling, retention and deletion. Show a short attachment notice for failed takes too. The described support use does not introduce ATT tracking. [Apple definitions](https://developer.apple.com/app-store/app-privacy-details/).
+
+**(3) Three normal-user edge cases**
+
+1. **Offline or interrupted send:** preserve the draft if persistence fails; serialize outbox writes/flushes and reuse the same UUID after lost acknowledgement. A duplicate submission must not schedule another email.
+2. **Email fails:** the report can say Received while the founder never gets alerted. No retries is acceptable only with a routine dashboard inbox check; scheduled actions are not automatically retried. [Convex scheduling](https://docs.convex.dev/scheduling/scheduled-functions).
+3. **“Fixed” requires a newer app:** include “Fixed in version X—please update” in the note, rather than implying the installed version now works.
+
+**(4) Verdict:** Proceed with this scope, including in-app status—it now directly serves the stated goal. Fix the attention signal, queued-list visibility, draft preservation and privacy wording before shipping. Read-only; no files changed or Convex/EAS commands run.

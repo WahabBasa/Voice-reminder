@@ -1,0 +1,1351 @@
+2026-09-09T19:22:25.837285Z ERROR codex_core::session::session: failed to load skill C:\Users\AtheA\.agents\skills\ptc-microsoft-todo\SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Dev\VR
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a0879f-0c69-7c90-a028-642373775ef7
+--------
+user
+You are grilling Claude's plan (Claude is the architect on this repo). Role: illuminate iOS platform facts Claude has wrong or missing, and the few edge cases that WILL happen for a solo-dev reminder app. Read-only: do not modify files, do not run convex/eas. Verify iOS API claims against Apple docs where you can (SpeechAnalyzer / SpeechTranscriber / AssetInventory in iOS 26, SFSpeechRecognizer on-device). Answer in under 80 lines: (1) factual corrections with evidence (file:line or URL); (2) answers to Q1-Q6; (3) the 3-5 real edge cases; (4) verdict: agree / agree with changes. No essays, no exotic cases, deprioritize Android.
+
+## Goal
+Replace cloud speech-to-text for voice takes with on-device iOS dictation. The user just tried iOS 26 on-device dictation and found it excellent; speed is the driver. Current numbers on the fridge take today (iPhone 12, iOS 26.6): stop tap → card ≈ 6.6 s; backend total 3140 ms of which sttMs 913 (gpt-4o-mini-transcribe via OpenRouter), parseMs 1405, storageGetMs 223, getJobMs 417, schedulerDelayMs 190; upload + job pickup account for the rest.
+
+## Current pipeline (verified)
+- Recording: expo-av `Audio.Recording`, 16 kHz mono AAC m4a 32 kbps (`lib/recordingPreset.ts:22-43`), singleton start/stop in `lib/audio.ts:107-211`, metering listener for the VoiceMeter UI `lib/audio.ts:85-94`, stop tap → `onRecordingComplete(uri, traceId, tStopTap)` `components/RecordingOverlay.tsx:243-260`.
+- Upload: binary POST to a Convex upload URL (`lib/convexUpload.ts:10-38`, URL pre-warmed during recording `app/index.tsx:944`), then `creationJobs.begin({deviceId, creationId, audioStorageId, localDate, localTime, timezone})` `app/index.tsx:1067-1121`.
+- Job machinery: statuses pending|transcribed|committed|failed|cancelled (`convex/schema.ts:112-118, 204-221`), lifecycle in `convex/creationJobs.ts` (begin :225, casPatch :424, commit :451, perfPatch :522, retry :601 MAX 3), worker `convex/creationJobActions.ts:355` → storage get → STT `convex/stt.ts:147` (fallback whisper-1) → CAS `transcribed` → parse (`gpt-5.6-luna`, bare transcript as user message, `:287-341`) → validate → commit. Client watches the job reactively (`lib/creationJobWatch.ts`), reconciles on relaunch (`lib/takeReconcile.ts`), logs `convex_perf` (`lib/perf.ts:189`).
+- Typed path exists but bypasses the job machinery: `processTypedReminder` `convex/actions.ts:1645` → `createTakeWithDeferredAudio` `:1385`.
+- Parse prompt gets only {currentDate, dayOfWeek, currentTime, timezone} (`convex/actions.ts:521`); language is inferred from the text; supports English + Arabic (`:522-616`, `convex/helpers.ts:432` script detection).
+- Native precedent: `plugins/withAlarmKit.js` injects Swift (`plugins/ios-src/*.swift`) via withXcodeProject/withDangerousMod/withInfoPlist, classic RN bridge (`RCT_EXTERN_MODULE`, `NativeModules.AlarmKitBridge` in `lib/alarmKit.ts:14,62`), all gated `@available(iOS 26.0, *)`; EAS default image compiles against the iOS 26 SDK (note at `withAlarmKit.js:408`). No expo-build-properties, no deploymentTarget override, newArchEnabled true, expo 54 / RN 0.81.5, no speech package installed. `NSSpeechRecognitionUsageDescription` absent from app.json.
+
+## Plan
+A. **Native module `VRSpeech` (Swift, iOS 26+, same injection pattern as AlarmKit, classic bridge)**. Phase 1 is FILE-BASED, not streaming: keep expo-av recording exactly as is (VoiceMeter, permission, 16 kHz preset untouched); on stop, call `VRSpeech.transcribeFile(uri, localeId)` which runs `SpeechAnalyzer` + `SpeechTranscriber` over the m4a via `AVAudioFile` and resolves `{ text, localeId, ms }`. Plus `VRSpeech.status(localeId)` → `{ available: boolean, installed: boolean, reason }` and `VRSpeech.prepare(localeId)` which reserves/downloads the locale assets (`AssetInventory`) — called at app start / after mic consent so first take is not blocked by a model download. Below iOS 26 or when unavailable → module reports unavailable and the client uses the cloud path unchanged.
+B. **Backend**: `creationJobs.begin` accepts `transcript?: string` with `audioStorageId?` now optional (exactly one required). Worker: when `transcript` present, skip storage get + STT, CAS straight to `transcribed`, parse as today. Perf: add `sttSource: "device" | "cloud"` and `deviceSttMs` to the job perf; `stt_perf` line skipped for device. Job table gets `transcript`/`sttSource` fields (schema additive). Retry/reconcile untouched. Keep the audio upload happening in parallel (fire-and-forget) for the first release so a bad on-device transcript can be compared against cloud in logs? — see Q4.
+C. **Client** (`app/index.tsx` handoff + `lib/voiceTake.ts`): on stop, if VRSpeech available for the chosen locale → transcribe file (device timing logged as `[VR PERF] device_stt`), then `begin({transcript})`; if transcription throws / returns empty / times out (3 s cap) → fall back to the existing upload+begin path with the same creationId. Locale: new setting "Voice language" (English / Arabic) defaulting from the device locale, stored locally; passed as localeId. 
+D. **Build**: native → new EAS build (build 3 is already planned for the 2.1 resubmission), then OTA for JS iterations.
+E. **Split for parallel agents**: (1) native module + plugin + JS wrapper with a typed contract, (2) backend begin/worker/schema/tests, (3) client integration + fallback + setting + tests — contracts defined up front so all three can run concurrently; then a build + device-verify step.
+
+## Questions
+- Q1: SpeechAnalyzer/SpeechTranscriber (iOS 26) — is file-based analysis via AVAudioFile supported and roughly how fast for a 5-10 s clip on an A14 (iPhone 12)? Does it require `SFSpeechRecognizer.requestAuthorization` / `NSSpeechRecognitionUsageDescription`, or only the mic permission? Does it need `AssetInventory.reserve` + `allocate` and how big is the Arabic/English download? Does it work with a 16 kHz AAC m4a input, or must we convert the format (`analyzer.bestAvailableAudioFormat`)?
+- Q2: Arabic: is `ar` (which region ids?) among SpeechTranscriber's `supportedLocales` for on-device? If not, the fallback to cloud for Arabic is automatic under plan C — confirm that's the right shape rather than SFSpeechRecognizer with `requiresOnDeviceRecognition`.
+- Q3: File-based (plan A) vs streaming partial results from a shared AVAudioEngine tap: given the numbers above, is the extra latency of file-based after stop small enough (< ~500 ms) that streaming is not worth its complexity (AVAudioSession conflicts with expo-av, rewriting the recorder + meter) for phase 1?
+- Q4: Should the audio still be uploaded when the device transcript is used? Claude leans NO on the hot path (it costs the upload wait and blob storage) but wants a cheap way to compare quality during the first week — e.g. upload in the background after `begin` and store the cloud transcript on the job for logs only, dropped after a week. Reasonable or overkill?
+- Q5: Mixed-language takes (Arabic sentence with an English word, or vice versa): what does SpeechTranscriber do with a single-locale transcriber? Is there any auto language detection on-device in iOS 26?
+- Q6: Anything about running SpeechAnalyzer right after `stopAndUnloadAsync` on the same AVAudioSession (category changes, `allowsRecordingIOS` restore is deferred in `lib/audio.ts:196`) that would bite?
+
+2026-09-09T19:22:26.671360Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\"error\":{\"message\":\"Invalid API key: ak_**mXj4\",\"code\":801,\"status\":401,\"request_id\":\"da83bea9-68a6-4217-8e50-2dca322bc67e\"}}")
+codex
+I’ll check the repo handoff and Apple’s API documentation, focusing on device support, locale coverage, and the latency assumptions.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content C:/Users/AtheA/.agents/skills/grilling/SKILL.md' in C:\Dev\VR
+ succeeded in 688ms:
+---
+name: grilling
+description: Interview the user relentlessly about a plan or design. Use when the user wants to stress-test a plan before building, or uses any 'grill' trigger phrases.
+---
+
+Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+
+Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+
+If a question can be answered by exploring the codebase, explore the codebase instead.
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files -g AGENTS.md -g '*audio*' -g '*creationJob*' -g '*takeReconcile*' -g '*voiceTake*'; Get-Content lib/audio.ts | Select-Object -Skip 100 -First 125; Get-Content convex/creationJobs.ts | Select-Object -Skip 220 -First 130" in C:\Dev\VR
+web search: site.developer.apple.com SpeechAnalyzer SpeechTranscriber iPhone 12 supported devices authorization audio file ...
+ succeeded in 1919ms:
+__vitest__\convex\creationJobsRaces.test.ts
+__vitest__\convex\creationJobsLifecycle.test.ts
+lib\voiceTake.ts
+lib\takeReconcile.ts
+lib\creationJobWatch.ts
+lib\audioHydration.ts
+lib\audio.ts
+docs\issues\CL-1-server-audio-and-phrasing.md
+convex\creationJobActions.ts
+convex\creationJobs.ts
+__tests__\convex\creationJobActions.test.ts
+__tests__\lib\audio.test.ts
+__tests__\lib\voiceTake.test.ts
+__tests__\lib\takeReconcile.test.ts
+__tests__\lib\creationJobWatch.test.ts
+__tests__\lib\audioHydration.test.ts
+
+export async function getMicrophonePermission(): Promise<PermissionStatus> {
+  const { status } = await Audio.getPermissionsAsync();
+  return status as PermissionStatus;
+}
+
+export async function startRecording(): Promise<void> {
+  // Prevent double-tap race condition
+  if (isRecordingPreparing) {
+    console.log("[VR] Recording already preparing, ignoring duplicate call");
+    return;
+  }
+
+  // Clean up any existing recording first
+  if (recording) {
+    console.log("[VR] Cleaning up existing recording before starting new one");
+    try {
+      await recording.stopAndUnloadAsync();
+    } catch (e) {
+      console.log("[VR] Error cleaning up previous recording:", e);
+    }
+    recording = null;
+  }
+
+  isRecordingPreparing = true;
+
+  try {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+    });
+
+    const onStatusUpdate = (status: Audio.RecordingStatus) => {
+      if (status.isRecording && typeof status.metering === "number") {
+        meteringListener?.(status.metering);
+      }
+    };
+    const createRecording = (preset: Audio.RecordingOptions) =>
+      Audio.Recording.createAsync(
+        { ...preset, isMeteringEnabled: true },
+        onStatusUpdate,
+        80
+      );
+
+    let result;
+    try {
+      result = await createRecording(RECORDING_PRESET);
+    } catch (e: any) {
+      const data = {
+        preset: "RECORDING_PRESET",
+        code: e?.code ?? null,
+        message: e?.message ?? String(e),
+      };
+      Sentry.addBreadcrumb({
+        category: "device.recording",
+        message: "Recording preset failed; retrying HIGH_QUALITY",
+        level: "warning",
+        data,
+      });
+      perfLog("recording", "device.recording", "preset_failed", data);
+      result = await createRecording(RECORDING_FALLBACK_PRESET);
+    }
+    recording = result.recording;
+  } finally {
+    isRecordingPreparing = false;
+  }
+}
+
+export async function pauseRecording(): Promise<void> {
+  if (!recording) return;
+  await recording.pauseAsync();
+}
+
+export async function resumeRecording(): Promise<void> {
+  if (!recording) return;
+  await recording.startAsync();
+}
+
+export async function stopRecording(traceId?: string): Promise<string | null> {
+  if (!recording) return null;
+
+  // Split timing (OLD-82): both halves of this function landed in the same
+  // commit as Sentry (28bb2e0), so "the slowdown started with Sentry" could
+  // just as easily be the audio-session change below. Measure, don't guess.
+  //
+  // OLD-106 answered it by removing the second half from the wait entirely.
+  // The URI is ready the moment expo-av finishes unloading; the session restore
+  // is fired here and completes on its own (see restorePlaybackAudioMode), so
+  // the upload no longer queues behind an AVAudioSession category switch.
+  const tStart = Date.now();
+  await recording.stopAndUnloadAsync();
+  const tUnloaded = Date.now();
+
+  // Not awaited â€” deliberately. Guaranteed to run to completion, retried once
+  // on failure, reported to Sentry if it ever gives up, and awaited by every
+  // playback path via ensurePlaybackAudioMode().
+  void restorePlaybackAudioMode(traceId);
+
+  if (traceId) {
+    perfLog(traceId, "device.recording", "stopRecording_split", {
+      // expo-av teardown + file finalization â€” now the whole of the wait.
+      unloadMs: tUnloaded - tStart,
+      // Kept as a field so the shape of the log is stable across the change:
+      // the category switch is off the critical path, so it costs zero here.
+      // Its real duration lands separately as audioMode_restored.
+      audioModeMs: 0,
+      audioModeDeferred: 1,
+    });
+  }
+
+  const uri = recording.getURI();
+  recording = null;
+  return uri;
+}
+
+export function getRecording(): Audio.Recording | null {
+  return recording;
+}
+
+
+// ============================================================
+// AudioService - Unified audio playback with resource management
+// ============================================================
+
+export interface PlayOptions {
+ * insert path schedules a worker, and it does so inside the same transaction â€”
+ * so a job row that exists always has (or has had) exactly one worker for
+ * generation 1 (D1).
+ */
+export const begin = mutation({
+  args: {
+    deviceId: v.string(),
+    creationId: v.string(),
+    audioStorageId: v.id("_storage"),
+    localDate: v.string(),
+    localTime: v.string(),
+    timezone: v.string(),
+  },
+  returns: v.object({
+    jobId: v.id("creationJobs"),
+    status: creationStatusValidator,
+    generation: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const existing = await findJob(ctx, args.deviceId, args.creationId);
+    if (existing) {
+      return {
+        jobId: existing._id,
+        status: existing.status,
+        generation: existing.generation,
+      };
+    }
+
+    const now = Date.now();
+    const jobId = await ctx.db.insert("creationJobs", {
+      deviceId: args.deviceId,
+      creationId: args.creationId,
+      status: "pending" as const,
+      generation: 1,
+      attempts: 1,
+      audioStorageId: args.audioStorageId,
+      localDate: args.localDate,
+      localTime: args.localTime,
+      timezone: args.timezone,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await ctx.scheduler.runAfter(0, internal.creationJobActions.run, {
+      jobId,
+      generation: 1,
+      scheduledAt: now,
+    });
+
+    return { jobId, status: "pending" as const, generation: 1 };
+  },
+});
+
+// â”€â”€â”€ 1.4 reads, commit, ack â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/**
+ * The document the client watches. Null until `begin` lands, and null forever
+ * for another device's creationId â€” a job is not a shared object.
+ */
+export const get = query({
+  args: { deviceId: v.string(), creationId: v.string() },
+  returns: v.union(v.null(), watchedJobValidator),
+  handler: async (ctx, args) => {
+    const job = await findJob(ctx, args.deviceId, args.creationId);
+    if (!job) return null;
+    return {
+      status: job.status,
+      generation: job.generation,
+      transcript: job.transcript,
+      errorCode: job.errorCode,
+      reminderIds: job.reminderIds,
+      perf: job.perf,
+      updatedAt: job.updatedAt,
+    };
+  },
+});
+
+/**
+ * The rows a committed take produced, in the order they were inserted (C14).
+ *
+ * Only ever answers for a committed job the calling device owns; anything else
+ * is null, which the client reads as "not importable yet". A row the user has
+ * already deleted comes back as a placeholder rather than being skipped, so the
+ * client can tell "deleted" apart from "the read lost a row".
+ */
+export const getReminders = query({
+  args: { deviceId: v.string(), creationId: v.string() },
+  returns: v.union(
+    v.null(),
+    v.array(v.union(committedReminderValidator, deletedReminderValidator))
+  ),
+  handler: async (ctx, args) => {
+    const job = await findJob(ctx, args.deviceId, args.creationId);
+    if (!job || job.status !== "committed") return null;
+
+    const rows = [];
+    for (const reminderId of job.reminderIds ?? []) {
+      const reminder = await ctx.db.get(reminderId);
+      // Same ownership rule the public reminder reads use, applied to a row we
+      // reached through the job rather than through the by_device index.
+      const owned =
+        reminder !== null &&
+        (reminder.deviceId === undefined || reminder.deviceId === args.deviceId);
+      if (!owned) {
+        rows.push({ id: reminderId as string, deleted: true as const });
+        continue;
+      }
+      rows.push({
+        id: reminder._id as string,
+        creationId: reminder.creationId,
+        title: reminder.title,
+        description: reminder.description,
+        time: reminder.time,
+        date: reminder.date,
+        frequency: reminder.frequency,
+        days: reminder.days,
+        schedule: reminder.schedule,
+        scheduleType: reminder.scheduleType,
+        onceAt: reminder.onceAt,
+        rrule: reminder.rrule,
+        dtstart: reminder.dtstart,
+        tzid: reminder.tzid,
+        until: reminder.until,
+        intervalMs: reminder.intervalMs,
+        anchorAt: reminder.anchorAt,
+        intervalDays: reminder.intervalDays,
+        parseWarnings: reminder.parseWarnings,
+        emoji: reminder.emoji,
+        audioStorageId: reminder.audioStorageId,
+        wavStorageId: reminder.wavStorageId,
+
+codex
+I’m applying the grilling skill as a read-only plan review, using your Q1–Q6 format. File-based analysis is supported; the key uncertainties are Arabic availability and the assumed sub-500 ms latency on the iPhone 12.
+
+web search: 
+web search: https://developer.apple.com/videos/play/wwdc2025/277/
+web search: 
+web search: site:developer.apple.com/documentation/speech "permission" "SpeechTranscriber" ...
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "audioStorageId|transcript|retry|pending|audioUri" convex/creationJobs.ts convex/schema.ts lib/takeReconcile.ts lib/voiceTake.ts convex/creationJobActions.ts; Get-Content lib/takeReconcile.ts | Select-Object -First 210; Get-Content lib/voiceTake.ts | Select-Object -First 160' in C:\Dev\VR
+ succeeded in 560ms:
+convex/creationJobActions.ts:10: * client has already been told the take exists, a retry may have superseded
+convex/creationJobActions.ts:11: * this run mid-transcription, and the user may have cancelled. So every write
+convex/creationJobActions.ts:63:  transcriptionCheckpointMs?: number;
+convex/creationJobActions.ts:74: * transcripts, prompt text or credentials — only ids, model slugs and numbers.
+convex/creationJobActions.ts:158: * is a take that fails as `unparseable` and that no retry can turn into
+convex/creationJobActions.ts:219:      expectStatus: ["pending", "transcribed"],
+convex/creationJobActions.ts:230: * Steps 2 and 3: the stored recording, then transcription (convex/stt.ts).
+convex/creationJobActions.ts:235:  audioStorageId: Id<"_storage"> | undefined,
+convex/creationJobActions.ts:239:  if (!audioStorageId) return { ok: false, code: "storage_missing" };
+convex/creationJobActions.ts:246:    audioBlob = await ctx.storage.get(audioStorageId);
+convex/creationJobActions.ts:277:    console.error("[VR] creation job: transcription failed");
+convex/creationJobActions.ts:289:  transcript: string,
+convex/creationJobActions.ts:318:        { role: "user", content: transcript },
+convex/creationJobActions.ts:326:      transcript,
+convex/creationJobActions.ts:349:    // The moment `begin`/`retry` scheduled this run, passed so the worker can
+convex/creationJobActions.ts:370:    if (job.generation !== args.generation || job.status !== "pending") return null;
+convex/creationJobActions.ts:376:    // stands in; a retry queued without one omits the delay rather than
+convex/creationJobActions.ts:385:    // 2-3. Recording → transcript.
+convex/creationJobActions.ts:386:    const stt = await transcribeRecording(ctx, job.audioStorageId, perf, job.creationId);
+convex/creationJobActions.ts:393:    // 4. Milestone. Losing it means a retry or a cancel got here first, and the
+convex/creationJobActions.ts:401:        expectStatus: ["pending"],
+convex/creationJobActions.ts:402:        patch: { status: "transcribed", transcript: stt.value },
+convex/creationJobActions.ts:405:      perf.transcriptionCheckpointMs = Date.now() - tCheckpoint;
+lib/takeReconcile.ts:13:} from "./pendingTakes";
+lib/takeReconcile.ts:18: * Reconciliation (spec §2.5) and the retry dispatch (§2.6).
+lib/takeReconcile.ts:49:  | "retry_dispatch";
+lib/takeReconcile.ts:85:        return "retry_dispatch";
+lib/takeReconcile.ts:89:  // pending | transcribed
+lib/takeReconcile.ts:90:  // A committed take cannot become pending again — the server refuses it. Seeing
+lib/takeReconcile.ts:99:  | "reupload_then_retry"
+lib/takeReconcile.ts:100:  | "server_retry"
+lib/takeReconcile.ts:107: * The §2.6 retry dispatch — the single source of truth for "this take failed,
+lib/takeReconcile.ts:121:  // It re-enters the import; it must never spend a server retry (C13). A job
+lib/takeReconcile.ts:131:  if (server === "pending" || server === "transcribed") return "subscribe";
+lib/takeReconcile.ts:136:      return hasRecording ? "reupload_then_retry" : "record_again";
+lib/takeReconcile.ts:138:    return "server_retry";
+lib/takeReconcile.ts:147:  // with nothing left on the server: there is nothing to retry.
+lib/takeReconcile.ts:159:    audioStorageId: string;
+lib/takeReconcile.ts:186:  /** The user asked to retry and there is nothing left but a fresh recording. */
+lib/takeReconcile.ts:374:  // retry pointed at the local re-check rather than at a server that has
+lib/takeReconcile.ts:415:    audioStorageId: storageId,
+lib/takeReconcile.ts:417:  await beginAndSubscribe(stamped ?? { ...uploading, audioStorageId: storageId }, current, deviceId);
+lib/takeReconcile.ts:425:  const audioStorageId = take.audioStorageId;
+lib/takeReconcile.ts:426:  if (!audioStorageId) {
+lib/takeReconcile.ts:433:    await handOrphanBlob(current, deviceId, take.creationId, audioStorageId);
+lib/takeReconcile.ts:440:    audioStorageId,
+lib/takeReconcile.ts:446:    audioStorageId,
+lib/takeReconcile.ts:493:    ...(take.audioStorageId ? { orphanStorageId: take.audioStorageId } : {}),
+lib/takeReconcile.ts:525:    hasStorageId: !!take.audioStorageId,
+lib/takeReconcile.ts:530:  current.onStage?.(take.creationId, `retry_${action}`, { trigger });
+lib/takeReconcile.ts:550:    case "reupload_then_retry": {
+lib/takeReconcile.ts:556:      await updatePendingTake(take.creationId, "processing", { audioStorageId: storageId });
+lib/takeReconcile.ts:565:    case "server_retry": {
+lib/takeReconcile.ts:595: * Nothing left to retry with.
+lib/takeReconcile.ts:637:export async function retryTake(creationId: string): Promise<void> {
+lib/takeReconcile.ts:646:    current.onStage?.(creationId, "retry_error", { error: String(e) });
+lib/takeReconcile.ts:679:export function pendingTakeCount(): number {
+lib/voiceTake.ts:20:  /** Fast path returns rows with audio still pending. */
+lib/voiceTake.ts:108:    audioStatus: ctx.usedFastPath ? "pending" : item.audioUrl ? "ready" : undefined,
+convex/schema.ts:102:  transcriptionCheckpointMs: v.optional(v.number()),
+convex/schema.ts:113:  v.literal("pending"),
+convex/schema.ts:137:    audioStorageId: v.optional(v.id("_storage")),
+convex/schema.ts:169:    audioStatus: v.optional(v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))),
+convex/schema.ts:173:    // fires minutes BEFORE the event — and holding "pending" until it landed
+convex/schema.ts:181:      v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))
+convex/schema.ts:195:   * fill the pending card. Every write past `begin` is a compare-and-set on
+convex/schema.ts:196:   * `generation`, so a worker that was superseded by a retry — or by the stale
+convex/schema.ts:198:   * are terminal and never regress; `failed` is the retryable one.
+convex/schema.ts:211:    // Bumped by `retry`. Every write CAS's on it, which is how a superseded
+convex/schema.ts:214:    // Worker runs so far, capped at 3 by `retry`.
+convex/schema.ts:216:    transcript: v.optional(v.string()),
+convex/schema.ts:219:    audioStorageId: v.optional(v.id("_storage")),
+convex/creationJobs.ts:6: * watches `get` on every frame of a pending card, and a watched query has no
+convex/creationJobs.ts:13: * retry bumps it; every write past `begin` compares against it and no-ops on a
+convex/creationJobs.ts:64:  v.literal("pending"),
+convex/creationJobs.ts:92:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:104:  audioStorageId: v.optional(v.id("_storage")),
+convex/creationJobs.ts:117:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:137:  audioStorageId: v.optional(v.id("_storage")),
+convex/creationJobs.ts:185:  transcript?: string;
+convex/creationJobs.ts:196: * no caller can talk a committed job back into `pending`.
+convex/creationJobs.ts:220: * pass, and a lost response must not cost a second transcription. Only the
+convex/creationJobs.ts:229:    audioStorageId: v.id("_storage"),
+convex/creationJobs.ts:253:      status: "pending" as const,
+convex/creationJobs.ts:256:      audioStorageId: args.audioStorageId,
+convex/creationJobs.ts:270:    return { jobId, status: "pending" as const, generation: 1 };
+convex/creationJobs.ts:289:      transcript: job.transcript,
+convex/creationJobs.ts:349:        audioStorageId: reminder.audioStorageId,
+convex/creationJobs.ts:361:        audioUrl: reminder.audioStorageId
+convex/creationJobs.ts:362:          ? await ctx.storage.getUrl(reminder.audioStorageId)
+convex/creationJobs.ts:400: * generation before spending a Whisper call.
+convex/creationJobs.ts:414:      audioStorageId: job.audioStorageId,
+convex/creationJobs.ts:479:        audioStatus: "pending" as const,
+convex/creationJobs.ts:482:        audioExtrasStatus: preTtsText ? ("pending" as const) : undefined,
+convex/creationJobs.ts:498:    if (job.audioStorageId) {
+convex/creationJobs.ts:500:        storageId: job.audioStorageId,
+convex/creationJobs.ts:508:      // A commit after a retry clears the previous attempt's error.
+convex/creationJobs.ts:533:// ─── 1.5 cancel / retry / discard ───────────────────────────────────────────
+convex/creationJobs.ts:536: * The X on the pending card (C4).
+convex/creationJobs.ts:576:    // The status was read and narrowed to pending|transcribed inside this same
+convex/creationJobs.ts:582:    if (job.audioStorageId) orphans.add(job.audioStorageId);
+convex/creationJobs.ts:601:export const retry = mutation({
+convex/creationJobs.ts:623:      args.newStorageId !== undefined && args.newStorageId !== job.audioStorageId;
+convex/creationJobs.ts:626:      status: "pending" as const,
+convex/creationJobs.ts:630:      ...(swapping ? { audioStorageId: args.newStorageId } : {}),
+convex/creationJobs.ts:634:    if (swapping && job.audioStorageId) {
+convex/creationJobs.ts:636:        storageId: job.audioStorageId,
+convex/creationJobs.ts:646:    return { status: "pending" as const, generation };
+convex/creationJobs.ts:662:    if (job.audioStorageId) {
+convex/creationJobs.ts:664:        storageId: job.audioStorageId,
+convex/creationJobs.ts:677: * Two halves, one budget. First: a job that has been `pending` or `transcribed`
+convex/creationJobs.ts:679: * mid-run — and is failed as `internal` so the client's card offers a retry
+convex/creationJobs.ts:705:    for (const status of ["pending", "transcribed"] as const) {
+convex/creationJobs.ts:714:        // At the job's CURRENT generation: the sweep is not a retry, it is the
+convex/creationJobs.ts:715:        // live worker's obituary, and it must lose to a retry that beat it here.
+convex/creationJobs.ts:716:        const result = await applyCas(ctx, job, job.generation, ["pending", "transcribed"], {
+convex/creationJobs.ts:736:      // A failed take stays retryable for a week.
+convex/creationJobs.ts:785:  if (job.audioStorageId) {
+convex/creationJobs.ts:787:      storageId: job.audioStorageId,
+import { AppState } from "react-native";
+import {
+  errorKindForServerCode,
+  getPendingTake,
+  getPendingTakesSnapshot,
+  loadPendingTakes,
+  missingRecordingOutcome,
+  removePendingTake,
+  updatePendingTake,
+  type PendingErrorKind,
+  type PendingPhase,
+  type PendingTake,
+} from "./pendingTakes";
+import type { WatchedJob } from "./creationJobWatch";
+import type { CommitTakeOutcome } from "./takeCommit";
+
+/**
+ * Reconciliation (spec Â§2.5) and the retry dispatch (Â§2.6).
+ *
+ * Everything that can strand a take converges here: a kill mid-upload, a
+ * foreground after three days offline, a watch that gave up at 90s, a cancel
+ * that raced a commit, a user tapping a failed card. The rule is that the
+ * device's phase and the server's status are BOTH inputs â€” neither alone says
+ * what to do â€” and the pair maps to exactly one action.
+ *
+ * The queue is a draining FIFO with two workers and single-flight per
+ * creationId, so two foregrounds in a second cannot import the same take twice,
+ * and a take enqueued while its own pass is running is re-run once rather than
+ * dropped.
+ *
+ * The load barrier is not an optimization (C10): dispatching before the outbox,
+ * the reminders and the history are on the device would read an empty store and
+ * conclude that a perfectly good import never happened.
+ */
+
+export type ServerJobStatus = WatchedJob["status"];
+
+export type ReconcileAction =
+  | "resume_upload"
+  | "rebegin"
+  | "subscribe"
+  | "import"
+  | "fail_from_server"
+  | "remove_local"
+  | "recover_committing"
+  | "invariant_violation"
+  | "cancel_then_remove"
+  | "discard_then_remove"
+  | "retry_dispatch";
+
+/**
+ * The Â§2.5 table, as one function.
+ *
+ * `null` here always means LOADED-and-missing. A watch's `undefined` never
+ * reaches this: it is filtered at the subscription (D-watch), because "not
+ * loaded yet" and "no such job" demand opposite actions.
+ */
+export function decideReconcileAction(
+  phase: PendingPhase,
+  status: ServerJobStatus | null
+): ReconcileAction {
+  // Two columns are the same answer whatever the device thinks.
+  if (status === "cancelled") return "remove_local";
+  if (status === "committed") return "import";
+
+  if (phase === "cancelling") {
+    // A cancel over a failed job is a discard â€” there is nothing to stop.
+    return status === "failed" ? "discard_then_remove" : "cancel_then_remove";
+  }
+
+  if (status === "failed") return "fail_from_server";
+
+  if (status === null) {
+    switch (phase) {
+      case "recording_saved":
+      case "uploading":
+        return "resume_upload";
+      case "processing":
+      case "transcribed":
+        return "rebegin";
+      case "committing":
+        return "recover_committing";
+      default:
+        // failed + no job: Â§2.6 owns this, by errorKind (D4).
+        return "retry_dispatch";
+    }
+  }
+
+  // pending | transcribed
+  // A committed take cannot become pending again â€” the server refuses it. Seeing
+  // it means our own phase is wrong, so the card says so rather than importing
+  // rows that do not exist.
+  return phase === "committing" ? "invariant_violation" : "subscribe";
+}
+
+export type RetryAction =
+  | "resume_upload"
+  | "rebegin"
+  | "reupload_then_retry"
+  | "server_retry"
+  | "import"
+  | "subscribe"
+  | "remove_local"
+  | "record_again";
+
+/**
+ * The Â§2.6 retry dispatch â€” the single source of truth for "this take failed,
+ * what now", used by the failed card's tap AND by reconciliation's `failed +
+ * null` cell.
+ */
+export function decideRetryAction(params: {
+  errorKind?: PendingErrorKind;
+  hasStorageId: boolean;
+  hasRecording: boolean;
+  server: ServerJobStatus | null;
+  serverErrorCode?: string;
+}): RetryAction {
+  const { errorKind, hasStorageId, hasRecording, server, serverErrorCode } = params;
+
+  // An unresolved entitlement is a LOCAL block on a job that already committed.
+  // It re-enters the import; it must never spend a server retry (C13). A job
+  // that is no longer there is no exception: the import is what re-checks the
+  // entitlement, and if there is genuinely nothing left to import it says so
+  // without the card losing the sentence that explains itself.
+  if (errorKind === "cap_unverified") {
+    return server === "cancelled" ? "remove_local" : "import";
+  }
+
+  if (server === "committed") return "import";
+  if (server === "cancelled") return "remove_local";
+  if (server === "pending" || server === "transcribed") return "subscribe";
+
+  if (server === "failed") {
+    // The one failure a reused blob cannot fix: the blob is what went missing.
+    if (serverErrorCode === "storage_missing") {
+      return hasRecording ? "reupload_then_retry" : "record_again";
+    }
+    return "server_retry";
+  }
+
+  // server === null
+  if (errorKind === "network") {
+    if (hasStorageId) return "rebegin";
+    return hasRecording ? "resume_upload" : "record_again";
+  }
+  // A failed job that has been garbage collected, or any non-network failure
+  // with nothing left on the server: there is nothing to retry.
+  return "record_again";
+}
+
+// â”€â”€â”€ Wiring â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+export type ReconcileDeps = {
+  getDeviceId: () => Promise<string>;
+  fetchJob: (deviceId: string, creationId: string) => Promise<WatchedJob | null>;
+  begin: (args: {
+    deviceId: string;
+    creationId: string;
+    audioStorageId: string;
+    localDate: string;
+    localTime: string;
+    timezone: string;
+  }) => Promise<{ status: ServerJobStatus }>;
+  cancel: (args: {
+    deviceId: string;
+    creationId: string;
+    orphanStorageId?: string;
+  }) => Promise<{ status: string }>;
+  serverRetry: (args: {
+    deviceId: string;
+    creationId: string;
+    newStorageId?: string;
+  }) => Promise<{ status: string; capReached?: boolean }>;
+  discard: (args: { deviceId: string; creationId: string }) => Promise<{ status: string }>;
+  /** Upload this take's recording. Null when the file is gone (D10). */
+  uploadRecording: (take: PendingTake) => Promise<string | null>;
+  /** Is the recording still on disk? Only ever false for a `fragileUri` take. */
+  recordingExists: (take: PendingTake) => Promise<boolean>;
+  importTake: (take: PendingTake) => Promise<CommitTakeOutcome>;
+  subscribe: (take: PendingTake) => void;
+  deleteRecording: (take: PendingTake) => Promise<void>;
+  /** Durable proof that an import landed: a stored row stamped with this take. */
+  storeHasCreationId: (creationId: string) => boolean;
+  /** Outbox + reminders + history, all on the device (C10). */
+  loadBarrier: () => Promise<void>;
+  /** The user asked to retry and there is nothing left but a fresh recording. */
+  onRecordAgain?: (take: PendingTake) => void;
+  onStage?: (creationId: string, stage: string, data?: Record<string, unknown>) => void;
+};
+
+const WORKERS = 2;
+
+let deps: ReconcileDeps | null = null;
+let queue: string[] = [];
+const inFlight = new Set<string>();
+const requested = new Set<string>();
+let active = 0;
+let barrier: Promise<void> | null = null;
+let idle: Promise<void> = Promise.resolve();
+let resolveIdle: (() => void) | null = null;
+
+export function configureReconcile(next: ReconcileDeps): void {
+  deps = next;
+  pump();
+}
+
+function markBusy(): void {
+  if (resolveIdle) return;
+  idle = new Promise<void>((resolve) => {
+    resolveIdle = resolve;
+import { CURRENT_SCHEMA_VERSION, type Reminder } from "./store";
+import { buildGridSchedule, legacyFieldsFromGrid, type GridSchedule } from "./schedule";
+import { isPremiumSchedule } from "./usageGate";
+import type { PaywallContext } from "./paywallContent";
+
+/**
+ * One voice take, several reminders (OLD-93).
+ *
+ * The processing actions return the first reminder's fields top-level (where
+ * every pre-OLD-93 caller reads them) with the whole take alongside in
+ * `reminders`. Everything here is deliberately dependency-free so the screen's
+ * loop is testable: the store, Notifee, hydration and the Convex delete all
+ * arrive as injected deps.
+ */
+
+/** One reminder as the action returned it. Field-for-field the old result. */
+export type TakeItem = Record<string, any>;
+
+export type DraftContext = {
+  /** Fast path returns rows with audio still pending. */
+  usedFastPath: boolean;
+  tzid: string;
+};
+
+/**
+ * The reminders in an action result. A result without a usable array is the
+ * legacy single-reminder shape, which is a take of exactly one.
+ */
+export function extractTakeItems(result: any): TakeItem[] {
+  if (!result || typeof result !== "object") return [];
+
+  const items: TakeItem[] = Array.isArray(result.reminders)
+    ? result.reminders.filter((item: unknown) => !!item && typeof item === "object")
+    : [];
+
+  return items.length > 0 ? items : [result];
+}
+
+/**
+ * The grid one take item means.
+ *
+ * The grid is what the action now sends (OLD-97). A result from an older deploy
+ * carries none, so it is rebuilt from the flat fields that result does have â€”
+ * the same builder the parse itself runs. Read before the reminder is stored
+ * too, because whether it needs Pro is a question about this grid (OLD-100).
+ */
+export function scheduleForItem(item: TakeItem, tzid?: string): GridSchedule {
+  if (isGridSchedule(item.schedule)) return item.schedule;
+
+  return buildGridSchedule(
+    {
+      frequency: item.frequency,
+      time: item.time,
+      times: item.times,
+      date: item.date,
+      days: item.days,
+      everyNDays: item.everyNDays ?? item.intervalDays,
+      intervalMs: item.intervalMs,
+      windowStart: item.windowStart,
+      windowEnd: item.windowEnd,
+      until: item.until,
+    },
+    { tzid }
+  );
+}
+
+/** Whether this item's schedule is one only a subscriber may keep. */
+export function isPremiumTakeItem(item: TakeItem, tzid?: string): boolean {
+  return isPremiumSchedule(scheduleForItem(item, tzid));
+}
+
+/** The local reminder one take item becomes. */
+export function buildReminderDraft(
+  item: TakeItem,
+  ctx: DraftContext
+): Omit<Reminder, "id" | "createdAt"> {
+  const schedule = scheduleForItem(item, ctx.tzid);
+
+  // Legacy projection: `time`/`date`/`frequency`/`days` stay in lockstep with
+  // the grid so nothing that still reads them can disagree with it.
+  const legacy = legacyFieldsFromGrid(schedule);
+  const frequency = legacy.frequency;
+  const days = legacy.days;
+
+  const intervalMs = Number(item.intervalMs);
+  const anchorAt = Number(item.anchorAt);
+  const preReminderMinutes = Number(item.preReminderMinutes);
+
+  // Card-chip emoji from the parse (absent = neutral bell chip)
+  const emoji = typeof item.emoji === "string" && item.emoji ? (item.emoji as string) : undefined;
+
+  // Ring tier (OLD-53). Both paths return urgency/persistent at parse time.
+  // The replay-variant fields that used to be read here are gone (OLD-108) â€”
+  // the server stopped producing them, and the nag repeats the base line.
+
+  return {
+    convexId: item.id,
+    title: item.title,
+    description: item.description,
+    emoji,
+    schedule,
+    time: legacy.time,
+    date: legacy.date,
+    frequency,
+    days,
+    intervalDays: legacy.intervalDays,
+    audioUrl: item.audioUrl || "",
+    audioStatus: ctx.usedFastPath ? "pending" : item.audioUrl ? "ready" : undefined,
+    preReminderMinutes:
+      Number.isFinite(preReminderMinutes) && preReminderMinutes > 0 ? preReminderMinutes : undefined,
+    preAudioUrl: item.preAudioUrl || undefined,
+    urgency: item.urgency,
+    persistent: item.persistent === true || undefined,
+
+    intervalMs: Number.isFinite(intervalMs) ? intervalMs : legacy.intervalMs,
+    anchorAt: Number.isFinite(anchorAt) ? anchorAt : undefined,
+
+    // New unified schedule fields
+    scheduleType: item.scheduleType,
+    onceAt: item.onceAt,
+    rrule: item.rrule,
+    dtstart: item.dtstart,
+    tzid: ctx.tzid,
+    until: schedule.until ?? item.until,
+    parseWarnings: item.parseWarnings,
+
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+  };
+}
+
+/** A `schedule` that survived the wire as an actual grid, not model junk. */
+function isGridSchedule(value: unknown): value is GridSchedule {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<GridSchedule>;
+  return (
+    candidate.type === "grid" &&
+    !!candidate.days &&
+    typeof candidate.days === "object" &&
+    !!candidate.times &&
+    typeof candidate.times === "object"
+  );
+}
+
+/** What the plan says about one reminder of the take. */
+export type TakeDecision = "keep" | "drop_cap" | "drop_premium";
+
+export type TakeAllowance = {
+  /** How many of the take's reminders may be kept. */
+  allowed: number;
+  dropped: number;
+  /** Cut because their schedule needs Pro â€” interval mode (OLD-100). */
+  blockedPremium: number;
+  /** Index-aligned with the take: what happens to each reminder. */
+  decisions: TakeDecision[];
+  isPro: boolean;
+  limit: number;
+  activeCount: number;
+};
+
+/**
+
+web search: 
+web search: site:developer.apple.com/documentation/speech/asking-permission-to-use-speech-recognition "on-device" ...
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths = @('"'asking-permission-to-use-speech-recognition','speechanalyzer/analyzesequence(from:)','speechtranscriber','assetinventory','speechtranscriber/supportedlocales'); foreach ("'$p in $paths) { $u = '"'https://developer.apple.com/tutorials/data/documentation/speech/' + "'$p + '"'.json'; try { "'$d = Invoke-RestMethod -Uri $u; Write-Output ($p); Write-Output ($d.abstract | ConvertTo-Json -Depth 15 -Compress); Write-Output ($d.primaryContentSections | ConvertTo-Json -Depth 20 -Compress) } catch { Write-Output $_.Exception.Message } }' in C:\Dev\VR
+ succeeded in 736ms:
+Unable to connect to the remote server
+Unable to connect to the remote server
+Unable to connect to the remote server
+Unable to connect to the remote server
+Unable to connect to the remote server
+
+codex
+The repo exposes one definite plan change: reconciliation currently requires an uploaded audio ID, so it cannot stay untouched for transcript-only jobs. Apple also offers `DictationTranscriber` as the iOS 26 fallback model; cloud remains a reasonable phase-one fallback, but it isn’t the only option.
+
+web search: 
+web search: site:developer.apple.com "SpeechTranscriber" "authorization" "not" ...
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content convex/creationJobActions.ts | Select-Object -Skip 365 -First 115; Get-Content lib/takeReconcile.ts | Select-Object -Skip 310 -First 120; Get-Content convex/creationJobs.ts | Select-Object -Skip 600 -First 48; rg -n "transcript|localUri|recordingUri|storageId" lib/pendingTakes.ts; Get-Content app/index.tsx | Select-Object -Skip 1015 -First 115' in C:\Dev\VR
+ succeeded in 745ms:
+      // In a `finally` so a rejected query still records the elapsed time.
+      perf.getJobMs = Date.now() - tGetJob;
+    }
+    if (!job) return null;
+    if (job.generation !== args.generation || job.status !== "pending") return null;
+
+    // Scheduling telemetry. `jobAgeMs` is always createdAt â†’ handler entry;
+    // `schedulerDelayMs` is scheduledAt â†’ handler entry when the timestamp was
+    // supplied. For an already-queued generation-1 run without one, createdAt
+    // IS the scheduling instant (begin schedules inside the insert), so it
+    // stands in; a retry queued without one omits the delay rather than
+    // pretending the createdAt gap is scheduler latency.
+    perf.jobAgeMs = handlerEnteredAt - job.createdAt;
+    if (args.scheduledAt !== undefined) {
+      perf.schedulerDelayMs = handlerEnteredAt - args.scheduledAt;
+    } else if (args.generation === 1) {
+      perf.schedulerDelayMs = handlerEnteredAt - job.createdAt;
+    }
+
+    // 2-3. Recording â†’ transcript.
+    const stt = await transcribeRecording(ctx, job.audioStorageId, perf, job.creationId);
+    if (!stt.ok) {
+      await failJob(ctx, args, stt.code, perf);
+      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
+      return null;
+    }
+
+    // 4. Milestone. Losing it means a retry or a cancel got here first, and the
+    //    winner owns everything from here â€” including the recording.
+    let milestone;
+    const tCheckpoint = Date.now();
+    try {
+      milestone = await ctx.runMutation(internal.creationJobs.casPatch, {
+        jobId: args.jobId,
+        generation: args.generation,
+        expectStatus: ["pending"],
+        patch: { status: "transcribed", transcript: stt.value },
+      });
+    } finally {
+      perf.transcriptionCheckpointMs = Date.now() - tCheckpoint;
+    }
+    if (milestone.result !== "applied") return null;
+
+    // 5. Transcript â†’ plans.
+    const parsed = await parseTake(job, stt.value, perf, job.creationId);
+    if (!parsed.ok) {
+      await failJob(ctx, args, parsed.code, perf);
+      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
+      return null;
+    }
+
+    // 6. The strict gate. All N are checked before anything is written, and one
+    //    bad item fails the whole take rather than importing half of it. The
+    //    one repair made on the way in is the every-N-days cap â€” see
+    //    capEveryNDays; the capped plans are what is validated AND committed.
+    const plans = parsed.value.map(capEveryNDays);
+    const verdict = validateCreationPlans(plans, {
+      timezone: job.timezone,
+      now: Date.now(),
+    });
+    if (!verdict.ok) {
+      console.error(
+        `[VR] creation job: plan ${verdict.index} rejected â€” ${verdict.field}: ${verdict.reason}`
+      );
+      await failJob(ctx, args, "unparseable", perf);
+      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
+      return null;
+    }
+
+    // 7. All of it, or none of it.
+    const tCommit = Date.now();
+    let committed: { result: "applied" | "stale" };
+    try {
+      committed = await ctx.runMutation(internal.creationJobs.commit, {
+        jobId: args.jobId,
+        generation: args.generation,
+        plans: plans.map(toCommitPlan),
+        preCommitPerf: perf,
+      });
+    } catch (e) {
+      console.error("[VR] creation job: commit failed:", e);
+      await failJob(ctx, args, "internal", perf);
+      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
+      return null;
+    }
+    if (committed.result !== "applied") return null;
+
+    // The last two timings can only be known after the commit that carried the
+    // rest of `perf`, so they arrive in a separate patch that touches nothing
+    // else. A failure here costs a log line and nothing more (C5).
+    perf.commitMs = Date.now() - tCommit;
+    perf.totalMs = Date.now() - tStart;
+    try {
+      await ctx.runMutation(internal.creationJobs.perfPatch, {
+        jobId: args.jobId,
+        perf: { commitMs: perf.commitMs, totalMs: perf.totalMs },
+      });
+    } catch (e) {
+      console.error("[VR] creation job: could not record timings:", e);
+    }
+
+    logCreationJobPerf(job.creationId, args.generation, "committed", perf);
+    return null;
+  },
+});
+    case "subscribe":
+      current.subscribe(take);
+      return;
+    case "resume_upload":
+      await resumeUpload(take, current, deviceId);
+      return;
+    case "rebegin":
+      await beginAndSubscribe(take, current, deviceId);
+      return;
+    case "recover_committing":
+      await recoverCommitting(take, current);
+      return;
+    case "invariant_violation":
+      await failLocally(take, "server");
+      return;
+    case "cancel_then_remove":
+      await cancelThenRemove(take, current, deviceId);
+      return;
+    case "discard_then_remove":
+      await discardThenRemove(take, current, deviceId);
+      return;
+    default:
+      await runRetry(take, current, deviceId, job, "reconcile");
+      return;
+  }
+}
+
+// â”€â”€â”€ The individual moves â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async function forget(take: PendingTake, current: ReconcileDeps): Promise<void> {
+  await removePendingTake(take.creationId);
+  await current.deleteRecording(take).catch(() => {});
+}
+
+async function failLocally(take: PendingTake, errorKind: PendingErrorKind): Promise<void> {
+  await updatePendingTake(take.creationId, "failed", { errorKind });
+}
+
+async function failFromServer(take: PendingTake, job: WatchedJob): Promise<void> {
+  await updatePendingTake(take.creationId, "failed", {
+    errorKind: errorKindForServerCode(job.errorCode),
+    serverErrorCode: job.errorCode,
+  });
+}
+
+async function runImport(
+  take: PendingTake,
+  current: ReconcileDeps,
+  status: ServerJobStatus | null
+): Promise<void> {
+  const outcome = await current.importTake(take);
+  if (outcome.result !== "unavailable") return;
+
+  // The job said committed but its rows would not read: a race worth another
+  // push. With no job at all there is nothing to wait for.
+  if (status === "committed") {
+    current.subscribe(take);
+    return;
+  }
+  // An unresolved entitlement is a LOCAL block over a job that already
+  // committed, and a job that has since been collected does not turn it into a
+  // generic fault. Keeping the entitlement copy keeps the card honest â€” "can't
+  // verify your subscription" is still exactly what happened â€” and keeps the
+  // retry pointed at the local re-check rather than at a server that has
+  // nothing left to offer.
+  await failLocally(take, take.errorKind === "cap_unverified" ? "cap_unverified" : "server");
+}
+
+/**
+ * Resume from wherever the upload got to. The phase is re-read immediately
+ * before `begin` because a cancel may have landed while the bytes were in
+ * flight â€” in which case the blob is an orphan and is handed straight to the
+ * server for deletion (C4).
+ */
+async function resumeUpload(
+  take: PendingTake,
+  current: ReconcileDeps,
+  deviceId: string
+): Promise<void> {
+  if (missingRecordingOutcome(take) === "use_server_blob") {
+    // The bytes already reached Convex, so whether the local file survived is
+    // beside the point â€” the server blob is the source (D10).
+    await beginAndSubscribe(take, current, deviceId);
+    return;
+  }
+
+  const uploading = await updatePendingTake(take.creationId, "uploading");
+  if (!uploading) return;
+
+  const storageId = await current.uploadRecording(uploading);
+  if (!storageId) {
+    // Nothing uploaded and nothing on disk: the only honest offer is a
+    // re-record, which is what the failed("server") card carries (D10).
+    await failLocally(uploading, "server");
+    return;
+  }
+
+  const live = getPendingTake(take.creationId);
+  if (!live || live.phase === "cancelling") {
+    await handOrphanBlob(current, deviceId, take.creationId, storageId);
+    return;
+  }
+
+  const stamped = await updatePendingTake(take.creationId, "uploading", {
+    audioStorageId: storageId,
+  });
+  await beginAndSubscribe(stamped ?? { ...uploading, audioStorageId: storageId }, current, deviceId);
+}
+
+async function beginAndSubscribe(
+  take: PendingTake,
+  current: ReconcileDeps,
+  deviceId: string
+): Promise<void> {
+  const audioStorageId = take.audioStorageId;
+  if (!audioStorageId) {
+    await failLocally(take, "server");
+    return;
+  }
+
+export const retry = mutation({
+  args: {
+    deviceId: v.string(),
+    creationId: v.string(),
+    newStorageId: v.optional(v.id("_storage")),
+  },
+  returns: v.object({
+    status: statusOrMissingValidator,
+    generation: v.optional(v.number()),
+    capReached: v.optional(v.boolean()),
+  }),
+  handler: async (ctx, args) => {
+    const job = await findJob(ctx, args.deviceId, args.creationId);
+    if (!job) return { status: "not_found" as const };
+    if (job.status !== "failed") return { status: job.status, generation: job.generation };
+    if (job.attempts >= MAX_ATTEMPTS) {
+      return { status: job.status, generation: job.generation, capReached: true };
+    }
+
+    const generation = job.generation + 1;
+    const now = Date.now();
+    const swapping =
+      args.newStorageId !== undefined && args.newStorageId !== job.audioStorageId;
+
+    await ctx.db.patch(job._id, {
+      status: "pending" as const,
+      generation,
+      attempts: job.attempts + 1,
+      errorCode: undefined,
+      ...(swapping ? { audioStorageId: args.newStorageId } : {}),
+      updatedAt: now,
+    });
+
+    if (swapping && job.audioStorageId) {
+      await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
+        storageId: job.audioStorageId,
+      });
+    }
+
+    await ctx.scheduler.runAfter(0, internal.creationJobActions.run, {
+      jobId: job._id,
+      generation,
+      scheduledAt: now,
+    });
+
+    return { status: "pending" as const, generation };
+  },
+});
+41:  transcript?: string;
+44:  recordingUri: string;
+99:  transcript?: string;
+103:  recordingUri?: string;
+132:  recordingUri: string;
+142:    recordingUri: params.recordingUri,
+163:}): { recordingUri: string; fragileUri: boolean } {
+164:  if (params.copiedUri) return { recordingUri: params.copiedUri, fragileUri: false };
+165:  return { recordingUri: params.cacheUri, fragileUri: true };
+186: * blob, a transcription transport error and an internal fault are all "the app
+223:    typeof take.recordingUri === "string" &&
+            ...(job.transcript ? { transcript: job.transcript } : {}),
+          });
+          return;
+        }
+        if (job.status === "committed") {
+          markCreation(creationId, "committedAt");
+          creationBreadcrumb("committed");
+          enqueueReconcile(creationId);
+          return;
+        }
+        if (job.status === "failed") {
+          const errorKind = errorKindForServerCode(job.errorCode);
+          creationBreadcrumb("job_failed", errorKind);
+          dropCreationRun(creationId);
+          await updatePendingTake(creationId, "failed", {
+            errorKind,
+            ...(job.errorCode ? { serverErrorCode: job.errorCode } : {}),
+          });
+          return;
+        }
+        if (job.status === "cancelled") {
+          creationBreadcrumb("job_cancelled");
+          dropCreationRun(creationId);
+          await removePendingTake(creationId);
+          await deleteTakeRecording(take);
+        }
+      },
+      onLocalFailure: async (errorKind) => {
+        creationBreadcrumb("watch_gave_up", errorKind);
+        await updatePendingTake(creationId, "failed", { errorKind }).catch(() => {});
+        // The watchdog gave up at 90s; the job may still commit at 95. Hand the
+        // take to reconciliation now rather than leaving it for the next
+        // foreground â€” the dispatch table already turns failed + committed into
+        // an import, so the card heals itself instead of waiting for a tap.
+        if (errorKind === "network") enqueueReconcile(creationId);
+      },
+      onServerPerf: (perf) => logCreationServerPerf(creationId, perf),
+    });
+
+    watchesRef.current.set(creationId, handle);
+    void handle.done.finally(() => {
+      watchesRef.current.delete(creationId);
+    });
+  }, []);
+
+  /**
+   * The detached half of stop-tap: bytes up, job begun, subscription open.
+   *
+   * The phase is re-read immediately before `begin` because the user can cancel
+   * from the card while the upload is still in flight â€” in which case the blob
+   * belongs to nobody and is handed straight to the server for deletion (C4).
+   */
+  const uploadAndBegin = useCallback(
+    async (take: PendingTake, claimedUploadUrl: Promise<string | null> | null) => {
+      const creationId = take.creationId;
+      try {
+        await updatePendingTake(creationId, "uploading");
+        markCreation(creationId, "uploadStart");
+        creationBreadcrumb("upload_start");
+
+        let uploadUrl = claimedUploadUrl ? await claimedUploadUrl : null;
+        if (!uploadUrl) {
+          uploadUrl = (await generateAudioUploadUrl()).uploadUrl;
+        }
+        const { storageId } = await uploadRecordingToConvex(uploadUrl, take.recordingUri);
+        markCreation(creationId, "uploadDone");
+        creationBreadcrumb("upload_done");
+
+        const deviceId = await getDeviceId();
+        const live = getPendingTake(creationId);
+        if (!live || live.phase === "cancelling") {
+          creationBreadcrumb("orphan_blob");
+          void abandonOrphanBlob(creationId, storageId);
+          return;
+        }
+
+        const stamped = await updatePendingTake(creationId, "uploading", {
+          audioStorageId: storageId,
+        });
+        markCreation(creationId, "beginCalled");
+        await beginCreationJob({
+          deviceId,
+          creationId,
+          audioStorageId: storageId as any,
+          localDate: take.localDate,
+          localTime: take.localTime,
+          timezone: take.timezone,
+        });
+        creationBreadcrumb("job_begun");
+
+        const processing = await updatePendingTake(creationId, "processing", {
+          audioStorageId: storageId,
+        });
+        void subscribeToJob(processing ?? stamped ?? take);
+      } catch (error) {
+        // A `fragileUri` recording that is simply gone is not a network problem,
+        // and retrying the upload will never fix it (D10).
+        const gone =
+          take.fragileUri === true && !(await recordingFileExists(take.recordingUri));
+        const errorKind = gone ? ("server" as const) : ("network" as const);
+        console.log("[VR] take: upload/begin failed:", error);
+        creationBreadcrumb("upload_failed", errorKind);
+        await updatePendingTake(creationId, "failed", { errorKind }).catch(() => {});
+      }
+    },
+    [generateAudioUploadUrl, beginCreationJob, subscribeToJob]
+  );
+
+  /**
+   * Stop-tap.
+   *
+   * Everything up to "close the overlay" is ONE AsyncStorage write, because the
+   * whole point of the wave is that the card is on screen before anything slow
+   * is consulted. The documents-dir copy is slow â€” it is a file copy of up to
+   * two minutes of audio â€” so it does not run here: the take is persisted
+
+web search: 
+web search: "site:developer.apple.com/documentation/speech/asking-permission-to-use-speech-recognition" "SpeechAnalyzer" ...
+web search: 
+web search: https://developer.apple.com/documentation/speech/asking-permission-to-use-speech-recognition?language=swift
+web search: 
+web search: 
+web search: 
+web search: "analyzesequence(from:)" "format" "Speech" ...
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"async function beginAndSubscribe|if \\("'!audioStorageId'"\\)|transcript: v.optional|audioStorageId: v.optional|const swapping|transcribeRecording\\(ctx|stopAndUnloadAsync|void restorePlaybackAudioMode|runtimeVersion\" lib/takeReconcile.ts convex/schema.ts convex/creationJobs.ts convex/creationJobActions.ts lib/audio.ts app.json" in C:\Dev\VR
+ succeeded in 351ms:
+lib/audio.ts:118:      await recording.stopAndUnloadAsync();
+lib/audio.ts:191:  await recording.stopAndUnloadAsync();
+lib/audio.ts:197:  void restorePlaybackAudioMode(traceId);
+convex/creationJobActions.ts:239:  if (!audioStorageId) return { ok: false, code: "storage_missing" };
+convex/creationJobActions.ts:386:    const stt = await transcribeRecording(ctx, job.audioStorageId, perf, job.creationId);
+convex/creationJobs.ts:92:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:104:  audioStorageId: v.optional(v.id("_storage")),
+convex/creationJobs.ts:117:  transcript: v.optional(v.string()),
+convex/creationJobs.ts:137:  audioStorageId: v.optional(v.id("_storage")),
+convex/creationJobs.ts:622:    const swapping =
+lib/takeReconcile.ts:420:async function beginAndSubscribe(
+lib/takeReconcile.ts:426:  if (!audioStorageId) {
+convex/schema.ts:137:    audioStorageId: v.optional(v.id("_storage")),
+convex/schema.ts:216:    transcript: v.optional(v.string()),
+convex/schema.ts:219:    audioStorageId: v.optional(v.id("_storage")),
+app.json:147:    "runtimeVersion": {
+
+codex
+Apple’s sample confirms that file processing must finish and drain all final results before resolving. I couldn’t verify an Apple-published A14 timing or fixed Arabic locale/download-size list, so those remain device checks rather than promises in the plan.
+
+web search: 
+web search: site:developer.apple.com/documentation/Speech/asking-permission-to-use-speech-recognition ...
+codex
+**(1) Factual corrections**
+
+- **System dictation quality does not establish SpeechTranscriber quality.** Apple identifies `DictationTranscriber` as using system dictation/on-device `SFSpeechRecognizer` models; `SpeechTranscriber` uses a different model. Test the fridge recording against both before choosing. [Apple](https://developer.apple.com/documentation/speech/dictationtranscriber)
+- **“Retry/reconcile untouched” is incorrect.** `beginAndSubscribe` explicitly fails without `audioStorageId` ([lib/takeReconcile.ts:420](C:/Dev/VR/lib/takeReconcile.ts:420)). Persist the device transcript and selected source, and make rebegin/recovery accept them.
+- **The schema already has optional `transcript` and `audioStorageId`.** Change `begin`’s validation and worker routing; those two schema fields are not new. [convex/schema.ts:216](C:/Dev/VR/convex/schema.ts:216)
+- **Do not route solely on `job.transcript` presence.** Cloud jobs also acquire transcripts, and retry preserves them—even when replacing audio. Use an explicit source; otherwise replacement audio can be ignored. [convex/creationJobs.ts:622](C:/Dev/VR/convex/creationJobs.ts:622)
+
+**(2) Q1–Q6**
+
+- **Q1 — File/API:** Yes: `analyzeSequence(from: AVAudioFile)` is supported. Read results concurrently, call `finalizeAndFinish(through:)`, then await the accumulated final transcript. File-read completion alone is insufficient. [Apple](https://developer.apple.com/documentation/speech/speechanalyzer/analyzesequence(from:))
+- **Q1 — Permissions:** SpeechAnalyzer modules do **not** require `SFSpeechRecognizer.requestAuthorization` or `NSSpeechRecognitionUsageDescription`; recording still requires microphone permission. Apple explicitly limits that speech-authorization procedure to `SFSpeechRecognizer`. [Apple](https://developer.apple.com/documentation/speech/asking-permission-to-use-speech-recognition)
+- **Q1 — Assets:** No `reserve` + `allocate` sequence. Current API: `assetInstallationRequest(supporting:)` → `downloadAndInstall()`; reservations happen automatically if needed, with explicit `reserve(locale:)` available. Installation persists across launches, but recheck readiness. Apple provides no fixed English/Arabic download sizes here. [Apple](https://developer.apple.com/documentation/speech/assetinventory)
+- **Q1 — Format/speed:** Keep the m4a for the file-based trial; `AVAudioFile` decodes compressed audio. For manually supplied buffers, convert to a compatible PCM format using `bestAvailableAudioFormat` and `AVAudioConverter`; do not assume 16 kHz is the model format. I could verify file support, but not an explicit automatic-resampling guarantee for this exact input. No verified Apple A14/5–10-second timing supports a numerical promise. [Apple sample](https://developer.apple.com/videos/play/wwdc2025/277/)
+- **Q2 — Arabic:** I could not establish an authoritative fixed Arabic region list for iOS 26.6. Resolve the requested locale with `supportedLocale(equivalentTo:)`, check `isAvailable`, then installed assets; return the resolved identifier. Unsupported/unready → cloud is sensible for phase one. Do not hard-code “Arabic unsupported.”
+- **Q2 — Alternative:** `DictationTranscriber` is the missing native fallback candidate. Legacy `SFSpeechRecognizer` only honors `requiresOnDeviceRecognition` when `supportsOnDeviceRecognition` is true; the flag cannot manufacture Arabic support. [Apple](https://developer.apple.com/documentation/speech/sfspeechrecognizer/supportsondevicerecognition)
+- **Q3:** Agree with file-based phase one, **not the <500 ms assumption**. Measure cold/warm stop→final and stop→card on the actual iPhone 12. Asset download is not model warm-up: `prepareToAnalyze(in:)` can preheat during recording. Streaming becomes justified if measured post-stop work remains material. [Apple](https://developer.apple.com/documentation/speech/speechanalyzer)
+- **Q3 — Budget:** You remove upload plus roughly 1.14 s of storage-get/STT, then add device transcription. Parse, job pickup, and commit remain. A 3 s timeout followed by cloud can make fallback approximately 3 s slower than today.
+- **Q4:** No production shadow-upload machinery for week one. Compare a small developer/TestFlight corpus through both engines and inspect reminder dates/times as well as words. Background uploads need ownership, cleanup, and retention handling; uploading alone produces no comparison transcript.
+- **Q5:** A single locale is not an automatic bilingual mode. I found no documented iOS 26 SpeechTranscriber audio-language autodetection contract. Treat English insertions in Arabic—and vice versa—as accuracy tests; a plausible wrong transcript will not trigger empty/error fallback. Apple’s API selects a transcription locale. [Apple](https://developer.apple.com/videos/play/wwdc2025/277/)
+- **Q6:** File analysis needs no microphone tap or recording-category change. Keep VRSpeech out of AVAudioSession management and start after unload resolves. The deferred restore should not affect reading a finalized file; that is an architectural inference, not a device-tested guarantee. [lib/audio.ts:191](C:/Dev/VR/lib/audio.ts:191)
+
+**(3) Five real edge cases**
+
+- **First take/model unavailable:** Preparation may still be downloading or fail. Use cloud immediately unless ready; never spend the 3 s transcription budget downloading.
+- **Timeout/cancel followed by late native completion:** Cancel native analysis and suppress late results. One client operation must select the source and call `begin`; the existing server deduplication preserves whichever request arrived first.
+- **App closes or network drops before `begin`:** Persist transcript, source, locale, and original date/time context before submission. Reconcile must resume without requiring an upload.
+- **Silence, clipped speech, or mixed-language wrong time:** Finalize and concatenate all segments; trim empty output. Keep the existing correction/retry experience because nonempty text is not proof of correctness.
+- **Longer take/cold model:** A fixed 3 s cap may systematically send otherwise successful takes to cloud. Choose the cap from measured clip-length and cold/warm results.
+
+**(4) Verdict: agree with changes.** Keep file-based transcription and cloud fallback; fix recovery/source semantics, omit shadow uploads, and validate both native transcribers on the target phone before committing to latency claims. Read-only review completed; no files changed or Convex/EAS commands run.
+tokens used
+72,707
+**(1) Factual corrections**
+
+- **System dictation quality does not establish SpeechTranscriber quality.** Apple identifies `DictationTranscriber` as using system dictation/on-device `SFSpeechRecognizer` models; `SpeechTranscriber` uses a different model. Test the fridge recording against both before choosing. [Apple](https://developer.apple.com/documentation/speech/dictationtranscriber)
+- **“Retry/reconcile untouched” is incorrect.** `beginAndSubscribe` explicitly fails without `audioStorageId` ([lib/takeReconcile.ts:420](C:/Dev/VR/lib/takeReconcile.ts:420)). Persist the device transcript and selected source, and make rebegin/recovery accept them.
+- **The schema already has optional `transcript` and `audioStorageId`.** Change `begin`’s validation and worker routing; those two schema fields are not new. [convex/schema.ts:216](C:/Dev/VR/convex/schema.ts:216)
+- **Do not route solely on `job.transcript` presence.** Cloud jobs also acquire transcripts, and retry preserves them—even when replacing audio. Use an explicit source; otherwise replacement audio can be ignored. [convex/creationJobs.ts:622](C:/Dev/VR/convex/creationJobs.ts:622)
+
+**(2) Q1–Q6**
+
+- **Q1 — File/API:** Yes: `analyzeSequence(from: AVAudioFile)` is supported. Read results concurrently, call `finalizeAndFinish(through:)`, then await the accumulated final transcript. File-read completion alone is insufficient. [Apple](https://developer.apple.com/documentation/speech/speechanalyzer/analyzesequence(from:))
+- **Q1 — Permissions:** SpeechAnalyzer modules do **not** require `SFSpeechRecognizer.requestAuthorization` or `NSSpeechRecognitionUsageDescription`; recording still requires microphone permission. Apple explicitly limits that speech-authorization procedure to `SFSpeechRecognizer`. [Apple](https://developer.apple.com/documentation/speech/asking-permission-to-use-speech-recognition)
+- **Q1 — Assets:** No `reserve` + `allocate` sequence. Current API: `assetInstallationRequest(supporting:)` → `downloadAndInstall()`; reservations happen automatically if needed, with explicit `reserve(locale:)` available. Installation persists across launches, but recheck readiness. Apple provides no fixed English/Arabic download sizes here. [Apple](https://developer.apple.com/documentation/speech/assetinventory)
+- **Q1 — Format/speed:** Keep the m4a for the file-based trial; `AVAudioFile` decodes compressed audio. For manually supplied buffers, convert to a compatible PCM format using `bestAvailableAudioFormat` and `AVAudioConverter`; do not assume 16 kHz is the model format. I could verify file support, but not an explicit automatic-resampling guarantee for this exact input. No verified Apple A14/5–10-second timing supports a numerical promise. [Apple sample](https://developer.apple.com/videos/play/wwdc2025/277/)
+- **Q2 — Arabic:** I could not establish an authoritative fixed Arabic region list for iOS 26.6. Resolve the requested locale with `supportedLocale(equivalentTo:)`, check `isAvailable`, then installed assets; return the resolved identifier. Unsupported/unready → cloud is sensible for phase one. Do not hard-code “Arabic unsupported.”
+- **Q2 — Alternative:** `DictationTranscriber` is the missing native fallback candidate. Legacy `SFSpeechRecognizer` only honors `requiresOnDeviceRecognition` when `supportsOnDeviceRecognition` is true; the flag cannot manufacture Arabic support. [Apple](https://developer.apple.com/documentation/speech/sfspeechrecognizer/supportsondevicerecognition)
+- **Q3:** Agree with file-based phase one, **not the <500 ms assumption**. Measure cold/warm stop→final and stop→card on the actual iPhone 12. Asset download is not model warm-up: `prepareToAnalyze(in:)` can preheat during recording. Streaming becomes justified if measured post-stop work remains material. [Apple](https://developer.apple.com/documentation/speech/speechanalyzer)
+- **Q3 — Budget:** You remove upload plus roughly 1.14 s of storage-get/STT, then add device transcription. Parse, job pickup, and commit remain. A 3 s timeout followed by cloud can make fallback approximately 3 s slower than today.
+- **Q4:** No production shadow-upload machinery for week one. Compare a small developer/TestFlight corpus through both engines and inspect reminder dates/times as well as words. Background uploads need ownership, cleanup, and retention handling; uploading alone produces no comparison transcript.
+- **Q5:** A single locale is not an automatic bilingual mode. I found no documented iOS 26 SpeechTranscriber audio-language autodetection contract. Treat English insertions in Arabic—and vice versa—as accuracy tests; a plausible wrong transcript will not trigger empty/error fallback. Apple’s API selects a transcription locale. [Apple](https://developer.apple.com/videos/play/wwdc2025/277/)
+- **Q6:** File analysis needs no microphone tap or recording-category change. Keep VRSpeech out of AVAudioSession management and start after unload resolves. The deferred restore should not affect reading a finalized file; that is an architectural inference, not a device-tested guarantee. [lib/audio.ts:191](C:/Dev/VR/lib/audio.ts:191)
+
+**(3) Five real edge cases**
+
+- **First take/model unavailable:** Preparation may still be downloading or fail. Use cloud immediately unless ready; never spend the 3 s transcription budget downloading.
+- **Timeout/cancel followed by late native completion:** Cancel native analysis and suppress late results. One client operation must select the source and call `begin`; the existing server deduplication preserves whichever request arrived first.
+- **App closes or network drops before `begin`:** Persist transcript, source, locale, and original date/time context before submission. Reconcile must resume without requiring an upload.
+- **Silence, clipped speech, or mixed-language wrong time:** Finalize and concatenate all segments; trim empty output. Keep the existing correction/retry experience because nonempty text is not proof of correctness.
+- **Longer take/cold model:** A fixed 3 s cap may systematically send otherwise successful takes to cloud. Choose the cap from measured clip-length and cold/warm results.
+
+**(4) Verdict: agree with changes.** Keep file-based transcription and cloud fallback; fix recovery/source semantics, omit shadow uploads, and validate both native transcribers on the target phone before committing to latency claims. Read-only review completed; no files changed or Convex/EAS commands run.
