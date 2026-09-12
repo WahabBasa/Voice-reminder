@@ -24,6 +24,7 @@ import { useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import {
   cancelDisplayedAlarmNotifications,
+  cancelOccurrenceFallbackChain,
   markPendingAlarmUiShown,
 } from "../lib/notifications";
 import {
@@ -33,6 +34,8 @@ import {
   ringCadenceMode,
   shouldNagAgain,
 } from "../lib/notificationDecisions";
+import { completeOccurrence } from "../lib/occurrenceActions";
+import { markSnoozed } from "../lib/ringLifecycle";
 import { buildTraceId } from "../lib/vrLog";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
@@ -334,21 +337,30 @@ export function AlarmOverlay({
           const reminder = store.getReminderById(reminderId);
           if (reminder) {
             const scheduledForRaw = scheduledFor ? Number(scheduledFor) : undefined;
-            const scheduledForNum = Number.isFinite(scheduledForRaw as number)
+            const occurrenceAt = Number.isFinite(scheduledForRaw as number)
               ? (scheduledForRaw as number)
-              : undefined;
-            await store.recordCompletion(reminderId, reminder.title, "completed", {
-              scheduledFor: scheduledForNum,
-              action: "dismissed",
-            });
-
-            if (reminder.frequency === "once") {
-              await removeReminderFully(reminderId, {
-                removeConvexById: async (id) => {
-                  await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
+              : Date.now();
+            // Done for THIS occurrence, unified with the card + native Stop:
+            // stops the ring, cancels the occurrence's chain, idempotent history
+            // at the original occurrenceAt, one-off removal / repeater keep.
+            await completeOccurrence(
+              { reminderId, occurrenceAt },
+              {
+                reminderTitle: reminder.title,
+                isOneTime: reminder.frequency === "once",
+                source: "fallback",
+                cancelFallbackChain: async (ref) => {
+                  await cancelOccurrenceFallbackChain(ref.reminderId, ref.occurrenceAt);
                 },
-              });
-            }
+                removeReminder: async (id) => {
+                  await removeReminderFully(id, {
+                    removeConvexById: async (cid) => {
+                      await removeConvexReminder({ id: cid as any, deviceId: await getDeviceId() });
+                    },
+                  });
+                },
+              }
+            );
           }
         } catch (e) {
           console.log("[VR] Failed to record completion:", e);
@@ -382,7 +394,12 @@ export function AlarmOverlay({
       // MAX_NAG_COMEBACKS, with nothing per-reminder to turn it off. Once the
       // chain is spent the alarm just goes quiet.
       const nagCount = parseNagCount(nagCountStr);
-      if (!reminderId || !shouldNagAgain(nagCount)) {
+      // "Later" is a DELIBERATE answer: unlimited, and it never consumes the
+      // ignored-ring nag allowance — that cap (shouldNagAgain) governs IGNORED
+      // rings only. Every Later starts a fresh chain, so the comeback below
+      // resets nagCount to 0 rather than incrementing the ignored counter.
+      void shouldNagAgain;
+      if (!reminderId) {
         await onSnooze();
         maybeExitApp();
         return;
@@ -449,7 +466,8 @@ export function AlarmOverlay({
             // and carries the incremented counter so the chain stays capped.
             urgency: urgency ?? "",
             persistent: persistent ?? "false",
-            nagCount: String(nagCount + 1),
+            // Deliberate Later resets the ignored-ring counter (fresh chain).
+            nagCount: "0",
             nagReason: "later_action",
           },
         },
@@ -533,6 +551,23 @@ export function AlarmOverlay({
         } catch (e) {
           console.log("[VR] Failed interval snooze collision suppression:", e);
         }
+      }
+
+      // Freeze the card on the REAL armed comeback time (tap + 5 min) through
+      // the ring lifecycle — a fresh chain per Later so the card shows "Rings
+      // again" at the true time without waiting for the next foreground.
+      try {
+        const occurrenceAt = scheduledFor ? Number(scheduledFor) : triggerTimestamp;
+        await markSnoozed(
+          { reminderId, occurrenceAt },
+          {
+            snoozeUntil: triggerTimestamp,
+            chainId: `${reminderId}:later:${Date.now()}`,
+            source: "fallback",
+          }
+        );
+      } catch (e) {
+        console.log("[VR] Failed to record snooze lifecycle:", e);
       }
 
       await onSnooze();

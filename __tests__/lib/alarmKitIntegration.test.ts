@@ -15,7 +15,10 @@ type Bridge = {
   scheduleAlarm: jest.Mock;
   cancelAlarm: jest.Mock;
   getScheduledAlarms: jest.Mock;
-  getAndClearEventLog: jest.Mock;
+  peekEvents: jest.Mock;
+  ackEvents: jest.Mock;
+  getAlarmStates: jest.Mock;
+  stopOccurrence: jest.Mock;
 };
 
 function makeBridge(overrides: Partial<Bridge> = {}): Bridge {
@@ -25,7 +28,10 @@ function makeBridge(overrides: Partial<Bridge> = {}): Bridge {
     scheduleAlarm: jest.fn(async () => "UUID-1"),
     cancelAlarm: jest.fn(async () => undefined),
     getScheduledAlarms: jest.fn(async () => []),
-    getAndClearEventLog: jest.fn(async () => []),
+    peekEvents: jest.fn(async () => []),
+    ackEvents: jest.fn(async () => undefined),
+    getAlarmStates: jest.fn(async () => []),
+    stopOccurrence: jest.fn(async () => undefined),
     ...overrides,
   } as Bridge;
 }
@@ -202,10 +208,41 @@ describe("bridge passthrough", () => {
     metadata: { reminderId: "abc123", scheduledFor: String(T), tier: "urgent", variantIndex: "-1" },
   };
 
-  it("forwards scheduleAlarm and returns the native UUID", async () => {
+  it("forwards scheduleAlarm, folding occurrence identity into metadata, and returns the UUID", async () => {
     await withAlarmKit({}, async (alarmKit, bridge) => {
       await expect(alarmKit.scheduleAlarm(opts)).resolves.toBe("UUID-1");
-      expect(bridge!.scheduleAlarm).toHaveBeenCalledWith(opts);
+      const call = bridge!.scheduleAlarm.mock.calls[0][0];
+      // Original opts survive untouched…
+      expect(call.id).toBe(opts.id);
+      expect(call.fireDate).toBe(opts.fireDate);
+      expect(call.title).toBe(opts.title);
+      // …and metadata gains the occurrence identity with legacy-safe defaults:
+      // occurrenceAt = fireDate, chainId = orig:<occurrenceAt>, step 0, original.
+      expect(call.metadata).toMatchObject({
+        reminderId: "abc123",
+        occurrenceAt: String(T),
+        chainId: `orig:${T}`,
+        chainStep: "0",
+        kind: "original",
+      });
+    });
+  });
+
+  it("honours explicit occurrenceAt / chainId / chainStep / kind when the caller passes them", async () => {
+    await withAlarmKit({}, async (alarmKit, bridge) => {
+      await alarmKit.scheduleAlarm({
+        ...opts,
+        occurrenceAt: T - 5 * MIN,
+        chainId: "later:reminder_abc123_x:99",
+        chainStep: 2,
+        kind: "later",
+      });
+      expect(bridge!.scheduleAlarm.mock.calls[0][0].metadata).toMatchObject({
+        occurrenceAt: String(T - 5 * MIN),
+        chainId: "later:reminder_abc123_x:99",
+        chainStep: "2",
+        kind: "later",
+      });
     });
   });
 
@@ -253,18 +290,31 @@ describe("bridge passthrough", () => {
     });
   });
 
-  it("drops malformed rows from getAndClearEventLog", async () => {
+  it("deprecated getAndClearEventLog = peek + map-to-legacy + ack", async () => {
     const bridge = makeBridge({
-      getAndClearEventLog: jest.fn(async () => [
-        { type: "stopped", id: KEY, at: T },
-        { type: "bogus", id: KEY, at: T },
-        { type: "fired", id: KEY },
+      peekEvents: jest.fn(async () => [
+        { eventId: "e1", kind: "stopped", appKey: KEY, reminderId: "abc123", occurrenceAt: T, at: T },
+        // no legacy equivalent — dropped from the returned list, still acked
+        { eventId: "e2", kind: "scheduled", appKey: KEY, reminderId: "abc123", occurrenceAt: T, at: T },
+        {
+          eventId: "e3",
+          kind: "snoozed",
+          appKey: KEY,
+          reminderId: "abc123",
+          occurrenceAt: T,
+          at: T,
+          snoozeUntil: T + 5 * MIN,
+        },
+        null,
       ]),
     });
     await withAlarmKit({ bridge }, async (alarmKit) => {
       await expect(alarmKit.getAndClearEventLog()).resolves.toEqual([
         { type: "stopped", id: KEY, at: T },
+        { type: "snoozed", id: KEY, at: T, snoozeUntil: T + 5 * MIN },
       ]);
+      // Every peeked event is acked, even the one with no legacy shape.
+      expect(bridge.ackEvents).toHaveBeenCalledWith(["e1", "e2", "e3"]);
     });
   });
 });

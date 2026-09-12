@@ -21,7 +21,9 @@ import notifee, {
 import * as FileSystem from "expo-file-system/legacy";
 import { useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
-import { cancelDisplayedAlarmNotifications, clearPendingAlarm } from "../lib/notifications";
+import { cancelDisplayedAlarmNotifications, cancelOccurrenceFallbackChain, clearPendingAlarm } from "../lib/notifications";
+import { completeOccurrence } from "../lib/occurrenceActions";
+import { markSnoozed } from "../lib/ringLifecycle";
 import { buildTraceId } from "../lib/vrLog";
 import AppIcon from "../components/AppIcon";
 import { colors, scaleFontSize } from "../lib/theme";
@@ -208,22 +210,30 @@ export default function AlarmScreen() {
                     const reminder = store.getReminderById(reminderId);
                     if (reminder) {
                         const scheduledForRaw = params.scheduledFor ? Number(params.scheduledFor) : undefined;
-                        const scheduledFor = Number.isFinite(scheduledForRaw as number)
+                        const occurrenceAt = Number.isFinite(scheduledForRaw as number)
                             ? (scheduledForRaw as number)
-                            : undefined;
-                        await store.recordCompletion(reminderId, reminder.title, "completed", {
-                            scheduledFor,
-                            action: "dismissed",
-                        });
-
-                        // One-time reminders become inactive after dismiss.
-                        if (reminder.frequency === "once") {
-                            await removeReminderFully(reminderId, {
-                                removeConvexById: async (id) => {
-                                    await removeConvexReminder({ id: id as any, deviceId: await getDeviceId() });
+                            : Date.now();
+                        // Unified per-occurrence Done: stop the ring, cancel this
+                        // occurrence's chain, idempotent history at the original
+                        // occurrenceAt, one-off removal / repeater keep.
+                        await completeOccurrence(
+                            { reminderId, occurrenceAt },
+                            {
+                                reminderTitle: reminder.title,
+                                isOneTime: reminder.frequency === "once",
+                                source: "fallback",
+                                cancelFallbackChain: async (ref) => {
+                                    await cancelOccurrenceFallbackChain(ref.reminderId, ref.occurrenceAt);
                                 },
-                            });
-                        }
+                                removeReminder: async (id) => {
+                                    await removeReminderFully(id, {
+                                        removeConvexById: async (cid) => {
+                                            await removeConvexReminder({ id: cid as any, deviceId: await getDeviceId() });
+                                        },
+                                    });
+                                },
+                            }
+                        );
                     }
                 } catch (e) {
                     console.log("[VR] Failed to record completion:", e);
@@ -254,11 +264,13 @@ export default function AlarmScreen() {
             await cancelDisplayedAlarmNotifications(notificationId);
             await clearPendingAlarm();
 
-            // OLD-96: "Later" feeds the fixed nag — same audio, NAG_DELAY_MINUTES
-            // out, capped at MAX_NAG_COMEBACKS. There is no per-reminder snooze
-            // duration and no toggle any more.
+            // "Later" is a DELIBERATE answer: unlimited, and it never consumes
+            // the ignored-ring nag allowance — that cap (shouldNagAgain) governs
+            // IGNORED rings only. Every Later starts a fresh chain, so the
+            // comeback below resets nagCount to 0.
             const nagCount = parseNagCount(params.nagCount);
-            if (!reminderId || !shouldNagAgain(nagCount)) {
+            void shouldNagAgain;
+            if (!reminderId) {
                 closeAlarmScreen();
                 return;
             }
@@ -304,7 +316,8 @@ export default function AlarmScreen() {
                         title,
                         description,
                         audioUrl,
-                        nagCount: String(nagCount + 1),
+                        // Deliberate Later resets the ignored-ring counter (fresh chain).
+                        nagCount: "0",
                         volume: String(targetVolume),
                         volumeStyle: String(params.volumeStyle ?? "standard"),
                         kind: "snooze_occurrence",
@@ -389,6 +402,23 @@ export default function AlarmScreen() {
                 } catch (e) {
                     console.log("[VR] Failed interval snooze collision suppression:", e);
                 }
+            }
+
+            // Freeze the card on the REAL armed comeback time (tap + 5 min) via
+            // the ring lifecycle — a fresh chain per Later, so the card shows
+            // "Rings again" at the true time without a foreground round-trip.
+            try {
+                const occurrenceAt = params.scheduledFor ? Number(params.scheduledFor) : triggerTimestamp;
+                await markSnoozed(
+                    { reminderId, occurrenceAt },
+                    {
+                        snoozeUntil: triggerTimestamp,
+                        chainId: `${reminderId}:later:${Date.now()}`,
+                        source: "fallback",
+                    }
+                );
+            } catch (e) {
+                console.log("[VR] Failed to record snooze lifecycle:", e);
             }
 
             // Close the alarm screen

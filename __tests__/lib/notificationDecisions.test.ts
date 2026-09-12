@@ -36,6 +36,9 @@ import {
   nagIndexForFireTime,
   NAG_DELAY_MINUTES,
   MAX_NAG_COMEBACKS,
+  planLaterComeback,
+  LATER_COMEBACK_MINUTES,
+  LATER_COMEBACK_NAGS,
 } from "../../lib/notificationDecisions";
 
 // ─── Group 1: Notification classification and repost detection ──────────────
@@ -786,5 +789,47 @@ describe("nagIndexForFireTime", () => {
     expect(nagIndexForFireTime(T, T + 90 * MIN)).toBe(MAX_NAG_COMEBACKS);
     expect(nagIndexForFireTime(T, T - 10 * MIN)).toBe(0);
     expect(nagIndexForFireTime(Number.NaN, T)).toBe(0);
+  });
+});
+
+// ─── Group 8c: the deliberate "Later" tap (uncapped) ────────────────────────
+
+describe("planLaterComeback", () => {
+  const MIN = 60_000;
+  const TAP = 1_700_000_000_000;
+
+  it("arms the comeback at tap+5 with two nag siblings at +5/+10 relative to it", () => {
+    const plan = planLaterComeback(TAP);
+    expect(plan.comebackAt).toBe(TAP + 5 * MIN);
+    expect(plan.fireTimes).toEqual([TAP + 5 * MIN, TAP + 10 * MIN, TAP + 15 * MIN]);
+  });
+
+  it("keys the comeback off LATER_COMEBACK_MINUTES / LATER_COMEBACK_NAGS", () => {
+    expect(LATER_COMEBACK_MINUTES).toBe(NAG_DELAY_MINUTES);
+    expect(LATER_COMEBACK_NAGS).toBe(2);
+    expect(planLaterComeback(TAP).fireTimes).toHaveLength(1 + LATER_COMEBACK_NAGS);
+  });
+
+  it("honours a custom cadence and nag count", () => {
+    const plan = planLaterComeback(TAP, 3, 1);
+    expect(plan.comebackAt).toBe(TAP + 3 * MIN);
+    expect(plan.fireTimes).toEqual([TAP + 3 * MIN, TAP + 6 * MIN]);
+  });
+
+  it("floors a sub-minute cadence to one minute and clamps negative nag counts to zero", () => {
+    expect(planLaterComeback(TAP, 0).comebackAt).toBe(TAP + 1 * MIN);
+    expect(planLaterComeback(TAP, 5, -3).fireTimes).toEqual([TAP + 5 * MIN]);
+  });
+
+  it("is uncapped — it never consults MAX_NAG_COMEBACKS, unlike the ignored-ring nag", () => {
+    // The ignored-ring cap still limits comebacks to three...
+    expect(shouldNagAgain(MAX_NAG_COMEBACKS)).toBe(false);
+    expect(remainingNagComebacks(TAP, TAP)).toHaveLength(MAX_NAG_COMEBACKS);
+    // ...but a deliberate Later comeback plan is a pure function of the tap and
+    // its own nag count, independent of how many times the user has tapped.
+    const first = planLaterComeback(TAP);
+    const tenth = planLaterComeback(TAP + 1000);
+    expect(first.fireTimes).toHaveLength(3);
+    expect(tenth.fireTimes).toHaveLength(3);
   });
 });

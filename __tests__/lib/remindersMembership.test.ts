@@ -1,5 +1,6 @@
 import { activeCards, nextDisplayDue, nextLine, patternLine, overdueDays } from "../../lib/remindersMembership";
 import { isReminderActive } from "../../lib/reminderActive";
+import { occurrenceKey, type RingRecord, type RingSnapshot } from "../../lib/ringLifecycle";
 import type { Reminder, ReminderHistory } from "../../lib/store";
 
 const at = (day: number, hour = 0, minute = 0) => new Date(2026, 8, day, hour, minute).getTime();
@@ -18,7 +19,19 @@ function once(day = 8, time = "09:00", id = "once"): Reminder {
 }
 const completed = (id: string): ReminderHistory => ({ id: `h-${id}`, reminderId: id,
   reminderTitle: "Test", status: "completed", timestamp: new Date(now).toISOString() });
+const completedAt = (id: string, scheduledFor: number): ReminderHistory => ({ id: `h-${id}-${scheduledFor}`,
+  reminderId: id, reminderTitle: "Test", status: "completed", timestamp: new Date(now).toISOString(), scheduledFor });
 const card = (r: Reminder, time = now) => activeCards([r], [], time, {})[0];
+
+// Build a ring-lifecycle record and a one-entry snapshot for it.
+function ringRecord(id: string, occurrenceAt: number, over: Partial<RingRecord> = {}): RingRecord {
+  return { reminderId: id, occurrenceAt, key: occurrenceKey({ reminderId: id, occurrenceAt }),
+    state: "ringing", source: "alarmkit", chainId: String(occurrenceAt), chainStartedAt: occurrenceAt,
+    lastEventAt: occurrenceAt, ...over };
+}
+function snap(...records: RingRecord[]): RingSnapshot {
+  return Object.fromEntries(records.map((r) => [r.key, r]));
+}
 
 test("tomorrow-first repeater created midday stays visible without completion", () => {
   expect(card(reminder())).toMatchObject({ due: { at: at(9, 9), source: "grid" }, dueToday: false, showCompletion: false });
@@ -112,4 +125,90 @@ test("patterns reuse clock/grid formatting with pattern first and one-off date",
   expect(patternLine(reminder({ schedule: undefined, frequency: "weekly", days: undefined, time: undefined }), clock)).toBe("Weekly \u00b7 ");
   expect(patternLine(reminder({ schedule: undefined, frequency: "interval", intervalMs: 120 * 60000 }))).toBe("Every 2 hr");
   expect(patternLine(reminder({ schedule: undefined, frequency: "interval" }))).toBe("");
+});
+
+// ─── Ring-state resolution (ring-state fix) ─────────────────────────────────
+
+test("a ringing occurrence freezes a repeater on that ring, never red, sorted first", () => {
+  const r = reminder(); // daily 09:00; without a ring it would jump to tomorrow
+  const s = snap(ringRecord("r", at(8, 9)));
+  const [c] = activeCards([r], [], now, {}, s);
+  expect(c).toMatchObject({ ringing: true, overdue: false, missed: false, ringState: "ringing",
+    occurrenceAt: at(8, 9), due: { at: at(8, 9) }, dueToday: true, showCompletion: true });
+  expect(nextLine(c, now, clock)).toBe("Ringing now");
+});
+
+test("ringing sorts above overdue and normal cards", () => {
+  const ring = reminder({ id: "ring" });
+  const s = snap(ringRecord("ring", at(8, 9)));
+  const ids = activeCards([reminder({ id: "plain" }), once(8, "09:00", "over"), ring], [], now, {}, s)
+    .map((c) => c.reminder.id);
+  expect(ids[0]).toBe("ring");
+});
+
+test("a snoozed lifecycle record shows the real comeback time, not red", () => {
+  const r = once(8, "09:00", "s1");
+  const s = snap(ringRecord("s1", at(8, 9), { state: "snoozed", snoozeUntil: at(8, 15, 57), chainId: "c2" }));
+  const [c] = activeCards([r], [], now, {}, s);
+  expect(c).toMatchObject({ ringState: "snoozed", overdue: false, missed: false,
+    occurrenceAt: at(8, 9), due: { at: at(8, 15, 57), source: "snooze" }, showCompletion: true });
+  expect(nextLine(c, now, clock)).toBe("Rings again 3:57 pm");
+});
+
+test("ringing wins over a snoozed record for the same reminder", () => {
+  const r = reminder({ id: "m" });
+  const s = snap(
+    ringRecord("m", at(8, 9), { state: "snoozed", snoozeUntil: at(8, 20), chainId: "c2" }),
+    ringRecord("m", at(8, 16)),
+  );
+  expect(activeCards([r], [], now, {}, s)[0].ringState).toBe("ringing");
+});
+
+test("done drops a one-off and advances a repeater past that occurrence", () => {
+  const off = once(8, "09:00", "off");
+  expect(activeCards([off], [], now, {}, snap(ringRecord("off", at(8, 9), { state: "done" })))).toHaveLength(0);
+
+  const rep = reminder({ id: "rep" }); // daily 09:00
+  const before = at(8, 8); // before today's 09:00 ring
+  const done = snap(ringRecord("rep", at(8, 9), { state: "done" }));
+  const [c] = activeCards([rep], [], before, {}, done);
+  expect(c.due.at).toBe(at(9, 9)); // advanced to tomorrow's 09:00
+  expect(c.ringState).toBeNull();
+});
+
+test("missed reddens a passed one-off with its ring time", () => {
+  const r = once(8, "09:00", "miss");
+  const s = snap(ringRecord("miss", at(8, 9), { state: "missed" }));
+  const [c] = activeCards([r], [], now, {}, s);
+  expect(c).toMatchObject({ missed: true, ringState: "missed", overdue: false,
+    occurrenceAt: at(8, 9), showCompletion: true });
+  expect(nextLine(c, now, clock)).toBe("Missed · 9:00 am");
+});
+
+test("a just-passed one-off reads neutral 'Due now' through the grace window, then overdue", () => {
+  const soon = card(once(8, "11:50", "soon")); // 10 min before now, no ring record
+  expect(soon).toMatchObject({ ringState: "due-now", overdue: false, missed: false, showCompletion: true });
+  expect(nextLine(soon, now, clock)).toBe("Due now");
+
+  const late = card(once(8, "11:40", "late")); // 20 min before now → past the 16-min grace
+  expect(late).toMatchObject({ ringState: null, overdue: true });
+  expect(nextLine(late, now, clock)).toMatch(/^Overdue · /);
+});
+
+test("default (empty) snapshot reproduces the old behavior and carries occurrenceAt", () => {
+  // A ring for a DIFFERENT reminder must not leak into this one.
+  const other = snap(ringRecord("elsewhere", at(8, 9)));
+  const [c] = activeCards([reminder()], [], now, {}, other);
+  expect(c).toMatchObject({ ringing: false, ringState: null, occurrenceAt: at(9, 9), due: { at: at(9, 9) } });
+  // 4-arg call (no snapshot) still works.
+  expect(activeCards([once()], [], now, {})[0]).toMatchObject({ overdue: true, occurrenceAt: at(8, 9) });
+});
+
+test("nextDisplayDue skips a per-occurrence completion but keeps the day's other ring owed", () => {
+  const twice = reminder({ schedule: { type: "grid", days: { kind: "everyday" }, times: { kind: "clock", times: ["09:00", "21:00"] } } });
+  const early = at(8, 8);
+  // 09:00 completed by scheduledFor: 21:00 is still owed today.
+  expect(nextDisplayDue(twice, [completedAt("r", at(8, 9))], early, {})).toEqual({ at: at(8, 21), source: "grid" });
+  // Legacy completion (no scheduledFor) keeps the whole-day meaning → advances to tomorrow.
+  expect(nextDisplayDue(twice, [completed("r")], early, {})).toEqual({ at: at(9, 9), source: "grid" });
 });

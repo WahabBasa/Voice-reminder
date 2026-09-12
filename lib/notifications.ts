@@ -79,6 +79,7 @@ import {
   isNagAppKey,
   parseAlarmAppKey,
   reconcileAlarmEvents,
+  type AlarmEvent,
   dedupeByAppKey,
   cancelAlarm as cancelNativeAlarm,
   getAndClearEventLog as drainNativeAlarmEvents,
@@ -1908,7 +1909,7 @@ async function rescheduleAlarmKitNextOccurrence(
  * outside our JS runtime, so this is the only place their effects land in the
  * store. Safe to call anywhere — it exits immediately unless the gate is on.
  */
-export async function reconcileAlarmKitEvents(): Promise<{
+export type AlarmKitReconcileSummary = {
   stopped: number;
   snoozed: number;
   missed: number;
@@ -1916,9 +1917,34 @@ export async function reconcileAlarmKitEvents(): Promise<{
   cancelled: number;
   /** Rings that went unanswered but still owe a comeback. */
   nagged: number;
-}> {
-  const summary = { stopped: 0, snoozed: 0, missed: 0, pending: 0, cancelled: 0, nagged: 0 };
-  if (!(await alarmKitEnabled())) return summary;
+};
+
+function emptyAlarmKitSummary(): AlarmKitReconcileSummary {
+  return { stopped: 0, snoozed: 0, missed: 0, pending: 0, cancelled: 0, nagged: 0 };
+}
+
+/** True when history already carries this exact reminder+occurrence+status row. */
+function historyHasEntry(
+  history: ReminderHistory[] | undefined,
+  reminderId: string,
+  scheduledFor: number,
+  status: "completed" | "missed"
+): boolean {
+  if (!Array.isArray(history)) return false;
+  return history.some(
+    (h) => h.reminderId === reminderId && h.status === status && h.scheduledFor === scheduledFor
+  );
+}
+
+/**
+ * DEPRECATED runtime path. reconcileRings (lib/ringReconcile) is the SOLE
+ * native-queue drainer now — it peeks once and feeds {@link applyAlarmKitEvents}
+ * the same events. This wrapper still drains itself, so it must NOT run
+ * alongside reconcileRings (that double-acked the peek/ack queue and starved one
+ * side). Kept only for tests that drive the mocked event log through it.
+ */
+export async function reconcileAlarmKitEvents(): Promise<AlarmKitReconcileSummary> {
+  if (!(await alarmKitEnabled())) return emptyAlarmKitSummary();
 
   const events = await drainNativeAlarmEvents();
   // Always log the drain result, zero included: an empty drain after a lock-screen
@@ -1927,9 +1953,26 @@ export async function reconcileAlarmKitEvents(): Promise<{
     count: events.length,
     ids: events.map((e) => `${e.type}:${e.id}`).slice(0, 8).join("|"),
   });
+  if (events.length === 0) return emptyAlarmKitSummary();
+
+  return applyAlarmKitEvents(events);
+}
+
+/**
+ * The ledger: collapse ALREADY-drained native events into history rows, sibling
+ * cancels, one-off removal and reschedules. Fed the same events reconcileRings
+ * peeked, so it never touches the native queue itself. Idempotent — a completed
+ * or missed history row is skipped when an identical one already exists, so a
+ * replayed event (its ack failed, or reconcileRings already wrote the completion
+ * via completeOccurrence) cannot double-write.
+ */
+export async function applyAlarmKitEvents(
+  events: AlarmEvent[],
+  now: number = Date.now()
+): Promise<AlarmKitReconcileSummary> {
+  const summary = emptyAlarmKitSummary();
   if (events.length === 0) return summary;
 
-  const now = Date.now();
   const outcomes = reconcileAlarmEvents(events, now, ALARM_RING_TIMEOUT_MS);
 
   // One ring is up to four alarms since OLD-96 (the occurrence plus the
@@ -2016,10 +2059,14 @@ export async function reconcileAlarmKitEvents(): Promise<{
     if (outcome.outcome === "completed") {
       handledChains.add(chainId);
       summary.stopped++;
-      await store.recordCompletion(reminderId, reminder.title, "completed", {
-        scheduledFor: originAt,
-        action: "dismissed",
-      });
+      // Idempotent: reconcileRings may have already written this completion via
+      // completeOccurrence, and a replayed event must not add a second row.
+      if (!historyHasEntry(store.history, reminderId, originAt, "completed")) {
+        await store.recordCompletion(reminderId, reminder.title, "completed", {
+          scheduledFor: originAt,
+          action: "dismissed",
+        });
+      }
       // "Done" ends the chain wherever it was answered — the ring itself or one
       // of its comebacks. The native stop intent already cancelled the siblings;
       // this is the backstop for the case where it could not run (intents are
@@ -2093,10 +2140,14 @@ export async function reconcileAlarmKitEvents(): Promise<{
 
     handledChains.add(chainId);
     summary.missed++;
-    await store.recordCompletion(reminderId, reminder.title, "missed", {
-      scheduledFor: originAt,
-      action: "auto_missed",
-    });
+    // Idempotent: a replayed "fired" event for an exhausted chain must not add
+    // a second missed row (the peek/ack queue can hand the same event twice).
+    if (!historyHasEntry(store.history, reminderId, originAt, "missed")) {
+      await store.recordCompletion(reminderId, reminder.title, "missed", {
+        scheduledFor: originAt,
+        action: "auto_missed",
+      });
+    }
     await cancelAlarmKitNagChain(reminderId, originAt);
     await patchAlarmKitState(reminderId, { nagCount: 0 });
     vrLog("alarmkit", "reconciled_missed", {
@@ -2465,6 +2516,37 @@ export async function cancelReminder(reminderId: string): Promise<void> {
   // Audio is only deleted when reminder is fully deleted via deleteReminderWithAudio()
 
   console.log(`[VR] Cancelled ${toCancel.length} trigger notifications for reminder ${reminderId}`);
+}
+
+/**
+ * Cancel the fallback (notifee) chain that belongs to ONE occurrence — the
+ * comeback/nag triggers under `snooze_<id>_*` plus any displayed alarm for it —
+ * without touching a repeater's future `reminder_<id>_*` occurrences. This is
+ * the seam completeOccurrence/laterOccurrence route through so a card Done or a
+ * Later stops the ring and its chain for exactly the occurrence being answered.
+ *
+ * On the AlarmKit route the native stopOccurrence already tore the chain down;
+ * cancelling the nag chain here is a backstop for when the intent could not run.
+ */
+export async function cancelOccurrenceFallbackChain(
+  reminderId: string,
+  occurrenceAt: number
+): Promise<void> {
+  const snoozePrefix = `snooze_${reminderId}_`;
+  try {
+    const scheduledIds = await notifee.getTriggerNotificationIds();
+    for (const id of scheduledIds) {
+      if (id.startsWith(snoozePrefix)) await notifee.cancelNotification(id);
+    }
+  } catch {
+    // ignore — a failed cancel is retried on the next answer/reconcile
+  }
+
+  await cancelDisplayedAlarmNotifications();
+
+  if (await alarmKitEnabled()) {
+    await cancelAlarmKitNagChain(reminderId, occurrenceAt);
+  }
 }
 
 // Use this when fully deleting a reminder (not just rescheduling)

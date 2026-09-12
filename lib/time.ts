@@ -523,3 +523,33 @@ export function formatNextIn(targetMs: number, nowMs: number): string {
   const days = Math.ceil(hours / 24);
   return `Next in ${days} day${days !== 1 ? "s" : ""}`;
 }
+
+// ─── Ring-state card labels (ring-state fix) ────────────────────────────────
+//
+// The card no longer flips straight to "Overdue" the instant a ring starts.
+// While a ring is live (or presumed live) it reads "Ringing now"; a passed
+// occurrence with no answer yet reads the neutral "Due now" through its grace
+// window; a Later reads "Rings again <time>" off the real armed comeback; and a
+// ring that went unanswered reads "Missed · <time>" (the only red one-off
+// state). Kept here so every surface shares the one spelling. No Arabic here —
+// this file ships English strings only, like "Overdue"/"Next in" above.
+
+/** The card label while a ring is alerting. */
+export function formatRingingNow(): string {
+  return "Ringing now";
+}
+
+/** The neutral label for a just-passed occurrence still inside its grace window. */
+export function formatDueNow(): string {
+  return "Due now";
+}
+
+/** "Rings again 3:57 pm" — off the real armed comeback time after a Later. */
+export function formatRingsAgain(at: number, options: ClockFormatOptions = {}): string {
+  return `Rings again ${formatClockAt(at, options)}`;
+}
+
+/** "Missed · 3:52 pm" — an unanswered ring; the card's only red one-off state. */
+export function formatMissedAt(at: number, options: ClockFormatOptions = {}): string {
+  return `Missed · ${formatClockAt(at, options)}`;
+}

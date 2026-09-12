@@ -99,10 +99,38 @@ class AlarmKitBridge: NSObject {
     resolve(VRAlarmStore.registryEntries())
   }
 
-  @objc(getAndClearEventLog:rejecter:)
-  func getAndClearEventLog(_ resolve: @escaping RCTPromiseResolveBlock,
-                           rejecter reject: @escaping RCTPromiseRejectBlock) {
-    resolve(VRAlarmStore.drainEvents())
+  @objc(peekEvents:rejecter:)
+  func peekEvents(_ resolve: @escaping RCTPromiseResolveBlock,
+                  rejecter reject: @escaping RCTPromiseRejectBlock) {
+    resolve(VRAlarmStore.peekEvents())
+  }
+
+  @objc(ackEvents:resolver:rejecter:)
+  func ackEvents(_ eventIds: NSArray,
+                 resolver resolve: @escaping RCTPromiseResolveBlock,
+                 rejecter reject: @escaping RCTPromiseRejectBlock) {
+    VRAlarmStore.ackEvents(eventIds.compactMap { $0 as? String })
+    resolve(nil)
+  }
+
+  @objc(getAlarmStates:rejecter:)
+  func getAlarmStates(_ resolve: @escaping RCTPromiseResolveBlock,
+                      rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard VRAlarmSupport.isSupported, #available(iOS 26.0, *) else {
+      resolve([])
+      return
+    }
+    resolve(VRAlarmScheduler.alarmStates())
+  }
+
+  @objc(stopOccurrence:occurrenceAt:resolver:rejecter:)
+  func stopOccurrence(_ reminderId: String, occurrenceAt: NSNumber,
+                      resolver resolve: @escaping RCTPromiseResolveBlock,
+                      rejecter reject: @escaping RCTPromiseRejectBlock) {
+    if VRAlarmSupport.isSupported, #available(iOS 26.0, *) {
+      VRAlarmScheduler.stopOccurrence(reminderId: reminderId, occurrenceAt: occurrenceAt.intValue)
+    }
+    resolve(nil)
   }
 
   /// Dev-only proof of life (PRD rollout step 1). Not part of the frozen contract.
@@ -208,7 +236,19 @@ RCT_EXTERN_METHOD(cancelAlarm:(NSString *)appKey
 RCT_EXTERN_METHOD(getScheduledAlarms:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN_METHOD(getAndClearEventLog:(RCTPromiseResolveBlock)resolve
+RCT_EXTERN_METHOD(peekEvents:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(ackEvents:(NSArray *)eventIds
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(getAlarmStates:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(stopOccurrence:(NSString *)reminderId
+                  occurrenceAt:(nonnull NSNumber *)occurrenceAt
+                  resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(scheduleTestAlarm:(nonnull NSNumber *)secondsFromNow
@@ -230,6 +270,67 @@ RCT_EXTERN_METHOD(removeAlarmSound:(NSString *)fileName
 @end
 `;
 
+// VRAlarmEventEmitter.m content
+//
+// The RN event emitter lives in pure Objective-C, NOT Swift: an Expo-owned
+// bridging header cannot be relied on to expose <React/RCTEventEmitter.h> to the
+// Swift compile, so a Swift RCTEventEmitter subclass fails to find its
+// superclass. This .m imports the React headers directly and subclasses
+// RCTEventEmitter. It forwards VRAlarmHint — an NSNotification named
+// "VRAlarmEventHint" posted by the Swift intents/scheduler (userInfo["reason"])
+// — to JS as the RN event "VRAlarmEvent". Both sides agree on the plain string
+// "VRAlarmEventHint"; nothing here touches AlarmKit.
+const VR_ALARM_EVENT_EMITTER_OBJC = `#import <React/RCTBridgeModule.h>
+#import <React/RCTEventEmitter.h>
+#import <Foundation/Foundation.h>
+
+// Mirrors VRAlarmHint.notificationName in the Swift (a plain NSNotification.Name).
+static NSString *const kVRAlarmHintNotification = @"VRAlarmEventHint";
+
+@interface VRAlarmEventEmitter : RCTEventEmitter <RCTBridgeModule>
+@end
+
+@implementation VRAlarmEventEmitter {
+  BOOL _hasListeners;
+}
+
+RCT_EXPORT_MODULE(VRAlarmEventEmitter);
+
++ (BOOL)requiresMainQueueSetup { return NO; }
+
+- (NSArray<NSString *> *)supportedEvents {
+  return @[@"VRAlarmEvent"];
+}
+
+- (void)startObserving {
+  _hasListeners = YES;
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(onHint:)
+                                               name:kVRAlarmHintNotification
+                                             object:nil];
+  // Wake JS to peek whatever the durable log already holds.
+  [self sendEventWithName:@"VRAlarmEvent" body:@{@"reason": @"launch"}];
+}
+
+- (void)stopObserving {
+  _hasListeners = NO;
+  [[NSNotificationCenter defaultCenter] removeObserver:self name:kVRAlarmHintNotification object:nil];
+}
+
+- (void)onHint:(NSNotification *)note {
+  if (!_hasListeners) { return; }
+  NSString *reason = note.userInfo[@"reason"];
+  if (![reason isKindOfClass:[NSString class]]) { reason = @"intent"; }
+  [self sendEventWithName:@"VRAlarmEvent" body:@{@"reason": reason}];
+}
+
+- (void)dealloc {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+@end
+`;
+
 // VRAlarmScheduler.swift content
 const VR_ALARM_SCHEDULER_SWIFT = `import Foundation
 #if canImport(AlarmKit)
@@ -239,6 +340,22 @@ import AlarmKit
 import ActivityKit
 #endif
 import SwiftUI
+
+/// Shared lock serializing the durable event log's read-modify-write, so an
+/// intent thread appending and the RN bridge acking never clobber each other.
+/// The intents' VRAlarmIntentStore references this same symbol (same target).
+let vrAlarmEventLock = NSLock()
+
+/// Posts the "something changed, please peek" hint. VRAlarmEventEmitter forwards
+/// it to JS as the RN event "VRAlarmEvent". Kept a plain NotificationCenter post
+/// so the intents can fire it without importing the emitter, and so it is inert
+/// when nothing is listening. Notification name mirrored in VRAlarmEventEmitter.
+enum VRAlarmHint {
+  static let notificationName = Notification.Name("VRAlarmEventHint")
+  static func post(reason: String) {
+    NotificationCenter.default.post(name: notificationName, object: nil, userInfo: ["reason": reason])
+  }
+}
 
 /// Runtime capability check. Kept separate from the AlarmKit-gated types so the
 /// bridge can answer \`isSupported()\` without touching an unavailable framework.
@@ -322,6 +439,38 @@ enum VRAlarmStore {
     defaults.set(all, forKey: metaKey)
   }
 
+  /// Reverse lookup: the app key that currently owns this UUID.
+  static func appKey(forUUID uuid: UUID) -> String? {
+    guard let map = defaults.dictionary(forKey: uuidsKey) as? [String: String] else { return nil }
+    let needle = uuid.uuidString.lowercased()
+    return map.first { $0.value.lowercased() == needle }?.key
+  }
+
+  static func fireDate(forAppKey appKey: String) -> Double? {
+    let fireDates = (defaults.dictionary(forKey: fireDatesKey) as? [String: Double]) ?? [:]
+    return fireDates[appKey]
+  }
+
+  /// The stored metadata dict (reminderId / occurrenceAt / chainId / chainStep / kind …).
+  static func metadataValues(appKey: String) -> [String: String] {
+    let all = (defaults.dictionary(forKey: metaKey) as? [String: [String: Any]]) ?? [:]
+    return (all[appKey]?["metadata"] as? [String: String]) ?? [:]
+  }
+
+  /// Every app key whose metadata matches this occurrence, across ALL chains
+  /// (the original + every Later). Occurrence-scoped stop uses this.
+  static func appKeysForOccurrence(reminderId: String, occurrenceAt: Int) -> [String] {
+    let all = (defaults.dictionary(forKey: metaKey) as? [String: [String: Any]]) ?? [:]
+    var matches: [String] = []
+    for (appKey, record) in all {
+      let md = (record["metadata"] as? [String: String]) ?? [:]
+      guard md["reminderId"] == reminderId else { continue }
+      guard let raw = md["occurrenceAt"], Int(raw) == occurrenceAt else { continue }
+      matches.append(appKey)
+    }
+    return matches
+  }
+
   // MARK: Snooze guard (PRD guards 1-3)
 
   static func setSnoozeGuard(_ snoozeUntilMs: Double, appKey: String) {
@@ -336,33 +485,96 @@ enum VRAlarmStore {
     defaults.removeObject(forKey: snoozeGuardPrefix + appKey)
   }
 
-  // MARK: Event log
+  // MARK: Event log (durable peek/ack — ring-state fix)
+  //
+  // Identical shape + storage to the intents' VRAlarmIntentStore. Serialized
+  // through vrAlarmEventLock so append (intent thread) and ack (RN bridge) never
+  // clobber each other. Written as a JSON string; tolerant of a legacy plist
+  // array left by an older build.
 
-  static func appendEvent(type: String, appKey: String, snoozeUntil: Double? = nil) {
-    var event: [String: Any] = ["type": type, "id": appKey, "at": nowMs()]
-    if let snoozeUntil = snoozeUntil { event["snoozeUntil"] = snoozeUntil }
-    var events = decodeEvents()
-    events.append(event)
-    // Bound the log: JS drains on every foreground, so anything older is dead weight.
-    if events.count > 200 { events.removeFirst(events.count - 200) }
-    guard let data = try? JSONSerialization.data(withJSONObject: events, options: []),
-          let json = String(data: data, encoding: .utf8) else { return }
-    defaults.set(json, forKey: eventsKey)
-  }
+  private static let maxEvents = 200
 
-  static func decodeEvents() -> [[String: Any]] {
-    guard let json = defaults.string(forKey: eventsKey),
-          let data = json.data(using: .utf8),
-          let parsed = try? JSONSerialization.jsonObject(with: data, options: []) as? [[String: Any]] else {
-      return []
+  private static func decodeEventsLocked() -> [[String: Any]] {
+    let raw = defaults.object(forKey: eventsKey)
+    if let json = raw as? String,
+       let data = json.data(using: .utf8),
+       let decoded = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+      return decoded
     }
-    return parsed
+    if let array = raw as? [[String: Any]] { return array }
+    return []
   }
 
-  static func drainEvents() -> [[String: Any]] {
-    let events = decodeEvents()
-    defaults.removeObject(forKey: eventsKey)
+  private static func writeEventsLocked(_ events: [[String: Any]]) {
+    if let data = try? JSONSerialization.data(withJSONObject: events, options: []),
+       let json = String(data: data, encoding: .utf8) {
+      defaults.set(json, forKey: eventsKey)
+    } else {
+      defaults.set(events, forKey: eventsKey)
+    }
+  }
+
+  static func appendEvent(kind: String,
+                          appKey: String?,
+                          alarmId: String?,
+                          reminderId: String,
+                          occurrenceAt: Int,
+                          chainId: String?,
+                          chainStep: Int?,
+                          snoozeUntil: Int?,
+                          error: String?,
+                          atMillis: Int) {
+    var event: [String: Any] = [
+      "eventId": UUID().uuidString,
+      "kind": kind,
+      "reminderId": reminderId,
+      "occurrenceAt": occurrenceAt,
+      "at": atMillis,
+    ]
+    if let appKey = appKey, !appKey.isEmpty { event["appKey"] = appKey }
+    if let alarmId = alarmId, !alarmId.isEmpty { event["alarmId"] = alarmId }
+    if let chainId = chainId, !chainId.isEmpty { event["chainId"] = chainId }
+    if let chainStep = chainStep { event["chainStep"] = chainStep }
+    if let snoozeUntil = snoozeUntil { event["snoozeUntil"] = snoozeUntil }
+    if let error = error, !error.isEmpty { event["error"] = error }
+
+    vrAlarmEventLock.lock()
+    defer { vrAlarmEventLock.unlock() }
+    var events = decodeEventsLocked()
+    events.append(event)
+    if events.count > maxEvents { events.removeFirst(events.count - maxEvents) }
+    writeEventsLocked(events)
+  }
+
+  /// All events not yet acked, oldest first. Migrates any legacy entry that
+  /// lacks an eventId so ackEvents can address it.
+  static func peekEvents() -> [[String: Any]] {
+    vrAlarmEventLock.lock()
+    defer { vrAlarmEventLock.unlock() }
+    var events = decodeEventsLocked()
+    var migrated = false
+    for index in events.indices {
+      if (events[index]["eventId"] as? String)?.isEmpty ?? true {
+        events[index]["eventId"] = UUID().uuidString
+        migrated = true
+      }
+    }
+    if migrated { writeEventsLocked(events) }
     return events
+  }
+
+  /// Remove exactly the events whose eventIds are given.
+  static func ackEvents(_ ids: [String]) {
+    guard !ids.isEmpty else { return }
+    let drop = Set(ids)
+    vrAlarmEventLock.lock()
+    defer { vrAlarmEventLock.unlock() }
+    let events = decodeEventsLocked()
+    let kept = events.filter { event in
+      guard let id = event["eventId"] as? String else { return true }
+      return !drop.contains(id)
+    }
+    if kept.count != events.count { writeEventsLocked(kept) }
   }
 }
 
@@ -482,17 +694,17 @@ enum VRAlarmScheduler {
     return alarmID.uuidString
   }
 
-  /// AK-2 seam (VRAlarmFollowUpScheduling): synchronous and nonisolated, because an
-  /// intent's perform() cannot await us and still write its guard first. Registry and
-  /// meta are committed here; the AlarmKit call rides a detached Task that PRD guard 4's
-  /// 1s sleep in VRSnoozeIntent gives time to land.
+  /// AK-2 seam (VRAlarmFollowUpScheduling): AWAITED by the Snooze intent so a
+  /// registration failure surfaces as a throw (ring-state fix — no more detached
+  /// try? that hides errors behind a sleep). Records are committed only after the
+  /// schedule succeeds, so a throw never leaves a phantom registry entry.
   @discardableResult
   static func scheduleAlarm(appKey: String,
                             fireDate: Date,
                             title: String,
                             soundName: String?,
                             snoozeMinutes: Int,
-                            metadata: [String: String]) throws -> UUID {
+                            metadata: [String: String]) async throws -> UUID {
     // PRD guard 5.
     cancel(appKey: appKey)
 
@@ -505,13 +717,11 @@ enum VRAlarmScheduler {
                                           snoozeMinutes: snoozeMinutes,
                                           metadata: metadata)
 
+    _ = try await AlarmManager.shared.schedule(id: alarmID, configuration: configuration)
+
     VRAlarmStore.setUUID(alarmID, fireDate: fireDate.timeIntervalSince1970 * 1000, forAppKey: appKey)
     VRAlarmStore.setMeta(appKey: appKey, title: title, soundName: soundName,
                          snoozeMinutes: snoozeMinutes, metadata: metadata)
-
-    Task.detached {
-      _ = try? await AlarmManager.shared.schedule(id: alarmID, configuration: configuration)
-    }
     return alarmID
   }
 
@@ -533,6 +743,77 @@ enum VRAlarmScheduler {
     try? AlarmManager.shared.cancel(id: uuid)
     VRAlarmStore.setUUID(nil, fireDate: nil, forAppKey: appKey)
     VRAlarmStore.clearMeta(appKey: appKey)
+  }
+
+  // MARK: - Live state (ring-state fix)
+
+  /// Maps Apple's Alarm.State by description (drift-safe, like requestAuthorization).
+  /// "alerting" is the only case that confirms ringing right now.
+  static func stateString(_ state: Alarm.State) -> String {
+    let s = String(describing: state).lowercased()
+    if s.contains("alerting") { return "alerting" }
+    if s.contains("countdown") { return "countdown" }
+    if s.contains("paused") { return "paused" }
+    return "scheduled"
+  }
+
+  /// Snapshot of AlarmManager.shared.alarms joined to our per-key metadata.
+  static func alarmStates() -> [[String: Any]] {
+    // Subscribe to alarmUpdates BEFORE reading the first snapshot.
+    VRAlarmObservation.ensureStarted()
+    // The alarms getter throws; an unreadable registry reads as empty.
+    let alarms = (try? AlarmManager.shared.alarms) ?? []
+    return alarms.map { alarm in
+      let uuid = alarm.id.uuidString
+      var row: [String: Any] = ["alarmId": uuid, "state": stateString(alarm.state)]
+      if let appKey = VRAlarmStore.appKey(forUUID: alarm.id) {
+        row["appKey"] = appKey
+        let md = VRAlarmStore.metadataValues(appKey: appKey)
+        if let reminderId = md["reminderId"] { row["reminderId"] = reminderId }
+        if let occ = md["occurrenceAt"], let occInt = Int(occ) { row["occurrenceAt"] = occInt }
+        if let chainId = md["chainId"] { row["chainId"] = chainId }
+        if let step = md["chainStep"], let stepInt = Int(step) { row["chainStep"] = stepInt }
+        if let fireDate = VRAlarmStore.fireDate(forAppKey: appKey) { row["fireAt"] = Int(fireDate) }
+      }
+      return row
+    }
+  }
+
+  /// Stop any alerting alarm for this occurrence, then cancel every alarm whose
+  /// metadata matches it (all chains). The card's occurrence-scoped "Done".
+  static func stopOccurrence(reminderId: String, occurrenceAt: Int) {
+    let keys = VRAlarmStore.appKeysForOccurrence(reminderId: reminderId, occurrenceAt: occurrenceAt)
+    let currentAlarms = (try? AlarmManager.shared.alarms) ?? []
+    let alertingUUIDs = Set(currentAlarms
+      .filter { stateString($0.state) == "alerting" }
+      .map { $0.id.uuidString.lowercased() })
+    for key in keys {
+      if let uuid = VRAlarmStore.uuid(forAppKey: key), alertingUUIDs.contains(uuid.uuidString.lowercased()) {
+        stopRinging(uuid: uuid)
+      }
+      cancel(appKey: key)
+    }
+    VRAlarmHint.post(reason: "intent")
+  }
+}
+
+/// Subscribes once to AlarmManager.shared.alarmUpdates and posts a "please peek"
+/// hint on every change, so a foregrounded JS side learns of state transitions
+/// without polling. Started before the first snapshot (see alarmStates()).
+@available(iOS 26.0, *)
+enum VRAlarmObservation {
+  private static let lock = NSLock()
+  private static var started = false
+
+  static func ensureStarted() {
+    lock.lock(); defer { lock.unlock() }
+    guard !started else { return }
+    started = true
+    Task.detached {
+      for await _ in AlarmManager.shared.alarmUpdates {
+        VRAlarmHint.post(reason: "alarmUpdates")
+      }
+    }
   }
 }
 
@@ -595,9 +876,12 @@ struct VRStopIntent: LiveActivityIntent {
   func perform() async throws -> some IntentResult {
     // PRD guard 2: iOS fires the stop intent even when the user tapped Later.
     if VRAlarmStore.isSnoozeGuardActive(appKey: appKey) { return .result() }
-    VRAlarmStore.appendEvent(type: "stopped", appKey: appKey)
+    VRAlarmStore.appendEvent(kind: "stopped", appKey: appKey, alarmId: alarmID,
+                             reminderId: "", occurrenceAt: 0, chainId: nil, chainStep: nil,
+                             snoozeUntil: nil, error: nil, atMillis: Int(VRAlarmStore.nowMs()))
     VRAlarmStore.setUUID(nil, fireDate: nil, forAppKey: appKey)
     VRAlarmStore.clearSnoozeGuard(appKey: appKey)
+    VRAlarmHint.post(reason: "intent")
     return .result()
   }
 }
@@ -635,12 +919,13 @@ struct VRSnoozeIntent: LiveActivityIntent {
   func perform() async throws -> some IntentResult {
     // PRD guard 1: the snooze guard is written before any other work.
     let minutes = snoozeMinutes ?? 5
-    let snoozeUntil = VRAlarmStore.nowMs() + Double(minutes) * 60_000
-    VRAlarmStore.setSnoozeGuard(snoozeUntil, appKey: appKey)
-    VRAlarmStore.appendEvent(type: "snoozed", appKey: appKey, snoozeUntil: snoozeUntil)
-    // AK-2 schedules the native follow-up here, before the sleep below.
-    // PRD guard 4: give AlarmKit a beat to register it before iOS suspends us.
-    try? await Task.sleep(nanoseconds: 1_000_000_000)
+    let nowMs = Int(VRAlarmStore.nowMs())
+    let snoozeUntil = nowMs + minutes * 60_000
+    VRAlarmStore.setSnoozeGuard(Double(snoozeUntil), appKey: appKey)
+    VRAlarmStore.appendEvent(kind: "snoozed", appKey: appKey, alarmId: alarmID,
+                             reminderId: "", occurrenceAt: 0, chainId: nil, chainStep: 0,
+                             snoozeUntil: snoozeUntil, error: nil, atMillis: nowMs)
+    VRAlarmHint.post(reason: "intent")
     return .result()
   }
 }
@@ -659,6 +944,7 @@ function getSourceFiles(projectRoot) {
   return [
     { name: "AlarmKitBridge.swift", contents: ALARM_KIT_BRIDGE_SWIFT },
     { name: "AlarmKitBridge.m", contents: ALARM_KIT_BRIDGE_OBJC },
+    { name: "VRAlarmEventEmitter.m", contents: VR_ALARM_EVENT_EMITTER_OBJC },
     { name: "VRAlarmScheduler.swift", contents: VR_ALARM_SCHEDULER_SWIFT },
     { name: "VRAlarmIntents.swift", contents: intentsSource },
   ];
@@ -714,6 +1000,10 @@ function ensureBridgingHeader(project, platformProjectRoot, projectName) {
   );
 
   let contents = fs.existsSync(headerPath) ? fs.readFileSync(headerPath, "utf8") : "";
+  // Only RCTBridgeModule: the Swift bridge uses RCTPromiseResolve/RejectBlock.
+  // RCTEventEmitter is NOT imported here — the event emitter is pure ObjC
+  // (VRAlarmEventEmitter.m) and imports its own React headers, since an
+  // Expo-regenerated bridging header cannot be relied on for the Swift compile.
   const importLine = "#import <React/RCTBridgeModule.h>";
   if (!contents.includes(importLine)) {
     contents = `${contents.replace(/\s*$/, "")}\n${importLine}\n`.replace(/^\n/, "");

@@ -209,3 +209,51 @@ export function isCompletedOnDay(
   }
   return false;
 }
+
+/**
+ * Per-occurrence completion (ring-state fix). Done finishes THAT occurrence
+ * only, so a completion matches when the ledger's `scheduledFor` equals the
+ * occurrence timestamp — history rows carry the ORIGINAL occurrenceAt even
+ * after Laters, so a snoozed-then-done ring still matches its own slot.
+ *
+ * Legacy rows written before Done recorded `scheduledFor` have none: those keep
+ * the old whole-day meaning (any completion that day completes every occurrence
+ * of the day, one-offs completed outright), so upgrading never resurrects a
+ * ring the user already answered.
+ */
+export function isOccurrenceCompleted(
+  reminder: Reminder,
+  history: ReminderHistory[],
+  occurrenceAt: number
+): boolean {
+  const occDay = startOfLocalDayMs(occurrenceAt);
+  for (const entry of history) {
+    if (entry.reminderId !== reminder.id) continue;
+    if (entry.status !== "completed") continue;
+    if (entry.scheduledFor !== undefined) {
+      // A precise row only completes its own occurrence.
+      if (entry.scheduledFor === occurrenceAt) return true;
+      continue;
+    }
+    // Legacy row (no scheduledFor): whole-day fallback, like today.
+    if (reminder.frequency === "once") return true;
+    if (startOfLocalDayMs(new Date(entry.timestamp).getTime()) === occDay) return true;
+  }
+  return false;
+}
+
+/**
+ * True once every occurrence the reminder has on the day is completed — the
+ * per-occurrence version of {@link isCompletedOnDay} for the Days list, so a
+ * multi-time reminder stays visible until its last ring of the day is answered.
+ * Pre-grid reminders (no occurrence set) fall back to the day-level rule.
+ */
+export function isDayFullyCompleted(
+  reminder: Reminder,
+  history: ReminderHistory[],
+  dateISO: string
+): boolean {
+  const times = dayOccurrenceTimes(reminder, dateISO);
+  if (times.length === 0) return isCompletedOnDay(reminder, history, dateISO);
+  return times.every((occurrenceAt) => isOccurrenceCompleted(reminder, history, occurrenceAt));
+}

@@ -365,3 +365,44 @@ export function nagIndexForFireTime(
   if (!Number.isFinite(index) || index <= 0) return 0;
   return Math.min(index, Math.max(0, Math.floor(maxComebacks)));
 }
+
+// ─── Group 8c: the deliberate "Later" tap (NOT the ignored-ring nag) ─────────
+//
+// Tapping "Later" is a deliberate answer, so it is governed by a DIFFERENT
+// policy than the ignored-ring nag above. `MAX_NAG_COMEBACKS` caps how many
+// times an *ignored* ring comes back before going quiet; it must never gate a
+// Later tap. A Later starts a fresh comeback chain FROM THE TAP: the comeback
+// rings `NAG_DELAY_MINUTES` out, then two more nags at +5/+10 relative to the
+// comeback, and the user can tap Later again without limit — every tap replaces
+// the chain and resets its counter (Codex ring-state Q5: comeback + two nags).
+//
+// This is why the fallback "Later" route calls `planLaterComeback` instead of
+// `remainingNagComebacks`/`shouldNagAgain`: the cap stays on ignored rings only.
+
+/** Minutes from a Later tap to its comeback. Same cadence as the ignored nag. */
+export const LATER_COMEBACK_MINUTES = NAG_DELAY_MINUTES;
+
+/** Ignored nags that ride after a deliberate Later comeback (the "+5/+10"). */
+export const LATER_COMEBACK_NAGS = 2;
+
+/**
+ * The fire schedule a "Later" tapped at `tapAt` arms: the comeback plus its two
+ * ignored-nag siblings. `{ comebackAt: tap+5m, fireTimes: [tap+5m, tap+10m, tap+15m] }`.
+ *
+ * Uncapped by design — a deliberate Later is not an ignored ring, so it does not
+ * consume the `MAX_NAG_COMEBACKS` allowance. `snoozeUntil` for the lifecycle is
+ * `comebackAt` (the real armed time), never a "tap + 5 min" estimate written
+ * before the alarm actually registered.
+ */
+export function planLaterComeback(
+  tapAt: number,
+  delayMinutes: number = NAG_DELAY_MINUTES,
+  nags: number = LATER_COMEBACK_NAGS
+): { comebackAt: number; fireTimes: number[] } {
+  const step = Math.max(1, Math.round(delayMinutes)) * 60_000;
+  const comebackAt = tapAt + step;
+  const count = Math.max(0, Math.floor(nags));
+  const fireTimes = [comebackAt];
+  for (let i = 1; i <= count; i++) fireTimes.push(comebackAt + i * step);
+  return { comebackAt, fireTimes };
+}

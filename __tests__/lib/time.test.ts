@@ -12,6 +12,10 @@ import {
   usesHour12Format,
   planGridOccurrences,
   MAX_PENDING_OCCURRENCES,
+  formatRingingNow,
+  formatDueNow,
+  formatRingsAgain,
+  formatMissedAt,
   type ReminderSchedule,
 } from "../../lib/time";
 
@@ -632,5 +636,25 @@ describe("grid takes precedence over the legacy fields", () => {
     };
 
     expect(getNextTriggerTime(passed, day1(12))).toBe(day1(9));
+  });
+});
+
+// ─── Ring-state card labels (ring-state fix) ────────────────────────────────
+
+describe("ring-state labels", () => {
+  const clock = { hour12: true };
+  it("formatRingingNow / formatDueNow are fixed strings", () => {
+    expect(formatRingingNow()).toBe("Ringing now");
+    expect(formatDueNow()).toBe("Due now");
+  });
+  it("formatRingsAgain and formatMissedAt reuse clock formatting", () => {
+    const t = utc(2026, 9, 8, 15, 57);
+    expect(formatRingsAgain(t, clock)).toBe("Rings again 3:57 pm");
+    expect(formatMissedAt(utc(2026, 9, 8, 9, 0), clock)).toBe("Missed · 9:00 am");
+  });
+  it("respect a 24-hour dial", () => {
+    const t = utc(2026, 9, 8, 15, 57);
+    expect(formatRingsAgain(t, { hour12: false })).toBe("Rings again 15:57");
+    expect(formatMissedAt(t, { hour12: false })).toBe("Missed · 15:57");
   });
 });

@@ -561,6 +561,33 @@ describe("AlarmKit — the comebacks are pre-scheduled, not reacted to", () => {
     );
   });
 
+  it("writes the miss only once even if the exhausted chain is replayed (peek/ack replay safety)", async () => {
+    const rang = NOW - 30 * MIN;
+    mockStoreState.getReminderById.mockReturnValue(storedReminder());
+    // A prior pass already recorded the miss for this occurrence; the peek/ack
+    // queue can hand the same "fired" events back if an ack failed.
+    mockStoreState.history = [
+      { id: "h1", reminderId: ID, reminderTitle: "Take your pills", timestamp: "", status: "missed", scheduledFor: rang },
+    ];
+    await AsyncStorage.setItem(
+      "@alarmkit_state",
+      JSON.stringify({
+        [ID]: { nagOrigins: Object.fromEntries(chainOf(rang).map((key) => [key, rang])) },
+      })
+    );
+    mockAlarmKit.getAndClearEventLog.mockResolvedValue([
+      { type: "fired", id: `reminder_${ID}_${rang}`, at: rang },
+      ...chainOf(rang).map((key, index) => ({ type: "fired", id: key, at: rang + (index + 1) * NAG_MS })),
+    ] as any);
+
+    const summary = await reconcileAlarmKitEvents();
+
+    // The chain still resolves as a miss, but no second history row is written.
+    expect(summary.missed).toBe(1);
+    expect(mockStoreState.recordCompletion).not.toHaveBeenCalled();
+    mockStoreState.history = undefined;
+  });
+
   it("counts Done on the last comeback as done, not as three misses", async () => {
     const rang = NOW - 20 * MIN;
     mockStoreState.getReminderById.mockReturnValue(storedReminder());

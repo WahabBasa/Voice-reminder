@@ -2,17 +2,23 @@ import fs from "fs";
 import path from "path";
 
 /**
- * OLD-96 tripwire — the snooze-nag, native side.
+ * Ring-state tripwire — the AlarmKit native side.
  *
  * The Swift in `plugins/` is never executed by Jest and never compiled without a
- * Mac, so the only feedback loop short of a 15-minute EAS build is reading the
- * source. These suites read it: they pin the guarantees the nag depends on
- * (docs/alarmkit-focus-breakthrough.md §7) so that a well-meaning edit to either
- * intent shows up as a red test instead of a phone that keeps reminding a user
- * who already tapped Done — or one that never stops snoozing.
+ * Mac, so short of a 15-minute EAS build the only feedback loop is reading the
+ * source. These suites pin the ring-state contract so a well-meaning edit shows
+ * up red here instead of as a broken build later:
+ *   - every alarm carries occurrence identity (reminderId / occurrenceAt /
+ *     chainId / chainStep / kind) in its metadata dict,
+ *   - "Later" starts a fresh chain: guard first, silence, cancel the current
+ *     chain's siblings, AWAIT registration of a new comeback chain, then persist
+ *     a durable snoozed event (or scheduleFailed),
+ *   - the durable log is peek/ack with unique eventIds (no delete-first drain),
+ *   - the bridge exposes the live AlarmManager snapshot, occurrence-scoped stop,
+ *     and an RCTEventEmitter carrying the "please peek" hint,
+ *   - native subscribes to alarmUpdates before the first snapshot.
  *
- * Assertions here are deliberately about ORDER and PRESENCE, not formatting: they
- * name symbols, not whitespace.
+ * Assertions are about PRESENCE and ORDER of symbols, not formatting.
  */
 
 const INTENTS_PATH = path.resolve(__dirname, "../../plugins/ios-src/VRAlarmIntents.swift");
@@ -39,10 +45,14 @@ function at(haystack: string, needle: string): number {
 
 const stopIntent = slice(intents, "struct VRStopIntent", "// MARK: - Resolution helpers");
 const snoozeIntent = slice(intents, "struct VRSnoozeIntent", "// MARK: - Stop");
-const snoozePerform = slice(snoozeIntent, "func perform()", "private func scheduleFollowUp");
-const followUp = snoozeIntent.slice(snoozeIntent.indexOf("private func scheduleFollowUp"));
+const snoozePerform = snoozeIntent.slice(snoozeIntent.indexOf("func perform()"));
 const chain = slice(intents, "enum VRAlarmNagChain", "// MARK: - Alarm button configuration");
+const seam = intents.slice(intents.indexOf("protocol VRAlarmFollowUpScheduling"));
+
 const scheduler = slice(plugin, "const VR_ALARM_SCHEDULER_SWIFT", "// INTENTS HOOK");
+const bridgeSwift = slice(plugin, "const ALARM_KIT_BRIDGE_SWIFT", "// AlarmKitBridge.m content");
+const bridgeObjc = slice(plugin, "const ALARM_KIT_BRIDGE_OBJC", "// VRAlarmEventEmitter.m content");
+const emitterObjc = slice(plugin, "const VR_ALARM_EVENT_EMITTER_OBJC", "// VRAlarmScheduler.swift content");
 
 // ─── Group 1: the plugin ships the real intents ─────────────────────────────
 
@@ -58,13 +68,7 @@ describe("withAlarmKit plugin wiring", () => {
   });
 });
 
-// ─── Group 2: the nag is NOT built on the system countdown ──────────────────
-//
-// docs/alarmkit-focus-breakthrough.md §7: the system snooze is wired to the
-// SECONDARY button, so `.countdown` + `postAlert` cannot express "dismiss, then
-// come back". Adopting it would also cost a widget extension and displace
-// VRSnoozeIntent. Every one of these names appearing in the scheduler is a
-// regression, not a feature.
+// ─── Group 2: the nag never rides the system countdown ──────────────────────
 
 describe("the nag never rides the system countdown", () => {
   it("sets no countdownDuration, preAlert or postAlert anywhere", () => {
@@ -82,56 +86,54 @@ describe("the nag never rides the system countdown", () => {
     );
   });
 
-  it("schedules plain fixed-date alarms, which is what a pre-scheduled chain needs", () => {
+  it("schedules plain fixed-date alarms", () => {
     expect(scheduler).toContain("schedule: .fixed(fireDate)");
   });
 });
 
-// ─── Group 3: chain metadata survives the round trip ────────────────────────
+// ─── Group 3: occurrence + chain metadata ───────────────────────────────────
 
-describe("chain metadata reaches the intents", () => {
+describe("every alarm carries occurrence identity", () => {
+  it("declares the five identity metadata keys in the intents", () => {
+    expect(intents).toContain('static let reminderIdMetadataKey = "reminderId"');
+    expect(intents).toContain('static let occurrenceAtMetadataKey = "occurrenceAt"');
+    expect(intents).toContain('static let chainIdMetadataKey = "chainId"');
+    expect(intents).toContain('static let chainStepMetadataKey = "chainStep"');
+    expect(intents).toContain('static let kindMetadataKey = "kind"');
+  });
+
   it("the scheduler persists the whole metadata dict per app key — no key whitelist", () => {
     expect(scheduler).toContain('"metadata": metadata');
     expect(scheduler).toContain("VRAlarmStore.setMeta(appKey: appKey");
   });
 
-  it("both scheduling paths write meta, so a follow-up is readable too", () => {
-    const writes = scheduler.match(/VRAlarmStore\.setMeta\(appKey:/g) ?? [];
-    expect(writes.length).toBeGreaterThanOrEqual(2);
+  it("both scheduling paths write meta and the fire time", () => {
+    expect((scheduler.match(/VRAlarmStore\.setMeta\(appKey:/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect((scheduler.match(/VRAlarmStore\.setUUID\(alarmID, fireDate:/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
-  it("both scheduling paths record the fire time the chain check reads", () => {
-    const writes = scheduler.match(/VRAlarmStore\.setUUID\(alarmID, fireDate:/g) ?? [];
-    expect(writes.length).toBeGreaterThanOrEqual(2);
-    expect(scheduler).toContain('static let fireDatesKey = "vr_alarm_firedates"');
-    expect(intents).toContain('static let fireDates = "vr_alarm_firedates"');
-    expect(intents).toContain("static func fireDateMillis(appKey: String) -> Int?");
-  });
-
-  it("the intents read the chain keys back out of that same record", () => {
-    expect(intents).toContain('static let siblingsMetadataKey = "siblings"');
-    expect(intents).toContain('static let nagIndexMetadataKey = "nagIndex"');
-    expect(intents).toContain('static let nagMaxMetadataKey = "nagMax"');
-    expect(intents).toContain('static let nagForMetadataKey = "nagFor"');
-    expect(intents).toContain("static func storedSiblings(appKey: String) -> String?");
-    expect(intents).toContain("VRAlarmIntentKeys.siblingsMetadataKey");
+  it("the state snapshot reads the identity back out of that record", () => {
+    expect(scheduler).toContain('md["reminderId"]');
+    expect(scheduler).toContain('md["occurrenceAt"]');
+    expect(scheduler).toContain('md["chainId"]');
+    expect(scheduler).toContain('md["chainStep"]');
   });
 });
 
-// ─── Group 4: Stop — chain cancel strictly after guard 2 ────────────────────
+// ─── Group 4: Stop — records, cancels siblings after guard, emits hint ───────
 
 describe("VRStopIntent ends the chain", () => {
-  it("cancels the ring's remaining comebacks", () => {
-    expect(stopIntent).toContain("VRAlarmNagChain.cancelSiblings(of: resolvedKey");
+  it("records a stopped event carrying occurrence identity", () => {
+    expect(stopIntent).toContain("kind: VRAlarmIntentKeys.stoppedEvent");
+    expect(stopIntent).toContain("occurrenceAt: context.occurrenceAt");
+    expect(stopIntent).toContain("chainId: context.chainId");
   });
 
-  it("runs the cancel strictly AFTER the spurious-stop guard (PRD guard 2)", () => {
+  it("cancels the ring's remaining comebacks strictly AFTER the spurious-stop guard", () => {
     const guard = at(stopIntent, "shouldRecordStop(");
     const guardReturn = at(stopIntent, "return .result()");
     const cancel = at(stopIntent, "VRAlarmNagChain.cancelSiblings");
     expect(guard).toBeLessThan(cancel);
-    // The guard's early return is the only `return .result()` before the cancel:
-    // a spurious stop leaves the method without touching a single alarm.
     expect(guardReturn).toBeLessThan(cancel);
   });
 
@@ -139,142 +141,213 @@ describe("VRStopIntent ends the chain", () => {
     expect(stopIntent).toMatch(/guard VRAlarmIntentGuards\.shouldRecordStop\([^)]*\) else \{\s*return \.result\(\)\s*\}/);
   });
 
-  it("still records the stop event before cancelling anything", () => {
-    expect(at(stopIntent, '"stopped"')).toBeLessThan(at(stopIntent, "VRAlarmNagChain.cancelSiblings"));
+  it("records the stop before cancelling anything", () => {
+    expect(at(stopIntent, "kind: VRAlarmIntentKeys.stoppedEvent")).toBeLessThan(
+      at(stopIntent, "VRAlarmNagChain.cancelSiblings")
+    );
   });
 
-  it("keeps the existing registry + guard cleanup for the acknowledged ring", () => {
+  it("keeps the registry + guard cleanup and emits the peek hint", () => {
     expect(stopIntent).toContain("VRAlarmIntentStore.clearUUID(appKey: resolvedKey)");
     expect(stopIntent).toContain("VRAlarmIntentStore.clearSnoozeGuard(appKey: resolvedKey)");
+    expect(stopIntent).toContain('VRAlarmHint.post(reason: "intent")');
   });
 
   it("never schedules anything — Done is the end of the chain", () => {
     expect(stopIntent).not.toContain("scheduleAlarm(");
-    expect(stopIntent).not.toContain("scheduleFollowUp");
   });
 
-  it("never opens the app — slide-to-stop on the lock screen must not demand an unlock", () => {
-    // Foregrounding was only ever about draining the event log immediately, and
-    // reconciliation runs on every foreground anyway (its completed branch is
-    // documented as the backstop for intents that never ran at all). Both
-    // intents stay lock-screen silent.
+  it("never opens the app — slide-to-stop must not demand an unlock", () => {
     expect(stopIntent).toContain("static var openAppWhenRun: Bool = false");
     expect(snoozeIntent).toContain("static var openAppWhenRun: Bool = false");
   });
 });
 
-// ─── Group 5: Later — leaves the pre-scheduled chain standing ───────────────
+// ─── Group 5: Later — fresh chain, awaited scheduling ───────────────────────
 
-describe("VRSnoozeIntent rides the pre-scheduled chain", () => {
-  it("does NOT cancel the siblings — they ARE the comebacks the user asked for", () => {
-    // Cancelling here would collapse three owed comebacks into one and hand the
-    // counter back to zero, which is how the snooze button became unbounded.
-    expect(snoozePerform).not.toContain("cancelSiblings");
-  });
-
-  it("only arms a follow-up when the chain owes nothing", () => {
-    expect(snoozePerform).toContain("VRAlarmNagChain.owedComebackCount(of: resolvedKey");
-    expect(snoozePerform).toMatch(
-      /owedComebackCount\(of: resolvedKey, afterMillis: nowMillis\) == 0 \{\s*scheduleFollowUp\(/
-    );
-  });
-
-  it("counts only siblings that are registered AND still in the future", () => {
-    expect(chain).toContain("static func owedComebackCount(of resolvedKey: String, afterMillis: Int) -> Int");
-    expect(chain).toContain("registry[key] != nil");
-    expect(chain).toContain("fireDate > afterMillis");
-  });
-
-  it("writes the snooze guard before anything else (PRD guard 1)", () => {
+describe("VRSnoozeIntent starts a fresh comeback chain", () => {
+  it("writes the snooze guard first (guard 1), before any await", () => {
     const guardWrite = at(snoozePerform, "writeSnoozeGuard(");
-    expect(guardWrite).toBeLessThan(at(snoozePerform, 'appendEvent(\n            type: "snoozed"'));
-    expect(guardWrite).toBeLessThan(at(snoozePerform, "owedComebackCount("));
+    expect(guardWrite).toBeLessThan(at(snoozePerform, "stopRinging("));
+    expect(guardWrite).toBeLessThan(at(snoozePerform, "cancelSiblings(of: resolvedKey"));
+    expect(guardWrite).toBeLessThan(at(snoozePerform, "try await VRFollowUpScheduler.scheduleAlarm("));
   });
 
-  it("keeps guard 4's 1s sleep last", () => {
-    const scheduleCall = at(snoozePerform, "scheduleFollowUp(appKey: resolvedKey");
-    expect(scheduleCall).toBeLessThan(at(snoozePerform, "Task.sleep(nanoseconds: 1_000_000_000)"));
-  });
-});
-
-// ─── Group 5b: Later silences the ring it belongs to ────────────────────────
-//
-// The ring's audio used to die as a SIDE EFFECT: Later always rescheduled its
-// own app key, and guard-5 rotation cancelled the alerting UUID on the way.
-// The pre-scheduled chain removed that reschedule for the common path, and
-// `.custom` leaves silencing entirely to the intent — so the stop must be
-// explicit or the alarm rings until its timeout however many times Later is
-// tapped.
-
-describe("VRSnoozeIntent silences the ringing alarm", () => {
-  it("stops the alerting UUID unconditionally — after guard 1, before the owed-comeback branch", () => {
-    const guardWrite = at(snoozePerform, "writeSnoozeGuard(");
-    const stop = at(snoozePerform, "stopRinging(");
-    expect(guardWrite).toBeLessThan(stop);
-    expect(stop).toBeLessThan(at(snoozePerform, "owedComebackCount("));
-  });
-
-  it("falls back to the registry when the intent lost its UUID parameter", () => {
+  it("silences the ringing alarm, with a registry fallback for a lost UUID", () => {
+    expect(snoozePerform).toContain("stopRinging(");
     expect(snoozePerform).toContain("UUID(uuidString: alarmID)");
     expect(snoozePerform).toContain("VRAlarmIntentStore.uuidRegistry()[resolvedKey]");
   });
 
-  it("stops — never cancels — so the registry survives for Done's sibling bookkeeping", () => {
-    expect(snoozePerform).not.toContain("cancel(");
-    expect(snoozePerform).not.toContain("clearUUID");
+  it("cancels the CURRENT chain's siblings, then arms a NEW chain (reversed from OLD-96)", () => {
+    // Each Later replaces the chain — the pre-armed comebacks of the current
+    // chain are cancelled and a fresh chain is armed from the tap.
+    const cancel = at(snoozePerform, "VRAlarmNagChain.cancelSiblings(of: resolvedKey");
+    const arm = at(snoozePerform, "try await VRFollowUpScheduler.scheduleAlarm(");
+    expect(cancel).toBeLessThan(arm);
+    expect(snoozePerform).toContain("VRAlarmIntentGuards.laterChainId(");
+    // The old owed-comeback / cap machinery is gone.
+    expect(snoozePerform).not.toContain("owedComebackCount");
+    expect(snoozePerform).not.toContain("Task.sleep");
   });
 
-  it("declares stopRinging on the AK-1 integration seam", () => {
-    const seam = intents.slice(intents.indexOf("protocol VRAlarmFollowUpScheduling"));
-    expect(seam).toContain("static func stopRinging(uuid: UUID)");
+  it("arms a comeback plus two nags — three awaited registrations", () => {
+    expect((snoozePerform.match(/try await VRFollowUpScheduler\.scheduleAlarm\(/g) ?? []).length).toBe(3);
   });
 
-  it("the scheduler's stopRinging maps to AlarmManager.stop and touches no records", () => {
-    const stopFn = slice(scheduler, "static func stopRinging", "static func cancel(");
-    expect(stopFn).toContain("AlarmManager.shared.stop(id: uuid)");
-    expect(stopFn).not.toContain("VRAlarmStore");
-  });
-});
-
-// ─── Group 6: the cap on the native snooze ──────────────────────────────────
-
-describe("the follow-up is capped", () => {
-  it("refuses to arm past the allowance before doing any other work", () => {
-    const capGuard = at(followUp, "guard VRAlarmIntentGuards.shouldNagAgain(");
-    expect(capGuard).toBeLessThan(at(followUp, "VRFollowUpScheduler.scheduleAlarm("));
-    expect(followUp).toMatch(
-      /guard VRAlarmIntentGuards\.shouldNagAgain\(nagIndex: delivered, nagMax: allowance\) else \{ return \}/
+  it("on comeback-registration failure persists scheduleFailed and claims no snooze", () => {
+    expect(snoozePerform).toContain("kind: VRAlarmIntentKeys.scheduleFailedEvent");
+    // scheduleFailed appears before the snoozed event in source, inside the catch.
+    expect(at(snoozePerform, "VRAlarmIntentKeys.scheduleFailedEvent")).toBeLessThan(
+      at(snoozePerform, "kind: VRAlarmIntentKeys.snoozedEvent")
     );
   });
 
-  it("carries the incremented counter forward on the reused app key", () => {
-    // The follow-up reuses the ring's key, so its metadata is what the NEXT tap
-    // reads back — without the increment the chain never terminates.
-    expect(followUp).toContain("VRAlarmIntentGuards.nagIndex(metadata: metadata)");
-    expect(followUp).toContain("metadata[VRAlarmIntentKeys.nagIndexMetadataKey] = String(delivered + 1)");
-    expect(followUp).toContain("metadata[VRAlarmIntentKeys.nagMaxMetadataKey] = String(allowance)");
-    expect(followUp).toContain("appKey: VRAlarmIntentGuards.followUpAppKey(originalAppKey: resolvedKey)");
-  });
-
-  it("mirrors the JS cap and treats a missing counter as zero", () => {
-    expect(intents).toContain("static let defaultNagMax = 3");
-    expect(intents).toContain("static func nagIndex(metadata: [String: String]) -> Int");
-    expect(intents).toContain("static func nagMax(metadata: [String: String]) -> Int");
-    expect(intents).toContain("static func shouldNagAgain(nagIndex: Int, nagMax: Int) -> Bool");
-  });
-
-  it("drops the sibling list so the follow-up is not itself a chain member", () => {
-    expect(followUp).toContain("metadata.removeValue(forKey: VRAlarmIntentKeys.siblingsMetadataKey)");
-    expect(followUp).not.toContain("cancelSiblings");
+  it("on success records a snoozed event with the comeback's real fire date and the new chainId", () => {
+    expect(snoozePerform).toContain("kind: VRAlarmIntentKeys.snoozedEvent");
+    expect(snoozePerform).toContain("snoozeUntil: comebackAt");
+    expect(snoozePerform).toContain("chainId: newChainId");
+    expect(snoozePerform).toContain('VRAlarmHint.post(reason: "intent")');
   });
 });
 
-// ─── Group 7: only real alarm keys ever reach cancel ────────────────────────
+// ─── Group 6: the scheduler seam is async throws and awaited ─────────────────
+
+describe("the scheduler seam awaits AlarmKit", () => {
+  it("declares scheduleAlarm as async throws on the AK-1 seam", () => {
+    expect(seam).toContain("static func scheduleAlarm(");
+    expect(seam).toContain("async throws -> UUID");
+    expect(seam).toContain("static func cancel(appKey: String)");
+    expect(seam).toContain("static func stopRinging(uuid: UUID)");
+  });
+
+  it("the scheduler impl awaits AlarmManager.schedule (no detached try? in the seam)", () => {
+    expect(scheduler).toContain("async throws -> UUID");
+    expect((scheduler.match(/_ = try await AlarmManager\.shared\.schedule\(id: alarmID/g) ?? []).length)
+      .toBeGreaterThanOrEqual(2);
+    expect(scheduler).not.toContain("Task.detached {\n      _ = try? await AlarmManager.shared.schedule");
+  });
+});
+
+// ─── Group 7: durable peek/ack event log ────────────────────────────────────
+
+describe("the event log is durable peek/ack", () => {
+  it("both stores expose peekEvents / ackEvents and mint an eventId per append", () => {
+    for (const src of [intents, scheduler]) {
+      expect(src).toContain("static func peekEvents()");
+      expect(src).toContain("static func ackEvents(");
+      expect(src).toContain('"eventId": UUID().uuidString');
+      expect(src).toContain("writeEventsLocked");
+    }
+  });
+
+  it("serializes append/ack through one shared lock", () => {
+    expect(scheduler).toContain("let vrAlarmEventLock = NSLock()");
+    expect(intents).toContain("vrAlarmEventLock.lock()");
+    expect(scheduler).toContain("vrAlarmEventLock.lock()");
+  });
+
+  it("declares the durable event kinds in the intents", () => {
+    expect(intents).toContain('static let stoppedEvent = "stopped"');
+    expect(intents).toContain('static let snoozedEvent = "snoozed"');
+    expect(intents).toContain('static let removedEvent = "removed"');
+    expect(intents).toContain('static let scheduleFailedEvent = "scheduleFailed"');
+  });
+
+  it("sibling cancellation logs a `removed` event, only for rings still scheduled", () => {
+    expect(chain).toContain("kind: VRAlarmIntentKeys.removedEvent");
+    expect(chain).toContain("let wasScheduled = registry[key] != nil");
+    expect(at(chain, "guard wasScheduled else { continue }")).toBeLessThan(
+      at(chain, "VRAlarmIntentStore.appendEvent(")
+    );
+    expect(chain).toContain("VRFollowUpScheduler.cancel(appKey: key)");
+    expect(chain).not.toContain("AlarmManager");
+  });
+});
+
+// ─── Group 8: live state snapshot + occurrence-scoped stop ───────────────────
+
+describe("live AlarmManager state + occurrence stop", () => {
+  it("maps Alarm.State by description, with alerting the ringing case", () => {
+    expect(scheduler).toContain("static func stateString(_ state: Alarm.State)");
+    for (const token of ["alerting", "countdown", "paused"]) {
+      expect(scheduler).toContain(`s.contains("${token}")`);
+    }
+  });
+
+  it("snapshots AlarmManager.shared.alarms joined to metadata", () => {
+    expect(scheduler).toContain("static func alarmStates()");
+    expect(scheduler).toContain("AlarmManager.shared.alarms");
+    expect(scheduler).toContain("VRAlarmStore.appKey(forUUID: alarm.id)");
+  });
+
+  it("stopOccurrence cancels every matching app key across all chains", () => {
+    expect(scheduler).toContain("static func stopOccurrence(reminderId: String, occurrenceAt: Int)");
+    expect(scheduler).toContain("appKeysForOccurrence(reminderId: reminderId, occurrenceAt: occurrenceAt)");
+  });
+
+  it("the bridge exports peek / ack / getAlarmStates / stopOccurrence", () => {
+    for (const method of ["peekEvents", "ackEvents", "getAlarmStates", "stopOccurrence"]) {
+      expect(bridgeSwift).toContain(`func ${method}(`);
+      expect(bridgeObjc).toContain(`RCT_EXTERN_METHOD(${method}:`);
+    }
+  });
+});
+
+// ─── Group 9: alarmUpdates subscription + hint emitter ───────────────────────
+
+describe("live hint over alarmUpdates + RCTEventEmitter", () => {
+  it("subscribes to alarmUpdates before the first snapshot", () => {
+    expect(scheduler).toContain("AlarmManager.shared.alarmUpdates");
+    expect(scheduler).toContain("enum VRAlarmObservation");
+    expect(scheduler).toContain("static func ensureStarted()");
+    expect(at(scheduler, "VRAlarmObservation.ensureStarted()")).toBeLessThan(
+      at(scheduler, "(try? AlarmManager.shared.alarms) ?? []")
+    );
+  });
+
+  it("defines the hint as a NotificationCenter post named VRAlarmEventHint", () => {
+    expect(scheduler).toContain("enum VRAlarmHint");
+    expect(scheduler).toContain('Notification.Name("VRAlarmEventHint")');
+    expect(scheduler).toContain("static func post(reason: String)");
+  });
+
+  it("the emitter is a pure ObjC RCTEventEmitter subclass in its own linked .m file", () => {
+    // A Swift RCTEventEmitter subclass fails to see React's header under an
+    // Expo-owned bridging header, so the emitter is Objective-C importing React
+    // directly. No Swift file may reference RCTEventEmitter.
+    expect(scheduler).not.toContain("RCTEventEmitter");
+    expect(bridgeSwift).not.toContain("RCTEventEmitter");
+    expect(plugin).toContain('{ name: "VRAlarmEventEmitter.m", contents: VR_ALARM_EVENT_EMITTER_OBJC }');
+    expect(emitterObjc).toContain("#import <React/RCTEventEmitter.h>");
+    expect(emitterObjc).toContain("@interface VRAlarmEventEmitter : RCTEventEmitter");
+    expect(emitterObjc).toContain("RCT_EXPORT_MODULE(VRAlarmEventEmitter)");
+    expect(emitterObjc).toContain('return @[@"VRAlarmEvent"];');
+    expect(emitterObjc).toContain("- (void)startObserving");
+    expect(emitterObjc).toContain("- (void)stopObserving");
+    expect(emitterObjc).toContain('sendEventWithName:@"VRAlarmEvent"');
+  });
+
+  it("both sides agree on the plain notification name VRAlarmEventHint, carrying reason", () => {
+    expect(scheduler).toContain('Notification.Name("VRAlarmEventHint")');
+    expect(emitterObjc).toContain('@"VRAlarmEventHint"');
+    expect(emitterObjc).toContain('note.userInfo[@"reason"]');
+    // hasListeners guard so no event fires without a JS listener.
+    expect(emitterObjc).toContain("_hasListeners");
+  });
+
+  it("does NOT add RCTEventEmitter to the Swift bridging header", () => {
+    expect(plugin).toContain('const importLine = "#import <React/RCTBridgeModule.h>";');
+  });
+});
+
+// ─── Group 10: only real alarm keys ever reach cancel ────────────────────────
 
 describe("key families", () => {
-  it("accepts both the occurrence and the comeback prefix", () => {
+  it("accepts both the occurrence and the comeback prefix, and builds comeback keys", () => {
     expect(intents).toContain('static let appKeyPrefix = "reminder_"');
     expect(intents).toContain('static let nagKeyPrefix = "snooze_"');
+    expect(intents).toContain("static func comebackAppKey(reminderId: String, fireMillis: Int) -> String");
     expect(intents).toContain("guard isCancellableAlarmKey(key) else { continue }");
   });
 
@@ -284,172 +357,8 @@ describe("key families", () => {
     );
   });
 
-  it("the follow-up reuses the ring's own key, which sibling parsing excludes", () => {
-    expect(intents).toContain("static func followUpAppKey(originalAppKey: String) -> String");
-    expect(intents).toContain("guard key != selfKey else { continue }");
-    expect(intents).toContain("guard key != followUpAppKey(originalAppKey: selfKey) else { continue }");
-  });
-
   it("cancelSiblings always excludes the key it was invoked for", () => {
     expect(chain).toContain("excluding: resolvedKey");
-  });
-});
-
-// ─── Group 8: cancel reuses the scheduler, logs, and cleans up ──────────────
-
-describe("chain cancel mechanics", () => {
-  it("delegates to the scheduler's rotation-aware cancel instead of re-implementing it", () => {
-    expect(chain).toContain("VRFollowUpScheduler.cancel(appKey: key)");
-    expect(chain).not.toContain("AlarmManager");
-  });
-
-  it("declares cancel on the AK-1 integration seam", () => {
-    const seam = intents.slice(intents.indexOf("protocol VRAlarmFollowUpScheduling"));
-    expect(seam).toContain("static func cancel(appKey: String)");
-  });
-
-  it("the scheduler's cancel resolves the CURRENT uuid and evicts both records", () => {
-    expect(scheduler).toContain("static func cancel(appKey: String) {");
-    expect(scheduler).toContain("guard let uuid = VRAlarmStore.uuid(forAppKey: appKey) else { return }");
-    expect(scheduler).toContain("VRAlarmStore.setUUID(nil, fireDate: nil, forAppKey: appKey)");
-    expect(scheduler).toContain("VRAlarmStore.clearMeta(appKey: appKey)");
-  });
-
-  it("logs one event per cancelled ring into the drained event log", () => {
-    expect(intents).toContain('static let siblingCancelledEvent = "sibling_cancelled"');
-    expect(chain).toContain("VRAlarmIntentStore.appendEvent(");
-    expect(chain).toContain("type: VRAlarmIntentKeys.siblingCancelledEvent");
-    expect(chain).toContain("id: key");
-  });
-
-  it("only logs rings that were actually still scheduled", () => {
-    expect(chain).toContain("let wasScheduled = registry[key] != nil");
-    expect(at(chain, "guard wasScheduled else { continue }")).toBeLessThan(
-      at(chain, "VRAlarmIntentStore.appendEvent(")
-    );
-  });
-
-  it("evicts the cancelled ring's stored metadata and guard key", () => {
-    expect(chain).toContain("VRAlarmIntentStore.clearMeta(appKey: key)");
-    expect(chain).toContain("VRAlarmIntentStore.clearSnoozeGuard(appKey: key)");
-    expect(intents).toContain("static func clearMeta(appKey: String)");
-  });
-
-  it("writes events in the shape the JS drain reads (JSON string, not a plist array)", () => {
-    // AK-1 drains with string(forKey:) — an array under this key is invisible to JS.
-    expect(scheduler).toContain("defaults.string(forKey: eventsKey)");
-    const append = slice(intents, "static func appendEvent(", "// MARK: UUID registry");
-    expect(at(append, "JSONSerialization.data(withJSONObject: events")).toBeLessThan(
-      at(append, "store.set(json, forKey: VRAlarmIntentKeys.events)")
-    );
-  });
-});
-
-// ─── Group 9: executable spec for the pure Swift logic ──────────────────────
-
-/**
- * TypeScript mirrors of `VRAlarmIntentGuards`. Nothing imports them — they exist
- * so the Swift's semantics are stated once in a language this suite can actually
- * run, and so a behavioral change to the Swift has to be reflected here
- * deliberately. The Swift carries the same tables in its `selfTestFailures()`.
- */
-function isCancellableAlarmKey(key: string): boolean {
-  if (key.startsWith("snooze_until_")) return false;
-  return key.startsWith("reminder_") || key.startsWith("snooze_");
-}
-
-function siblingKeys(rawSiblings: string | null, selfKey: string): string[] {
-  if (!rawSiblings) return [];
-  const seen = new Set<string>();
-  const keys: string[] = [];
-  for (const piece of rawSiblings.split(",")) {
-    const key = piece.trim();
-    if (!key) continue;
-    if (key === selfKey) continue;
-    if (!isCancellableAlarmKey(key)) continue;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    keys.push(key);
-  }
-  return keys;
-}
-
-const DEFAULT_NAG_MAX = 3;
-
-function nagIndex(metadata: Record<string, string>): number {
-  const value = Number.parseInt(metadata.nagIndex ?? "", 10);
-  return Number.isFinite(value) ? Math.max(0, value) : 0;
-}
-
-function nagMax(metadata: Record<string, string>): number {
-  const value = Number.parseInt(metadata.nagMax ?? "", 10);
-  if (!Number.isFinite(value) || value < 0) return DEFAULT_NAG_MAX;
-  return Math.min(value, DEFAULT_NAG_MAX);
-}
-
-describe("sibling list parsing (mirror of the Swift guard)", () => {
-  const occurrence = "reminder_a_1000";
-  const comeback1 = "snooze_a_301000";
-  const comeback2 = "snooze_a_601000";
-  const comeback3 = "snooze_a_901000";
-
-  it("no metadata means nothing to cancel — a chainless alarm behaves as before", () => {
-    expect(siblingKeys(null, occurrence)).toEqual([]);
-    expect(siblingKeys("", occurrence)).toEqual([]);
-  });
-
-  it("Done on the occurrence cancels all three comebacks", () => {
-    expect(siblingKeys(`${comeback1},${comeback2},${comeback3}`, occurrence)).toEqual([
-      comeback1,
-      comeback2,
-      comeback3,
-    ]);
-  });
-
-  it("Done on a comeback ends the whole chain, backwards and forwards", () => {
-    expect(siblingKeys(`${occurrence},${comeback1},${comeback3}`, comeback2)).toEqual([
-      occurrence,
-      comeback1,
-      comeback3,
-    ]);
-  });
-
-  it("tolerates whitespace, blanks and duplicates", () => {
-    expect(siblingKeys(` ${comeback1} , , ${comeback1} `, occurrence)).toEqual([comeback1]);
-  });
-
-  it("never cancels the key it was invoked for (that is the follow-up's key)", () => {
-    expect(siblingKeys(`${occurrence},${comeback1}`, occurrence)).toEqual([comeback1]);
-  });
-
-  it("never hands the snooze guard key to cancel", () => {
-    expect(siblingKeys(`snooze_until_${occurrence},${comeback1}`, occurrence)).toEqual([comeback1]);
-    expect(isCancellableAlarmKey(`snooze_until_${occurrence}`)).toBe(false);
-  });
-});
-
-describe("nag cap (mirror of the Swift guard)", () => {
-  it("treats a missing or garbage counter as nothing delivered yet", () => {
-    expect(nagIndex({})).toBe(0);
-    expect(nagIndex({ nagIndex: "junk" })).toBe(0);
-    expect(nagIndex({ nagIndex: "-4" })).toBe(0);
-  });
-
-  it("reads the counter back", () => {
-    expect(nagIndex({ nagIndex: "2" })).toBe(2);
-  });
-
-  it("clamps the allowance to the shared default", () => {
-    expect(nagMax({})).toBe(DEFAULT_NAG_MAX);
-    expect(nagMax({ nagMax: "99" })).toBe(DEFAULT_NAG_MAX);
-    expect(nagMax({ nagMax: "1" })).toBe(1);
-  });
-
-  it("stops the chain at the third comeback", () => {
-    const allowed = (index: number) => index < nagMax({});
-    expect(allowed(nagIndex({ nagIndex: "0" }))).toBe(true);
-    expect(allowed(nagIndex({ nagIndex: "2" }))).toBe(true);
-    expect(allowed(nagIndex({ nagIndex: "3" }))).toBe(false);
-    expect(allowed(nagIndex({ nagIndex: "9" }))).toBe(false);
+    expect(intents).toContain("guard key != selfKey else { continue }");
   });
 });

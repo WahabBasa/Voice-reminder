@@ -7,8 +7,14 @@
  */
 
 import { type GridSchedule } from "../../convex/scheduleShape";
-import { dayOccurrenceTimes, occurrenceSortKey, occursOnDay } from "../../lib/dayOccurrences";
-import { type Reminder } from "../../lib/store";
+import {
+  dayOccurrenceTimes,
+  isDayFullyCompleted,
+  isOccurrenceCompleted,
+  occurrenceSortKey,
+  occursOnDay,
+} from "../../lib/dayOccurrences";
+import { type Reminder, type ReminderHistory } from "../../lib/store";
 
 // TZ is UTC in jest.config.js, so local midnight is UTC midnight.
 const MONDAY = "2026-08-17";
@@ -123,5 +129,67 @@ describe("occursOnDay / occurrenceSortKey with a grid", () => {
 
     expect(occursOnDay(bounded, MONDAY)).toBe(true);
     expect(occursOnDay(bounded, TUESDAY)).toBe(false);
+  });
+});
+
+// ─── Per-occurrence completion (ring-state fix) ─────────────────────────────
+
+describe("isOccurrenceCompleted", () => {
+  const twice = reminder({
+    type: "grid",
+    days: { kind: "everyday" },
+    times: { kind: "clock", times: ["08:00", "21:00"] },
+  });
+  const hist = (over: Partial<ReminderHistory>): ReminderHistory => ({
+    id: "h", reminderId: "r1", reminderTitle: "T", status: "completed",
+    timestamp: new Date(at(MONDAY, 10)).toISOString(), ...over,
+  });
+
+  it("matches only the occurrence a precise (scheduledFor) row names", () => {
+    const h = [hist({ scheduledFor: at(MONDAY, 8) })];
+    expect(isOccurrenceCompleted(twice, h, at(MONDAY, 8))).toBe(true);
+    expect(isOccurrenceCompleted(twice, h, at(MONDAY, 21))).toBe(false);
+  });
+
+  it("treats a legacy row (no scheduledFor) as whole-day for repeaters", () => {
+    const h = [hist({})];
+    expect(isOccurrenceCompleted(twice, h, at(MONDAY, 8))).toBe(true);
+    expect(isOccurrenceCompleted(twice, h, at(MONDAY, 21))).toBe(true);
+    expect(isOccurrenceCompleted(twice, h, at(TUESDAY, 8))).toBe(false);
+  });
+
+  it("a legacy row completes a one-off outright, and ignores other statuses/ids", () => {
+    const off = { ...twice, frequency: "once" } as Reminder;
+    expect(isOccurrenceCompleted(off, [hist({})], at(TUESDAY, 8))).toBe(true);
+    expect(isOccurrenceCompleted(twice, [hist({ status: "missed" })], at(MONDAY, 8))).toBe(false);
+    expect(isOccurrenceCompleted(twice, [hist({ reminderId: "other" })], at(MONDAY, 8))).toBe(false);
+  });
+});
+
+describe("isDayFullyCompleted", () => {
+  const twice = reminder({
+    type: "grid",
+    days: { kind: "everyday" },
+    times: { kind: "clock", times: ["08:00", "21:00"] },
+  });
+  const hist = (over: Partial<ReminderHistory>): ReminderHistory => ({
+    id: "h", reminderId: "r1", reminderTitle: "T", status: "completed",
+    timestamp: new Date(at(MONDAY, 10)).toISOString(), ...over,
+  });
+
+  it("stays incomplete until every occurrence of the day is completed", () => {
+    expect(isDayFullyCompleted(twice, [hist({ scheduledFor: at(MONDAY, 8) })], MONDAY)).toBe(false);
+    const both = [hist({ id: "a", scheduledFor: at(MONDAY, 8) }), hist({ id: "b", scheduledFor: at(MONDAY, 21) })];
+    expect(isDayFullyCompleted(twice, both, MONDAY)).toBe(true);
+  });
+
+  it("a legacy whole-day completion still finishes the day", () => {
+    expect(isDayFullyCompleted(twice, [hist({})], MONDAY)).toBe(true);
+  });
+
+  it("falls back to the day-level rule for a pre-grid reminder", () => {
+    const legacy = { ...reminder({} as GridSchedule), schedule: undefined, frequency: "daily" } as Reminder;
+    expect(isDayFullyCompleted(legacy, [hist({})], MONDAY)).toBe(true);
+    expect(isDayFullyCompleted(legacy, [], MONDAY)).toBe(false);
   });
 });

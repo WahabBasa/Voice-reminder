@@ -11,7 +11,7 @@
  * reconciliation bookkeeping and every write.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { NativeModules, Platform } from "react-native";
+import { NativeEventEmitter, NativeModules, Platform } from "react-native";
 import { vrLog } from "./vrLog";
 
 export type AlarmAuthorizationStatus = "authorized" | "denied" | "notDetermined";
@@ -25,7 +25,33 @@ export interface AlarmKitScheduleOptions {
   soundName: string | null;
   snoozeMinutes: number;
   metadata: { [k: string]: string };
+  // ── Occurrence identity (ring-state fix) ──────────────────────────────────
+  // Folded into `metadata` before the native call so every scheduled alarm
+  // carries the identity the intents and the state snapshot read back. All
+  // optional so existing callers keep compiling; agent R passes occurrenceAt
+  // and chainId when it wires the ring lifecycle.
+  /** ms epoch of the ORIGINAL occurrence (constant across a comeback chain). Defaults to `fireDate`. */
+  occurrenceAt?: number;
+  /** Comeback-chain identity. Defaults to `orig:${occurrenceAt}`. */
+  chainId?: string;
+  /** 0 = the ring, 1..n = comeback siblings. Defaults to 0. */
+  chainStep?: number;
+  /** "original" (schedule grid) or "later" (a Later-armed comeback). Defaults to "original". */
+  kind?: "original" | "later";
 }
+
+/**
+ * Metadata keys carried in the AlarmKit `metadata` dict. Mirrored verbatim in
+ * plugins/ios-src/VRAlarmIntents.swift (VRAlarmMetaKeys) and the generated Swift
+ * in plugins/withAlarmKit.js — a rename here has to be made in all three.
+ */
+export const ALARM_META_KEYS = {
+  reminderId: "reminderId",
+  occurrenceAt: "occurrenceAt",
+  chainId: "chainId",
+  chainStep: "chainStep",
+  kind: "kind",
+} as const;
 
 export interface ScheduledAlarm {
   id: string;
@@ -56,7 +82,13 @@ interface AlarmKitBridgeModule {
   scheduleAlarm(opts: AlarmKitScheduleOptions): Promise<string>;
   cancelAlarm(id: string): Promise<void>;
   getScheduledAlarms(): Promise<ScheduledAlarm[]>;
-  getAndClearEventLog(): Promise<AlarmEvent[]>;
+  // Durable event log (ring-state fix): peek returns all unacked events; ack
+  // removes only the ones JS has applied. Replaces the old delete-first drain.
+  peekEvents(): Promise<unknown[]>;
+  ackEvents(eventIds: string[]): Promise<void>;
+  // Live AlarmManager snapshot + occurrence-scoped stop.
+  getAlarmStates(): Promise<unknown[]>;
+  stopOccurrence(reminderId: string, occurrenceAt: number): Promise<void>;
 }
 
 const bridge: AlarmKitBridgeModule | undefined = (
@@ -187,13 +219,38 @@ export function isAlarmLimitError(error: unknown): boolean {
   return /maximumlimitreached|maximum limit/i.test(String(error ?? ""));
 }
 
+/**
+ * Fold the occurrence-identity fields into the metadata dict the native side
+ * persists per app key. Defaults keep legacy callers (who pass none) working:
+ * a plain occurrence is `chainStep 0`, `kind "original"`, occurrenceAt = its own
+ * fire time, chainId = `orig:${occurrenceAt}`.
+ */
+function withOccurrenceMetadata(opts: AlarmKitScheduleOptions): AlarmKitScheduleOptions {
+  const occurrenceAt = Number.isFinite(opts.occurrenceAt as number)
+    ? (opts.occurrenceAt as number)
+    : opts.fireDate;
+  const chainId = opts.chainId ?? `orig:${occurrenceAt}`;
+  const chainStep = Number.isFinite(opts.chainStep as number) ? (opts.chainStep as number) : 0;
+  const kind = opts.kind ?? "original";
+  return {
+    ...opts,
+    metadata: {
+      ...opts.metadata,
+      [ALARM_META_KEYS.occurrenceAt]: String(occurrenceAt),
+      [ALARM_META_KEYS.chainId]: chainId,
+      [ALARM_META_KEYS.chainStep]: String(chainStep),
+      [ALARM_META_KEYS.kind]: kind,
+    },
+  };
+}
+
 /** Resolves the native alarm UUID, or null when the alarm could not be registered. */
 export async function scheduleAlarm(
   opts: AlarmKitScheduleOptions
 ): Promise<string | null> {
   if (!isAlarmKitLinked()) return null;
   try {
-    return (await bridge!.scheduleAlarm(opts)) ?? null;
+    return (await bridge!.scheduleAlarm(withOccurrenceMetadata(opts))) ?? null;
   } catch (e) {
     vrLog("alarmkit", isAlarmLimitError(e) ? "schedule_limit_reached" : "schedule_failed", {
       appKey: opts.id,
@@ -227,19 +284,275 @@ export async function getScheduledAlarms(): Promise<ScheduledAlarm[]> {
   }
 }
 
-/** Drains the native event log — the entries are gone from UserDefaults after this. */
-export async function getAndClearEventLog(): Promise<AlarmEvent[]> {
-  if (!isAlarmKitLinked()) return [];
+// ─── Durable event log: peek / ack (ring-state fix) ─────────────────────────
+
+/** AlarmKit's own `Alarm.State`, as surfaced by {@link getAlarmStates}. */
+export type NativeAlarmState = "scheduled" | "countdown" | "paused" | "alerting";
+
+/** One live alarm from `AlarmManager.shared.alarms`, joined to our metadata. */
+export interface NativeAlarmInfo {
+  /** AlarmKit UUID. */
+  alarmId: string;
+  appKey?: string;
+  reminderId?: string;
+  /** ms epoch of the ORIGINAL occurrence. */
+  occurrenceAt?: number;
+  chainId?: string;
+  chainStep?: number;
+  state: NativeAlarmState;
+  /** ms epoch the alarm is/was scheduled to fire. */
+  fireAt?: number;
+}
+
+/**
+ * A durable native event. `eventId` is a UUID minted when the event is written,
+ * so a replayed peek never re-applies one JS already acked. `kind` mirrors the
+ * native tokens; `reminderId`/`occurrenceAt` identify the occurrence the event
+ * belongs to (the ORIGINAL occurrence, stable across a comeback chain).
+ */
+export type NativeAlarmEventKind =
+  | "stopped"
+  | "snoozed"
+  | "alerting"
+  | "scheduled"
+  | "scheduleFailed"
+  | "removed"
+  | "stateChanged";
+
+export interface NativeAlarmEvent {
+  eventId: string;
+  kind: NativeAlarmEventKind;
+  /** AlarmKit UUID, when the event knew it. */
+  alarmId?: string;
+  appKey?: string;
+  reminderId: string;
+  occurrenceAt: number;
+  chainId?: string;
+  chainStep?: number;
+  /** Present on "snoozed": the REAL armed comeback fire time. */
+  snoozeUntil?: number;
+  at: number;
+  /** Present on "scheduleFailed". */
+  error?: string;
+}
+
+const NATIVE_EVENT_KINDS = new Set<NativeAlarmEventKind>([
+  "stopped",
+  "snoozed",
+  "alerting",
+  "scheduled",
+  "scheduleFailed",
+  "removed",
+  "stateChanged",
+]);
+
+const NATIVE_ALARM_STATES = new Set<NativeAlarmState>([
+  "scheduled",
+  "countdown",
+  "paused",
+  "alerting",
+]);
+
+// Legacy native builds wrote `{ type, id, at }`. New native migrates those to
+// carry an eventId before returning, but JS stays tolerant in case a raw legacy
+// row ever reaches here.
+function legacyKindToNative(type: unknown): NativeAlarmEventKind | null {
+  const token = String(type ?? "").toLowerCase().trim();
+  if (token === "stopped" || token === "snoozed") return token;
+  if (token === "fired") return "alerting";
+  if (token === "cancelled" || token === "canceled") return "removed";
+  if (token === "sibling_cancelled" || token === "sibling_canceled") return "removed";
+  if (token === "snooze_failed" || token === "schedule_failed") return "scheduleFailed";
+  return null;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Normalize one raw native peek row into a {@link NativeAlarmEvent}, or null. */
+function toNativeAlarmEvent(value: unknown): NativeAlarmEvent | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const kind =
+    typeof raw.kind === "string" && NATIVE_EVENT_KINDS.has(raw.kind as NativeAlarmEventKind)
+      ? (raw.kind as NativeAlarmEventKind)
+      : legacyKindToNative(raw.type);
+  if (!kind) return null;
+  const at = Number(raw.at);
+  if (!Number.isFinite(at)) return null;
+
+  const appKey =
+    typeof raw.appKey === "string" ? raw.appKey : typeof raw.id === "string" ? raw.id : undefined;
+  const parsed = appKey ? parseAlarmAppKey(appKey) : null;
+  const reminderId =
+    typeof raw.reminderId === "string" && raw.reminderId ? raw.reminderId : parsed?.reminderId ?? "";
+  const occurrenceAt = optionalNumber(raw.occurrenceAt) ?? parsed?.scheduledFor ?? 0;
+  const eventId =
+    typeof raw.eventId === "string" && raw.eventId
+      ? raw.eventId
+      : `legacy:${kind}:${appKey ?? "?"}:${Math.round(at)}`;
+
+  return {
+    eventId,
+    kind,
+    reminderId,
+    occurrenceAt,
+    at,
+    ...(typeof raw.alarmId === "string" ? { alarmId: raw.alarmId } : {}),
+    ...(appKey !== undefined ? { appKey } : {}),
+    ...(typeof raw.chainId === "string" ? { chainId: raw.chainId } : {}),
+    ...(optionalNumber(raw.chainStep) !== undefined ? { chainStep: optionalNumber(raw.chainStep) } : {}),
+    ...(optionalNumber(raw.snoozeUntil) !== undefined ? { snoozeUntil: optionalNumber(raw.snoozeUntil) } : {}),
+    ...(typeof raw.error === "string" ? { error: raw.error } : {}),
+  };
+}
+
+/** Normalize one raw `getAlarmStates` row, or null. */
+function toNativeAlarmInfo(value: unknown): NativeAlarmInfo | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.alarmId !== "string" || !raw.alarmId) return null;
+  if (typeof raw.state !== "string" || !NATIVE_ALARM_STATES.has(raw.state as NativeAlarmState)) {
+    return null;
+  }
+  return {
+    alarmId: raw.alarmId,
+    state: raw.state as NativeAlarmState,
+    ...(typeof raw.appKey === "string" ? { appKey: raw.appKey } : {}),
+    ...(typeof raw.reminderId === "string" ? { reminderId: raw.reminderId } : {}),
+    ...(optionalNumber(raw.occurrenceAt) !== undefined ? { occurrenceAt: optionalNumber(raw.occurrenceAt) } : {}),
+    ...(typeof raw.chainId === "string" ? { chainId: raw.chainId } : {}),
+    ...(optionalNumber(raw.chainStep) !== undefined ? { chainStep: optionalNumber(raw.chainStep) } : {}),
+    ...(optionalNumber(raw.fireAt) !== undefined ? { fireAt: optionalNumber(raw.fireAt) } : {}),
+  };
+}
+
+/** All native events not yet acked, oldest first. Empty off-iOS or with no bridge. */
+export async function peekAlarmEvents(): Promise<NativeAlarmEvent[]> {
+  if (!isAlarmKitLinked() || !bridge!.peekEvents) return [];
   try {
-    const events = await bridge!.getAndClearEventLog();
-    if (!Array.isArray(events)) return [];
-    return events
-      .map(toAlarmEvent)
-      .filter((event): event is AlarmEvent => event !== null);
+    const raw = await bridge!.peekEvents();
+    if (!Array.isArray(raw)) return [];
+    return raw.map(toNativeAlarmEvent).filter((e): e is NativeAlarmEvent => e !== null);
   } catch (e) {
-    vrLog("alarmkit", "event_log_failed", { error: String(e) });
+    vrLog("alarmkit", "peek_events_failed", { error: String(e) });
     return [];
   }
+}
+
+/** Remove exactly the events whose eventIds are given. No-op off-iOS / empty list. */
+export async function ackAlarmEvents(eventIds: string[]): Promise<void> {
+  if (!isAlarmKitLinked() || !bridge!.ackEvents) return;
+  const ids = Array.isArray(eventIds) ? eventIds.filter((id) => typeof id === "string" && id) : [];
+  if (ids.length === 0) return;
+  try {
+    await bridge!.ackEvents(ids);
+  } catch (e) {
+    vrLog("alarmkit", "ack_events_failed", { error: String(e) });
+  }
+}
+
+/** Live AlarmManager snapshot (state per alarm, joined to our metadata). */
+export async function getAlarmStates(): Promise<NativeAlarmInfo[]> {
+  if (!isAlarmKitLinked() || !bridge!.getAlarmStates) return [];
+  try {
+    const rows = await bridge!.getAlarmStates();
+    if (!Array.isArray(rows)) return [];
+    return rows.map(toNativeAlarmInfo).filter((r): r is NativeAlarmInfo => r !== null);
+  } catch (e) {
+    vrLog("alarmkit", "get_alarm_states_failed", { error: String(e) });
+    return [];
+  }
+}
+
+/**
+ * Stop any alerting alarm for this occurrence and cancel every alarm whose
+ * metadata matches it (all chains). The card's "Done" for an occurrence.
+ */
+export async function stopOccurrence(ref: {
+  reminderId: string;
+  occurrenceAt: number;
+}): Promise<void> {
+  if (!isAlarmKitLinked() || !bridge!.stopOccurrence) return;
+  try {
+    await bridge!.stopOccurrence(ref.reminderId, ref.occurrenceAt);
+  } catch (e) {
+    vrLog("alarmkit", "stop_occurrence_failed", { error: String(e) });
+  }
+}
+
+/**
+ * Subscribe to the native "something changed, please peek" hint. The hint
+ * carries only a `reason`; the payload lives in the durable event log, which the
+ * callback should peek. Returns an unsubscribe; a no-op off-iOS or when the
+ * emitter module is missing.
+ */
+export function subscribeAlarmEvents(cb: (hint: { reason: string }) => void): () => void {
+  if (Platform.OS !== "ios") return () => {};
+  const emitterModule = (NativeModules as { VRAlarmEventEmitter?: object }).VRAlarmEventEmitter;
+  if (!emitterModule) return () => {};
+  try {
+    const emitter = new NativeEventEmitter(emitterModule as never);
+    const sub = emitter.addListener("VRAlarmEvent", (payload: { reason?: unknown } | undefined) => {
+      const reason = typeof payload?.reason === "string" ? payload.reason : "intent";
+      cb({ reason });
+    });
+    return () => sub.remove();
+  } catch (e) {
+    vrLog("alarmkit", "subscribe_failed", { error: String(e) });
+    return () => {};
+  }
+}
+
+// ─── Deprecated drain shim ──────────────────────────────────────────────────
+
+/** Map a new-shape event to the legacy {@link AlarmEvent}, or null when it has no legacy equivalent. */
+function toLegacyAlarmEvent(ev: NativeAlarmEvent): AlarmEvent | null {
+  let type: AlarmEventType;
+  switch (ev.kind) {
+    case "stopped":
+      type = "stopped";
+      break;
+    case "snoozed":
+      type = "snoozed";
+      break;
+    case "alerting":
+      type = "fired";
+      break;
+    case "removed":
+      type = "cancelled";
+      break;
+    default:
+      // scheduled / scheduleFailed / stateChanged have no legacy meaning.
+      return null;
+  }
+  const id = ev.appKey ?? alarmAppKey(ev.reminderId, ev.occurrenceAt);
+  return {
+    type,
+    id,
+    at: ev.at,
+    ...(ev.snoozeUntil !== undefined ? { snoozeUntil: ev.snoozeUntil } : {}),
+  };
+}
+
+/**
+ * @deprecated Kept working for one release as peek + ack so the pre-ring-state
+ * reconciliation in lib/notifications.ts keeps compiling. New code should call
+ * {@link peekAlarmEvents} + {@link ackAlarmEvents} and feed lib/ringLifecycle.
+ *
+ * Peeks every unacked event, acks them all, and returns those with a legacy
+ * equivalent in the old `{ type, id, at, snoozeUntil }` shape.
+ */
+export async function getAndClearEventLog(): Promise<AlarmEvent[]> {
+  if (!isAlarmKitLinked()) return [];
+  const events = await peekAlarmEvents();
+  if (events.length === 0) return [];
+  await ackAlarmEvents(events.map((e) => e.eventId));
+  return events
+    .map(toLegacyAlarmEvent)
+    .filter((e): e is AlarmEvent => e !== null);
 }
 
 // The cancel entries the native intents append ride the same event channel
