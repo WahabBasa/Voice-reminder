@@ -1,7 +1,7 @@
 # App Review notes — Remi 1.0 (Guideline 2.1 reply)
 
-Paste-ready reply for the 2026-08-20 "Information Needed" message. Items 2–7 are final
-text; item 1 needs the screen-recording link filled in. Apple asked for this to also
+Paste-ready reply for the 2026-08-20 "Information Needed" message. All seven items are
+final as of 2026-09-15 (recording link filled in, build 6). Apple asked for this to also
 live in App Store Connect → App Information → App Review Information → Notes for all
 future submissions.
 
@@ -11,14 +11,18 @@ Thank you for the review. Here is the requested information.
 
 **1. Screen recording**
 
-A screen recording captured on a physical iPhone 12 running iOS 26 is available here:
-[LINK — fill in after recording]
+A video of the app running on a physical iPhone 12 (iOS 26, build 6 from TestFlight) is
+available here (unlisted):
+https://www.youtube.com/watch?v=BT_JVbB8O6o
 
-The recording begins at app launch on a fresh install and shows: the first-run AI
-consent sheet, the microphone and notification/alarm permission prompts, creating a
-reminder by voice, the reminder firing and speaking aloud, and the full subscription
-flow (paywall with both plans, prices, Terms of Use and Privacy Policy links, and a
-sandbox purchase). The app has no account registration, login, or account deletion —
+It was filmed with a second phone rather than the iOS screen recorder so that the alarm
+firing on the lock screen is visible. The recording begins at app launch on a fresh
+install (TestFlight, build 6) and shows: the notification and alarm permission prompts,
+the first-run AI-processing consent sheet, the microphone permission prompt, creating a
+reminder by voice, the reminder firing on the lock screen and speaking aloud, and the
+full subscription flow (paywall with both plans, prices, Terms of Use and
+Privacy Policy links, and a sandbox purchase). The wait between creating the reminder
+and the alarm firing is sped up; a caption on screen marks that stretch. No other edits. The app has no account registration, login, or account deletion —
 there are no accounts (see item 4). The app has no user-generated content that is
 shared with or visible to other users; voice reminders are private to the device that
 created them, so there are no reporting or blocking mechanisms.
@@ -26,7 +30,7 @@ created them, so there are no reporting or blocking mechanisms.
 **2. Devices and operating systems tested**
 
 - iPhone 12, iOS 26 (physical device) — primary test device throughout development
-  and via TestFlight for this exact build (1.0, build 2)
+  and via TestFlight for this exact build (1.0, build 6)
 
 **3. Purpose and target audience**
 
@@ -117,13 +121,21 @@ on the lock screen — Later must cut audio, Done must complete **without** prom
 Face ID or opening the app (OLD-110/OLD-111). While you're there, grab the
 lock-screen capture for the shot-1 screenshot reshoot.
 
-Upload the video (unlisted YouTube or Google Drive share link) and drop the URL into
-item 1.
+Done 2026-09-15: filmed with a second phone, trimmed to end 1 s after the Pro toast, wait
+sped up 15x with a caption (edit files in `LANDrop\claude\round3\`), uploaded unlisted
+(YouTube auto-classifies it as a Short; the `watch?v=` form of the link is what's in
+item 1).
 
 ## Where to put it in ASC
 
-1. App Store Connect → Remi → the App Review message thread (Resolution Center) →
-   reply with the full text above, link included. No new build or re-submission
-   needed for a 2.1 information request — the reply resumes the review.
-2. Copy the same text into App Information → App Review Information → **Notes**, so
-   every future submission carries it (Apple asked for this explicitly).
+Status on 2026-09-15 is **1.0 Rejected (2.1.0 App Completeness)**, not an information
+hold, so a reply alone does not resume review. A new submission is required:
+
+1. iOS App Version 1.0 page → **Build** section → swap the rejected build (2) for
+   **1.0 (6)** → Save.
+2. **App Privacy** → add the feedback data types (Customer Support, Other User Content,
+   Device ID, Diagnostics) → Publish.
+3. Version page → App Review Information → Notes → paste `docs/asc-notes-4000.txt`
+   (the same seven items condensed to 3,208 chars; the Notes field caps at 4,000) → Save.
+   Apple asked for this to ride on every future submission.
+4. **View Submission** → reply to the rejection thread with the same text → Resubmit.

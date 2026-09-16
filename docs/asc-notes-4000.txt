@@ -1,0 +1,36 @@
+Thank you for the review. Here is the requested information.
+
+1. SCREEN RECORDING
+https://www.youtube.com/watch?v=BT_JVbB8O6o (unlisted)
+Physical iPhone 12, iOS 26, build 6, fresh install. Shows: permission prompts,
+AI consent sheet, creating a reminder by voice, the alarm firing on the lock
+screen and speaking aloud, and the subscription purchase (sandbox). The wait
+before the alarm is sped up and captioned. No accounts exist in the app, so
+there is no sign-up, login or account deletion to show.
+
+2. DEVICES TESTED
+iPhone 12, iOS 26, via TestFlight with this build.
+
+3. PURPOSE AND AUDIENCE
+Voice-first reminders: speak a reminder, the app transcribes and schedules it,
+and at the due time it rings and speaks the reminder aloud. For adults who rely
+on reminders and miss silent notifications. Free, with an optional Remi Pro
+subscription (monthly or annual) for premium scheduling. No ads.
+
+4. SETUP
+No account or sample files needed. Launch, accept the AI consent sheet, allow
+microphone and alarm access, tap the mic and speak ("remind me to drink water
+in five minutes"). The reminder rings and speaks at the set time; Later snoozes,
+Done completes. Paywall: Settings > upgrade row. Restore Purchases: Settings.
+
+5. EXTERNAL SERVICES
+Convex (backend), OpenAI (speech-to-text and reminder parsing), Speechify and
+ElevenLabs (text-to-speech), RevenueCat (subscriptions on StoreKit), Sentry
+(crash reports). Voice data is used only to create and speak reminders. No
+tracking, no third-party ads.
+
+6. REGIONAL DIFFERENCES
+None. English interface.
+
+7. REGULATED INDUSTRY / THIRD-PARTY MATERIAL
+Not applicable.
