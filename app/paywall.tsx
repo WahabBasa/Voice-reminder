@@ -39,6 +39,7 @@ import PaywallHero from "../components/paywall/PaywallHero";
 import PricingCards from "../components/paywall/PricingCards";
 import FeatureTable from "../components/paywall/FeatureTable";
 import ClosingBlock from "../components/paywall/ClosingBlock";
+import FooterLegalRow from "../components/paywall/FooterLegalRow";
 import { AwardBadgeRow, ProofCarousel, TestimonialWall } from "../components/paywall/ProofSlots";
 import { PAYWALL_GUTTER, paywallColors, paywallWeight } from "../components/paywall/paywallTheme";
 
@@ -355,6 +356,16 @@ export default function PaywallScreen() {
                         ))}
                     </Text>
                 ))}
+
+                {/* Always-visible legal links (App Review 3.1.2(c)): Terms/Privacy
+                    and Restore reachable without scrolling. Footer height is
+                    measured via onLayout, so this row is accounted for
+                    automatically. */}
+                <FooterLegalRow
+                    onOpenLink={handleOpenLink}
+                    onRestore={handleRestore}
+                    busy={isRestoring || isPurchasing}
+                />
             </View>
         </View>
     );
