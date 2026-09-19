@@ -1,3 +1,9 @@
+RESUBMISSION, BUILD 7 (response to the Sep 18 review of submission 373e825f)
+
+Guideline 2.1(b): The subscription group "Pro" and both auto-renewable subscriptions (vr_pro_monthly, vr_pro_annual) are now in this same submission as the app version, each with an App Review screenshot. A new binary, 1.0 (7), is attached.
+
+Guideline 3.1.2(c): The App Description now ends with functional Terms of Use (EULA) and Privacy Policy links. In the app, the paywall shows the subscription title, length and price, and Terms of Use / Privacy Policy / Restore links sit directly under the purchase button, visible without scrolling. The attached screen recording (build 7) shows this and a sandbox purchase.
+
 Thank you for the review. Here is the requested information.
 
 1. SCREEN RECORDING
