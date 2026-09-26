@@ -439,6 +439,24 @@ export function shouldAskNotificationPermissionInContext(
 }
 
 /**
+ * Whether opening the recorder/composer on iOS should ask for AlarmKit
+ * ("Alarms") authorization directly. On iOS 26 AlarmKit is a separate
+ * permission that rings reminders as system alarms even with notifications
+ * denied, so a user without notifications still gets one in-context ask per
+ * session. With notifications granted (or provisional) the notification step
+ * already carried the AlarmKit ask. The request itself is a no-op on iOS
+ * without the native bridge and returns at once once the user has answered.
+ */
+export function shouldAskAlarmKitInContext(
+  platform: string,
+  authorizationStatus: number | null | undefined,
+  askedThisSession: boolean
+): boolean {
+  if (platform !== "ios" || askedThisSession) return false;
+  return !(typeof authorizationStatus === "number" && authorizationStatus >= 1);
+}
+
+/**
  * Android 12+ (API 31) exact-alarm special access ("Alarms & reminders").
  * The one creation gate left: without it Android cannot schedule the alarm at
  * the exact time at all. Never true on iOS.

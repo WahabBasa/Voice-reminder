@@ -42,6 +42,7 @@ import {
   NOTIFICATION_STATUS_DENIED,
   NOTIFICATION_STATUS_NOT_DETERMINED,
   shouldAskNotificationPermissionInContext,
+  shouldAskAlarmKitInContext,
   isExactAlarmAccessMissing,
   isNotificationPermissionError,
 } from "../../lib/notificationDecisions";
@@ -875,6 +876,30 @@ describe("shouldAskNotificationPermissionInContext", () => {
   it("does not ask when settings are unavailable", () => {
     expect(shouldAskNotificationPermissionInContext("ios", undefined, false)).toBe(false);
     expect(shouldAskNotificationPermissionInContext("android", null, false)).toBe(false);
+  });
+});
+
+describe("shouldAskAlarmKitInContext", () => {
+  it("asks on iOS when notifications are denied", () => {
+    expect(shouldAskAlarmKitInContext("ios", NOTIFICATION_STATUS_DENIED, false)).toBe(true);
+  });
+
+  it("asks on iOS when notification status is unknown", () => {
+    expect(shouldAskAlarmKitInContext("ios", undefined, false)).toBe(true);
+    expect(shouldAskAlarmKitInContext("ios", null, false)).toBe(true);
+  });
+
+  it("does not ask on iOS when notifications are granted or provisional", () => {
+    expect(shouldAskAlarmKitInContext("ios", 1, false)).toBe(false);
+    expect(shouldAskAlarmKitInContext("ios", 2, false)).toBe(false);
+  });
+
+  it("asks at most once per session", () => {
+    expect(shouldAskAlarmKitInContext("ios", NOTIFICATION_STATUS_DENIED, true)).toBe(false);
+  });
+
+  it("never asks on Android", () => {
+    expect(shouldAskAlarmKitInContext("android", NOTIFICATION_STATUS_DENIED, false)).toBe(false);
   });
 });
 

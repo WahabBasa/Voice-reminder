@@ -16,10 +16,12 @@ import {
   isBatteryOptimizationEnabledSafe,
   openAlarmPermissionSettingsSafe,
   openBatteryOptimizationSettingsSafe,
+  requestAlarmPermission,
   requestNotificationPermission,
 } from "../lib/notifications";
 import {
   isExactAlarmAccessMissing,
+  shouldAskAlarmKitInContext,
   shouldAskNotificationPermissionInContext,
 } from "../lib/notificationDecisions";
 
@@ -49,6 +51,8 @@ function androidApiLevel(): number {
 
 // The in-context notification ask happens at most once per app session.
 let askedForNotificationsThisSession = false;
+// Same for the iOS 26 AlarmKit ("Alarms") ask when notifications are off.
+let askedForAlarmsThisSession = false;
 
 /**
  * Run right before the recorder or composer opens. Notifications are OPTIONAL
@@ -57,6 +61,8 @@ let askedForNotificationsThisSession = false;
  * - If the user has never been asked, show the system notification dialog now
  *   — the in-context consent moment — and wait for the answer (so it can't
  *   collide with the mic prompt that follows). Whatever they answer, proceed.
+ * - iOS 26: with notifications off, AlarmKit ("Alarms") authorization is asked
+ *   instead — once per session — since it rings reminders without them.
  * - The one remaining gate is Android 12+ exact-alarm access ("Alarms &
  *   reminders"), without which Android can't schedule the alarm at all.
  *   Battery optimization never blocks.
@@ -84,10 +90,27 @@ export async function prepareReminderCreation(): Promise<boolean> {
     )
   ) {
     askedForNotificationsThisSession = true;
+    // On iOS requestNotificationPermission asks for AlarmKit too.
+    if (Platform.OS === "ios") askedForAlarmsThisSession = true;
     try {
       await requestNotificationPermission();
     } catch (e) {
       console.log("[VR] Notification permission request failed:", e);
+    }
+  } else if (
+    shouldAskAlarmKitInContext(
+      Platform.OS,
+      settings?.authorizationStatus,
+      askedForAlarmsThisSession
+    )
+  ) {
+    // iOS 26: notifications are off, but AlarmKit is its own permission and
+    // can still ring the reminder as a system alarm. Never blocks either.
+    askedForAlarmsThisSession = true;
+    try {
+      await requestAlarmPermission();
+    } catch (e) {
+      console.log("[VR] Alarm permission request failed:", e);
     }
   }
   return true;

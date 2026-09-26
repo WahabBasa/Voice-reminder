@@ -90,6 +90,7 @@ import {
   // Aliased on import: the contract name trips react-hooks/rules-of-hooks
   // wherever it is called from a plain async function.
   useAlarmKit as alarmKitEnabled,
+  noteAlarmKitAuthorization,
 } from "./alarmKit";
 // Note: Audio playback is handled by alarm screen (app/alarm.tsx)
 
@@ -1240,17 +1241,27 @@ export async function deleteLocalVariantAudios(reminderId: string): Promise<void
   }
 }
 
+/**
+ * Ask for iOS 26 AlarmKit ("Alarms") authorization. It is its own permission —
+ * a reminder can ring as a native alarm with notifications denied — so it is
+ * asked whatever the notification answer was. No-op on Android and on iOS
+ * without the native bridge (pre-26, Expo Go, Jest).
+ */
+export async function requestAlarmPermission(): Promise<void> {
+  if (Platform.OS !== "ios") return;
+  const status = await requestAlarmKitAuthorization();
+  vrLog("alarmkit", "authorization", { status });
+  noteAlarmKitAuthorization(status);
+}
+
+/** Returns whether NOTIFICATIONS are granted; on iOS it also asks for AlarmKit. */
 export async function requestNotificationPermission(): Promise<boolean> {
   const settings = await notifee.requestPermission();
   const granted = settings.authorizationStatus >= 1;
 
-  // iOS 26 AlarmKit rides the notification step — this function is what
-  // PermissionPrompt's "Notifications" row calls, and it is the only prompt
-  // surface we have. No-op on Android and on iOS without the native bridge.
-  if (granted && Platform.OS === "ios") {
-    const status = await requestAlarmKitAuthorization();
-    vrLog("alarmkit", "authorization", { status });
-  }
+  // This function is what PermissionPrompt's "Notifications" row calls, and it
+  // is the only prompt surface we have, so AlarmKit rides the same step.
+  await requestAlarmPermission();
 
   return granted;
 }
@@ -2182,15 +2193,17 @@ export async function scheduleReminder(
 ): Promise<{ triggerTimestamp: number; notificationId: string }> {
   const reminder = withStoredSchedule(input);
   const hasPermission = await requestNotificationPermission();
-  if (!hasPermission) {
+
+  // iOS 26 only: this occurrence becomes a system alarm instead of a notifee
+  // trigger further down. False everywhere else, so the path below is untouched.
+  // AlarmKit is its own permission, so it can ring with notifications denied —
+  // only when neither can alert is there nothing to schedule.
+  const alarmKitActive = await alarmKitEnabled();
+  if (!hasPermission && !alarmKitActive) {
     throw new NotificationPermissionError();
   }
 
   await assertAndroidExactAlarmAccess();
-
-  // iOS 26 only: this occurrence becomes a system alarm instead of a notifee
-  // trigger further down. False everywhere else, so the path below is untouched.
-  const alarmKitActive = await alarmKitEnabled();
 
   // Download audio to device (skip if no audioUrl - will use default sound)
   let localAudioPath: string | null = null;
@@ -2339,6 +2352,12 @@ export async function scheduleReminder(
       });
     }
     await patchAlarmKitState(reminder.id, { snoozeUntil: 0, nagCount: 0 });
+    if (!hasPermission) {
+      // Notifications denied, alarms allowed: the heads-up is a plain
+      // notification that could never show, so just clear any stale one.
+      await cancelExistingPreAlertTriggers(reminder.id);
+      return { triggerTimestamp, notificationId };
+    }
     await schedulePreAlertForOccurrence({
       reminderId: reminder.id,
       title: reminder.title,

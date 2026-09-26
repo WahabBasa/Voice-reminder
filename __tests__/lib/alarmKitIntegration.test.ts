@@ -132,6 +132,37 @@ describe("useAlarmKit gate decision", () => {
     });
   });
 
+  it("drops a stale false once the user authorizes (noteAlarmKitAuthorization)", async () => {
+    const requestAuthorization = jest
+      .fn()
+      .mockResolvedValueOnce("notDetermined")
+      .mockResolvedValue("authorized");
+    const bridge = makeBridge({ requestAuthorization });
+    await withAlarmKit({ bridge }, async (alarmKit) => {
+      await expect(alarmKit.useAlarmKit()).resolves.toBe(false);
+      alarmKit.noteAlarmKitAuthorization("authorized");
+      await expect(alarmKit.useAlarmKit()).resolves.toBe(true);
+    });
+  });
+
+  it("keeps the cached decision for a non-authorized answer or a cached true", async () => {
+    await withAlarmKit({}, async (alarmKit, bridge) => {
+      alarmKit.noteAlarmKitAuthorization("authorized"); // nothing cached yet
+      await alarmKit.useAlarmKit();
+      alarmKit.noteAlarmKitAuthorization("authorized");
+      alarmKit.noteAlarmKitAuthorization("denied");
+      await alarmKit.useAlarmKit();
+      expect(bridge!.requestAuthorization).toHaveBeenCalledTimes(1);
+    });
+    const denied = makeBridge({ requestAuthorization: jest.fn(async () => "denied") });
+    await withAlarmKit({ bridge: denied }, async (alarmKit) => {
+      await alarmKit.useAlarmKit();
+      alarmKit.noteAlarmKitAuthorization("denied");
+      await alarmKit.useAlarmKit();
+      expect(denied.requestAuthorization).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("re-evaluates after resetAlarmKitDecision", async () => {
     await withAlarmKit({}, async (alarmKit, bridge) => {
       await alarmKit.useAlarmKit();

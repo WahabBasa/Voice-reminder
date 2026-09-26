@@ -590,6 +590,8 @@ function toAlarmEvent(value: unknown): AlarmEvent | null {
 // ─── Gate decision ──────────────────────────────────────────────────────────
 
 let gateDecision: Promise<boolean> | null = null;
+/** What the cached decision resolved to; null while unevaluated or in flight. */
+let gateResolved: boolean | null = null;
 
 /**
  * Whether this session schedules reminders as native alarms instead of notifee
@@ -606,6 +608,10 @@ export function useAlarmKit(): Promise<boolean> {
       vrLog("alarmkit", "gate_decision", { enabled, status });
       return enabled;
     })();
+    const pending = gateDecision;
+    void pending.then((enabled) => {
+      if (gateDecision === pending) gateResolved = enabled;
+    });
   }
   return gateDecision;
 }
@@ -613,6 +619,20 @@ export function useAlarmKit(): Promise<boolean> {
 /** Test seam — drops the cached session decision. */
 export function resetAlarmKitDecision(): void {
   gateDecision = null;
+  gateResolved = null;
+}
+
+/**
+ * Feed a fresh authorization answer back into the session gate. The gate is
+ * cached, so a "false" computed before the user answered the Alarms prompt
+ * (still notDetermined, or the ask failed) would otherwise keep reminders off
+ * AlarmKit for the whole session even after they allowed it. Only that stale
+ * false is dropped; a true or an in-flight decision is left alone.
+ */
+export function noteAlarmKitAuthorization(status: AlarmAuthorizationStatus): void {
+  if (status === "authorized" && gateDecision && gateResolved === false) {
+    resetAlarmKitDecision();
+  }
 }
 
 // ─── Snooze windows (OLD-119) ───────────────────────────────────────────────

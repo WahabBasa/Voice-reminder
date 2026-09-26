@@ -98,6 +98,7 @@ import {
   clearPendingAlarm,
   handleNotificationEvent,
   NotificationPermissionError,
+  requestNotificationPermission,
   scheduleReminder,
   syncRemindersOnStartup,
   type ReminderNotification,
@@ -261,6 +262,90 @@ describe("scheduleReminder — notifications denied (optional, App Review 4.5.4)
     expect(result.permissionError).toBe(false);
     expect(result.synced).toBe(0);
     mockNotifee.requestPermission.mockResolvedValue({ authorizationStatus: 1 });
+  });
+
+  it("iOS without AlarmKit: still throws NotificationPermissionError", async () => {
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
+    mockNotifee.requestPermission.mockResolvedValueOnce({ authorizationStatus: 0 });
+
+    const err = await scheduleReminder(reminder(twoTimesADay)).catch((e) => e);
+
+    expect(err).toBeInstanceOf(NotificationPermissionError);
+    expect(mockAlarmKit.scheduleAlarm).not.toHaveBeenCalled();
+    expect(mockNotifee.createTriggerNotification).not.toHaveBeenCalled();
+  });
+});
+
+describe("requestNotificationPermission — AlarmKit is its own permission", () => {
+  it("asks for AlarmKit on iOS even when notifications are denied", async () => {
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
+    mockNotifee.requestPermission.mockResolvedValueOnce({ authorizationStatus: 0 });
+
+    await expect(requestNotificationPermission()).resolves.toBe(false);
+    expect(mockAlarmKit.requestAuthorization).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for AlarmKit on iOS when notifications are granted", async () => {
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
+
+    await expect(requestNotificationPermission()).resolves.toBe(true);
+    expect(mockAlarmKit.requestAuthorization).toHaveBeenCalledTimes(1);
+  });
+
+  it("never asks for AlarmKit on Android", async () => {
+    mockNotifee.requestPermission.mockResolvedValueOnce({ authorizationStatus: 0 });
+
+    await expect(requestNotificationPermission()).resolves.toBe(false);
+    expect(mockAlarmKit.requestAuthorization).not.toHaveBeenCalled();
+  });
+});
+
+describe("scheduleReminder — notifications denied, AlarmKit allowed (iOS 26)", () => {
+  beforeEach(() => {
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
+    mockAlarmKit.useAlarmKit.mockResolvedValue(true as any);
+    mockNotifee.requestPermission.mockResolvedValue({ authorizationStatus: 0 });
+  });
+
+  afterEach(() => {
+    mockNotifee.requestPermission.mockResolvedValue({ authorizationStatus: 1 });
+  });
+
+  it("registers the native alarms, schedules no notification, and does not throw", async () => {
+    const result = await scheduleReminder(
+      reminder(twoTimesADay, { preReminderMinutes: 10 } as any)
+    );
+
+    expect(result.triggerTimestamp).toBe(day(0, 8));
+    const alarmIds = mockAlarmKit.scheduleAlarm.mock.calls.map(([o]: [any]) => o.id);
+    expect(alarmIds).toEqual(
+      expect.arrayContaining([
+        `reminder_${ID}_${day(0, 8)}`,
+        `reminder_${ID}_${day(0, 21)}`,
+        `reminder_${ID}_${day(1, 8)}`,
+      ])
+    );
+    // No pre-alert heads-up (a plain notification) and no notifee trigger at all.
+    expect(mockNotifee.createTriggerNotification).not.toHaveBeenCalled();
+  });
+
+  it("clears a stale pre-alert instead of scheduling one", async () => {
+    const stale = `prealert_${ID}_1700000000000`;
+    mockNotifee.getTriggerNotificationIds.mockResolvedValue([stale]);
+
+    await scheduleReminder(reminder(twoTimesADay, { preReminderMinutes: 10 } as any));
+
+    expect(mockNotifee.cancelTriggerNotification).toHaveBeenCalledWith(stale);
+    expect(mockNotifee.createTriggerNotification).not.toHaveBeenCalled();
+  });
+
+  it("startup sync re-registers the alarms with notifications denied", async () => {
+    const result = await syncRemindersOnStartup([stored(twoTimesADay)], []);
+
+    expect(result).toMatchObject({ synced: 1, failed: 0 });
+    expect(mockAlarmKit.scheduleAlarm.mock.calls.map(([o]: [any]) => o.id)).toContain(
+      `reminder_${ID}_${day(0, 8)}`
+    );
   });
 });
 
