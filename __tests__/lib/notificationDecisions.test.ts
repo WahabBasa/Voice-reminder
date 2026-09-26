@@ -39,6 +39,11 @@ import {
   planLaterComeback,
   LATER_COMEBACK_MINUTES,
   LATER_COMEBACK_NAGS,
+  NOTIFICATION_STATUS_DENIED,
+  NOTIFICATION_STATUS_NOT_DETERMINED,
+  shouldAskNotificationPermissionInContext,
+  isExactAlarmAccessMissing,
+  isNotificationPermissionError,
 } from "../../lib/notificationDecisions";
 
 // ─── Group 1: Notification classification and repost detection ──────────────
@@ -831,5 +836,83 @@ describe("planLaterComeback", () => {
     const tenth = planLaterComeback(TAP + 1000);
     expect(first.fireTimes).toHaveLength(3);
     expect(tenth.fireTimes).toHaveLength(3);
+  });
+});
+
+// ─── Group 7: Optional notification permission (App Review 4.5.4) ───────────
+
+describe("shouldAskNotificationPermissionInContext", () => {
+  it("asks on iOS only while the dialog has never been shown", () => {
+    expect(
+      shouldAskNotificationPermissionInContext("ios", NOTIFICATION_STATUS_NOT_DETERMINED, false)
+    ).toBe(true);
+    expect(shouldAskNotificationPermissionInContext("ios", NOTIFICATION_STATUS_DENIED, false)).toBe(
+      false
+    );
+    expect(shouldAskNotificationPermissionInContext("ios", 1, false)).toBe(false);
+    expect(shouldAskNotificationPermissionInContext("ios", 2, false)).toBe(false);
+  });
+
+  it("asks on Android when not determined or reported denied (pre-first-ask on 13+)", () => {
+    expect(
+      shouldAskNotificationPermissionInContext("android", NOTIFICATION_STATUS_NOT_DETERMINED, false)
+    ).toBe(true);
+    expect(
+      shouldAskNotificationPermissionInContext("android", NOTIFICATION_STATUS_DENIED, false)
+    ).toBe(true);
+    expect(shouldAskNotificationPermissionInContext("android", 1, false)).toBe(false);
+  });
+
+  it("asks at most once per session", () => {
+    expect(
+      shouldAskNotificationPermissionInContext("ios", NOTIFICATION_STATUS_NOT_DETERMINED, true)
+    ).toBe(false);
+    expect(
+      shouldAskNotificationPermissionInContext("android", NOTIFICATION_STATUS_DENIED, true)
+    ).toBe(false);
+  });
+
+  it("does not ask when settings are unavailable", () => {
+    expect(shouldAskNotificationPermissionInContext("ios", undefined, false)).toBe(false);
+    expect(shouldAskNotificationPermissionInContext("android", null, false)).toBe(false);
+  });
+});
+
+describe("isExactAlarmAccessMissing", () => {
+  it("never gates iOS, whatever the alarm value", () => {
+    expect(isExactAlarmAccessMissing("ios", NaN, undefined)).toBe(false);
+    expect(isExactAlarmAccessMissing("ios", 17, 0)).toBe(false);
+  });
+
+  it("never gates Android below API 31 or with an unreadable API level", () => {
+    expect(isExactAlarmAccessMissing("android", 30, 0)).toBe(false);
+    expect(isExactAlarmAccessMissing("android", NaN, 0)).toBe(false);
+  });
+
+  it("gates Android 12+ only while the special access is off", () => {
+    expect(isExactAlarmAccessMissing("android", 31, 0)).toBe(true);
+    expect(isExactAlarmAccessMissing("android", 34, undefined)).toBe(true);
+    expect(isExactAlarmAccessMissing("android", 31, 1)).toBe(false);
+    expect(isExactAlarmAccessMissing("android", 35, true)).toBe(false);
+  });
+});
+
+describe("isNotificationPermissionError", () => {
+  it("matches by error name", () => {
+    const e = new Error("Notification permission not granted");
+    e.name = "NotificationPermissionError";
+    expect(isNotificationPermissionError(e)).toBe(true);
+  });
+
+  it("rejects other errors and non-errors", () => {
+    const exact = new Error("x");
+    exact.name = "ExactAlarmPermissionError";
+    expect(isNotificationPermissionError(exact)).toBe(false);
+    expect(isNotificationPermissionError(new Error("Notification permission not granted"))).toBe(
+      false
+    );
+    expect(isNotificationPermissionError(null)).toBe(false);
+    expect(isNotificationPermissionError(undefined)).toBe(false);
+    expect(isNotificationPermissionError("NotificationPermissionError")).toBe(false);
   });
 });

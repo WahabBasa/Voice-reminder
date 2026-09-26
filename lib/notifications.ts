@@ -117,6 +117,18 @@ export class ExactAlarmPermissionError extends Error {
   }
 }
 
+/**
+ * Thrown by scheduleReminder when notification permission is off. Notifications
+ * are optional (App Review 4.5.4): the reminder itself stays saved, it just
+ * can't alert — callers show a gentle notice instead of failing the create/edit.
+ */
+export class NotificationPermissionError extends Error {
+  constructor(message = "Notification permission not granted") {
+    super(message);
+    this.name = "NotificationPermissionError";
+  }
+}
+
 export class NoFutureOccurrenceError extends Error {
   public readonly scheduleType?: string;
 
@@ -2171,7 +2183,7 @@ export async function scheduleReminder(
   const reminder = withStoredSchedule(input);
   const hasPermission = await requestNotificationPermission();
   if (!hasPermission) {
-    throw new Error("Notification permission not granted");
+    throw new NotificationPermissionError();
   }
 
   await assertAndroidExactAlarmAccess();

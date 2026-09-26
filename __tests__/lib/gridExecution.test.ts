@@ -97,6 +97,7 @@ import {
   cancelDisplayedAlarmNotifications,
   clearPendingAlarm,
   handleNotificationEvent,
+  NotificationPermissionError,
   scheduleReminder,
   syncRemindersOnStartup,
   type ReminderNotification,
@@ -239,6 +240,29 @@ describe("scheduleReminder — one reminder, several rings a day", () => {
 });
 
 // ─── Windowed intervals ─────────────────────────────────────────────────────
+
+describe("scheduleReminder — notifications denied (optional, App Review 4.5.4)", () => {
+  it("throws a named NotificationPermissionError and registers nothing", async () => {
+    mockNotifee.requestPermission.mockResolvedValueOnce({ authorizationStatus: 0 });
+
+    const err = await scheduleReminder(reminder(twoTimesADay)).catch((e) => e);
+
+    expect(err).toBeInstanceOf(NotificationPermissionError);
+    expect(err.name).toBe("NotificationPermissionError");
+    expect(err.message).toBe("Notification permission not granted");
+    expect(mockNotifee.createTriggerNotification).not.toHaveBeenCalled();
+  });
+
+  it("startup sync counts a denied reminder as failed instead of crashing", async () => {
+    mockNotifee.requestPermission.mockResolvedValue({ authorizationStatus: 0 });
+
+    const result = await syncRemindersOnStartup([stored(twoTimesADay)], []);
+
+    expect(result.permissionError).toBe(false);
+    expect(result.synced).toBe(0);
+    mockNotifee.requestPermission.mockResolvedValue({ authorizationStatus: 1 });
+  });
+});
 
 describe("scheduleReminder — windowed intervals", () => {
   it("only plans rings inside the window", async () => {

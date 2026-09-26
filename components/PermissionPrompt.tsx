@@ -18,6 +18,10 @@ import {
   openBatteryOptimizationSettingsSafe,
   requestNotificationPermission,
 } from "../lib/notifications";
+import {
+  isExactAlarmAccessMissing,
+  shouldAskNotificationPermissionInContext,
+} from "../lib/notificationDecisions";
 
 const DEFERRED_KEY = "@permission_prompt_deferred";
 
@@ -31,40 +35,62 @@ type PermissionState = {
 let _showPrompt: (() => void) | null = null;
 
 /**
- * Call this to show the permission prompt from anywhere.
- * Ignores the "deferred" flag — always shows if permissions are missing.
+ * Call this to offer the permission prompt from anywhere.
+ * Ignores the "deferred" flag — shows if something is missing. It is always
+ * dismissable ("Not now") and must never be used as a gate on creating reminders.
  */
 export async function showPermissionPrompt(): Promise<void> {
   _showPrompt?.();
 }
 
+function androidApiLevel(): number {
+  return typeof Platform.Version === "number" ? Platform.Version : Number(Platform.Version);
+}
+
+// The in-context notification ask happens at most once per app session.
+let askedForNotificationsThisSession = false;
+
 /**
- * Check if all required permissions are granted.
- * Returns true if everything is good, false if something is missing.
+ * Run right before the recorder or composer opens. Notifications are OPTIONAL
+ * (App Review 4.5.4) and never block creating a reminder:
+ *
+ * - If the user has never been asked, show the system notification dialog now
+ *   — the in-context consent moment — and wait for the answer (so it can't
+ *   collide with the mic prompt that follows). Whatever they answer, proceed.
+ * - The one remaining gate is Android 12+ exact-alarm access ("Alarms &
+ *   reminders"), without which Android can't schedule the alarm at all.
+ *   Battery optimization never blocks.
+ *
+ * Returns false only when that Android gate is closed; the caller shows the
+ * permission prompt and stops.
  */
-export async function arePermissionsGranted(): Promise<boolean> {
+export async function prepareReminderCreation(): Promise<boolean> {
+  let settings: any = null;
   try {
-    const settings = await getNotificationSettingsSafe();
-    if (!settings) return false;
-
-    const notifGranted = settings.authorizationStatus >= 1;
-
-    let alarmGranted = true;
-    if (Platform.OS === "android") {
-      const apiLevel =
-        typeof Platform.Version === "number"
-          ? Platform.Version
-          : Number(Platform.Version);
-      if (Number.isFinite(apiLevel) && apiLevel >= 31) {
-        const alarmVal = settings.android?.alarm;
-        alarmGranted = alarmVal === 1 || alarmVal === true;
-      }
-    }
-
-    return notifGranted && alarmGranted;
+    settings = await getNotificationSettingsSafe();
   } catch {
+    settings = null;
+  }
+
+  if (isExactAlarmAccessMissing(Platform.OS, androidApiLevel(), settings?.android?.alarm)) {
     return false;
   }
+
+  if (
+    shouldAskNotificationPermissionInContext(
+      Platform.OS,
+      settings?.authorizationStatus,
+      askedForNotificationsThisSession
+    )
+  ) {
+    askedForNotificationsThisSession = true;
+    try {
+      await requestNotificationPermission();
+    } catch (e) {
+      console.log("[VR] Notification permission request failed:", e);
+    }
+  }
+  return true;
 }
 
 export default function PermissionPrompt() {
@@ -80,18 +106,11 @@ export default function PermissionPrompt() {
     if (!settings) return;
 
     const notifGranted = settings.authorizationStatus >= 1;
-
-    let alarmGranted = true;
-    if (Platform.OS === "android") {
-      const apiLevel =
-        typeof Platform.Version === "number"
-          ? Platform.Version
-          : Number(Platform.Version);
-      if (Number.isFinite(apiLevel) && apiLevel >= 31) {
-        const alarmVal = settings.android?.alarm;
-        alarmGranted = alarmVal === 1 || alarmVal === true;
-      }
-    }
+    const alarmGranted = !isExactAlarmAccessMissing(
+      Platform.OS,
+      androidApiLevel(),
+      settings.android?.alarm
+    );
 
     // Battery optimization on = OS can force-stop the app and wipe its alarms.
     const batteryGranted = !(await isBatteryOptimizationEnabledSafe());
@@ -211,9 +230,10 @@ export default function PermissionPrompt() {
             <AppIcon name="bell" size={28} color={colors.accent} />
           </View>
 
-          <Text style={styles.title}>Enable Permissions</Text>
+          <Text style={styles.title}>Get alerted on time</Text>
           <Text style={styles.subtitle}>
-            Remi needs these permissions to alert you on time, even when your phone is locked.
+            Allow notifications so Remi can alert you on time, even when your phone is locked.
+            You can still create reminders without them.
           </Text>
 
           {/* Notification permission */}
@@ -345,7 +365,7 @@ export default function PermissionPrompt() {
               onPress={handleDefer}
               activeOpacity={0.7}
             >
-              <Text style={styles.skipBtnText}>Later</Text>
+              <Text style={styles.skipBtnText}>Not now</Text>
             </TouchableOpacity>
           )}
         </View>

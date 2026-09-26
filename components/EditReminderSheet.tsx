@@ -15,6 +15,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
 import { useAction, useMutation } from "convex/react";
 import { useToast } from "./ToastProvider";
+import { noticeIfNotificationsOff } from "../lib/notificationsOffNotice";
 import { previewAudioService } from "../lib/AudioService";
 import BottomSheet, {
     BottomSheetScrollView,
@@ -386,6 +387,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
             const showExactAlarmAlertIfNeeded = (e: unknown) => {
                 console.log("[VR] Failed to reschedule reminder:", e);
+                // The edit is saved either way; with notifications off it just
+                // can't alert — say so once, never block (App Review 4.5.4).
+                if (noticeIfNotificationsOff(e, toast)) return;
                 if ((e as any)?.name === "ExactAlarmPermissionError") {
                     Alert.alert(
                         "Enable Alarms & reminders",

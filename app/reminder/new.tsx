@@ -20,6 +20,8 @@ import { TimerPickerModal } from "react-native-timer-picker";
 import { colors, scaleFontSize } from "../../lib/theme";
 import { useReminderStore } from "../../lib/store";
 import { scheduleReminder } from "../../lib/notifications";
+import { isNotificationPermissionError } from "../../lib/notificationDecisions";
+import { showNotificationsOffNoticeOnce } from "../../lib/notificationsOffNotice";
 import { getDeviceId } from "../../lib/deviceId";
 import NetInfo from "@react-native-community/netinfo";
 import { checkCanCreateActiveReminder } from "../../lib/usage";
@@ -140,26 +142,37 @@ export default function NewReminderScreen() {
 
       // Schedule the notification BEFORE telling the user it worked.
       const audioUrl = newReminder.audioUrl;
+      let noticeShown = false;
       if (audioUrl) {
-        const { triggerTimestamp } = await scheduleReminder({
-          id: newReminder.id,
-          title: newReminder.title,
-          description: newReminder.description,
-          time: newReminder.time,
-          frequency: newReminder.frequency,
-          days: newReminder.days,
-          audioUrl,
-          volume: newReminder.volume,
-          volumeStyle: newReminder.volumeStyle,
-        });
+        try {
+          const { triggerTimestamp } = await scheduleReminder({
+            id: newReminder.id,
+            title: newReminder.title,
+            description: newReminder.description,
+            time: newReminder.time,
+            frequency: newReminder.frequency,
+            days: newReminder.days,
+            audioUrl,
+            volume: newReminder.volume,
+            volumeStyle: newReminder.volumeStyle,
+          });
 
-        const current = useReminderStore.getState().getReminderById(newReminder.id);
-        if (current) {
-          await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
+          const current = useReminderStore.getState().getReminderById(newReminder.id);
+          if (current) {
+            await storeUpdateReminder({ ...current, scheduledFor: triggerTimestamp });
+          }
+        } catch (scheduleError) {
+          // Notifications are optional (App Review 4.5.4): the reminder is saved,
+          // it just can't alert. Anything else still fails the create below.
+          if (!isNotificationPermissionError(scheduleError)) throw scheduleError;
+          noticeShown = showNotificationsOffNoticeOnce(toast);
         }
       }
 
-      toast.show({ title: "Reminder created", message: newReminder.title, type: "success" });
+      // The notice (if it just showed) already says the reminder was saved.
+      if (!noticeShown) {
+        toast.show({ title: "Reminder created", message: newReminder.title, type: "success" });
+      }
       router.back();
     } catch (error: any) {
       console.error("[VR] Create error:", error);

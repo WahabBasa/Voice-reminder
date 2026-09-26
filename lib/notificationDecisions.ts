@@ -406,3 +406,54 @@ export function planLaterComeback(
   for (let i = 1; i <= count; i++) fireTimes.push(comebackAt + i * step);
   return { comebackAt, fireTimes };
 }
+
+// ─── Group 7: Optional notification permission (App Review 4.5.4) ───────────
+//
+// Notifications are optional. Nothing that creates, views or edits a reminder
+// may wait on them; the only thing permission decides is whether we ask once,
+// in context, before the first reminder, and whether a saved reminder gets a
+// "notifications are off" notice.
+
+/** notifee AuthorizationStatus.NOT_DETERMINED — the system dialog was never shown. */
+export const NOTIFICATION_STATUS_NOT_DETERMINED = -1;
+/** notifee AuthorizationStatus.DENIED. */
+export const NOTIFICATION_STATUS_DENIED = 0;
+
+/**
+ * Whether opening the recorder/composer should first show the system
+ * notification dialog. It is the consent moment, asked at most once per app
+ * session and never as a gate — the caller proceeds whatever the answer.
+ *
+ * iOS: only while NOT_DETERMINED (the OS never re-shows the dialog anyway).
+ * Android 13+: notifee reports DENIED before the first ask, and the OS itself
+ * stops showing the dialog once the user has declined for good.
+ */
+export function shouldAskNotificationPermissionInContext(
+  platform: string,
+  authorizationStatus: number | null | undefined,
+  askedThisSession: boolean
+): boolean {
+  if (askedThisSession) return false;
+  if (authorizationStatus === NOTIFICATION_STATUS_NOT_DETERMINED) return true;
+  return platform === "android" && authorizationStatus === NOTIFICATION_STATUS_DENIED;
+}
+
+/**
+ * Android 12+ (API 31) exact-alarm special access ("Alarms & reminders").
+ * The one creation gate left: without it Android cannot schedule the alarm at
+ * the exact time at all. Never true on iOS.
+ */
+export function isExactAlarmAccessMissing(
+  platform: string,
+  apiLevel: number,
+  alarmValue: unknown
+): boolean {
+  if (platform !== "android") return false;
+  if (!Number.isFinite(apiLevel) || apiLevel < 31) return false;
+  return !(alarmValue === 1 || alarmValue === true);
+}
+
+/** scheduleReminder's "notifications are off" failure (NotificationPermissionError). */
+export function isNotificationPermissionError(e: unknown): boolean {
+  return (e as { name?: unknown } | null | undefined)?.name === "NotificationPermissionError";
+}

@@ -44,7 +44,8 @@ import EditReminderSheet from "../components/EditReminderSheet";
 import { useToast } from "../components/ToastProvider";
 import AiConsentCard from "../components/AiConsentCard";
 import { resolveAiConsent, type AiConsentChoice } from "../lib/aiConsent";
-import { arePermissionsGranted, showPermissionPrompt } from "../components/PermissionPrompt";
+import { prepareReminderCreation, showPermissionPrompt } from "../components/PermissionPrompt";
+import { noticeIfNotificationsOff } from "../lib/notificationsOffNotice";
 import SwipePager from "../components/SwipePager";
 import AppIcon from "../components/AppIcon";
 import ReminderListItem, { chipColorForId } from "../components/ReminderListItem";
@@ -461,10 +462,13 @@ export default function HomeScreen() {
       return;
     }
 
-    // Check permissions before letting user create a reminder
-    const permsOk = await arePermissionsGranted();
-    if (!permsOk) {
-      perfLog(traceId, "ui.recording", "open_blocked_permissions");
+    // Notifications are optional (App Review 4.5.4): if never asked, ask now in
+    // context and wait for the answer — so the dialog is gone before the
+    // recorder opens the mic — then continue whatever the answer. Only Android
+    // 12+ exact-alarm access can stop here.
+    const canCreate = await prepareReminderCreation();
+    if (!canCreate) {
+      perfLog(traceId, "ui.recording", "open_blocked_exact_alarm");
       showPermissionPrompt();
       return;
     }
@@ -624,6 +628,8 @@ export default function HomeScreen() {
           },
           (e: any) => {
             console.log("[VR] Failed to schedule reminder:", e);
+            // Saved but can't alert: a gentle once-per-session notice, never a block.
+            noticeIfNotificationsOff(e, toast);
             if (e?.name === "ExactAlarmPermissionError" && !promptedForExactAlarm) {
               promptedForExactAlarm = true;
               showPermissionPrompt();
@@ -635,7 +641,7 @@ export default function HomeScreen() {
         ).finally(() => onSettled?.());
       });
     },
-    [storeUpdateReminder]
+    [storeUpdateReminder, toast]
   );
 
   /** Fire-and-forget audio hydration for one imported row. */
@@ -814,9 +820,10 @@ export default function HomeScreen() {
    * Open the typed composer (OLD-101).
    *
    * The same gates the mic runs, minus the ones that are about a microphone:
-   * notification/alarm permission still applies (a typed reminder has to ring),
-   * the AI consent card does not — it is written about a recording and chains
-   * straight into the system mic prompt.
+   * the in-context notification ask and the Android exact-alarm gate still
+   * apply (notifications themselves are optional), the AI consent card does
+   * not — it is written about a recording and chains straight into the system
+   * mic prompt.
    */
   const handleOpenComposer = useCallback(async () => {
     if (showComposer || showRecording) return;
@@ -830,9 +837,10 @@ export default function HomeScreen() {
       return;
     }
 
-    const permsOk = await arePermissionsGranted();
-    if (!permsOk) {
-      perfLog(traceId, "ui.composer", "open_blocked_permissions");
+    // Same non-blocking notification step as the mic (App Review 4.5.4).
+    const canCreate = await prepareReminderCreation();
+    if (!canCreate) {
+      perfLog(traceId, "ui.composer", "open_blocked_exact_alarm");
       showPermissionPrompt();
       return;
     }
