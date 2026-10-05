@@ -323,6 +323,8 @@ describe("processVoiceReminderFast", () => {
         "frequency",
         "intervalDays",
         "intervalMs",
+        // OLD-131: the row's language, which picks the voice on regeneration.
+        "lang",
         "onceAt",
         "parseWarnings",
         "persistent",

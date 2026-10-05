@@ -3,6 +3,8 @@
  * No Convex, OpenAI, or network dependencies.
  */
 
+import { needsMultilingualVoice } from "./languages";
+
 export function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -44,6 +46,67 @@ MULTIPLE REMINDERS IN ONE REQUEST:
 - One array entry per distinct reminder the user asked for. A request with a single reminder still returns a one-element array.
 - Never merge distinct tasks into one reminder. Each entry gets its own title, description, time, and frequency.
 - Never SPLIT one task across entries either. The SAME task at several times is ONE entry with several "times" — "my pills at 8 and 9" is one reminder, not two.`;
+
+// ─── The guard (OLD-130) ────────────────────────────────────────────────────
+//
+// Pieces of the parse prompt. Every client's prompt carries the `lang` field;
+// only a creation job begun with the "guard_v1" client feature gets the rest,
+// which lets the model say "this is not a reminder" and "no time was said"
+// instead of inventing both. All static text — buildSystemPrompt places them
+// above CURRENT CONTEXT, so they cache like the rest of the prompt.
+
+// One field of the per-reminder JSON format, for every client. What the line
+// will later be voiced in (reminders.lang).
+export const LANG_FIELD_LINE = `"lang": "ISO 639-1 code of the language the user spoke this reminder in, lowercase (e.g. \\"en\\", \\"ar\\")",`;
+
+// One line of the prompt's LANGUAGE RULES, for every client (OLD-131). The two
+// rules above it only name English and Arabic, which left a Swedish take free
+// to come back with an English title and line — and the line is what the voice
+// speaks, so it must stay in the language the voice is picked for.
+export const OTHER_LANGUAGE_RULE = `- If the input is in any other language, return "title", "description" and "preDescription" in that same language; never translate them into English`;
+
+// Guard only: one more per-reminder field, rendered right under "times".
+export const GUARD_TIME_SPOKEN_FIELD_LINE = `"timeSpoken": true | false (true only if the user said a clock time, a part of the day like "tonight", or a relative time like "in 20 minutes"; false if you had to pick the time yourself),`;
+
+// The closing default the prompt has always ended on. Guard clients get
+// GUARD_NO_TIME_INSTRUCTION in its place: a one-off nobody gave a time to is
+// rejected, not quietly scheduled for the next minute.
+export const NO_TIME_DEFAULT_INSTRUCTION = "If no time specified, use a reasonable default.";
+export const GUARD_NO_TIME_INSTRUCTION =
+  'If no time specified: a repeating reminder gets a reasonable default time; a one-time reminder gets timeSpoken=false — never invent a time for it.';
+
+// Guard only, appended after MULTI_REMINDER_INSTRUCTION so it can name the
+// envelope that instruction defines.
+export const GUARD_UNDERSTOOD_INSTRUCTION = `
+
+UNDERSTANDING:
+- Add two top-level fields next to "reminders": {"understood": true | false, "language": "ISO 639-1 code of the language the user spoke, lowercase", "reminders": [...]}
+- The input is a speech-to-text transcript and may be misheard. If it is not a request to be reminded of something, is gibberish, or you cannot tell what the task is, return "understood": false and "reminders": []. Never invent a task.
+- A short but clear request ("water at 8", "call mom") IS understood.`;
+
+/**
+ * The guard's top-level answer, read off a raw parse response before any
+ * reminder object is looked at. Every field is undefined when the model left
+ * it out — a response without them is treated exactly as before the guard.
+ * `empty` means the envelope holds an explicit, empty reminders list.
+ */
+export function readParseEnvelope(parsed: unknown): {
+  understood: boolean | undefined;
+  language: unknown;
+  empty: boolean;
+} {
+  if (Array.isArray(parsed)) {
+    return { understood: undefined, language: undefined, empty: parsed.length === 0 };
+  }
+  if (!isPlainObject(parsed)) {
+    return { understood: undefined, language: undefined, empty: false };
+  }
+  return {
+    understood: typeof parsed.understood === "boolean" ? parsed.understood : undefined,
+    language: parsed.language,
+    empty: Array.isArray(parsed.reminders) && parsed.reminders.length === 0,
+  };
+}
 
 /**
  * Ceiling on how many reminders one take may create. A take that asks for more
@@ -369,15 +432,24 @@ export function normalizePreReminder(
  * 4. the stand-in anyway, banned title and all — last resort, never "".
  *
  * "" only when there is no lead time, or genuinely nothing to say.
+ *
+ * A reminder in a language the multilingual voice speaks (OLD-131) never gets
+ * the stand-in: it is an English sentence around a foreign title, and no one
+ * voice reads both halves right. The model already writes `preDescription` in
+ * the input's language, so the heads-up is its line, clean or not; with no
+ * line at all it is "" and the heads-up arrives as a silent notification,
+ * which is how a failed heads-up synthesis already degrades.
  */
 export function buildHeadsUpTtsText(args: {
   preReminderMinutes: number;
   preDescription: string;
   rawPreDescription: string;
   title: unknown;
+  lang?: unknown;
 }): string {
   if (!(args.preReminderMinutes > 0)) return "";
   if (args.preDescription) return args.preDescription;
+  if (needsMultilingualVoice(args.lang)) return args.rawPreDescription;
   const title = String(args.title ?? "").trim();
   const standIn = title ? `${title} in ${args.preReminderMinutes} minutes` : "";
   if (standIn && !hasBannedOpener(title)) return standIn;

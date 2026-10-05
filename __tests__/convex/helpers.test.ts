@@ -758,6 +758,24 @@ describe("buildHeadsUpTtsText", () => {
     ).toBe("");
   });
 
+  // OLD-131: the stand-in is English around a foreign title, which neither
+  // voice reads right — a multilingual-voice reminder only speaks the model's line.
+  it("never uses the English stand-in for a multilingual-voice language", () => {
+    expect(build({ title: "Möte med Anna", lang: "sv" })).toBe("");
+    expect(build({ title: "Möte med Anna", lang: "sv", rawPreDescription: "Påminnelse: möte snart" })).toBe(
+      "Påminnelse: möte snart"
+    );
+    expect(
+      build({ lang: "de", preDescription: "Dein Treffen beginnt in 15 Minuten." })
+    ).toBe("Dein Treffen beginnt in 15 Minuten.");
+  });
+
+  it("keeps the stand-in for English, Arabic and a missing lang", () => {
+    expect(build({ lang: "en" })).toBe("Meeting with Ahmed in 15 minutes");
+    expect(build({ lang: undefined })).toBe("Meeting with Ahmed in 15 minutes");
+    expect(build({ title: "تذكير بالدواء", lang: "ar" })).toBe("تذكير بالدواء in 15 minutes");
+  });
+
   it("says nothing when the parse produced neither a line nor a title", () => {
     expect(build({ title: "", rawPreDescription: "" })).toBe("");
     expect(build({ title: undefined, rawPreDescription: "" })).toBe("");

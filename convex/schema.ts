@@ -118,6 +118,13 @@ export const creationPerfValidator = v.object({
   parseReasoningTokens: v.optional(v.number()),
 });
 
+/** Why the guard turned a take away (OLD-130; creationValidate.GuardDetail). */
+export const creationErrorDetailValidator = v.union(
+  v.literal("not_understood"),
+  v.literal("no_time"),
+  v.literal("unsupported_language")
+);
+
 /** The five states a creation job can be in. The last three are terminal. */
 export const creationStatusValidator = v.union(
   v.literal("pending"),
@@ -195,6 +202,11 @@ export default defineSchema({
     // Alarm settings (optional for backward compatibility)
     soundRepeatCount: v.optional(v.number()),
     soundRepeatMode: v.optional(v.string()),
+    // ISO 639-1 code of the language the reminder was spoken in, as the parse
+    // reported it (OLD-130). What its line is voiced in. Absent on rows written
+    // before the parse returned it. OLD-131 picks the line's voice from it, and
+    // writes it from the legacy fast/slow actions too.
+    lang: v.optional(v.string()),
   }).index("by_device", ["deviceId"]),
 
   /**
@@ -244,6 +256,15 @@ export default defineSchema({
     reminderIds: v.optional(v.array(v.id("reminders"))),
     // storage_missing | stt_failed | parse_failed | unparseable | internal
     errorCode: v.optional(v.string()),
+    // Why an `unparseable` take was turned away, set only for a job begun with
+    // the "guard_v1" client feature (OLD-130). Older clients never see it and
+    // keep reading the bare errorCode.
+    errorDetail: v.optional(creationErrorDetailValidator),
+    // ISO 639-1 code of the language an `unsupported_language` take was in.
+    detectedLanguage: v.optional(v.string()),
+    // Capabilities the client declared at `begin` (e.g. "guard_v1"). Absent on
+    // every job from a build that predates the field.
+    clientFeatures: v.optional(v.array(v.string())),
     // Set by `ack` once the client has durably imported the take (spec 1.4).
     ackedAt: v.optional(v.number()),
     // The user's own clock at stop-tap. A one-off's instant is resolved against

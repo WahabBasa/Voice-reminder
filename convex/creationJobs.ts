@@ -33,7 +33,12 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { creationPerfValidator, creationStatusValidator, scheduleFields } from "./schema";
+import {
+  creationErrorDetailValidator,
+  creationPerfValidator,
+  creationStatusValidator,
+  scheduleFields,
+} from "./schema";
 
 type JobDoc = Doc<"creationJobs">;
 type CreationStatus = JobDoc["status"];
@@ -53,6 +58,19 @@ export const SWEEP_BATCH_SIZE = 25;
 
 /** Worker attempts a single job is allowed, `begin`'s first run included. */
 export const MAX_ATTEMPTS = 3;
+
+/**
+ * `clientFeatures` as `begin`/`retry` receive it (OLD-130): capability flags
+ * like "guard_v1" that change what the worker may answer this client with.
+ * Optional — a build that predates it sends nothing and gets today's behaviour.
+ */
+const clientFeaturesValidator = v.optional(v.array(v.string()));
+
+/** Bounded and deduped before it is stored; it is a flag list, not a payload. */
+function sanitizeClientFeatures(features: string[] | undefined): string[] | undefined {
+  if (features === undefined) return undefined;
+  return [...new Set(features.filter((f) => f.length > 0 && f.length <= 64))].slice(0, 16);
+}
 
 const urgencyValidator = v.union(
   v.literal("urgent"),
@@ -84,6 +102,8 @@ const commitPlanValidator = v.object({
   persistent: v.optional(v.boolean()),
   ttsText: v.string(),
   preTtsText: v.optional(v.string()),
+  // ISO 639-1 language of the spoken content (OLD-130), stored on the row.
+  lang: v.optional(v.string()),
 });
 
 /** Fields a CAS write is allowed to move. Never `generation`, never `attempts`. */
@@ -91,6 +111,8 @@ const casPatchValidator = v.object({
   status: v.optional(creationStatusValidator),
   transcript: v.optional(v.string()),
   errorCode: v.optional(v.string()),
+  errorDetail: v.optional(creationErrorDetailValidator),
+  detectedLanguage: v.optional(v.string()),
   perf: v.optional(creationPerfValidator),
 });
 
@@ -110,6 +132,8 @@ const workerJobValidator = v.object({
   deviceSttMs: v.optional(v.number()),
   deviceSttEngine: v.optional(v.union(v.literal("dictation"), v.literal("transcriber"))),
   deviceSttLocale: v.optional(v.string()),
+  // Whether this take opted into the guard ("guard_v1", OLD-130).
+  clientFeatures: v.optional(v.array(v.string())),
   localDate: v.string(),
   localTime: v.string(),
   timezone: v.string(),
@@ -127,6 +151,10 @@ const watchedJobValidator = v.object({
   // and rebegin it from the transcript alone, no audio (spec §reconcile).
   sttSource: v.optional(v.union(v.literal("device"), v.literal("cloud"))),
   errorCode: v.optional(v.string()),
+  // Set only on a guard_v1 take that failed `unparseable` (OLD-130): why, and
+  // for `unsupported_language`, which language. Absent for everyone else.
+  errorDetail: v.optional(creationErrorDetailValidator),
+  detectedLanguage: v.optional(v.string()),
   reminderIds: v.optional(v.array(v.id("reminders"))),
   perf: v.optional(creationPerfValidator),
   updatedAt: v.number(),
@@ -195,6 +223,8 @@ type CasPatch = {
   status?: CreationStatus;
   transcript?: string;
   errorCode?: string;
+  errorDetail?: JobDoc["errorDetail"];
+  detectedLanguage?: string;
   perf?: JobDoc["perf"];
 };
 
@@ -257,6 +287,7 @@ export const begin = mutation({
     localDate: v.string(),
     localTime: v.string(),
     timezone: v.string(),
+    clientFeatures: clientFeaturesValidator,
   },
   returns: v.object({
     jobId: v.id("creationJobs"),
@@ -310,6 +341,7 @@ export const begin = mutation({
       localDate: args.localDate,
       localTime: args.localTime,
       timezone: args.timezone,
+      clientFeatures: sanitizeClientFeatures(args.clientFeatures),
       createdAt: now,
       updatedAt: now,
     });
@@ -342,6 +374,8 @@ export const get = query({
       transcript: job.transcript,
       sttSource: job.sttSource,
       errorCode: job.errorCode,
+      errorDetail: job.errorDetail,
+      detectedLanguage: job.detectedLanguage,
       reminderIds: job.reminderIds,
       perf: job.perf,
       updatedAt: job.updatedAt,
@@ -471,6 +505,7 @@ export const getJob = internalQuery({
       deviceSttMs: job.deviceSttMs,
       deviceSttEngine: job.deviceSttEngine,
       deviceSttLocale: job.deviceSttLocale,
+      clientFeatures: job.clientFeatures,
       localDate: job.localDate,
       localTime: job.localTime,
       timezone: job.timezone,
@@ -549,6 +584,8 @@ export const commit = internalMutation({
         title: plan.title,
         ttsText,
         preTtsText,
+        // The row's own language picks the voice (OLD-131).
+        lang: row.lang,
       });
     }
 
@@ -566,6 +603,8 @@ export const commit = internalMutation({
       perf: args.preCommitPerf,
       // A commit after a retry clears the previous attempt's error.
       errorCode: undefined,
+      errorDetail: undefined,
+      detectedLanguage: undefined,
       updatedAt: now,
     });
     // Founder alerts (OLD-135).
@@ -676,6 +715,8 @@ export const retry = mutation({
     deviceSttMs: v.optional(v.number()),
     deviceSttEngine: v.optional(v.union(v.literal("dictation"), v.literal("transcriber"))),
     deviceSttLocale: v.optional(v.string()),
+    // Replaces the stored list when given (OLD-130); omitted keeps it.
+    clientFeatures: clientFeaturesValidator,
   },
   returns: v.object({
     status: statusOrMissingValidator,
@@ -725,6 +766,11 @@ export const retry = mutation({
       generation,
       attempts: job.attempts + 1,
       errorCode: undefined,
+      errorDetail: undefined,
+      detectedLanguage: undefined,
+      ...(args.clientFeatures !== undefined
+        ? { clientFeatures: sanitizeClientFeatures(args.clientFeatures) }
+        : {}),
       ...(swapping ? { audioStorageId: args.newStorageId } : {}),
       ...sourcePatch,
       updatedAt: now,
