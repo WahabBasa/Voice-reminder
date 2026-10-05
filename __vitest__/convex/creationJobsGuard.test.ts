@@ -71,6 +71,33 @@ describe("clientFeatures", () => {
     await t.mutation(api.creationJobs.retry, { deviceId: DEVICE, creationId });
     expect((await readJob(t, DEVICE, creationId))!.clientFeatures).toEqual(["guard_v1"]);
   });
+
+  test("a device take retried with new audio and the flag runs guarded, in the cloud", async () => {
+    // The client's recovery path: a device take (transcript only, no flag on
+    // the row) re-uploaded as audio. The worker branches on sttSource, so
+    // "cloud" plus the new blob is what sends it through cloud STT.
+    const { creationId } = await insertJob(t, {
+      status: "failed",
+      errorCode: "unparseable",
+      sttSource: "device",
+      transcript: "kilometer got lead",
+    });
+    const newStorageId = await storeAudio(t, "re-record");
+
+    await t.mutation(api.creationJobs.retry, {
+      deviceId: DEVICE,
+      creationId,
+      newStorageId,
+      clientFeatures: ["guard_v1"],
+    });
+
+    expect(await readJob(t, DEVICE, creationId)).toMatchObject({
+      status: "pending",
+      sttSource: "cloud",
+      audioStorageId: newStorageId,
+      clientFeatures: ["guard_v1"],
+    });
+  });
 });
 
 describe("errorDetail on the watched document", () => {
