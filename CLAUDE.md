@@ -24,6 +24,22 @@
 | **ASC screenshot renders** | GPT renders and phone captures arrive in `C:\Users\AtheA\Downloads\LANDrop`. Approved store screenshots get copied to `marketing/renders/` named by slot (`01-lockscreen.png`, `02-recording.png`, …). When the set is complete, `python marketing/upscale_to_asc.py` emits exact 6.7" (1290x2796) + 6.5" (1242x2688) PNGs to `marketing/out/asc/` for App Store Connect upload. |
 | **Convex — LIVE deployment** | `dev:proper-stoat-767` — https://dashboard.convex.dev/d/proper-stoat-767. **This is what every shipped build reads** (TestFlight and App Store included: the EAS env `EXPO_PUBLIC_CONVEX_URL` carries the dev URL for all three build environments). The prod deployment exists but nothing reads it until OLD-126. See "Convex deployments" under Development Commands before any deploy. |
 | **GitHub Repo** | https://github.com/WahabBasa/Voice-reminder |
+| **App Store Connect API** | Team key `UK56CMV8QG` (App Manager), issuer `d9e92b80-7749-4e52-9301-4ce71066f26c`, app `6801797784`. The `.p8` lives at `C:\Users\AtheA\.appstoreconnect\private_keys\`, never in the repo. Claude handles ASC admin through the API; Resolution Center replies and the final submit stay with the user. |
+
+---
+
+## 🎯 Standing Rules: iOS only, cloud builds, test before Apple
+
+User rules, set 2026-09-26. These override anything older in this file.
+
+1. **iOS only.** Android is on hold: don't plan, test, build, or write test cases for Android unless the user asks. Android notes live in the "Android (parked)" section at the bottom, for reference only.
+2. **Every build and update runs on Expo's servers, never on this machine.** Builds use `eas build` (cloud). JS updates go through the EAS Workflow `update` job (`.eas/workflows/`), never a local `eas update`, `expo export`, or Gradle/Xcode build.
+3. **Nothing goes to Apple before the user has tested it on their phone.** The order is:
+   1. Cloud dev build or update.
+   2. The user tests on the iPhone.
+   3. The user decides: make changes, or build production and submit.
+
+   No `eas submit`, no `--auto-submit`, and no TestFlight upload without the user's explicit go after their own device test.
 
 ---
 
@@ -31,22 +47,20 @@
 
 **Project Location:** `C:\Dev\VR`
 
-**Tooling Versions:**
+**Tooling:**
 - Node: `22.5.1` (via NVM for Windows, see `.nvmrc`)
-- Java: OpenJDK `17.0.15` (Microsoft build)
-- Android SDK: `C:\Users\AtheA\AppData\Local\Android\Sdk`
-- NDK: `27.1.12297006`
-- CMake: `3.22.1`
-- Gradle: `8.14.3`
-
-**What is set up:**
-- Git, Node (NVM), Java 17, Android SDK, NDK, CMake
-- ADB available for device communication
+- EAS CLI: iOS builds run in the cloud (team ZQCWAL4768)
+- go-ios: `C:/Users/AtheA/AppData/Local/SideTap/bin/ios.exe` (USB install to the iPhone)
+- Syslog: `python scripts/wifi-syslog.py -m Remi` (Wi-Fi), USB fallback `pymobiledevice3 syslog live`
 - Local env file: `.env.local` (Convex URL + deployment)
+- Android tooling (Java 17, SDK, NDK, Gradle, ADB) is installed but parked; see the bottom section
+
+**RAM:** 12 GB installed, about 9.9 GB usable (the integrated graphics takes 2 GB). Fixed 2026-09-27 by swapping the sticks: Hynix 8 GB in slot 1, Samsung 4 GB in slot 2. With the Hynix in slot 2 the BIOS disabled it and only about 3.4 GB was usable. If sudden freezes come back, suspect slot 2. **2026-09-28: it came back** — Windows sees only 5.92 GB (both sticks detected, no bcdedit memory limit), plus bugchecks 0x139 and 0x3D and repeated Automatic Repair boots. Heavy local jobs can crash with Windows exit code `3221226505` (`0xC0000409`) when memory runs out.
 
 **Known gotchas:**
 - PowerShell blocks `npm` / `npx` `.ps1` shims. Use `npm.cmd` / `npx.cmd`
 - Windows file locking can cause `kill EPERM` errors during builds - just retry
+- **`eas build` runs on Expo's servers, but `eas update` bundles the JS on this machine** (Metro export) and only uploads the result. That makes it memory-bound on this laptop: on 2026-09-26 it crashed with `0xC0000409` at 99.9% with 363 MB free. Close Brave and other heavy apps first. If memory is still the blocker, publish from the cloud (EAS Workflows `type: update` job, or GitHub Actions).
 - `eas update` needs `--platform ios` (no react-native-web installed) and often `--clear-cache` — Metro dies with "Failed to get the SHA-1 for ... require.js" on a warm cache. Run from `C:\Dev\VR` (uppercase drive letter)
 - The uppercase drive letter can't be reached by a plain `cd /d C:\Dev\VR` when the shell already inherits the lowercase path — it's a no-op that keeps `c:\Dev\VR` and Metro throws the SHA-1 error anyway. Bounce first: `cd /d C:\Windows` then `cd /d C:\Dev\VR` (verified 2026-08-31)
 - `npm.cmd run test:coverage` **always exits 1 on Windows** even when every suite and threshold passes — the per-file `coverageThreshold` keys resolve to backslash paths that never match the coverage map. Judge the run by the printed suite/test results, not the exit code; Linux CI is the authoritative threshold gate (verified 2026-08-31, pre-existing)
@@ -55,7 +69,7 @@
 
 **Claude orchestrates; subagents do the grunt work.** Standing instruction from the user:
 
-- Implementation, research, test runs, builds, publishes, installs — anything mechanical — goes to subagents: **Opus 4.8 at high reasoning effort**, one per well-scoped task, dispatched in parallel when tasks are disjoint.
+- Implementation, research, test runs, builds, publishes, installs — anything mechanical — goes to subagents: **Opus 5.5 at medium reasoning effort** (user default since 2026-10-05; research agents also get the Parallel Search MCP), one per well-scoped task, dispatched in parallel when tasks are disjoint.
 - The orchestrator's job is to frame each task with full context (files, gotchas, quality gates), dispatch, then **review the agent's report or diff** and relay the outcome. Inspect the diff directly when a change is risky or touches shipped behavior.
 - The orchestrator works directly only on: small reads/greps needed to frame a task, quick verifications of agent output, CLAUDE.md/devlog/memory edits, and conversation with the user (decisions, grilling).
 
@@ -152,7 +166,7 @@ Consequence: any `npx convex dev` session — human or agent — pushes straight
 
 **Publish routine for JS-only changes (the coupled pair):**
 1. `npx.cmd convex dev --once` — backend first.
-2. `eas update --branch production --platform ios --clear-cache` from a directly-opened terminal (agent shells hit the Metro SHA-1 error). Production builds are on channel `production`, runtime policy `appVersion`.
+2. Publish the update **in the cloud** through the EAS Workflow `update` job (see Standing Rules), after the change has been tested on a dev build. Production builds are on channel `production`, runtime policy `appVersion`. (A local `eas update` is off-limits: it bundles on this machine.)
 3. Force-quit the app twice: first launch downloads, second applies.
 
 Native changes (`app.json`, `plugins/`, native deps, Swift under `plugins/ios-src/`) need a new EAS build, not an OTA.
@@ -160,6 +174,41 @@ Native changes (`app.json`, `plugins/`, native deps, Swift under `plugins/ios-sr
 **The Convex URL rides in the JS bundle, not the native shell.** `EXPO_PUBLIC_CONVEX_URL` is inlined by Metro at export time: an EAS build takes it from the EAS env, an `eas update` takes it from this machine's `.env.local`. Today both say `proper-stoat-767`. Never run `eas update` from an environment whose `.env.local` points elsewhere — it would silently repoint every installed app. Switching to prod (OLD-126) therefore means flipping the EAS env, `.env.local`, and shipping a build + OTA together.
 
 **Before any push:** run `npm.cmd run test:coverage`, not plain `npm test`. CI enforces per-file coverage thresholds that plain `npm test` skips — every historical CI failure was this step going red after a locally-green push.
+
+### 📱 iPhone Device Workflow
+
+1. **Build:** `eas build --platform ios --profile development` runs in the cloud (about 5 min) and produces a dev-client `.ipa`.
+2. **Install over USB:** `C:/Users/AtheA/AppData/Local/SideTap/bin/ios.exe install --path=<ipa>`. Installing over an existing copy keeps its data and permission answers; delete the app first to test first-run permission prompts.
+3. **Load the JS:** the dev client doesn't bundle JS, so it needs one of these:
+   - **Metro on LAN:** `npx.cmd expo start --dev-client`, with the phone on the same Wi-Fi. Pick the server in the launcher.
+   - **EAS update on the `development` branch** (the dev build's channel), loaded from the dev menu. Publish it with the cloud EAS Workflow, never a local `eas update`: edit `message:` in `.eas/workflows/update-development.yml` to name the commit, then run `eas workflow:run .eas/workflows/update-development.yml --non-interactive` (about 2 min, uploads a 3.9 MB archive governed by `.easignore`). The EAS `development` environment doesn't carry `EXPO_PUBLIC_VR_PERF_LOGS`, so cloud updates don't emit `[VR PERF]` lines.
+4. **Logs:** start the syslog before the first take (`python scripts/wifi-syslog.py -m Remi`).
+
+---
+
+---
+
+## 🏗️ Project Architecture
+
+See `plan.md` for full details. Summary:
+
+```
+User Voice → Expo App → Convex Backend → OpenAI (Whisper/GPT/TTS) → Notification with Custom Sound
+```
+
+**Tech Stack:**
+- Frontend: Expo (React Native)
+- Backend: Convex
+- Notifications: Notifee
+- AI: OpenAI (Whisper STT, GPT-4o-mini parsing, TTS)
+
+---
+
+## 🤖 Android (parked, reference only)
+
+iOS is the focus. Nothing in this section runs unless the user asks for Android work.
+
+**Tooling (installed):** Java OpenJDK `17.0.15` (Microsoft build), Android SDK `C:\Users\AtheA\AppData\Local\Android\Sdk`, NDK `27.1.12297006`, CMake `3.22.1`, Gradle `8.14.3`, ADB.
 
 ### 📱 USB Development Workflow (Recommended)
 
@@ -202,15 +251,15 @@ C:\Users\AtheA\AppData\Local\Android\Sdk\platform-tools\adb.exe reverse tcp:8085
 npx expo run:android
 ```
 
-## 📦 Release Builds
+### 📦 Release Builds
 
-### When to use `--clean` prebuild
+#### When to use `--clean` prebuild
 
 - **`npx.cmd expo prebuild --platform android --clean`** — Wipes the entire `android/` folder and regenerates it. Use ONLY when native config changed (plugins, `app.json`, native deps). Full rebuild takes ~20-25 min.
 - **`npx.cmd expo prebuild --platform android`** (no `--clean`) — Incremental. Use when only JS/TS code changed. Keeps cached native artifacts.
 - **Skip prebuild entirely** — If nothing in `app.json` or `plugins/` changed, just run `gradlew.bat assembleRelease` directly. Fastest option for JS-only changes.
 
-### Build commands
+#### Build commands
 
 ```powershell
 # Release APK (for device testing) — faster, installs via adb
@@ -235,7 +284,7 @@ cd android
 - `plugins/withNotifeeAndroidMaven.js` - Fixes Notifee + Expo 54 (GitHub #1262)
 - `plugins/withAndroidSigning.js` - Injects release signing config
 
-### ⚡ Build Optimization: ARM Only
+#### ⚡ Build Optimization: ARM Only
 
 To speed up release builds (~50% faster), only build for ARM architectures (mobile devices) and skip x86 (emulators):
 
@@ -251,20 +300,4 @@ reactNativeArchitectures=armeabi-v7a,arm64-v8a
 
 ---
 
-## 🏗️ Project Architecture
-
-See `plan.md` for full details. Summary:
-
-```
-User Voice → Expo App → Convex Backend → OpenAI (Whisper/GPT/TTS) → Notification with Custom Sound
-```
-
-**Tech Stack:**
-- Frontend: Expo (React Native)
-- Backend: Convex
-- Notifications: Notifee
-- AI: OpenAI (Whisper STT, GPT-4o-mini parsing, TTS)
-
----
-
-*Last Updated: 2026-08-29*
+*Last Updated: 2026-09-26*
