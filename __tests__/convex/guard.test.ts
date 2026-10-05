@@ -165,6 +165,16 @@ describe("readParseEnvelope / planTakeFromRawParse", () => {
     expect(readParseEnvelope([]).empty).toBe(true);
   });
 
+  it("a response that is neither an object nor a list carries no envelope", () => {
+    for (const parsed of [null, "Call mom at 5", 42, true, undefined]) {
+      expect(readParseEnvelope(parsed)).toEqual({
+        understood: undefined,
+        language: undefined,
+        empty: false,
+      });
+    }
+  });
+
   it("an understood:false answer is a take with no plans, not a throw", () => {
     const take = planTakeFromRawParse(
       JSON.stringify({ understood: false, language: "en", reminders: [] }),
@@ -286,6 +296,15 @@ describe("guardTake", () => {
     expect(guardTake({ understood: false, language: "xh", plans: [] })).toMatchObject({
       detail: "not_understood",
     });
+  });
+
+  it("a plan that is not an object is skipped by the language and time checks", () => {
+    expect(
+      guardTake({ understood: true, language: "en", plans: [null, "Call mom", once()] })
+    ).toEqual({ ok: true });
+    expect(
+      guardTake({ understood: true, language: "en", plans: [null, once({ timeSpoken: false })] })
+    ).toMatchObject({ ok: false, detail: "no_time", reason: expect.stringContaining("plan 1") });
   });
 
   it("absent or unreadable fields never reject", () => {
