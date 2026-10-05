@@ -291,4 +291,57 @@ export default defineSchema({
   })
     .index("by_device", ["deviceId", "createdAt"])
     .index("by_client", ["deviceId", "clientId"]),
+
+  /**
+   * One row per install that has opened the app (OLD-135, founder alerts).
+   *
+   * Written by `devices.hello` (once per launch, throttled to one write an hour),
+   * by `founderAlerts.recordOutcome` when a take arrives from an install that
+   * never said hello (an older build), and by `devices.seedFromReminders`.
+   * `seeded` marks installs that existed before this table did, so they never
+   * read as "new". The runtime fields are optional because seeded rows and
+   * take-registered rows start without them; the next hello fills them in.
+   */
+  devices: defineTable({
+    deviceId: v.string(),
+    // First 8 hex of SHA-256(deviceId) — the only handle emails carry.
+    deviceTag: v.string(),
+    firstSeenAt: v.number(),
+    // 0 on rows nobody has said hello from yet (seeded / take-registered).
+    lastSeenAt: v.number(),
+    seeded: v.boolean(),
+    buildNumber: v.optional(v.string()),
+    updateId: v.optional(v.string()),
+    // First preferred locale (lib/deviceStt.ts getDeviceLocales()[0]).
+    locale: v.optional(v.string()),
+    timezone: v.optional(v.string()),
+    iosVersion: v.optional(v.string()),
+  })
+    .index("by_deviceId", ["deviceId"])
+    .index("by_firstSeen", ["firstSeenAt"])
+    .index("by_lastSeen", ["lastSeenAt"]),
+
+  /**
+   * One row per creation-job terminal transition (committed / failed), for the
+   * founder's alerts and daily summary (OLD-135). Carries no deviceId and no
+   * user content — `deviceTag` only. Pruned after 30 days by a cron.
+   */
+  takeOutcomes: defineTable({
+    creationId: v.string(),
+    deviceTag: v.string(),
+    status: v.union(v.literal("committed"), v.literal("failed")),
+    errorCode: v.optional(v.string()),
+    errorDetail: v.optional(v.string()),
+    sttSource: v.optional(v.string()),
+    deviceSttLocale: v.optional(v.string()),
+    timezone: v.optional(v.string()),
+    buildNumber: v.optional(v.string()),
+    reminderCount: v.optional(v.number()),
+    // Classification at record time (founderAlertsEmail.classifyOutcome).
+    newDevice: v.boolean(),
+    firstTake: v.boolean(),
+    at: v.number(),
+  })
+    .index("by_at", ["at"])
+    .index("by_device_tag", ["deviceTag", "at"]),
 });

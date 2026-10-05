@@ -27,6 +27,7 @@ import { convex } from "../lib/convexClient";
 import { hydrateReminderAudio } from "../lib/audioHydration";
 import { startForegroundReconcile } from "../lib/takeReconcile";
 import { getDeviceId } from "../lib/deviceId";
+import { sendDeviceHello } from "../lib/deviceHello";
 import ErrorBoundary from "../components/ErrorBoundary";
 import FeedbackHost from "../components/FeedbackHost";
 import PermissionPrompt from "../components/PermissionPrompt";
@@ -100,6 +101,12 @@ function StartupTasks() {
   // a kill, a lost network or a job that outlived its subscription on either OS,
   // and the foreground is the moment the user is looking at the card.
   useEffect(() => startForegroundReconcile(), []);
+
+  // Once-per-launch check-in for the founder's new-device alerts (OLD-135).
+  // Fire-and-forget: it never blocks start-up and swallows its own errors.
+  useEffect(() => {
+    void sendDeviceHello(convex);
+  }, []);
 
   // iOS 26 AlarmKit: Done/Later run inside App Intents with the app closed, so
   // their effects only reach the store when we drain the native event log —

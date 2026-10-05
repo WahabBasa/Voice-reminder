@@ -39,4 +39,23 @@ crons.interval(
   {}
 );
 
+// Founder alerts (OLD-135). The daily summary fires at 05:00 UTC, which is
+// 09:00 in the UAE where the founder reads it; it always sends, even on a quiet
+// day, so a missing email means the cron is broken rather than nobody came.
+crons.cron(
+  "founder daily summary",
+  "0 5 * * *",
+  internal.founderAlerts.dailySummary,
+  {}
+);
+
+// The take-outcome log keeps 30 days. Daily, ahead of the summary; a backlog
+// larger than one batch reschedules itself until it is clear.
+crons.cron(
+  "prune take outcomes",
+  "30 4 * * *",
+  internal.founderAlerts.pruneOutcomes,
+  {}
+);
+
 export default crons;
