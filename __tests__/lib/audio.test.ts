@@ -1,3 +1,7 @@
+jest.mock("react-native", () => ({
+  Platform: { OS: "ios" },
+  AppState: { currentState: "active", addEventListener: jest.fn() },
+}));
 jest.mock("expo-av", () => ({
   __esModule: true,
   Audio: {
@@ -15,23 +19,109 @@ jest.mock("react-native-sound", () => ({ __esModule: true, default: null }));
 jest.mock("../../lib/perf", () => ({ perfLog: jest.fn() }));
 
 import { Audio } from "expo-av";
+import { AppState, type AppStateStatus } from "react-native";
 import * as Sentry from "@sentry/react-native";
 import { getRecording, setMeteringListener, startRecording, stopRecording } from "../../lib/audio";
 import { perfLog } from "../../lib/perf";
 import { RECORDING_PRESET } from "../../lib/recordingPreset";
 
 const createAsync = jest.mocked(Audio.Recording.createAsync);
+const addEventListener = jest.mocked(AppState.addEventListener);
+const removeListener = jest.fn();
+const appState = AppState as { currentState: AppStateStatus };
 const recorder = new Error("Prepare encountered an error: recorder not prepared.");
 const prepareError = Object.assign(recorder, { code: "E_AUDIO_RECORDERNOTCREATED" });
 
 beforeEach(() => {
   jest.clearAllMocks();
   createAsync.mockReset();
+  appState.currentState = "active";
+  addEventListener.mockReturnValue({ remove: removeListener } as any);
 });
 
 afterEach(async () => {
+  jest.useRealTimers();
   setMeteringListener(null);
   await stopRecording();
+});
+
+// Lets every queued promise continuation run, without advancing fake timers.
+async function flushPromises() {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+describe("waiting for the app to be active (OLD-132)", () => {
+  it("starts immediately when the app is already active", async () => {
+    createAsync.mockResolvedValueOnce(successfulRecording());
+
+    await startRecording();
+
+    expect(addEventListener).not.toHaveBeenCalled();
+    expect(createAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the recorder until AppState reports active, then cleans up", async () => {
+    jest.useFakeTimers();
+    appState.currentState = "inactive";
+    const result = successfulRecording();
+    createAsync.mockResolvedValueOnce(result);
+
+    const started = startRecording();
+    await flushPromises();
+    expect(addEventListener).toHaveBeenCalledWith("change", expect.any(Function));
+    expect(Audio.setAudioModeAsync).not.toHaveBeenCalled();
+    expect(createAsync).not.toHaveBeenCalled();
+
+    // A duplicate tap during the wait is still deduped.
+    await startRecording();
+    expect(addEventListener).toHaveBeenCalledTimes(1);
+
+    const onChange = addEventListener.mock.calls[0][1];
+    onChange("background");
+    await flushPromises();
+    expect(createAsync).not.toHaveBeenCalled();
+
+    onChange("active");
+    await started;
+    expect(createAsync).toHaveBeenCalledTimes(1);
+    expect(getRecording()).toBe(result.recording);
+    expect(removeListener).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it("proceeds after the timeout if active never arrives", async () => {
+    jest.useFakeTimers();
+    appState.currentState = "inactive";
+    createAsync.mockResolvedValueOnce(successfulRecording());
+
+    const started = startRecording();
+    await flushPromises();
+    jest.advanceTimersByTime(1999);
+    await flushPromises();
+    expect(createAsync).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(1);
+    await started;
+    expect(createAsync).toHaveBeenCalledTimes(1);
+    expect(removeListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the preparing guard when a start after the wait fails", async () => {
+    jest.useFakeTimers();
+    appState.currentState = "inactive";
+    const error = new Error("Audio mode failed");
+    jest.mocked(Audio.setAudioModeAsync).mockRejectedValueOnce(error);
+
+    const started = startRecording();
+    await flushPromises();
+    addEventListener.mock.calls[0][1]("active");
+    await expect(started).rejects.toBe(error);
+
+    appState.currentState = "active";
+    createAsync.mockResolvedValueOnce(successfulRecording());
+    await startRecording();
+    expect(createAsync).toHaveBeenCalledTimes(1);
+  });
 });
 
 function successfulRecording() {
