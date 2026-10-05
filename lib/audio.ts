@@ -1,4 +1,5 @@
 import { Audio } from "expo-av";
+import { AppState, Platform } from "react-native";
 import * as Sentry from "@sentry/react-native";
 import { perfLog } from "./perf";
 import { RECORDING_PRESET, RECORDING_FALLBACK_PRESET } from "./recordingPreset";
@@ -104,27 +105,60 @@ export async function getMicrophonePermission(): Promise<PermissionStatus> {
   return status as PermissionStatus;
 }
 
+// ─── Wait for the app to be active before touching the mic (OLD-132) ───────
+//
+// On a fresh install the first record tap walks through system dialogs (mic,
+// then notifications / AlarmKit). Each one fires WillResignActive, which expo-av
+// treats as "backgrounded": it deactivates the audio session and refuses to
+// reactivate it until DidBecomeActive. A start that lands in that gap fails both
+// presets with "This experience is currently in the background". Waiting for
+// AppState "active" closes the gap; the timeout means a missed event can only
+// cost two seconds, never a stuck start.
+const APP_ACTIVE_TIMEOUT_MS = 2000;
+
+export function waitForAppActive(timeoutMs = APP_ACTIVE_TIMEOUT_MS): Promise<void> {
+  if (AppState.currentState === "active") return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let subscription: { remove: () => void } | null = null;
+    const finish = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      subscription?.remove();
+      subscription = null;
+      resolve();
+    };
+    subscription = AppState.addEventListener("change", (next) => {
+      if (next === "active") finish();
+    });
+    timer = setTimeout(finish, timeoutMs);
+  });
+}
+
 export async function startRecording(): Promise<void> {
-  // Prevent double-tap race condition
+  // Prevent double-tap race condition. Claimed before the app-active wait so a
+  // second tap during the wait is still deduped; the finally below releases it.
   if (isRecordingPreparing) {
     console.log("[VR] Recording already preparing, ignoring duplicate call");
     return;
   }
-
-  // Clean up any existing recording first
-  if (recording) {
-    console.log("[VR] Cleaning up existing recording before starting new one");
-    try {
-      await recording.stopAndUnloadAsync();
-    } catch (e) {
-      console.log("[VR] Error cleaning up previous recording:", e);
-    }
-    recording = null;
-  }
-
   isRecordingPreparing = true;
 
   try {
+    await waitForAppActive();
+
+    // Clean up any existing recording first
+    if (recording) {
+      console.log("[VR] Cleaning up existing recording before starting new one");
+      try {
+        await recording.stopAndUnloadAsync();
+      } catch (e) {
+        console.log("[VR] Error cleaning up previous recording:", e);
+      }
+      recording = null;
+    }
+
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
@@ -248,8 +282,6 @@ try {
 } catch (e) {
   console.log("[AudioService] react-native-sound not available");
 }
-
-import { Platform } from "react-native";
 
 class AudioServiceClass {
   private currentSound: Audio.Sound | null = null;
