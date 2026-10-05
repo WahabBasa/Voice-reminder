@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { Keyboard, StyleSheet, Text, View } from "react-native";
 import BottomSheet, {
   BottomSheetBackdrop,
+  BottomSheetScrollView,
   BottomSheetTextInput,
   BottomSheetView,
   TouchableOpacity,
@@ -20,6 +21,7 @@ import {
   type FeedbackSubmitResult,
 } from "../lib/feedbackOutbox";
 import { buildFeedbackContext } from "../lib/feedbackContext";
+import ReminderContextCard from "./ReminderContextCard";
 import { borderRadius, colors, scaleFontSize, shadows } from "../lib/theme";
 
 const MAX_FEEDBACK_CHARS = 2000;
@@ -46,7 +48,15 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
   const submitFeedback = useMutation(api.feedback.submit);
   const toast = useToast();
   const sheetRef = useRef<BottomSheet>(null);
-  const snapPoints = useMemo(() => ["55%", "90%"], []);
+  // What is being reported, shown above the box (OLD-134). Display-only: the
+  // context sent at Send is exactly the one the entrance handed over.
+  const showReminderCard = context?.kind === "reminder";
+  const isFailedTake = context?.kind === "failed_take";
+  // The card needs room above the box, Send included, before anyone drags.
+  const snapPoints = useMemo(
+    () => (showReminderCard ? ["70%", "90%"] : ["55%", "90%"]),
+    [showReminderCard]
+  );
 
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -122,6 +132,51 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
 
   const sendDisabled = sending || text.trim().length === 0;
 
+  const body = (
+    <>
+      <Text style={[styles.title, isFailedTake && styles.titleWithKicker]}>Send feedback</Text>
+      {isFailedTake ? <Text style={styles.kicker}>Failed recording</Text> : null}
+
+      {showReminderCard && context ? <ReminderContextCard context={context} /> : null}
+
+      <View style={styles.inputCard}>
+        <BottomSheetTextInput
+          style={styles.input}
+          value={text}
+          onChangeText={setText}
+          placeholder="What happened? What were you trying to do?"
+          placeholderTextColor={colors.textTertiary}
+          multiline
+          autoFocus
+          maxLength={MAX_FEEDBACK_CHARS}
+          editable={!sending}
+        />
+      </View>
+
+      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+
+      <View style={styles.actions}>
+        <TouchableOpacity
+          style={styles.cancelButton}
+          onPress={handleClose}
+          activeOpacity={0.7}
+          disabled={sending}
+        >
+          <Text style={styles.cancelText}>Cancel</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.sendButton, sendDisabled && styles.sendButtonDisabled]}
+          onPress={() => void handleSend()}
+          activeOpacity={0.7}
+          disabled={sendDisabled}
+        >
+          <Text style={styles.sendText}>{sending ? "Sending…" : "Send"}</Text>
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
   return (
     <BottomSheet
       ref={sheetRef}
@@ -137,45 +192,17 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
       handleIndicatorStyle={styles.handleIndicator}
       backgroundStyle={styles.sheetBackground}
     >
-      <BottomSheetView style={styles.content}>
-        <Text style={styles.title}>Send feedback</Text>
-
-        <View style={styles.inputCard}>
-          <BottomSheetTextInput
-            style={styles.input}
-            value={text}
-            onChangeText={setText}
-            placeholder="What happened? What were you trying to do?"
-            placeholderTextColor={colors.textTertiary}
-            multiline
-            autoFocus
-            maxLength={MAX_FEEDBACK_CHARS}
-            editable={!sending}
-          />
-        </View>
-
-        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-
-        <View style={styles.actions}>
-          <TouchableOpacity
-            style={styles.cancelButton}
-            onPress={handleClose}
-            activeOpacity={0.7}
-            disabled={sending}
-          >
-            <Text style={styles.cancelText}>Cancel</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.sendButton, sendDisabled && styles.sendButtonDisabled]}
-            onPress={() => void handleSend()}
-            activeOpacity={0.7}
-            disabled={sendDisabled}
-          >
-            <Text style={styles.sendText}>{sending ? "Sending…" : "Send"}</Text>
-          </TouchableOpacity>
-        </View>
-      </BottomSheetView>
+      {showReminderCard ? (
+        <BottomSheetScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {body}
+        </BottomSheetScrollView>
+      ) : (
+        <BottomSheetView style={styles.content}>{body}</BottomSheetView>
+      )}
     </BottomSheet>
   );
 }
@@ -200,6 +227,16 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     lineHeight: scaleFontSize(26),
     color: colors.textHeading,
+    marginBottom: 16,
+  },
+  titleWithKicker: {
+    marginBottom: 2,
+  },
+  kicker: {
+    fontSize: scaleFontSize(14),
+    fontWeight: "500",
+    lineHeight: scaleFontSize(20),
+    color: colors.textSecondary,
     marginBottom: 16,
   },
   inputCard: {
