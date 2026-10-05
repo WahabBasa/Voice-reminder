@@ -85,7 +85,7 @@ import {
 } from "../lib/voiceTake";
 import { deviceClock, submitTypedTake } from "../lib/typedTake";
 import {
-  errorKindForServerCode,
+  failedJobPatch,
   getPendingTake,
   loadPendingTakes,
   newPendingTake,
@@ -99,11 +99,13 @@ import { commitTake, type CommitTakeOutcome, type TakeImportSummary } from "../l
 import {
   abandonOrphanBlob,
   cancelTake,
+  CLIENT_FEATURES,
   configureReconcile,
   discardTake,
   enqueueAllPendingTakes,
   enqueueReconcile,
   retryTake,
+  shouldRetryInCloud,
 } from "../lib/takeReconcile";
 import { watchCreationJob, type CreationJobWatchHandle } from "../lib/creationJobWatch";
 import PendingTakeCard, { usePendingTakes } from "../components/PendingTakeCard";
@@ -1107,13 +1109,19 @@ export default function HomeScreen() {
           return;
         }
         if (job.status === "failed") {
-          const errorKind = errorKindForServerCode(job.errorCode);
-          creationBreadcrumb("job_failed", errorKind);
+          // A device transcript the server did not understand gets one more
+          // try in the cloud (OLD-133). Reconciliation runs it, single-flight
+          // per take, and the card keeps shimmering until it lands.
+          const current = getPendingTake(creationId);
+          if (current && shouldRetryInCloud(current, job)) {
+            creationBreadcrumb("device_not_understood_cloud_retry");
+            enqueueReconcile(creationId);
+            return;
+          }
+          const patch = failedJobPatch(job);
+          creationBreadcrumb("job_failed", patch.errorKind);
           dropCreationRun(creationId);
-          await updatePendingTake(creationId, "failed", {
-            errorKind,
-            ...(job.errorCode ? { serverErrorCode: job.errorCode } : {}),
-          });
+          await updatePendingTake(creationId, "failed", patch);
           return;
         }
         if (job.status === "cancelled") {
@@ -1183,7 +1191,8 @@ export default function HomeScreen() {
           localDate: take.localDate,
           localTime: take.localTime,
           timezone: take.timezone,
-        });
+          clientFeatures: CLIENT_FEATURES,
+        } as any);
         creationBreadcrumb("job_begun");
 
         const processing = await updatePendingTake(creationId, "processing", {
@@ -1211,6 +1220,9 @@ export default function HomeScreen() {
    * begin the job from the transcript and open the same subscription the cloud
    * path uses. A begin that fails is a plain network failure — the card says so
    * and reconciliation/retry falls the take back to the cloud upload path.
+   * The recording stays on disk after a device begin: the cloud retry for a
+   * transcript the server did not understand (OLD-133) uploads it. The import or
+   * a discard deletes it, as on the cloud path.
    */
   const beginDeviceTake = useCallback(
     async (take: PendingTake, stt: DeviceSttSuccess) => {
@@ -1244,6 +1256,7 @@ export default function HomeScreen() {
           localDate: take.localDate,
           localTime: take.localTime,
           timezone: take.timezone,
+          clientFeatures: CLIENT_FEATURES,
         } as any);
         creationBreadcrumb("job_begun_device");
 

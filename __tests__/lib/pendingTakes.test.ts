@@ -15,9 +15,11 @@ import {
   __resetPendingTakes,
   canTransition,
   errorKindForServerCode,
+  failedJobPatch,
   getPendingTake,
   getPendingTakesSnapshot,
   hasLoadedPendingTakes,
+  isRecordAgainDetail,
   isTerminalPhase,
   loadPendingTakes,
   missingRecordingOutcome,
@@ -167,6 +169,27 @@ describe("transitionTake", () => {
     expect(next?.phase).toBe("uploading");
   });
 
+  it("clears the server's detail with it, but never the cloud-retry flag", () => {
+    const failed = take({
+      phase: "failed",
+      errorKind: "unparseable",
+      serverErrorCode: "unparseable",
+      serverErrorDetail: "unsupported_language",
+      detectedLanguage: "sv",
+      cloudRetried: true,
+    });
+
+    const next = transitionTake(failed, "processing");
+
+    expect(next).not.toHaveProperty("serverErrorDetail");
+    expect(next).not.toHaveProperty("detectedLanguage");
+    expect(next?.cloudRetried).toBe(true);
+  });
+
+  it("lets a transcribed device take go back to processing for its cloud retry", () => {
+    expect(canTransition("transcribed", "processing")).toBe(true);
+  });
+
   it("defaults its patch, so a bare phase move is legal", () => {
     expect(transitionTake(take(), "cancelling")?.phase).toBe("cancelling");
   });
@@ -209,6 +232,41 @@ describe("errorKindForServerCode", () => {
     expect(errorKindForServerCode("stt_failed")).toBe("server");
     expect(errorKindForServerCode("internal")).toBe("server");
     expect(errorKindForServerCode(undefined)).toBe("server");
+  });
+});
+
+describe("failedJobPatch (OLD-133)", () => {
+  it("carries the server's detail and the language it heard", () => {
+    expect(
+      failedJobPatch({
+        errorCode: "unparseable",
+        errorDetail: "unsupported_language",
+        detectedLanguage: "sv",
+      })
+    ).toEqual({
+      errorKind: "unparseable",
+      serverErrorCode: "unparseable",
+      serverErrorDetail: "unsupported_language",
+      detectedLanguage: "sv",
+    });
+  });
+
+  it("is exactly the old patch for an older server that sends neither", () => {
+    expect(failedJobPatch({ errorCode: "unparseable" })).toEqual({
+      errorKind: "unparseable",
+      serverErrorCode: "unparseable",
+    });
+    expect(failedJobPatch({})).toEqual({ errorKind: "server" });
+  });
+});
+
+describe("isRecordAgainDetail", () => {
+  it("is the three details a new recording fixes, and nothing else", () => {
+    expect(isRecordAgainDetail("not_understood")).toBe(true);
+    expect(isRecordAgainDetail("no_time")).toBe(true);
+    expect(isRecordAgainDetail("unsupported_language")).toBe(true);
+    expect(isRecordAgainDetail("something_new")).toBe(false);
+    expect(isRecordAgainDetail(undefined)).toBe(false);
   });
 });
 

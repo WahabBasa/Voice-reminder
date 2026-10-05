@@ -36,6 +36,22 @@ export type PendingPhase =
 
 export type PendingErrorKind = "network" | "unparseable" | "server" | "cap_unverified";
 
+/**
+ * Why the server could not use the sentence (OLD-130), sent beside
+ * `errorCode: "unparseable"` by a server that knows `guard_v1`. The take stores
+ * it as a plain string, because an older or newer server may send something
+ * else. The card acts only on these three.
+ */
+export type ServerErrorDetail = "not_understood" | "no_time" | "unsupported_language";
+
+/**
+ * The details that mean "this sentence will not work, say another one": the
+ * card's retry opens the recorder instead of re-running the same audio.
+ */
+export function isRecordAgainDetail(detail: string | undefined): detail is ServerErrorDetail {
+  return detail === "not_understood" || detail === "no_time" || detail === "unsupported_language";
+}
+
 export type PendingTake = {
   creationId: string;
   phase: PendingPhase;
@@ -56,6 +72,16 @@ export type PendingTake = {
   fragileUri?: boolean;
   audioStorageId?: string;
   serverErrorCode?: string;
+  /** The server's reason beside `serverErrorCode` (OLD-130). Absent from an older server. */
+  serverErrorDetail?: string;
+  /** The ISO 639-1 language the server heard, for the unsupported-language copy. */
+  detectedLanguage?: string;
+  /**
+   * Set when a device take the server did not understand is handed to the
+   * cloud for its one automatic retry (OLD-133), and never cleared. This flag
+   * stops a reconcile pass after a kill from retrying the take a second time.
+   */
+  cloudRetried?: boolean;
   /** The device clock AT STOP-TAP. The import builds rows against this, not "now" (C14). */
   localDate: string;
   localTime: string;
@@ -76,7 +102,10 @@ const NEXT_PHASES: Record<PendingPhase, readonly PendingPhase[]> = {
   // to land anywhere the worker has already reached.
   uploading: ["processing", "transcribed", "committing", "failed", "cancelling"],
   processing: ["transcribed", "committing", "failed", "cancelling"],
-  transcribed: ["committing", "failed", "cancelling"],
+  // A device transcript the server could not understand goes back to
+  // `processing` for its one cloud retry (OLD-133), without showing a failed
+  // card on the way.
+  transcribed: ["processing", "committing", "failed", "cancelling"],
   committing: ["failed", "cancelling"],
   // `failed` is retryable-terminal, exactly like the server's own: every retry
   // dispatch in §2.6 re-enters the pipeline from here.
@@ -113,6 +142,9 @@ export type PendingPatch = {
   deviceSttLocale?: string;
   errorKind?: PendingErrorKind;
   serverErrorCode?: string;
+  serverErrorDetail?: string;
+  detectedLanguage?: string;
+  cloudRetried?: boolean;
   audioStorageId?: string;
   recordingUri?: string;
   fragileUri?: boolean;
@@ -137,6 +169,8 @@ export function transitionTake(
   if (phase !== "failed") {
     delete next.errorKind;
     delete next.serverErrorCode;
+    delete next.serverErrorDetail;
+    delete next.detectedLanguage;
   }
   return next;
 }
@@ -203,6 +237,24 @@ export function missingRecordingOutcome(
 export function errorKindForServerCode(code: string | undefined): PendingErrorKind {
   if (code === "unparseable" || code === "parse_failed") return "unparseable";
   return "server";
+}
+
+/**
+ * Everything a failed job tells the card, as one patch. The detail and the
+ * language ride only when the server sent them, so an older server's failure
+ * persists exactly as it did before OLD-133.
+ */
+export function failedJobPatch(job: {
+  errorCode?: string;
+  errorDetail?: string;
+  detectedLanguage?: string;
+}): PendingPatch {
+  return {
+    errorKind: errorKindForServerCode(job.errorCode),
+    ...(job.errorCode ? { serverErrorCode: job.errorCode } : {}),
+    ...(job.errorDetail ? { serverErrorDetail: job.errorDetail } : {}),
+    ...(job.detectedLanguage ? { detectedLanguage: job.detectedLanguage } : {}),
+  };
 }
 
 // ─── Persistence + snapshot store ───────────────────────────────────────────

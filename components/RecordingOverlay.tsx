@@ -20,7 +20,7 @@ import {
   GestureHandlerRootView,
 } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import * as Sentry from "@sentry/react-native";
 import { colors, scaleFontSize } from "../lib/theme";
 import AppIcon from "./AppIcon";
@@ -35,6 +35,10 @@ import {
 } from "../lib/audio";
 import { createTraceId, perfLog } from "../lib/perf";
 import { concentricCardRadius } from "../lib/screenCorners";
+import { getDeviceLocales, resolveVoiceLocale } from "../lib/deviceStt";
+import { isVRSpeechAvailable } from "../lib/vrSpeech";
+import { listeningLabel } from "../lib/languageNames";
+import { useSettingsStore } from "../lib/settingsStore";
 
 const MAX_RECORDING_SECONDS = 120; // 2 minute cap
 
@@ -87,6 +91,18 @@ export default function RecordingOverlay({
   const insets = useSafeAreaInsets();
   // Corners concentric with the display's own curve at this inset.
   const cardRadius = concentricCardRadius(EDGE_GAP, insets.bottom, 28);
+  // The language the on-device engine will hear, so someone speaking another
+  // one knows why it may not understand them (OLD-133). The locale is the one
+  // the stop-tap hands the engine. Without the engine the cloud transcribes,
+  // and it hears any language, so there is nothing to say.
+  const voiceLanguage = useSettingsStore((s) => s.settings.voiceLanguage);
+  const listeningText = useMemo(
+    () =>
+      visible && isVRSpeechAvailable()
+        ? listeningLabel(resolveVoiceLocale(voiceLanguage, getDeviceLocales()))
+        : null,
+    [visible, voiceLanguage]
+  );
   const [state, setState] = useState<RecordingState>("idle");
   const [duration, setDuration] = useState(0);
   const [permissionDenied, setPermissionDenied] = useState(false);
@@ -415,6 +431,12 @@ export default function RecordingOverlay({
 
               <Text style={styles.title}>New Recording</Text>
 
+              {listeningText && (
+                <Text style={styles.listeningText} numberOfLines={1}>
+                  {listeningText}
+                </Text>
+              )}
+
               {showGateLock && (
                 <View style={styles.gateRow}>
                   <View style={styles.gateLeft}>
@@ -557,6 +579,13 @@ const styles = StyleSheet.create({
     fontSize: scaleFontSize(16),
     fontWeight: "600",
     color: colors.textPrimary,
+    textAlign: "center",
+  },
+  listeningText: {
+    marginTop: 4,
+    fontSize: scaleFontSize(12),
+    color: colors.textTertiary,
+    fontWeight: "400",
     textAlign: "center",
   },
   gateRow: {
