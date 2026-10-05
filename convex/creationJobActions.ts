@@ -28,8 +28,14 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import OpenAI from "openai";
-import { buildSystemPrompt, planRemindersFromRawParse } from "./actions";
-import { MAX_EVERY_N_DAYS, validateCreationPlans } from "./creationValidate";
+import { buildSystemPrompt, planRemindersFromRawParse, planTakeFromRawParse } from "./actions";
+import {
+  GUARD_V1,
+  MAX_EVERY_N_DAYS,
+  guardTake,
+  validateCreationPlans,
+  type GuardDetail,
+} from "./creationValidate";
 import { transcribeAudio, SttError, type SttPerf } from "./stt";
 import { extractParseUsage } from "./parseUsage";
 import type { scheduleFields } from "./schema";
@@ -110,6 +116,14 @@ type ErrorCode = "storage_missing" | "stt_failed" | "parse_failed" | "unparseabl
 
 type PlannedReminder = ReturnType<typeof planRemindersFromRawParse>[number];
 
+/** One parse, as the worker carries it to the gates. */
+type ParsedTake = {
+  plans: PlannedReminder[];
+  /** The guard's envelope fields; both undefined on a take without guard_v1. */
+  understood: boolean | undefined;
+  language: string | undefined;
+};
+
 // ─── plan → row ─────────────────────────────────────────────────────────────
 
 /**
@@ -153,6 +167,9 @@ function toCommitPlan(plan: PlannedReminder) {
     // Scheduling inputs, not columns: `commit` strips these off before insert.
     ttsText: plan.description,
     preTtsText: plan.preTtsText || undefined,
+
+    // The spoken language (OLD-130), for every take that reported one.
+    lang: plan.lang,
   };
 }
 
@@ -218,14 +235,17 @@ async function failJob(
   ctx: ActionCtx,
   args: { jobId: Id<"creationJobs">; generation: number },
   errorCode: ErrorCode,
-  perf: WorkerPerf
+  perf: WorkerPerf,
+  // The guard's reason (OLD-130). Only ever passed for a guard_v1 take, so
+  // every other failure writes exactly the patch it always has.
+  guard?: { errorDetail: GuardDetail; detectedLanguage?: string }
 ): Promise<void> {
   try {
     await ctx.runMutation(internal.creationJobs.casPatch, {
       jobId: args.jobId,
       generation: args.generation,
       expectStatus: ["pending", "transcribed"],
-      patch: { status: "failed", errorCode, perf },
+      patch: { status: "failed", errorCode, perf, ...(guard ?? {}) },
     });
   } catch (e) {
     console.error("[VR] creation job: could not record failure:", e);
@@ -291,13 +311,18 @@ async function transcribeRecording(
  * Step 5: the same parse call and the same planner the fast path runs
  * (convex/actions.ts createTakeWithDeferredAudio), against the user's own clock
  * snapshot rather than this container's UTC one (OLD-120).
+ *
+ * A guard_v1 take (OLD-130) gets the guard's prompt and planner instead: the
+ * model may answer "not understood" with no reminders, and that comes back as
+ * an empty take for the guard to name rather than as `parse_failed`.
  */
 async function parseTake(
   job: { localDate: string; localTime: string; timezone: string },
   transcript: string,
   perf: WorkerPerf,
-  traceId: string
-): Promise<StageResult<PlannedReminder[]>> {
+  traceId: string,
+  guard: boolean
+): Promise<StageResult<ParsedTake>> {
   const tParse = Date.now();
   try {
     const openrouter = new OpenAI({
@@ -321,7 +346,7 @@ async function parseTake(
             currentDayOfWeek,
             currentTime: job.localTime,
             timezone: job.timezone,
-          }),
+          }, { guard }),
         },
         { role: "user", content: transcript },
       ],
@@ -330,17 +355,24 @@ async function parseTake(
     const rawGptResponse = completion.choices[0].message.content || "{}";
     // One take can hold several reminders (OLD-93); a single-reminder take is
     // an array of one.
-    const plans = planRemindersFromRawParse(rawGptResponse, {
+    const planContext = {
       transcript,
       currentTime: job.localTime,
       currentDate: job.localDate,
       timezone: job.timezone,
-    });
+    };
+    const take: ParsedTake = guard
+      ? planTakeFromRawParse(rawGptResponse, planContext)
+      : {
+          plans: planRemindersFromRawParse(rawGptResponse, planContext),
+          understood: undefined,
+          language: undefined,
+        };
     perf.parseMs = Date.now() - tParse;
     const usage = extractParseUsage((completion as { usage?: unknown }).usage);
     Object.assign(perf, usage);
     logParsePerf(traceId, "job", perf.parseMs, usage);
-    return { ok: true, value: plans };
+    return { ok: true, value: take };
   } catch (e) {
     perf.parseMs = Date.now() - tParse;
     console.error("[VR] creation job: parse failed:", e);
@@ -445,18 +477,40 @@ export const run = internalAction({
     if (milestone.result !== "applied") return null;
 
     // 5. Transcript → plans.
-    const parsed = await parseTake(job, transcript, perf, job.creationId);
+    const guard = job.clientFeatures?.includes(GUARD_V1) === true;
+    const parsed = await parseTake(job, transcript, perf, job.creationId, guard);
     if (!parsed.ok) {
       await failJob(ctx, args, parsed.code, perf);
       logCreationJobPerf(job.creationId, args.generation, "failed", perf);
       return null;
     }
 
+    // 5b. The guard (OLD-130), for a client that opted in: not a reminder, a
+    //     language Remi cannot speak, or a one-off with no time said. Each
+    //     fails as the `unparseable` every client already handles, plus the
+    //     reason a new client can show. Content-free log: no transcript.
+    if (guard) {
+      const verdict = guardTake(parsed.value);
+      if (!verdict.ok) {
+        console.error(
+          `[VR] creation job: guard rejected — ${verdict.detail}: ${verdict.reason}`
+        );
+        await failJob(ctx, args, "unparseable", perf, {
+          errorDetail: verdict.detail,
+          ...(verdict.detectedLanguage !== undefined
+            ? { detectedLanguage: verdict.detectedLanguage }
+            : {}),
+        });
+        logCreationJobPerf(job.creationId, args.generation, "failed", perf);
+        return null;
+      }
+    }
+
     // 6. The strict gate. All N are checked before anything is written, and one
     //    bad item fails the whole take rather than importing half of it. The
     //    one repair made on the way in is the every-N-days cap — see
     //    capEveryNDays; the capped plans are what is validated AND committed.
-    const plans = parsed.value.map(capEveryNDays);
+    const plans = parsed.value.plans.map(capEveryNDays);
     const verdict = validateCreationPlans(plans, {
       timezone: job.timezone,
       now: Date.now(),

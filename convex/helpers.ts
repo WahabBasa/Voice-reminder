@@ -45,6 +45,61 @@ MULTIPLE REMINDERS IN ONE REQUEST:
 - Never merge distinct tasks into one reminder. Each entry gets its own title, description, time, and frequency.
 - Never SPLIT one task across entries either. The SAME task at several times is ONE entry with several "times" — "my pills at 8 and 9" is one reminder, not two.`;
 
+// ─── The guard (OLD-130) ────────────────────────────────────────────────────
+//
+// Pieces of the parse prompt. Every client's prompt carries the `lang` field;
+// only a creation job begun with the "guard_v1" client feature gets the rest,
+// which lets the model say "this is not a reminder" and "no time was said"
+// instead of inventing both. All static text — buildSystemPrompt places them
+// above CURRENT CONTEXT, so they cache like the rest of the prompt.
+
+// One field of the per-reminder JSON format, for every client. What the line
+// will later be voiced in (reminders.lang).
+export const LANG_FIELD_LINE = `"lang": "ISO 639-1 code of the language the user spoke this reminder in, lowercase (e.g. \\"en\\", \\"ar\\")",`;
+
+// Guard only: one more per-reminder field, rendered right under "times".
+export const GUARD_TIME_SPOKEN_FIELD_LINE = `"timeSpoken": true | false (true only if the user said a clock time, a part of the day like "tonight", or a relative time like "in 20 minutes"; false if you had to pick the time yourself),`;
+
+// The closing default the prompt has always ended on. Guard clients get
+// GUARD_NO_TIME_INSTRUCTION in its place: a one-off nobody gave a time to is
+// rejected, not quietly scheduled for the next minute.
+export const NO_TIME_DEFAULT_INSTRUCTION = "If no time specified, use a reasonable default.";
+export const GUARD_NO_TIME_INSTRUCTION =
+  'If no time specified: a repeating reminder gets a reasonable default time; a one-time reminder gets timeSpoken=false — never invent a time for it.';
+
+// Guard only, appended after MULTI_REMINDER_INSTRUCTION so it can name the
+// envelope that instruction defines.
+export const GUARD_UNDERSTOOD_INSTRUCTION = `
+
+UNDERSTANDING:
+- Add two top-level fields next to "reminders": {"understood": true | false, "language": "ISO 639-1 code of the language the user spoke, lowercase", "reminders": [...]}
+- The input is a speech-to-text transcript and may be misheard. If it is not a request to be reminded of something, is gibberish, or you cannot tell what the task is, return "understood": false and "reminders": []. Never invent a task.
+- A short but clear request ("water at 8", "call mom") IS understood.`;
+
+/**
+ * The guard's top-level answer, read off a raw parse response before any
+ * reminder object is looked at. Every field is undefined when the model left
+ * it out — a response without them is treated exactly as before the guard.
+ * `empty` means the envelope holds an explicit, empty reminders list.
+ */
+export function readParseEnvelope(parsed: unknown): {
+  understood: boolean | undefined;
+  language: unknown;
+  empty: boolean;
+} {
+  if (Array.isArray(parsed)) {
+    return { understood: undefined, language: undefined, empty: parsed.length === 0 };
+  }
+  if (!isPlainObject(parsed)) {
+    return { understood: undefined, language: undefined, empty: false };
+  }
+  return {
+    understood: typeof parsed.understood === "boolean" ? parsed.understood : undefined,
+    language: parsed.language,
+    empty: Array.isArray(parsed.reminders) && parsed.reminders.length === 0,
+  };
+}
+
 /**
  * Ceiling on how many reminders one take may create. A take that asks for more
  * than this is a mis-parse, not a user with a list — and every extra entry

@@ -24,12 +24,18 @@ jest.mock("openai", () => ({
   },
 }));
 
+// The guard's planner (OLD-130). Defaults to an understood take of the same one
+// plan; the guard tests override it per case.
+const mockPlanTake = jest.fn();
+const mockBuildSystemPrompt = jest.fn((..._args: unknown[]) => "SYSTEM PROMPT");
+
 // The parse planner and the prompt builder have their own tests; here they are
 // stubbed so the worker sees one valid plan without a real model call. The plan
 // lives inside the factory because jest.mock is hoisted above the module body.
 jest.mock("../../convex/actions", () => ({
   __esModule: true,
-  buildSystemPrompt: () => "SYSTEM PROMPT",
+  buildSystemPrompt: (...args: unknown[]) => mockBuildSystemPrompt(...args),
+  planTakeFromRawParse: (...args: unknown[]) => mockPlanTake(...args),
   planRemindersFromRawParse: () => [
     {
       title: "Water",
@@ -58,6 +64,7 @@ jest.mock("../../convex/actions", () => ({
       urgency: "routine",
       persistent: false,
       preTtsText: "",
+      lang: "en",
     },
   ],
 }));
@@ -277,5 +284,110 @@ describe("an STT helper failure", () => {
     // Parse never ran, and nothing was committed.
     expect(mockCompletionsCreate).not.toHaveBeenCalled();
     expect(commitOf(ctx)).toBeUndefined();
+  });
+});
+
+describe("the guard (OLD-130)", () => {
+  const waterPlan = () =>
+    (jest.requireMock("../../convex/actions") as any).planRemindersFromRawParse()[0];
+
+  beforeEach(() => {
+    mockPlanTake.mockReset();
+    mockBuildSystemPrompt.mockClear();
+  });
+
+  it("without guard_v1: legacy prompt and planner, and a failure carries no detail", async () => {
+    // The strict gate turns the take away, which a guard job would have named.
+    const { validateCreationPlans } = jest.requireMock("../../convex/creationValidate");
+    (validateCreationPlans as jest.Mock).mockReturnValueOnce({
+      ok: false,
+      index: 0,
+      field: "onceAt",
+      reason: "past",
+    });
+    const ctx = makeCtx(makeJob());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(mockBuildSystemPrompt.mock.calls[0][1]).toEqual({ guard: false });
+    expect(mockPlanTake).not.toHaveBeenCalled();
+    const fail = failOf(ctx);
+    expect(Object.keys(fail.patch).sort()).toEqual(["errorCode", "perf", "status"]);
+    expect(fail.patch.errorCode).toBe("unparseable");
+  });
+
+  it("without guard_v1: lang still reaches the commit", async () => {
+    const ctx = makeCtx(makeJob());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+    expect(commitOf(ctx).plans[0].lang).toBe("en");
+  });
+
+  it("with guard_v1: the guard prompt, and an understood take commits", async () => {
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "sv",
+      plans: [{ ...waterPlan(), lang: "sv" }],
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(mockBuildSystemPrompt.mock.calls[0][1]).toEqual({ guard: true });
+    expect(failOf(ctx)).toBeUndefined();
+    expect(commitOf(ctx).plans[0].lang).toBe("sv");
+  });
+
+  it("not_understood fails as unparseable with the detail and commits nothing", async () => {
+    mockPlanTake.mockReturnValue({ understood: false, language: "en", plans: [] });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    const fail = failOf(ctx);
+    expect(fail.patch).toMatchObject({
+      status: "failed",
+      errorCode: "unparseable",
+      errorDetail: "not_understood",
+    });
+    expect(fail.patch).not.toHaveProperty("detectedLanguage");
+    expect(commitOf(ctx)).toBeUndefined();
+  });
+
+  it("no_time for a one-off with no spoken time", async () => {
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "en",
+      plans: [{ ...waterPlan(), frequency: "once", timeSpoken: false }],
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(failOf(ctx).patch).toMatchObject({ errorCode: "unparseable", errorDetail: "no_time" });
+    expect(commitOf(ctx)).toBeUndefined();
+  });
+
+  it("unsupported_language carries the detected language", async () => {
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "xh",
+      plans: [{ ...waterPlan(), lang: "xh" }],
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(failOf(ctx).patch).toMatchObject({
+      errorCode: "unparseable",
+      errorDetail: "unsupported_language",
+      detectedLanguage: "xh",
+    });
+  });
+
+  it("a parse the guard planner cannot read is still parse_failed, with no detail", async () => {
+    mockPlanTake.mockImplementation(() => {
+      throw new Error("Parse response contained no reminder object");
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    const fail = failOf(ctx);
+    expect(fail.patch.errorCode).toBe("parse_failed");
+    expect(fail.patch).not.toHaveProperty("errorDetail");
   });
 });

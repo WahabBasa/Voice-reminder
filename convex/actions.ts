@@ -59,7 +59,8 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, type Urgency } from "./helpers";
+import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, LANG_FIELD_LINE, GUARD_TIME_SPOKEN_FIELD_LINE, NO_TIME_DEFAULT_INSTRUCTION, GUARD_NO_TIME_INSTRUCTION, GUARD_UNDERSTOOD_INSTRUCTION, readParseEnvelope, type Urgency } from "./helpers";
+import { normalizeLanguageCode } from "./languages";
 import { buildGridSchedule, legacyFieldsFromGrid, normalizeClockTimes, zonedTimeToUtcMs, type GridSchedule } from "./scheduleShape";
 import { transcribeAudio, SttError, type SttPerf } from "./stt";
 import { extractParseUsage } from "./parseUsage";
@@ -202,6 +203,14 @@ type ReminderPlan = {
    */
   explicitDate: boolean;
   explicitTime: boolean;
+  /**
+   * The guard's per-reminder answer (OLD-130): did the user SAY a time, or did
+   * the model pick one? Undefined when the response did not carry the field —
+   * every prompt but the guard's.
+   */
+  timeSpoken: boolean | undefined;
+  /** ISO 639-1 code of the language the reminder was spoken in, when known. */
+  lang: string | undefined;
 };
 
 /**
@@ -271,7 +280,7 @@ function computeOnceAt(
 
 export function buildReminderPlan(
   parsed: Record<string, unknown>,
-  context: PlanContext & { takeSize?: number }
+  context: PlanContext & { takeSize?: number; fallbackLang?: unknown }
 ): ReminderPlan {
   // A leaked banned opener costs the model's phrasing, not the reminder: the
   // title is the stand-in, on the card and aloud. Titles like 'Time to Sleep'
@@ -304,12 +313,17 @@ export function buildReminderPlan(
   // Provenance of the wall clock, for the creation job's gate (see ReminderPlan).
   // A day survives here only when the model named one; a time counts as named
   // whether it arrived as `time` or inside the `times` list, because the grid's
-  // first ring can come from either.
+  // first ring can come from either. When the guard's `timeSpoken` is present
+  // it outranks that (OLD-130): a time the model returned is not one the user
+  // said if the model says it picked it, and only then does the gate's
+  // past-instant rule mean what it says.
+  const timeSpoken = typeof parsed.timeSpoken === "boolean" ? parsed.timeSpoken : undefined;
   const explicitDate = date !== undefined;
-  const explicitTime =
+  const modelNamedTime =
     (typeof parsed.time === "string" && parsed.time !== "") ||
     (Array.isArray(parsed.times) &&
       parsed.times.some((entry) => typeof entry === "string" && entry !== ""));
+  const explicitTime = modelNamedTime && timeSpoken !== false;
 
   // Parse warnings for normalization issues
   let parseWarnings: string[] = [];
@@ -470,6 +484,10 @@ export function buildReminderPlan(
     parseWarnings,
     explicitDate,
     explicitTime,
+    timeSpoken,
+    // The reminder's own answer first; the take's `language` stands in for a
+    // reminder that left it out.
+    lang: normalizeLanguageCode(parsed.lang) ?? normalizeLanguageCode(context.fallbackLang),
   };
 }
 
@@ -486,11 +504,50 @@ export function planRemindersFromRawParse(
   rawGptResponse: string,
   context: PlanContext
 ): ReminderPlan[] {
-  const parsed = JSON.parse(rawGptResponse);
+  return planParsedReminders(JSON.parse(rawGptResponse), context);
+}
+
+function planParsedReminders(parsed: unknown, context: PlanContext): ReminderPlan[] {
   const items = normalizeParsedReminders(parsed);
+  const fallbackLang = readParseEnvelope(parsed).language;
   // takeSize is what tells each item whether the transcript is about it alone
   // (coerceFrequency) — a take of two must not share one item's "weekdays".
-  return items.map((item) => buildReminderPlan(item, { ...context, takeSize: items.length }));
+  return items.map((item) =>
+    buildReminderPlan(item, { ...context, takeSize: items.length, fallbackLang })
+  );
+}
+
+/** What the guard (OLD-130) needs from one parse response. */
+export type ParsedTake = {
+  /** The model's own verdict; undefined when it did not give one. */
+  understood: boolean | undefined;
+  /** ISO 639-1 code of the take's language, when the model named a real one. */
+  language: string | undefined;
+  /** Empty when the model said it did not understand, or returned no reminders. */
+  plans: ReminderPlan[];
+};
+
+/**
+ * The guard's read of a parse response: the envelope's verdict plus the plans.
+ *
+ * Unlike planRemindersFromRawParse, an envelope that says "not understood" or
+ * holds an empty reminders list is an ANSWER here, not a broken response — it
+ * comes back with no plans so the guard can name it, instead of throwing into
+ * the generic parse failure. Anything else is planned exactly as that function
+ * plans it, and junk still throws.
+ */
+export function planTakeFromRawParse(rawGptResponse: string, context: PlanContext): ParsedTake {
+  const parsed = JSON.parse(rawGptResponse);
+  const envelope = readParseEnvelope(parsed);
+  const language = normalizeLanguageCode(envelope.language);
+  if (envelope.understood === false || envelope.empty) {
+    return { understood: envelope.understood, language, plans: [] };
+  }
+  return {
+    understood: envelope.understood,
+    language,
+    plans: planParsedReminders(parsed, context),
+  };
 }
 
 // Shared helper: build system prompt for GPT. Exported for the live-model
@@ -518,7 +575,13 @@ export function planRemindersFromRawParse(
  *      two of those left since OLD-108 (description, preDescription); the
  *      replay-variant field that was the third is gone.
  */
-export function buildSystemPrompt(context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string }): string {
+export function buildSystemPrompt(
+  context: { currentDate: string; currentDayOfWeek: string; currentTime: string; timezone: string },
+  options: { guard?: boolean } = {}
+): string {
+  // The guard (OLD-130) is opt-in per creation job ("guard_v1"). Without it the
+  // prompt is the one every shipped build has always been sent, plus `lang`.
+  const guard = options.guard === true;
   return `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
 
 ${SPOKEN_LINE_RULES_SECTION}
@@ -528,7 +591,8 @@ Return exactly this format:
   "title": "the action plus the distinguishing detail the user gave — the object and its place / person / subject / qualifier, e.g. 'Take bottle out of fridge', 'Call mom about the flight', 'Pay July electricity bill' (aim 3-6 words; never begin with 'Reminder', 'It is time', 'Time to', or Arabic 'تذكير' / 'حان وقت' — the title names the thing, it never announces itself; see TITLE RULES)",
   "description": "${buildDescriptionInstruction()}",
   "time": "HH:MM in 24-hour format (the FIRST of \\"times\\")",
-  "times": ["HH:MM", ...] (EVERY clock time this one reminder rings at — see SCHEDULE RULES),
+  "times": ["HH:MM", ...] (EVERY clock time this one reminder rings at — see SCHEDULE RULES),${guard ? `
+  ${GUARD_TIME_SPOKEN_FIELD_LINE}` : ""}
   "date": "YYYY-MM-DD format (only for one-time reminders on a specific day)",
   "frequency": "once" | "daily" | "custom" | "everyNDays" | "interval",
   "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] (only if frequency is custom),
@@ -542,6 +606,7 @@ Return exactly this format:
   "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
   "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ${URGENCY_RULES_HEADING}),
   "persistent": boolean (true only for critical tasks, see ${URGENCY_RULES_HEADING}),
+  ${LANG_FIELD_LINE}
   "emoji": "ONE emoji that best fits the reminder (see EMOJI RULES)"
 }
 
@@ -631,8 +696,8 @@ ${buildPreReminderInstruction()}
 
 ${buildReplayTierInstruction()}
 
-If no time specified, use a reasonable default.
-If no frequency specified, assume "once".${MULTI_REMINDER_INSTRUCTION}
+${guard ? GUARD_NO_TIME_INSTRUCTION : NO_TIME_DEFAULT_INSTRUCTION}
+If no frequency specified, assume "once".${MULTI_REMINDER_INSTRUCTION}${guard ? GUARD_UNDERSTOOD_INSTRUCTION : ""}
 
 CURRENT CONTEXT:
 - Current date: ${context.currentDate} (${context.currentDayOfWeek})

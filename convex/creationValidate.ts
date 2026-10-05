@@ -18,7 +18,11 @@
  * new shape by hand — until then it rejects it, which is the safe direction.
  *
  * Pure: no Convex, no network, no ambient clock (`context.now` is injected).
+ * The one import is the language table (convex/languages.ts), which is data
+ * the guard reads, not a builder that repairs anything.
  */
+
+import { isSupportedLineLanguage, normalizeLanguageCode } from "./languages";
 
 /** A title is a card label, not an essay. */
 export const MAX_TITLE_LENGTH = 200;
@@ -179,6 +183,90 @@ export function validateCreationPlans(
     if (!verdict.ok) return verdict;
   }
   return OK;
+}
+
+// ─── The guard (OLD-130) ────────────────────────────────────────────────────
+
+/**
+ * The client feature a creation job is begun with to opt into the guard. A job
+ * without it — every take from a build that predates the guard — never reaches
+ * `guardTake` and fails exactly as it always has.
+ */
+export const GUARD_V1 = "guard_v1";
+
+/** Why the guard turned a take away. Rides on the job row as `errorDetail`. */
+export type GuardDetail = "not_understood" | "no_time" | "unsupported_language";
+
+export type GuardVerdict =
+  | { ok: true }
+  | {
+      ok: false;
+      detail: GuardDetail;
+      /** ISO 639-1, set only (and always) for `unsupported_language`. */
+      detectedLanguage?: string;
+      /** For logs — never user-facing, never the transcript. */
+      reason: string;
+    };
+
+/**
+ * Is this take a reminder request at all, in a language Remi can speak, with a
+ * time for every one-off? Runs before validateCreationPlans, so a take that
+ * fails here gets a reason the user can act on rather than the generic
+ * `unparseable`.
+ *
+ * The checks, in order:
+ *   1. the model said it did not understand, or returned no reminders →
+ *      `not_understood`;
+ *   2. the take's language, or any reminder's, cannot be voiced →
+ *      `unsupported_language`;
+ *   3. a one-off whose time the user never said → `no_time`. A repeating
+ *      reminder ("every day drink water") keeps the default time it has always
+ *      had; only a one-off without a time is a guess about WHEN that the app
+ *      would otherwise ring a minute from now.
+ *
+ * Absent fields never reject: a response that did not carry `understood`,
+ * `language`/`lang` or `timeSpoken` goes on to the strict gate as before.
+ */
+export function guardTake(take: {
+  understood: boolean | undefined;
+  language: unknown;
+  plans: readonly unknown[];
+}): GuardVerdict {
+  if (take.understood === false) {
+    return { ok: false, detail: "not_understood", reason: "model did not understand the take" };
+  }
+  if (take.plans.length === 0) {
+    return { ok: false, detail: "not_understood", reason: "take produced no reminders" };
+  }
+
+  const languages = [
+    take.language,
+    ...take.plans.map((plan) => (isPlainObject(plan) ? plan.lang : undefined)),
+  ];
+  for (const language of languages) {
+    // Something that is not an ISO 639-1 code ("english", "unknown") says
+    // nothing either way, and is not a reason to refuse the user.
+    const code = normalizeLanguageCode(language);
+    if (code === undefined) continue;
+    if (!isSupportedLineLanguage(code)) {
+      return {
+        ok: false,
+        detail: "unsupported_language",
+        detectedLanguage: code,
+        reason: `language "${code}" cannot be voiced`,
+      };
+    }
+  }
+
+  for (let index = 0; index < take.plans.length; index++) {
+    const plan = take.plans[index];
+    if (!isPlainObject(plan)) continue;
+    if (plan.frequency === "once" && plan.timeSpoken === false) {
+      return { ok: false, detail: "no_time", reason: `plan ${index}: one-off with no time said` };
+    }
+  }
+
+  return { ok: true };
 }
 
 /** One plan. `index` only decorates the failure so the caller can log it. */
