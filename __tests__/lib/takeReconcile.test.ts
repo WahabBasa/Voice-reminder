@@ -21,7 +21,9 @@ import {
   abandonOrphanBlob,
   reconcileIdle,
   retryTake,
+  shouldRetryInCloud,
   startForegroundReconcile,
+  CLIENT_FEATURES,
   type ReconcileDeps,
   type ServerJobStatus,
 } from "../../lib/takeReconcile";
@@ -30,12 +32,15 @@ import {
   getPendingTake,
   loadPendingTakes,
   putPendingTake,
+  updatePendingTake,
   type PendingPhase,
   type PendingTake,
 } from "../../lib/pendingTakes";
 import type { WatchedJob } from "../../lib/creationJobWatch";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppState } from "react-native";
+import fs from "fs";
+import path from "path";
 
 const take = (over: Partial<PendingTake> = {}): PendingTake => ({
   creationId: "t1",
@@ -796,7 +801,11 @@ describe("tapping a failed card", () => {
 
     await retryTake("t1");
 
-    expect(h.calls.retry[0]).toEqual({ deviceId: "device-1", creationId: "t1" });
+    expect(h.calls.retry[0]).toEqual({
+      deviceId: "device-1",
+      creationId: "t1",
+      clientFeatures: ["guard_v1"],
+    });
     expect(getPendingTake("t1")).toMatchObject({ phase: "processing", attempts: 2 });
     expect(h.calls.subscribes).toEqual(["t1"]);
   });
@@ -960,5 +969,405 @@ describe("the foreground listener", () => {
     stop();
     expect(remove).toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+// ─── OLD-133: the guard's client half ───────────────────────────────────────
+
+describe("the cloud-retry decision (OLD-133)", () => {
+  const failedNotUnderstood = job({
+    status: "failed",
+    errorCode: "unparseable",
+    errorDetail: "not_understood",
+  });
+
+  it("retries a device take the server did not understand", () => {
+    expect(shouldRetryInCloud({ sttSource: "device" }, failedNotUnderstood)).toBe(true);
+  });
+
+  it("retries it once: a take already sent to the cloud is not sent again", () => {
+    expect(
+      shouldRetryInCloud({ sttSource: "device", cloudRetried: true }, failedNotUnderstood)
+    ).toBe(false);
+  });
+
+  it("leaves cloud takes, other details and older servers alone", () => {
+    expect(shouldRetryInCloud({ sttSource: "cloud" }, failedNotUnderstood)).toBe(false);
+    expect(shouldRetryInCloud({}, failedNotUnderstood)).toBe(false);
+    for (const errorDetail of ["no_time", "unsupported_language", undefined]) {
+      expect(
+        shouldRetryInCloud(
+          { sttSource: "device" },
+          job({ status: "failed", errorCode: "unparseable", errorDetail })
+        )
+      ).toBe(false);
+    }
+    expect(
+      shouldRetryInCloud(
+        { sttSource: "device" },
+        job({ status: "pending", errorDetail: "not_understood" })
+      )
+    ).toBe(false);
+  });
+});
+
+describe("the retry dispatch for a sentence the server could not use (OLD-133)", () => {
+  for (const errorDetail of ["not_understood", "no_time", "unsupported_language"]) {
+    it(`offers a new recording for ${errorDetail}, never the same audio again`, () => {
+      for (const server of ["failed", null] as const) {
+        expect(
+          decideRetryAction({
+            errorKind: "unparseable",
+            hasStorageId: true,
+            hasRecording: true,
+            server,
+            serverErrorCode: "unparseable",
+            errorDetail,
+          })
+        ).toBe("record_again");
+      }
+    });
+  }
+
+  it("keeps today's server retry for an older server, or a detail this build does not know", () => {
+    for (const errorDetail of [undefined, "something_new"]) {
+      expect(
+        decideRetryAction({
+          errorKind: "unparseable",
+          hasStorageId: true,
+          hasRecording: true,
+          server: "failed",
+          serverErrorCode: "unparseable",
+          errorDetail,
+        })
+      ).toBe("server_retry");
+    }
+  });
+
+  it("opens the recorder from the card's tap and drops the dead take", async () => {
+    const h = setup();
+    h.jobs.set(
+      "t1",
+      job({ status: "failed", errorCode: "unparseable", errorDetail: "no_time" })
+    );
+    await seed(
+      take({
+        phase: "failed",
+        errorKind: "unparseable",
+        serverErrorCode: "unparseable",
+        serverErrorDetail: "no_time",
+        audioStorageId: "st1",
+      })
+    );
+
+    await retryTake("t1");
+
+    expect(h.calls.retry).toEqual([]);
+    expect(h.calls.recordAgain).toEqual(["t1"]);
+    expect(h.calls.discard[0]).toMatchObject({ creationId: "t1" });
+    expect(getPendingTake("t1")).toBeUndefined();
+  });
+});
+
+describe("the automatic cloud retry (OLD-133)", () => {
+  const deviceTake = (over: Partial<PendingTake> = {}) =>
+    take({
+      phase: "processing",
+      sttSource: "device",
+      transcript: "kilometer got lead",
+      deviceSttLocale: "en-US",
+      attempts: 0,
+      ...over,
+    });
+  const notUnderstood = (over: Partial<WatchedJob> = {}) =>
+    job({ status: "failed", errorCode: "unparseable", errorDetail: "not_understood", ...over });
+
+  for (const phase of ["processing", "transcribed", "failed"] as const) {
+    it(`uploads the recording and re-runs the job in the cloud, from ${phase}`, async () => {
+      const h = setup();
+      h.jobs.set("t1", notUnderstood());
+      await seed(deviceTake({ phase }));
+
+      enqueueReconcile("t1");
+      await reconcileIdle();
+
+      expect(h.calls.uploads).toEqual(["t1"]);
+      expect(h.calls.retry).toEqual([
+        {
+          deviceId: "device-1",
+          creationId: "t1",
+          newStorageId: "st-new",
+          clientFeatures: ["guard_v1"],
+        },
+      ]);
+      // Still working as far as the card can tell: no failure on it.
+      expect(getPendingTake("t1")).toMatchObject({
+        phase: "processing",
+        sttSource: "cloud",
+        audioStorageId: "st-new",
+        cloudRetried: true,
+        attempts: 1,
+      });
+      expect(getPendingTake("t1")?.errorKind).toBeUndefined();
+      expect(h.calls.subscribes).toEqual(["t1"]);
+    });
+  }
+
+  it("runs once even when the failure push and a foreground pass ask together", async () => {
+    const h = setup();
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+
+    enqueueReconcile("t1");
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.uploads).toEqual(["t1"]);
+    expect(h.calls.retry).toHaveLength(1);
+  });
+
+  it("shows the error when the cloud attempt fails too, and does not retry again", async () => {
+    const h = setup();
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    // The cloud run fails the same way.
+    h.jobs.set("t1", notUnderstood({ generation: 2 }));
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.uploads).toEqual(["t1"]);
+    expect(h.calls.retry).toHaveLength(1);
+    expect(getPendingTake("t1")).toMatchObject({
+      phase: "failed",
+      errorKind: "unparseable",
+      serverErrorCode: "unparseable",
+      serverErrorDetail: "not_understood",
+    });
+  });
+
+  it("does not retry again after a kill: the persisted flag wins", async () => {
+    const h = setup();
+    h.jobs.set("t1", notUnderstood());
+    // Killed mid-upload: the flag landed, the server retry never did.
+    await seed(deviceTake({ cloudRetried: true }));
+
+    enqueueAllPendingTakes();
+    await reconcileIdle();
+
+    expect(h.calls.uploads).toEqual([]);
+    expect(h.calls.retry).toEqual([]);
+    expect(getPendingTake("t1")).toMatchObject({
+      phase: "failed",
+      serverErrorDetail: "not_understood",
+    });
+  });
+
+  it("shows the device failure when the recording is gone", async () => {
+    const h = setup({ uploadRecording: async () => null });
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.retry).toEqual([]);
+    expect(getPendingTake("t1")).toMatchObject({
+      phase: "failed",
+      errorKind: "unparseable",
+      serverErrorDetail: "not_understood",
+      cloudRetried: true,
+    });
+  });
+
+  it("shows the device failure when the upload throws", async () => {
+    const h = setup({
+      uploadRecording: async () => {
+        throw new Error("offline");
+      },
+    });
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.retry).toEqual([]);
+    expect(h.calls.stages).toContain("cloud_retry_upload_failed");
+    expect(getPendingTake("t1")).toMatchObject({ phase: "failed", cloudRetried: true });
+  });
+
+  it("shows the device failure when the server retry throws", async () => {
+    const h = setup({
+      serverRetry: async () => {
+        throw new Error("offline");
+      },
+    });
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.subscribes).toEqual([]);
+    expect(getPendingTake("t1")).toMatchObject({
+      phase: "failed",
+      serverErrorDetail: "not_understood",
+    });
+  });
+
+  it("shows the device failure when the server's attempt cap is spent", async () => {
+    const h = setup({
+      serverRetry: async (args) => {
+        h.calls.retry.push(args);
+        return { status: "failed", capReached: true };
+      },
+    });
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.retry).toHaveLength(1);
+    expect(h.calls.subscribes).toEqual([]);
+    expect(getPendingTake("t1")).toMatchObject({ phase: "failed" });
+  });
+
+  it("hands the blob back when the user cancelled during the upload", async () => {
+    const h = setup({
+      uploadRecording: async (t) => {
+        await updatePendingTake(t.creationId, "cancelling");
+        return "st-new";
+      },
+    });
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.retry).toEqual([]);
+    expect(h.calls.cancel[0]).toMatchObject({ orphanStorageId: "st-new" });
+    // The cancel stands; the failure did not overwrite it.
+    expect(getPendingTake("t1")?.phase).toBe("cancelling");
+  });
+
+  it("leaves a cancel alone when the upload then fails", async () => {
+    const h = setup({
+      uploadRecording: async (t) => {
+        await updatePendingTake(t.creationId, "cancelling");
+        return null;
+      },
+    });
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.retry).toEqual([]);
+    expect(getPendingTake("t1")?.phase).toBe("cancelling");
+  });
+
+  it("shows the failure straight away when the take can no longer be moved", async () => {
+    const h = setup();
+    h.jobs.set("t1", notUnderstood());
+    // committing → processing is not an edge, so the retry cannot start.
+    await seed(deviceTake({ phase: "committing" }));
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.uploads).toEqual([]);
+    expect(getPendingTake("t1")).toMatchObject({
+      phase: "failed",
+      serverErrorDetail: "not_understood",
+    });
+  });
+
+  it("persists the detail and the language on a failure it does not retry", async () => {
+    const h = setup();
+    h.jobs.set(
+      "t1",
+      job({
+        status: "failed",
+        errorCode: "unparseable",
+        errorDetail: "unsupported_language",
+        detectedLanguage: "sv",
+      })
+    );
+    await seed(deviceTake());
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.uploads).toEqual([]);
+    expect(getPendingTake("t1")).toMatchObject({
+      phase: "failed",
+      errorKind: "unparseable",
+      serverErrorDetail: "unsupported_language",
+      detectedLanguage: "sv",
+    });
+  });
+});
+
+describe("clientFeatures on every begin (OLD-133)", () => {
+  it("is guard_v1", () => {
+    expect(CLIENT_FEATURES).toEqual(["guard_v1"]);
+  });
+
+  it("rides a cloud rebegin", async () => {
+    const h = setup();
+    await seed(take({ phase: "processing", audioStorageId: "st1" }));
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.begin[0]).toMatchObject({
+      audioStorageId: "st1",
+      clientFeatures: ["guard_v1"],
+    });
+  });
+
+  it("rides a device rebegin", async () => {
+    const h = setup();
+    await seed(take({ phase: "processing", sttSource: "device", transcript: "buy milk" }));
+
+    enqueueReconcile("t1");
+    await reconcileIdle();
+
+    expect(h.calls.begin[0]).toMatchObject({
+      sttSource: "device",
+      clientFeatures: ["guard_v1"],
+    });
+  });
+
+  it("rides a re-upload retry", async () => {
+    const h = setup();
+    h.jobs.set("t1", job({ status: "failed", errorCode: "storage_missing" }));
+    await seed(take({ phase: "failed", errorKind: "server", audioStorageId: "st1" }));
+
+    await retryTake("t1");
+
+    expect(h.calls.retry[0]).toMatchObject({
+      newStorageId: "st-new",
+      clientFeatures: ["guard_v1"],
+    });
+  });
+
+  it("rides both begin calls on the stop-tap paths in the screen", () => {
+    // The screen's two stop-tap begins (cloud upload, device transcript) cannot
+    // run here without rendering the home screen, so this pins the source.
+    const source = fs.readFileSync(path.join(__dirname, "../../app/index.tsx"), "utf8");
+    const calls = source.split("await beginCreationJob({").slice(1);
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      const args = call.slice(0, call.indexOf(");"));
+      expect(args).toContain("clientFeatures: CLIENT_FEATURES");
+    }
   });
 });

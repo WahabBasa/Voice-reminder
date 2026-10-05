@@ -95,3 +95,57 @@ describe("a take that failed", () => {
     });
   });
 });
+
+describe("a sentence the server could not use (OLD-133)", () => {
+  const unparseable = (serverErrorDetail?: string, detectedLanguage?: string) =>
+    pendingCardContent(
+      { phase: "failed", errorKind: "unparseable", serverErrorDetail, detectedLanguage },
+      LIMIT
+    );
+
+  it("says it did not catch the sentence", () => {
+    expect(unparseable("not_understood").text).toBe("Didn't catch that — tap to record again");
+  });
+
+  it("asks for the time that was missing", () => {
+    expect(unparseable("no_time").text).toBe(
+      "When should I remind you? Tap to record again with a time"
+    );
+  });
+
+  it("names the language Remi does not speak", () => {
+    expect(unparseable("unsupported_language", "sv").text).toBe("Remi doesn't speak Swedish yet");
+  });
+
+  it("falls back to 'this language' when the language cannot be named", () => {
+    expect(unparseable("unsupported_language").text).toBe("Remi doesn't speak this language yet");
+    expect(unparseable("unsupported_language", "zz").text).toBe(
+      "Remi doesn't speak this language yet"
+    );
+  });
+
+  it("keeps today's copy for an older server that sends no detail, or a detail this build does not know", () => {
+    const today = "Couldn't turn that into a reminder — tap to try again";
+    expect(unparseable(undefined).text).toBe(today);
+    expect(unparseable("something_new").text).toBe(today);
+  });
+
+  it("reads the detail only on an unparseable failure", () => {
+    expect(
+      pendingCardContent(
+        { phase: "failed", errorKind: "server", serverErrorDetail: "not_understood" },
+        LIMIT
+      ).text
+    ).toBe("Something went wrong — tap to retry");
+  });
+
+  it("stays a failed card: tappable, swipeable, error tone", () => {
+    expect(unparseable("no_time")).toMatchObject({
+      shimmer: false,
+      tappable: true,
+      swipeToDiscard: true,
+      cancellable: false,
+      tone: "error",
+    });
+  });
+});

@@ -1,4 +1,5 @@
 import { getCapGateBlockContent } from "./usageGate";
+import { languageName } from "./languageNames";
 import type { PendingErrorKind, PendingPhase } from "./pendingTakes";
 
 /**
@@ -37,6 +38,25 @@ const FAILED_COPY: Record<Exclude<PendingErrorKind, "cap_unverified">, string> =
   server: "Something went wrong — tap to retry",
 };
 
+/**
+ * The server's reason for a sentence it could not use (OLD-133). Each line
+ * points at a new recording, because that is what the card's tap now does for
+ * these. A detail this build does not know, or none at all (an older server),
+ * keeps the generic `unparseable` line.
+ */
+function unparseableDetailCopy(detail: string | undefined, detectedLanguage?: string): string | null {
+  switch (detail) {
+    case "not_understood":
+      return "Didn't catch that — tap to record again";
+    case "no_time":
+      return "When should I remind you? Tap to record again with a time";
+    case "unsupported_language":
+      return `Remi doesn't speak ${languageName(detectedLanguage) ?? "this language"} yet`;
+    default:
+      return null;
+  }
+}
+
 const working = (text: string, cancellable = true): PendingCardContent => ({
   text,
   shimmer: true,
@@ -47,16 +67,26 @@ const working = (text: string, cancellable = true): PendingCardContent => ({
 });
 
 export function pendingCardContent(
-  take: { phase: PendingPhase; transcript?: string; errorKind?: PendingErrorKind },
+  take: {
+    phase: PendingPhase;
+    transcript?: string;
+    errorKind?: PendingErrorKind;
+    serverErrorDetail?: string;
+    detectedLanguage?: string;
+  },
   limit: number
 ): PendingCardContent {
   if (take.phase === "failed") {
     // An unresolved entitlement is a failed take like any other — it just gets
     // the sentence the rest of the app already uses for it.
+    const detailCopy =
+      take.errorKind === "unparseable"
+        ? unparseableDetailCopy(take.serverErrorDetail, take.detectedLanguage)
+        : null;
     const text =
       take.errorKind === "cap_unverified"
         ? getCapGateBlockContent("blocked_unverified", limit).statusText
-        : FAILED_COPY[take.errorKind ?? "server"];
+        : detailCopy ?? FAILED_COPY[take.errorKind ?? "server"];
 
     return {
       text,

@@ -35,6 +35,15 @@ export type WatchedJob = {
   generation: number;
   transcript?: string;
   errorCode?: string;
+  /**
+   * Beside `errorCode: "unparseable"`, from a server that knows `guard_v1`
+   * (OLD-130): "not_understood" | "no_time" | "unsupported_language". Typed as
+   * a plain string because an older server never sends it and a newer one may
+   * add values.
+   */
+  errorDetail?: string;
+  /** ISO 639-1, when the server could tell which language it heard. */
+  detectedLanguage?: string;
   reminderIds?: string[];
   perf?: CreationServerPerf;
   updatedAt: number;

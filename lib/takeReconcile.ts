@@ -1,8 +1,9 @@
 import { AppState } from "react-native";
 import {
-  errorKindForServerCode,
+  failedJobPatch,
   getPendingTake,
   getPendingTakesSnapshot,
+  isRecordAgainDetail,
   loadPendingTakes,
   missingRecordingOutcome,
   removePendingTake,
@@ -14,6 +15,37 @@ import {
 import type { WatchedJob } from "./creationJobWatch";
 import type { CommitTakeOutcome } from "./takeCommit";
 import type { SpeechEngine } from "./vrSpeech";
+
+/**
+ * What this client can handle, sent on every call that begins or re-begins a
+ * creation job (OLD-130/133). `guard_v1` tells the server it may fail a
+ * sentence it cannot use with an `errorDetail`, instead of committing a junk
+ * reminder, because this client knows how to show that failure.
+ */
+export const CLIENT_FEATURES: readonly string[] = ["guard_v1"];
+
+/**
+ * The one automatic retry (OLD-133). The on-device engine listens in one
+ * language. When someone speaks another, it can return confident nonsense, and
+ * the server reports `not_understood`. The cloud transcriber handles other
+ * languages, so the take gets one more chance there before the card shows an
+ * error.
+ *
+ * Only once, ever. `cloudRetried` is set before the upload starts and never
+ * cleared, so a second failure, or a reconcile pass after a kill, shows the
+ * error.
+ */
+export function shouldRetryInCloud(
+  take: Pick<PendingTake, "sttSource" | "cloudRetried">,
+  job: Pick<WatchedJob, "status" | "errorDetail">
+): boolean {
+  return (
+    job.status === "failed" &&
+    job.errorDetail === "not_understood" &&
+    take.sttSource === "device" &&
+    take.cloudRetried !== true
+  );
+}
 
 /**
  * Reconciliation (spec §2.5) and the retry dispatch (§2.6).
@@ -115,8 +147,10 @@ export function decideRetryAction(params: {
   hasRecording: boolean;
   server: ServerJobStatus | null;
   serverErrorCode?: string;
+  /** The server's reason for an unusable sentence (OLD-130), if it sent one. */
+  errorDetail?: string;
 }): RetryAction {
-  const { errorKind, hasStorageId, hasRecording, server, serverErrorCode } = params;
+  const { errorKind, hasStorageId, hasRecording, server, serverErrorCode, errorDetail } = params;
 
   // An unresolved entitlement is a LOCAL block on a job that already committed.
   // It re-enters the import; it must never spend a server retry (C13). A job
@@ -130,6 +164,12 @@ export function decideRetryAction(params: {
   if (server === "committed") return "import";
   if (server === "cancelled") return "remove_local";
   if (server === "pending" || server === "transcribed") return "subscribe";
+
+  // The server heard the sentence and could not use it: not understood, no
+  // time in it, or a language Remi does not speak (OLD-133). Running the same
+  // audio again gives the same answer, so the only useful retry is a new
+  // recording.
+  if (isRecordAgainDetail(errorDetail)) return "record_again";
 
   if (server === "failed") {
     // The one failure a reused blob cannot fix: the blob is what went missing.
@@ -161,6 +201,7 @@ export type ReconcileDeps = {
       localDate: string;
       localTime: string;
       timezone: string;
+      clientFeatures: readonly string[];
     } & (
       | { audioStorageId: string }
       | {
@@ -181,6 +222,7 @@ export type ReconcileDeps = {
     deviceId: string;
     creationId: string;
     newStorageId?: string;
+    clientFeatures: readonly string[];
   }) => Promise<{ status: string; capReached?: boolean }>;
   discard: (args: { deviceId: string; creationId: string }) => Promise<{ status: string }>;
   /** Upload this take's recording. Null when the file is gone (D10). */
@@ -317,7 +359,7 @@ async function dispatchTake(take: PendingTake, current: ReconcileDeps): Promise<
       await runImport(take, current, status);
       return;
     case "fail_from_server":
-      await failFromServer(take, job as WatchedJob);
+      await failFromServer(take, job as WatchedJob, current, deviceId);
       return;
     case "subscribe":
       current.subscribe(take);
@@ -357,11 +399,94 @@ async function failLocally(take: PendingTake, errorKind: PendingErrorKind): Prom
   await updatePendingTake(take.creationId, "failed", { errorKind });
 }
 
-async function failFromServer(take: PendingTake, job: WatchedJob): Promise<void> {
-  await updatePendingTake(take.creationId, "failed", {
-    errorKind: errorKindForServerCode(job.errorCode),
-    serverErrorCode: job.errorCode,
+async function failFromServer(
+  take: PendingTake,
+  job: WatchedJob,
+  current: ReconcileDeps,
+  deviceId: string
+): Promise<void> {
+  if (shouldRetryInCloud(take, job)) {
+    await retryInCloud(take, job, current, deviceId);
+    return;
+  }
+  await updatePendingTake(take.creationId, "failed", failedJobPatch(job));
+}
+
+/**
+ * The automatic cloud retry for a device take the server did not understand
+ * (OLD-133). The same job is re-run with the local recording as its source,
+ * through `retry` + `newStorageId`. `begin` would only return the failed job
+ * that already exists.
+ *
+ * The card shimmers "Setting up…" the whole time. If the retry cannot start
+ * (the recording is gone, the upload or the call fails, or the server's
+ * attempt cap is reached), the take shows the device failure it already had.
+ * The flag is persisted first, so nothing here can run twice for one take.
+ */
+async function retryInCloud(
+  take: PendingTake,
+  job: WatchedJob,
+  current: ReconcileDeps,
+  deviceId: string
+): Promise<void> {
+  const creationId = take.creationId;
+  const showFailure = async () => {
+    // A cancel that landed during the retry wins. Its own pass removes the take.
+    if (getPendingTake(creationId)?.phase === "cancelling") return;
+    await updatePendingTake(creationId, "failed", failedJobPatch(job));
+  };
+
+  const marked = await updatePendingTake(creationId, "processing", { cloudRetried: true });
+  if (!marked) {
+    await showFailure();
+    return;
+  }
+  current.onStage?.(creationId, "cloud_retry_start");
+
+  let storageId: string | null = null;
+  try {
+    storageId = await current.uploadRecording(marked);
+  } catch (e) {
+    current.onStage?.(creationId, "cloud_retry_upload_failed", { error: String(e) });
+  }
+  if (!storageId) {
+    await showFailure();
+    return;
+  }
+
+  // The user can cancel from the card while the bytes are in flight. The blob
+  // then belongs to nobody (C4).
+  const live = getPendingTake(creationId);
+  if (!live || live.phase === "cancelling") {
+    await handOrphanBlob(current, deviceId, creationId, storageId);
+    return;
+  }
+  await updatePendingTake(creationId, "processing", { audioStorageId: storageId });
+
+  let result: { status: string; capReached?: boolean };
+  try {
+    result = await current.serverRetry({
+      deviceId,
+      creationId,
+      newStorageId: storageId,
+      clientFeatures: CLIENT_FEATURES,
+    });
+  } catch (e) {
+    current.onStage?.(creationId, "cloud_retry_failed", { error: String(e) });
+    await showFailure();
+    return;
+  }
+  if (result.capReached) {
+    await showFailure();
+    return;
+  }
+
+  // The server now treats this as a cloud take, so the local copy does too.
+  const processing = await updatePendingTake(creationId, "processing", {
+    sttSource: "cloud",
+    attempts: take.attempts + 1,
   });
+  current.subscribe(processing ?? marked);
 }
 
 async function runImport(
@@ -461,6 +586,7 @@ async function beginAndSubscribe(
           localDate: take.localDate,
           localTime: take.localTime,
           timezone: take.timezone,
+          clientFeatures: CLIENT_FEATURES,
         }
       : {
           deviceId,
@@ -473,6 +599,7 @@ async function beginAndSubscribe(
           localDate: take.localDate,
           localTime: take.localTime,
           timezone: take.timezone,
+          clientFeatures: CLIENT_FEATURES,
         }
   );
   const processing = await updatePendingTake(
@@ -561,6 +688,7 @@ async function runRetry(
     hasRecording: await current.recordingExists(take),
     server: status,
     serverErrorCode: job?.errorCode,
+    errorDetail: job?.errorDetail ?? take.serverErrorDetail,
   });
   current.onStage?.(take.creationId, `retry_${action}`, { trigger });
 
@@ -593,12 +721,17 @@ async function runRetry(
         deviceId,
         creationId: take.creationId,
         newStorageId: storageId,
+        clientFeatures: CLIENT_FEATURES,
       });
       await afterServerRetry(take, current, deviceId, result, trigger);
       return;
     }
     case "server_retry": {
-      const result = await current.serverRetry({ deviceId, creationId: take.creationId });
+      const result = await current.serverRetry({
+        deviceId,
+        creationId: take.creationId,
+        clientFeatures: CLIENT_FEATURES,
+      });
       await afterServerRetry(take, current, deviceId, result, trigger);
       return;
     }
