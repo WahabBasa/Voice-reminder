@@ -19,7 +19,9 @@ import {
   harness,
   insertJob,
   readJob,
+  scheduledOf,
   storeAudio,
+  TTS,
 } from "./harness";
 
 let t: Harness;
@@ -167,5 +169,20 @@ describe("lang on the reminder row", () => {
     const rows = await allReminders(t);
     expect(rows.find((row) => row.title === "Water")!.lang).toBe("sv");
     expect(rows.find((row) => row.title === "Other")).not.toHaveProperty("lang");
+  });
+
+  test("commit hands each row's lang to its TTS job, which picks the voice (OLD-131)", async () => {
+    const { jobId } = await insertJob(t, { status: "transcribed" });
+    await t.mutation(internal.creationJobs.commit, {
+      jobId,
+      generation: 1,
+      plans: [commitPlan({ lang: "sv" }), commitPlan({ title: "Other" })],
+    });
+
+    const jobs = await scheduledOf(t, TTS);
+    const argsOf = (title: string) =>
+      jobs.map((job) => job.args[0] as Record<string, unknown>).find((a) => a.title === title)!;
+    expect(argsOf("Water").lang).toBe("sv");
+    expect(argsOf("Other").lang).toBeUndefined();
   });
 });

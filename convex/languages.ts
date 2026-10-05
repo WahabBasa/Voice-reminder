@@ -125,3 +125,19 @@ export function isSupportedLineLanguage(lang: unknown): boolean {
   if (code === undefined) return false;
   return code === "en" || code === "ar" || V3_SET.has(code);
 }
+
+/**
+ * Does a line in `lang` need the multilingual voice (OLD-131)?
+ *
+ * True only for a code in ELEVENLABS_V3_LANGS that is neither English nor
+ * Arabic. English, and a missing code (every row written before OLD-130, and
+ * any parse that left it out), stay on the English voice. Arabic keeps its own
+ * route, picked from the line's script. Anything else is not a v3 language: it
+ * cannot reach a reminder past the guard, and if it ever did it falls back to
+ * the English route rather than to a voice never vetted for it.
+ */
+export function needsMultilingualVoice(lang: unknown): boolean {
+  const code = normalizeLanguageCode(lang);
+  if (code === undefined || code === "en" || code === "ar") return false;
+  return V3_SET.has(code);
+}

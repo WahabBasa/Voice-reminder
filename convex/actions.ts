@@ -59,8 +59,8 @@ function getTtsProvider(): TtsProvider {
   return "resemble";
 }
 
-import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, LANG_FIELD_LINE, GUARD_TIME_SPOKEN_FIELD_LINE, NO_TIME_DEFAULT_INSTRUCTION, GUARD_NO_TIME_INSTRUCTION, GUARD_UNDERSTOOD_INSTRUCTION, readParseEnvelope, type Urgency } from "./helpers";
-import { normalizeLanguageCode } from "./languages";
+import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, LANG_FIELD_LINE, OTHER_LANGUAGE_RULE, GUARD_TIME_SPOKEN_FIELD_LINE, NO_TIME_DEFAULT_INSTRUCTION, GUARD_NO_TIME_INSTRUCTION, GUARD_UNDERSTOOD_INSTRUCTION, readParseEnvelope, type Urgency } from "./helpers";
+import { normalizeLanguageCode, needsMultilingualVoice } from "./languages";
 import { buildGridSchedule, legacyFieldsFromGrid, normalizeClockTimes, zonedTimeToUtcMs, type GridSchedule } from "./scheduleShape";
 import { transcribeAudio, SttError, type SttPerf } from "./stt";
 import { extractParseUsage } from "./parseUsage";
@@ -443,6 +443,9 @@ export function buildReminderPlan(
 
   // Pre-reminder (heads-up) fields. The '<title> in N minutes' stand-in is
   // only opener-free when the title is, so the chooser knows about both.
+  // The reminder's own language answer first; the take's `language` stands in
+  // for a reminder that left it out.
+  const lang = normalizeLanguageCode(parsed.lang) ?? normalizeLanguageCode(context.fallbackLang);
   const { preReminderMinutes, preDescription, rawPreDescription } =
     normalizePreReminder(parsed.preReminderMinutes, parsed.preDescription);
   const preTtsText = buildHeadsUpTtsText({
@@ -450,6 +453,9 @@ export function buildReminderPlan(
     preDescription,
     rawPreDescription,
     title: parsed.title,
+    // The English '<title> in N minutes' stand-in is off for a line the
+    // multilingual voice speaks (OLD-131).
+    lang,
   });
 
   // Ring tier. Only the tier survives (OLD-108) — the escalating variant lines
@@ -485,9 +491,7 @@ export function buildReminderPlan(
     explicitDate,
     explicitTime,
     timeSpoken,
-    // The reminder's own answer first; the take's `language` stands in for a
-    // reminder that left it out.
-    lang: normalizeLanguageCode(parsed.lang) ?? normalizeLanguageCode(context.fallbackLang),
+    lang,
   };
 }
 
@@ -626,6 +630,7 @@ TITLE RULES:
 LANGUAGE RULES:
 - If the input is in Arabic, return "title" and "description" in Arabic
 - If the input is in English, return "title" and "description" in English
+${OTHER_LANGUAGE_RULE}
 - The JSON field names and "frequency"/"days" values always remain in English
 - For Arabic days: الأحد=sun, الاثنين=mon, الثلاثاء=tue, الأربعاء=wed, الخميس=thu, الجمعة=fri, السبت=sat
 
@@ -818,6 +823,11 @@ function elevenLabsModelId(): string {
  * rollback switch.
  */
 const SPEECHIFY_DEFAULT_MODEL = "simba-3.2";
+// Speechify retired `simba-multilingual` for new workspaces; ours still serves
+// it because it is pinned to an older API version, and the docs disagree on
+// whether it is switched off or silently re-pointed on 2026-11-21
+// (docs/research/2026-10-05_multilingual-scope.md). Arabic still rides it —
+// OLD-131 deliberately left that route alone; it needs its own move before then.
 const SPEECHIFY_DEFAULT_MULTILINGUAL_MODEL = "simba-multilingual";
 const SPEECHIFY_DEFAULT_VOICE_ID = "beatrice_32";
 
@@ -836,6 +846,41 @@ function routesToSpeechify(_text: string): boolean {
   return Boolean(process.env.SPEECHIFY_API_KEY);
 }
 
+/** Which voice speaks one line, and on which model. */
+export type VoiceRoute =
+  | { provider: "resemble" }
+  | { provider: "speechify"; model: string }
+  | { provider: "elevenlabs"; model: string };
+
+/**
+ * The one place a spoken line is matched to a voice (OLD-131).
+ *
+ * `lang` is the reminder row's ISO 639-1 code (reminders.lang). A line in any
+ * eleven_v3 language other than English and Arabic goes to the ElevenLabs
+ * voice pinned in `ELEVENLABS_VOICE_ID`, on `ELEVENLABS_MODEL_ID` — simba-3.2
+ * is English-only and mangles everything else. Every other line takes exactly
+ * the route it took before: English and a missing `lang` to Beatrice on
+ * simba-3.2, Arabic script to simba-multilingual, ElevenLabs when no Speechify
+ * key is set, Resemble when the legacy provider switch says so.
+ *
+ * There is no fallback between voices: a foreign line whose ElevenLabs call
+ * fails fails like any other synthesis (see the callers), rather than being
+ * read out by an English voice.
+ */
+export function pickVoiceRoute(args: { text: string; lang?: string | null }): VoiceRoute {
+  if (getTtsProvider() !== "elevenlabs") return { provider: "resemble" };
+  // Decided by the language, not the script: Persian or Urdu is written in
+  // Arabic script but is not Arabic, and simba-multilingual was only ever
+  // vetted for Arabic.
+  if (needsMultilingualVoice(args.lang)) {
+    return { provider: "elevenlabs", model: elevenLabsModelId() };
+  }
+  if (routesToSpeechify(args.text)) {
+    return { provider: "speechify", model: speechifyModelFor(args.text) };
+  }
+  return { provider: "elevenlabs", model: elevenLabsModelId() };
+}
+
 /**
  * What every synthesis timing log is labeled with (OLD-107).
  *
@@ -844,12 +889,8 @@ function routesToSpeechify(_text: string): boolean {
  * numbers captured under one model were therefore not comparable with numbers
  * captured under another, which is exactly the comparison OLD-62/OLD-67 need.
  */
-function ttsModelLabel(text?: string): string {
-  if (getTtsProvider() !== "elevenlabs") return "resemble";
-  if (text !== undefined && routesToSpeechify(text)) {
-    return `speechify/${speechifyModelFor(text)}`;
-  }
-  return `elevenlabs/${elevenLabsModelId()}`;
+function ttsModelLabel(route: VoiceRoute): string {
+  return route.provider === "resemble" ? "resemble" : `${route.provider}/${route.model}`;
 }
 
 /** `Retry-After` in ms, clamped — a provider asking us to wait a minute is not a reason to. */
@@ -974,33 +1015,36 @@ async function synthesizeWithSpeechify(args: { text: string; outputFormat?: stri
   }
 }
 
-async function synthesizeReminderTts(args: { text: string; title?: string }): Promise<Buffer> {
-  const provider = getTtsProvider();
-  if (provider === "elevenlabs") {
-    if (routesToSpeechify(args.text)) {
-      return await synthesizeWithSpeechify({ text: args.text });
-    }
-    return await synthesizeWithElevenLabs({ text: args.text });
-  }
-  return await synthesizeWithResemble(args);
+/** A line to speak, plus the reminder's language for pickVoiceRoute. */
+type SpokenLine = { text: string; title?: string; lang?: string | null };
+
+async function synthesizeReminderTts(args: SpokenLine): Promise<Buffer> {
+  const route = pickVoiceRoute(args);
+  if (route.provider === "speechify") return await synthesizeWithSpeechify({ text: args.text });
+  if (route.provider === "elevenlabs") return await synthesizeWithElevenLabs({ text: args.text });
+  return await synthesizeWithResemble({ text: args.text, title: args.title });
 }
 
 /**
  * Alarm-ready WAV of one spoken line (iOS AlarmKit custom sound).
- * PCM out (Speechify — simba-3.2 or simba-multilingual per the line's script;
- * ElevenLabs only as keyless fallback — same pcm_22050 byte layout from all),
- * shaped into repeated utterances and wrapped with a 44-byte WAV header
- * in-process.
+ * PCM out from whichever voice pickVoiceRoute picked — Speechify (simba-3.2,
+ * or simba-multilingual for Arabic) or ElevenLabs (a non-English, non-Arabic
+ * line, or no Speechify key) — all asked for the same ALARM_PCM_OUTPUT_FORMAT,
+ * so the bytes are the same pcm_22050 s16le mono layout either way. Shaped into
+ * repeated utterances and wrapped with a 44-byte WAV header in-process.
  * Failure returns null — the alarm degrades to the system default sound and
  * never blocks reminder creation.
  */
-async function synthesizeAlarmWav(text: string): Promise<Uint8Array | null> {
-  if (getTtsProvider() !== "elevenlabs") return null;
+async function synthesizeAlarmWav(line: { text: string; lang?: string | null }): Promise<Uint8Array | null> {
+  const route = pickVoiceRoute(line);
+  if (route.provider === "resemble") return null;
   const rate = parsePcmSampleRate(ALARM_PCM_OUTPUT_FORMAT);
   if (rate === null) return null;
-  const pcm = routesToSpeechify(text)
-    ? await synthesizeWithSpeechify({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT })
-    : await synthesizeWithElevenLabs({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT });
+  const { text } = line;
+  const pcm =
+    route.provider === "speechify"
+      ? await synthesizeWithSpeechify({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT })
+      : await synthesizeWithElevenLabs({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT });
   return buildAlarmWav(new Uint8Array(pcm), rate);
 }
 
@@ -1011,12 +1055,12 @@ async function synthesizeAlarmWav(text: string): Promise<Uint8Array | null> {
  */
 async function synthesizeAndStoreLineTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
-  args: { text: string; title?: string }
+  args: SpokenLine
 ): Promise<{ audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> }> {
   const started = Date.now();
   const [ttsBuffer, wavBytes] = await Promise.all([
     synthesizeReminderTts(args),
-    synthesizeAlarmWav(args.text).catch((e) => {
+    synthesizeAlarmWav(args).catch((e) => {
       console.error("[VR] Alarm WAV synthesis failed (system default alarm sound will be used):", e);
       return null;
     }),
@@ -1035,7 +1079,7 @@ async function synthesizeAndStoreLineTts(
   ]);
 
   console.log(
-    `[VR][tts] line model=${ttsModelLabel(args.text)} chars=${args.text.length} wav=${wavBytes ? 1 : 0} synthMs=${synthMs} storeMs=${Date.now() - tStore} totalMs=${Date.now() - started}`
+    `[VR][tts] line model=${ttsModelLabel(pickVoiceRoute(args))} chars=${args.text.length} wav=${wavBytes ? 1 : 0} synthMs=${synthMs} storeMs=${Date.now() - tStore} totalMs=${Date.now() - started}`
   );
   return { audioStorageId, wavStorageId };
 }
@@ -1060,19 +1104,20 @@ async function synthesizeAndStoreLineTts(
  */
 async function synthesizeAndStorePreAlertTts(
   ctx: { storage: { store: (blob: Blob) => Promise<Id<"_storage">> } },
-  args: { title: string; preTtsText: string }
+  args: { title: string; preTtsText: string; lang?: string | null }
 ): Promise<Id<"_storage"> | undefined> {
   const started = Date.now();
   try {
     const buffer = await synthesizeReminderTts({
       text: args.preTtsText,
       title: `${args.title} (heads-up)`,
+      lang: args.lang,
     });
     const preAudioStorageId = await ctx.storage.store(
       new Blob([new Uint8Array(buffer)], { type: "audio/mpeg" })
     );
     console.log(
-      `[VR][tts] pre-alert model=${ttsModelLabel(args.preTtsText)} chars=${args.preTtsText.length} ms=${
+      `[VR][tts] pre-alert model=${ttsModelLabel(pickVoiceRoute({ text: args.preTtsText, lang: args.lang }))} chars=${args.preTtsText.length} ms=${
         Date.now() - started
       }`
     );
@@ -1138,6 +1183,7 @@ async function createReminderWithAudio(
   const { audioStorageId: storageId, wavStorageId } = await synthesizeAndStoreLineTts(ctx, {
     text: ttsText,
     title: plan.title,
+    lang: plan.lang,
   });
 
   // The pre-alert line, when this reminder has a lead time. This path returns
@@ -1147,6 +1193,7 @@ async function createReminderWithAudio(
     ? await synthesizeAndStorePreAlertTts(ctx, {
         title: plan.title,
         preTtsText: plan.preTtsText,
+        lang: plan.lang,
       })
     : undefined;
 
@@ -1162,6 +1209,8 @@ async function createReminderWithAudio(
     preAudioStorageId,
     urgency: plan.urgency,
     persistent: plan.persistent || undefined,
+    // So a later edit regenerates the line in the same voice (OLD-131).
+    lang: plan.lang,
   });
 
   const audioUrl = await ctx.storage.getUrl(storageId);
@@ -1397,11 +1446,14 @@ export const regenerateReminderAudio = action({
       throw new Error("Reminder not found");
     }
 
-    // 2. Generate + store new TTS audio (mp3 + alarm-ready wav when available).
+    // 2. Generate + store new TTS audio (mp3 + alarm-ready wav when available),
+    // in the voice the row's language picks (OLD-131) — the same voice the
+    // line was first spoken in.
     const { audioStorageId: newStorageId, wavStorageId: newWavStorageId } =
       await synthesizeAndStoreLineTts(ctx, {
         text: args.soundText,
         title: reminder.title,
+        lang: reminder.lang,
       });
 
     // 4. Delete old audio and update reminder
@@ -1542,6 +1594,7 @@ async function createTakeWithDeferredAudio(
           plan.preReminderMinutes > 0 ? plan.preReminderMinutes : undefined,
         urgency: plan.urgency,
         persistent: plan.persistent || undefined,
+        lang: plan.lang,
         audioStatus: "pending",
         // Set here rather than only in the TTS job, so there is no window where
         // a row that will grow a pre-alert reads as one that never asked for one.
@@ -1560,6 +1613,7 @@ async function createTakeWithDeferredAudio(
       // the parse returned neither a description nor a title.
       ttsText: plan.description,
       preTtsText: plan.preTtsText || undefined,
+      lang: plan.lang,
     });
     perf.scheduleMs += Date.now() - tSchedule;
 
@@ -1777,6 +1831,9 @@ export const generateReminderTtsForReminder = internalAction({
     title: v.string(),
     ttsText: v.string(),
     preTtsText: v.optional(v.string()),
+    // The reminder row's ISO 639-1 code (OLD-131), picks the voice. Optional:
+    // a job enqueued by an older deploy carries none and keeps today's voice.
+    lang: v.optional(v.string()),
     // Neither is read any more. `persistent` stopped mattering when the wav
     // shape became the same for every tier; `variantTexts` stopped existing
     // when the nag went back to repeating the base line (OLD-108). Both are
@@ -1801,9 +1858,12 @@ export const generateReminderTtsForReminder = internalAction({
     let base: { audioStorageId: Id<"_storage">; wavStorageId?: Id<"_storage"> };
     try {
       // Says the stored line verbatim — nothing is prepended (OLD-95).
+      // A foreign line whose voice fails lands here like any other synthesis
+      // failure (audioStatus "failed"); it is never re-voiced in English.
       base = await synthesizeAndStoreLineTts(ctx, {
         text: args.ttsText,
         title: args.title,
+        lang: args.lang,
       });
     } catch (e) {
       console.error("[VR] TTS generation failed:", e);
@@ -1839,6 +1899,7 @@ export const generateReminderTtsForReminder = internalAction({
     const preAudioStorageId = await synthesizeAndStorePreAlertTts(ctx, {
       title: args.title,
       preTtsText: args.preTtsText,
+      lang: args.lang,
     });
 
     // Only fields this phase actually produced go into the patch: a Convex

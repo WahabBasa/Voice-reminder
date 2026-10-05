@@ -89,6 +89,8 @@ export const create = internalMutation({
       v.union(v.literal("urgent"), v.literal("notice"), v.literal("routine"))
     ),
     persistent: v.optional(v.boolean()),
+    // ISO 639-1 language of the spoken line; picks its voice (OLD-131).
+    lang: v.optional(v.string()),
     audioStatus: v.optional(v.union(v.literal("pending"), v.literal("ready"), v.literal("failed"))),
     // "pending" when this reminder asked for a pre-alert line, which lands in a
     // second patch after the base line (OLD-107).

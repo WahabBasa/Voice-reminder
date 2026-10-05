@@ -576,6 +576,8 @@ export const commit = internalMutation({
         title: plan.title,
         ttsText,
         preTtsText,
+        // The row's own language picks the voice (OLD-131).
+        lang: row.lang,
       });
     }
 

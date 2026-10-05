@@ -204,7 +204,8 @@ export default defineSchema({
     soundRepeatMode: v.optional(v.string()),
     // ISO 639-1 code of the language the reminder was spoken in, as the parse
     // reported it (OLD-130). What its line is voiced in. Absent on rows written
-    // before the parse returned it, and on the legacy actions' rows.
+    // before the parse returned it. OLD-131 picks the line's voice from it, and
+    // writes it from the legacy fast/slow actions too.
     lang: v.optional(v.string()),
   }).index("by_device", ["deviceId"]),
 

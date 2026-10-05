@@ -3,6 +3,8 @@
  * No Convex, OpenAI, or network dependencies.
  */
 
+import { needsMultilingualVoice } from "./languages";
+
 export function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -56,6 +58,12 @@ MULTIPLE REMINDERS IN ONE REQUEST:
 // One field of the per-reminder JSON format, for every client. What the line
 // will later be voiced in (reminders.lang).
 export const LANG_FIELD_LINE = `"lang": "ISO 639-1 code of the language the user spoke this reminder in, lowercase (e.g. \\"en\\", \\"ar\\")",`;
+
+// One line of the prompt's LANGUAGE RULES, for every client (OLD-131). The two
+// rules above it only name English and Arabic, which left a Swedish take free
+// to come back with an English title and line — and the line is what the voice
+// speaks, so it must stay in the language the voice is picked for.
+export const OTHER_LANGUAGE_RULE = `- If the input is in any other language, return "title", "description" and "preDescription" in that same language; never translate them into English`;
 
 // Guard only: one more per-reminder field, rendered right under "times".
 export const GUARD_TIME_SPOKEN_FIELD_LINE = `"timeSpoken": true | false (true only if the user said a clock time, a part of the day like "tonight", or a relative time like "in 20 minutes"; false if you had to pick the time yourself),`;
@@ -424,15 +432,24 @@ export function normalizePreReminder(
  * 4. the stand-in anyway, banned title and all — last resort, never "".
  *
  * "" only when there is no lead time, or genuinely nothing to say.
+ *
+ * A reminder in a language the multilingual voice speaks (OLD-131) never gets
+ * the stand-in: it is an English sentence around a foreign title, and no one
+ * voice reads both halves right. The model already writes `preDescription` in
+ * the input's language, so the heads-up is its line, clean or not; with no
+ * line at all it is "" and the heads-up arrives as a silent notification,
+ * which is how a failed heads-up synthesis already degrades.
  */
 export function buildHeadsUpTtsText(args: {
   preReminderMinutes: number;
   preDescription: string;
   rawPreDescription: string;
   title: unknown;
+  lang?: unknown;
 }): string {
   if (!(args.preReminderMinutes > 0)) return "";
   if (args.preDescription) return args.preDescription;
+  if (needsMultilingualVoice(args.lang)) return args.rawPreDescription;
   const title = String(args.title ?? "").trim();
   const standIn = title ? `${title} in ${args.preReminderMinutes} minutes` : "";
   if (standIn && !hasBannedOpener(title)) return standIn;
