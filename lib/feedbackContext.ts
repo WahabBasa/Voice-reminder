@@ -98,14 +98,29 @@ function clamp(context: FeedbackContext): FeedbackContext {
   return clamped;
 }
 
-export function buildFeedbackContext(base: FeedbackContext): FeedbackContext {
-  const now = new Date();
-  return clamp({
-    ...base,
+/**
+ * Which build, which OTA, which iOS, which zone — the runtime facts both the
+ * feedback envelope and the launch check-in (lib/deviceHello.ts) carry.
+ */
+export function getRuntimeInfo(): {
+  buildNumber: string | number | null;
+  updateId: string;
+  iosVersion: string | number;
+  timezone: string;
+} {
+  return {
     buildNumber: resolveBuildNumber(),
     updateId: resolveUpdateId(),
     iosVersion: Platform.Version,
     timezone: resolveTimezone(),
+  };
+}
+
+export function buildFeedbackContext(base: FeedbackContext): FeedbackContext {
+  const now = new Date();
+  return clamp({
+    ...base,
+    ...getRuntimeInfo(),
     localTime: localISOWithOffset(now),
   });
 }

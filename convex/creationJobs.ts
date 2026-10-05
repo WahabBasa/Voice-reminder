@@ -218,6 +218,14 @@ async function applyCas(
   if (TERMINAL_STATUSES.includes(job.status)) return "stale";
   if (!expectStatus.includes(job.status)) return "stale";
   await ctx.db.patch(job._id, { ...patch, updatedAt: Date.now() });
+  if (patch.status === "failed") {
+    // Founder alerts (OLD-135): every failure — worker or stale sweep — lands here.
+    await ctx.scheduler.runAfter(0, internal.founderAlerts.recordOutcome, {
+      jobId: job._id,
+      status: "failed",
+      errorCode: patch.errorCode,
+    });
+  }
   return "applied";
 }
 
@@ -559,6 +567,11 @@ export const commit = internalMutation({
       // A commit after a retry clears the previous attempt's error.
       errorCode: undefined,
       updatedAt: now,
+    });
+    // Founder alerts (OLD-135).
+    await ctx.scheduler.runAfter(0, internal.founderAlerts.recordOutcome, {
+      jobId: args.jobId,
+      status: "committed",
     });
 
     return { result: "applied" as const, reminderIds };
