@@ -109,7 +109,7 @@ import {
 } from "../lib/takeReconcile";
 import { watchCreationJob, type CreationJobWatchHandle } from "../lib/creationJobWatch";
 import PendingTakeCard, { usePendingTakes } from "../components/PendingTakeCard";
-import { feedbackUi } from "../lib/feedbackUi";
+import { feedbackUi, reminderCreatedToast } from "../lib/feedbackUi";
 import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, todayISO } from "../lib/dayOccurrences";
@@ -1491,6 +1491,14 @@ export default function HomeScreen() {
               ? openIntervalPaywall
               : openPaywall,
         });
+      } else if (created.length === 1) {
+        // A clean single reminder (OLD-134): name it, and put "Not right?" one
+        // tap away — the edit sheet's report row is too buried to be found.
+        toast.show(
+          reminderCreatedToast(created[0], (id) =>
+            useReminderStore.getState().reminders.find((r) => r.id === id)
+          )
+        );
       }
       // No edit sheet on this path: the rows simply appear (spec §2.4).
 

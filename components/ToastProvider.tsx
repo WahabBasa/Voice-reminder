@@ -12,6 +12,8 @@ type ToastOptions = {
   type?: ToastType;
   durationMs?: number;
   onPress?: () => void;
+  /** A short label at the toast's right edge naming what a tap does ("Not right?"). */
+  actionLabel?: string;
 };
 
 type ToastState = {
@@ -19,6 +21,7 @@ type ToastState = {
   message?: string;
   type: ToastType;
   onPress?: () => void;
+  actionLabel?: string;
 };
 
 type ToastContextValue = {
@@ -70,13 +73,13 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   }, [opacity, translateY]);
 
   const show = useCallback(
-    ({ title, message, type = "info", durationMs = 2200, onPress }: ToastOptions) => {
+    ({ title, message, type = "info", durationMs = 2200, onPress, actionLabel }: ToastOptions) => {
       if (hideTimerRef.current) {
         clearTimeout(hideTimerRef.current);
         hideTimerRef.current = null;
       }
 
-      setToast({ title, message, type, onPress });
+      setToast({ title, message, type, onPress, actionLabel });
       opacity.setValue(0);
       translateY.setValue(-30);
 
@@ -119,13 +122,24 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
               toast.onPress?.();
               hide();
             }}
-            style={[styles.toast, { borderLeftColor: getToastAccent(toast.type) }]}
+            style={[
+              styles.toast,
+              !!toast.actionLabel && styles.toastWithAction,
+              { borderLeftColor: getToastAccent(toast.type) },
+            ]}
           >
-            <Text style={styles.title}>{toast.title}</Text>
-            {!!toast.message && (
-              <Text style={styles.message} numberOfLines={2}>
-                {toast.message}
-              </Text>
+            <View style={styles.body}>
+              <Text style={styles.title}>{toast.title}</Text>
+              {!!toast.message && (
+                <Text style={styles.message} numberOfLines={2}>
+                  {toast.message}
+                </Text>
+              )}
+            </View>
+            {!!toast.actionLabel && (
+              <View style={styles.action} testID="toast-action">
+                <Text style={styles.actionText}>{toast.actionLabel}</Text>
+              </View>
             )}
           </Pressable>
         </Animated.View>
@@ -158,6 +172,28 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.12,
     shadowRadius: 16,
     elevation: 6,
+  },
+  toastWithAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  body: {
+    flexShrink: 1,
+    flexGrow: 1,
+  },
+  action: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  actionText: {
+    color: colors.textHeading,
+    fontWeight: "600",
+    fontSize: 13,
   },
   title: {
     color: colors.textHeading,

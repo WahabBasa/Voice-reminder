@@ -46,7 +46,7 @@ import { createTraceId, perfLog } from "../lib/perf";
 import { DEFAULT_ALARM_SETTINGS } from "../lib/storage";
 import { CURRENT_SCHEMA_VERSION, useReminderStore, Reminder } from "../lib/store";
 import { checkCanUsePremiumSchedule, isPremiumSchedule } from "../lib/usageGate";
-import { useFeedbackUi } from "../lib/feedbackUi";
+import { buildReminderFeedbackContext, useFeedbackUi } from "../lib/feedbackUi";
 import { borderRadius, chipColors, colors, scaleFontSize, shadows } from "../lib/theme";
 
 // Tap-to-cycle options
@@ -144,29 +144,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
     const handleReportProblem = useCallback(() => {
         // Details come from the SAVED store row, not the in-progress inputs.
-        const schedule = JSON.stringify({
-            scheduleType: reminder.scheduleType,
-            onceAt: reminder.onceAt,
-            rrule: reminder.rrule,
-            dtstart: reminder.dtstart,
-            tzid: reminder.tzid,
-            until: reminder.until,
-            time: reminder.time,
-            date: reminder.date,
-            frequency: reminder.frequency,
-            days: reminder.days,
-            grid: reminder.schedule,
-        });
         openFeedbackComposer(
-            {
-                kind: "reminder",
-                reminderId: reminder.id,
-                convexId: reminder.convexId,
-                reminderTitle: reminder.title,
-                reminderDescription: reminder.description,
-                schedule,
-                sttSource: (reminder as any).sttSource,
-            },
+            buildReminderFeedbackContext(reminder),
             "Includes saved reminder details. Your edits stay here."
         );
     }, [reminder, openFeedbackComposer]);
