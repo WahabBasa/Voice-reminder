@@ -66,6 +66,74 @@ export function isRecordAgainDetail(detail: string | undefined): detail is Serve
   );
 }
 
+/**
+ * One reminder a `no_time`/`past_time` take heard, as the server kept it for
+ * the "When should I remind you?" card (convex/needsTime.ts). The spoken line
+ * is in the user's own language.
+ */
+export type PendingPlan = {
+  title: string;
+  description: string;
+  emoji?: string;
+  lang?: string;
+  frequency: string;
+  days?: string[];
+  /** For a plan whose time had already passed: the "HH:MM" the user said. */
+  saidTime?: string;
+  /** This plan is the one waiting for a time; its siblings already have one. */
+  needsTime: boolean;
+};
+
+/** The two server details the card answers with a question, not a failure. */
+export function isNeedsTimeDetail(detail: string | undefined): detail is "no_time" | "past_time" {
+  return detail === "no_time" || detail === "past_time";
+}
+
+/**
+ * Only well-formed plans survive: they arrive off the wire and off disk, and a
+ * card that renders a plan with no title would be worse than the record-again
+ * card it replaces. Undefined when nothing usable is left.
+ */
+export function sanitizePendingPlans(value: unknown): PendingPlan[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const plans: PendingPlan[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const plan = entry as Record<string, unknown>;
+    if (typeof plan.title !== "string" || !plan.title.trim()) continue;
+    if (typeof plan.description !== "string") continue;
+    plans.push({
+      title: plan.title,
+      description: plan.description,
+      ...(typeof plan.emoji === "string" && plan.emoji ? { emoji: plan.emoji } : {}),
+      ...(typeof plan.lang === "string" && plan.lang ? { lang: plan.lang } : {}),
+      frequency: typeof plan.frequency === "string" ? plan.frequency : "once",
+      ...(Array.isArray(plan.days)
+        ? { days: plan.days.filter((d): d is string => typeof d === "string") }
+        : {}),
+      ...(typeof plan.saidTime === "string" && plan.saidTime ? { saidTime: plan.saidTime } : {}),
+      needsTime: plan.needsTime === true,
+    });
+  }
+  return plans.length > 0 ? plans : undefined;
+}
+
+/**
+ * A failed take that is really a question: the server heard a reminder but no
+ * usable time, and kept the reminder so the card can ask when (founder
+ * decision, 2026-10-06). Never shown as a failure.
+ */
+export function isNeedsTimeTake(
+  take: Pick<PendingTake, "phase" | "errorKind" | "serverErrorDetail" | "pendingPlans">
+): boolean {
+  return (
+    take.phase === "failed" &&
+    take.errorKind === "unparseable" &&
+    isNeedsTimeDetail(take.serverErrorDetail) &&
+    (take.pendingPlans?.length ?? 0) > 0
+  );
+}
+
 export type PendingTake = {
   creationId: string;
   phase: PendingPhase;
@@ -92,6 +160,11 @@ export type PendingTake = {
   detectedLanguage?: string;
   /** For `past_time`: the one-off's spoken time, "HH:MM" on the user's clock. */
   pastTime?: string;
+  /**
+   * For `no_time`/`past_time`: the reminders the server heard and kept, so the
+   * card can ask "When should I remind you?" and survive an app kill doing it.
+   */
+  pendingPlans?: PendingPlan[];
   /**
    * Set when a device take the server did not understand is handed to the
    * cloud for its one automatic retry (OLD-133), and never cleared. This flag
@@ -161,6 +234,7 @@ export type PendingPatch = {
   serverErrorDetail?: string;
   detectedLanguage?: string;
   pastTime?: string;
+  pendingPlans?: PendingPlan[];
   cloudRetried?: boolean;
   audioStorageId?: string;
   recordingUri?: string;
@@ -189,6 +263,7 @@ export function transitionTake(
     delete next.serverErrorDetail;
     delete next.detectedLanguage;
     delete next.pastTime;
+    delete next.pendingPlans;
   }
   return next;
 }
@@ -271,14 +346,20 @@ export function failedJobPatch(job: {
   errorDetail?: string;
   detectedLanguage?: string;
   pastTime?: string;
+  pendingPlans?: unknown;
   transcript?: string;
 }): PendingPatch {
+  // Only a take waiting for a time carries its plans onto the card.
+  const pendingPlans = isNeedsTimeDetail(job.errorDetail)
+    ? sanitizePendingPlans(job.pendingPlans)
+    : undefined;
   return {
     errorKind: errorKindForServerCode(job.errorCode),
     ...(job.errorCode ? { serverErrorCode: job.errorCode } : {}),
     ...(job.errorDetail ? { serverErrorDetail: job.errorDetail } : {}),
     ...(job.detectedLanguage ? { detectedLanguage: job.detectedLanguage } : {}),
     ...(job.pastTime ? { pastTime: job.pastTime } : {}),
+    ...(pendingPlans ? { pendingPlans } : {}),
     ...(job.transcript?.trim() ? { transcript: job.transcript } : {}),
   };
 }

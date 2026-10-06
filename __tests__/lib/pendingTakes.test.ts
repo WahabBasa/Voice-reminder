@@ -19,8 +19,11 @@ import {
   getPendingTake,
   getPendingTakesSnapshot,
   hasLoadedPendingTakes,
+  isNeedsTimeDetail,
+  isNeedsTimeTake,
   isRecordAgainDetail,
   isTerminalPhase,
+  sanitizePendingPlans,
   loadPendingTakes,
   missingRecordingOutcome,
   newPendingTake,
@@ -455,5 +458,134 @@ describe("updatePendingTake", () => {
 
     await expect(updatePendingTake("a", "transcribed")).resolves.toBeNull();
     expect(getPendingTake("a")?.phase).toBe("committing");
+  });
+});
+
+// ─── "When should I remind you?" (founder decision, 2026-10-06) ─────────────
+
+describe("the reminders a no_time / past_time take kept", () => {
+  const dentist = {
+    title: "Call the dentist",
+    description: "Ring tandläkaren.",
+    emoji: "🦷",
+    lang: "sv",
+    frequency: "once",
+    needsTime: true,
+  };
+
+  it("isNeedsTimeDetail is exactly no_time and past_time", () => {
+    expect(isNeedsTimeDetail("no_time")).toBe(true);
+    expect(isNeedsTimeDetail("past_time")).toBe(true);
+    expect(isNeedsTimeDetail("not_understood")).toBe(false);
+    expect(isNeedsTimeDetail(undefined)).toBe(false);
+  });
+
+  it("sanitizePendingPlans keeps well-formed plans and nothing else", () => {
+    expect(sanitizePendingPlans(undefined)).toBeUndefined();
+    expect(sanitizePendingPlans("nope")).toBeUndefined();
+    expect(sanitizePendingPlans([])).toBeUndefined();
+    expect(
+      sanitizePendingPlans([
+        null,
+        7,
+        { title: "  ", description: "x" },
+        { title: "No line" },
+        dentist,
+        {
+          title: "Pills",
+          description: "",
+          days: ["mon", 3, "wed"],
+          saidTime: "10:00",
+          emoji: "",
+          lang: 5,
+          needsTime: "yes",
+        },
+      ])
+    ).toEqual([
+      dentist,
+      {
+        title: "Pills",
+        description: "",
+        frequency: "once",
+        days: ["mon", "wed"],
+        saidTime: "10:00",
+        needsTime: false,
+      },
+    ]);
+  });
+
+  it("failedJobPatch carries the plans for no_time and past_time only", () => {
+    expect(
+      failedJobPatch({ errorCode: "unparseable", errorDetail: "no_time", pendingPlans: [dentist] })
+    ).toEqual({
+      errorKind: "unparseable",
+      serverErrorCode: "unparseable",
+      serverErrorDetail: "no_time",
+      pendingPlans: [dentist],
+    });
+    expect(
+      failedJobPatch({
+        errorCode: "unparseable",
+        errorDetail: "past_time",
+        pastTime: "10:00",
+        pendingPlans: [dentist],
+      }).pendingPlans
+    ).toEqual([dentist]);
+    expect(
+      failedJobPatch({
+        errorCode: "unparseable",
+        errorDetail: "not_understood",
+        pendingPlans: [dentist],
+      })
+    ).not.toHaveProperty("pendingPlans");
+    expect(
+      failedJobPatch({ errorCode: "unparseable", errorDetail: "no_time", pendingPlans: [] })
+    ).not.toHaveProperty("pendingPlans");
+  });
+
+  it("isNeedsTimeTake: a failed unparseable take with the detail and kept plans", () => {
+    const asking = take({
+      phase: "failed",
+      errorKind: "unparseable",
+      serverErrorDetail: "no_time",
+      pendingPlans: [dentist],
+    });
+    expect(isNeedsTimeTake(asking)).toBe(true);
+    expect(isNeedsTimeTake({ ...asking, pendingPlans: undefined })).toBe(false);
+    expect(isNeedsTimeTake({ ...asking, errorKind: "server" })).toBe(false);
+    expect(isNeedsTimeTake({ ...asking, serverErrorDetail: "not_understood" })).toBe(false);
+    expect(isNeedsTimeTake({ ...asking, phase: "committing" })).toBe(false);
+  });
+
+  it("leaving failed drops the plans with the rest of the failure", () => {
+    const asking = take({
+      phase: "failed",
+      errorKind: "unparseable",
+      serverErrorDetail: "no_time",
+      pendingPlans: [dentist],
+    });
+    expect(transitionTake(asking, "committing")).not.toHaveProperty("pendingPlans");
+    // failed → failed (a reconcile refresh) keeps them.
+    expect(transitionTake(asking, "failed", {})?.pendingPlans).toEqual([dentist]);
+  });
+
+  it("the plans survive an app kill: they are on disk with the take", async () => {
+    await loadPendingTakes();
+    await putPendingTake(
+      take({
+        creationId: "kept",
+        phase: "failed",
+        errorKind: "unparseable",
+        serverErrorDetail: "past_time",
+        pastTime: "10:00",
+        pendingPlans: [dentist],
+      })
+    );
+
+    __resetPendingTakes(); // the kill: memory gone, disk kept
+    await loadPendingTakes();
+    const restored = getPendingTake("kept")!;
+    expect(restored.pendingPlans).toEqual([dentist]);
+    expect(isNeedsTimeTake(restored)).toBe(true);
   });
 });

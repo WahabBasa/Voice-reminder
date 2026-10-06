@@ -1,7 +1,13 @@
 import { getCapGateBlockContent } from "./usageGate";
 import { languageName } from "./languageNames";
 import { formatClockTime, type ClockFormatOptions } from "./time";
-import type { PendingErrorKind, PendingPhase } from "./pendingTakes";
+import {
+  isNeedsTimeTake,
+  type PendingErrorKind,
+  type PendingPhase,
+  type PendingPlan,
+} from "./pendingTakes";
+import { needsTimeFocus } from "./needsTime";
 
 /**
  * What the pending card says and what it lets you do (spec §2.3).
@@ -28,13 +34,47 @@ export type PendingCardContent = {
   swipeToDiscard: boolean;
   /** The X. Present in every non-terminal phase except the cancel already running (C4). */
   cancellable: boolean;
-  tone: "working" | "error";
+  /**
+   * `ask` is a take that is NOT a failure: the server heard a reminder with no
+   * usable time and kept it, and the card asks when (founder decision,
+   * 2026-10-06). Neutral styling, never the error red.
+   */
+  tone: "working" | "error" | "ask";
   /**
    * A failed take's quiet second line: `Remi heard: "…"` (OLD-137). Present
    * only on a failed card whose take has a transcript.
    */
   heard?: string;
+  /** The reminder an `ask` card is filled in with. Present only on `ask`. */
+  ask?: {
+    title: string;
+    /** The line Remi will say, in the user's language. */
+    spokenLine: string;
+    emoji?: string;
+    /** The take's other reminders, created with the same answer. */
+    more?: string;
+  };
 };
+
+/**
+ * What the card asks over a kept reminder. `past_time` names the time the user
+ * said, as context, on the dial the rest of the app uses.
+ */
+export function needsTimePrompt(
+  detail: string | undefined,
+  pastTime: string | undefined,
+  clock: ClockFormatOptions = {}
+): string {
+  if (detail !== "past_time") return "When should I remind you?";
+  const named = pastTime ? formatClockTime(pastTime, clock) : "";
+  return `${named || "That time"} has already passed today. When should I remind you?`;
+}
+
+/** "+1 more: Call mum" / "+2 more: Call mum, Buy milk". */
+export function moreRemindersLine(others: readonly PendingPlan[]): string | undefined {
+  if (others.length === 0) return undefined;
+  return `+${others.length} more: ${others.map((plan) => plan.title).join(", ")}`;
+}
 
 const SETTING_UP = "Setting up…";
 
@@ -112,11 +152,33 @@ export function pendingCardContent(
     serverErrorDetail?: string;
     detectedLanguage?: string;
     pastTime?: string;
+    pendingPlans?: PendingPlan[];
   },
   limit: number,
   /** The clock dial for a named time. Defaults to the device's; tests pin it. */
   clock: ClockFormatOptions = {}
 ): PendingCardContent {
+  // Not a failure: the reminder is filled in, and the card asks for a time.
+  // Swipe still discards it; there is no tap-to-retry and no X.
+  const focus = isNeedsTimeTake(take) ? needsTimeFocus(take.pendingPlans) : null;
+  if (focus) {
+    const more = moreRemindersLine(focus.others);
+    return {
+      text: needsTimePrompt(take.serverErrorDetail, take.pastTime ?? focus.plan.saidTime, clock),
+      shimmer: false,
+      tappable: false,
+      swipeToDiscard: true,
+      cancellable: false,
+      tone: "ask",
+      ask: {
+        title: focus.plan.title,
+        spokenLine: focus.plan.description,
+        ...(focus.plan.emoji ? { emoji: focus.plan.emoji } : {}),
+        ...(more ? { more } : {}),
+      },
+    };
+  }
+
   if (take.phase === "failed") {
     // An unresolved entitlement is a failed take like any other — it just gets
     // the sentence the rest of the app already uses for it.

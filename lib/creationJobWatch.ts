@@ -46,6 +46,11 @@ export type WatchedJob = {
   detectedLanguage?: string;
   /** For `past_time`: the one-off's spoken time, "HH:MM" on the user's clock. */
   pastTime?: string;
+  /**
+   * For `no_time`/`past_time`: the reminders the server heard and kept, for
+   * the "When should I remind you?" card (lib/pendingTakes.ts PendingPlan).
+   */
+  pendingPlans?: unknown[];
   reminderIds?: string[];
   perf?: CreationServerPerf;
   updatedAt: number;

@@ -128,6 +128,55 @@ export const creationErrorDetailValidator = v.union(
   v.literal("past_time")
 );
 
+const urgencyValidator = v.union(
+  v.literal("urgent"),
+  v.literal("notice"),
+  v.literal("routine")
+);
+
+/**
+ * One reminder the worker wants committed: every column `reminders.create`
+ * would have written, plus the two lines its TTS job needs. `ttsText` and
+ * `preTtsText` are scheduling inputs, not columns — they are destructured off
+ * before the row is inserted. Shared by `creationJobs.commit` and by the plans
+ * a take waiting for a time holds (`heldPlans`, below).
+ */
+export const commitPlanValidator = v.object({
+  title: v.string(),
+  description: v.string(),
+  // The one shared list (OLD-97), so a new schedule axis cannot land in the
+  // table and be dropped on the way in through here.
+  ...scheduleFields,
+  emoji: v.optional(v.string()),
+  preReminderMinutes: v.optional(v.number()),
+  urgency: v.optional(urgencyValidator),
+  persistent: v.optional(v.boolean()),
+  ttsText: v.string(),
+  preTtsText: v.optional(v.string()),
+  // ISO 639-1 language of the spoken content (OLD-130), stored on the row.
+  lang: v.optional(v.string()),
+});
+
+/**
+ * One reminder of a take the guard turned away as `no_time` or `past_time`,
+ * as the card shows it while it asks "When should I remind you?". Compact on
+ * purpose: this rides on the watched document (`creationJobs.get`). The full
+ * plan stays server-side in `heldPlans`.
+ */
+export const pendingPlanValidator = v.object({
+  title: v.string(),
+  // The spoken line, in the user's language.
+  description: v.string(),
+  emoji: v.optional(v.string()),
+  lang: v.optional(v.string()),
+  frequency: v.string(),
+  days: v.optional(v.array(v.string())),
+  // For a plan whose time had already passed: the "HH:MM" the user said.
+  saidTime: v.optional(v.string()),
+  // This plan is waiting for a time. Its siblings already have one.
+  needsTime: v.boolean(),
+});
+
 /** The five states a creation job can be in. The last three are terminal. */
 export const creationStatusValidator = v.union(
   v.literal("pending"),
@@ -308,6 +357,12 @@ export default defineSchema({
     detectedLanguage: v.optional(v.string()),
     // The spoken one-off time ("HH:MM", the user's clock) of a `past_time` take.
     pastTime: v.optional(v.string()),
+    // A `no_time`/`past_time` take keeps what it heard (the "When should I
+    // remind you?" card). `pendingPlans` is the card's compact view, exposed
+    // through `get`; `heldPlans` are the full plans, never sent to a client,
+    // that `resolveWithTime` commits once the user picks a time.
+    pendingPlans: v.optional(v.array(pendingPlanValidator)),
+    heldPlans: v.optional(v.array(commitPlanValidator)),
     // Capabilities the client declared at `begin` (e.g. "guard_v1"). Absent on
     // every job from a build that predates the field.
     clientFeatures: v.optional(v.array(v.string())),
@@ -449,6 +504,9 @@ export default defineSchema({
     dueAt: v.number(),
     sentAt: v.optional(v.number()),
     sentCount: v.number(),
+    // A take waiting for a time ("When should I remind you?"): unsent, and no
+    // delivery queued. Swiping it away, or a later real failure, wakes it.
+    parked: v.optional(v.boolean()),
     newDevice: v.boolean(),
     firstTake: v.boolean(),
     // The install's first hello and pre-launch flag, for "first seen today".

@@ -7,6 +7,7 @@
  */
 
 import {
+  askCardPrompt,
   FAILED_CARD_COPY,
   CARD_HEARD_MAX_CHARS,
   cardErrorKindForServerCode,
@@ -17,6 +18,7 @@ import {
 } from "../../convex/takeCardCopy";
 import {
   REMI_HEARD_MAX_CHARS,
+  needsTimePrompt,
   pendingCardContent,
   remiHeardLine,
 } from "../../lib/pendingCardContent";
@@ -130,6 +132,19 @@ describe("the server's card copy mirrors the client's", () => {
       42,
     ]) {
       expect(cardHeardLine(transcript)).toBe(remiHeardLine(transcript));
+    }
+  });
+
+  it("asks the same 'When should I remind you?' over a kept take", () => {
+    for (const detail of ["no_time", "past_time"]) {
+      for (const pastTime of PAST_TIMES) {
+        expect(askCardPrompt(detail, pastTime)).toBe(
+          needsTimePrompt(detail, pastTime, { hour12: false })
+        );
+      }
+    }
+    for (const detail of [undefined, "not_understood", "unsupported_language"]) {
+      expect(askCardPrompt(detail, undefined)).toBeNull();
     }
   });
 });

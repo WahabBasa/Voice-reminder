@@ -55,6 +55,22 @@ function detailCopy(
   }
 }
 
+/**
+ * Mirrors `needsTimePrompt` in lib/pendingCardContent.ts: what the card asks
+ * over a `no_time`/`past_time` take it kept, in place of a failure line. Null
+ * for every other detail.
+ */
+export function askCardPrompt(
+  detail: string | undefined,
+  pastTime: string | undefined
+): string | null {
+  if (detail === "no_time") return "When should I remind you?";
+  if (detail === "past_time") {
+    return `${pastTime || "That time"} has already passed today. When should I remind you?`;
+  }
+  return null;
+}
+
 /** The failed card's main line for a client error kind and a server detail. */
 export function failedCardCopy(input: {
   errorKind: CardErrorKind;

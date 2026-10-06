@@ -311,14 +311,14 @@ describe("the subject is outcome · language · city", () => {
           transcript: "Påminn mig om tandläkaren",
           failure: { errorCode: "unparseable", errorDetail: "no_time", parseRaw: '{"language":"sv"}' },
         }),
-        "Remi ❌ No time · Swedish · Dubai",
+        "Remi ⏳ Needs a time · Swedish · Dubai",
       ],
       [
         failedWith({
           transcript: "Remind me at nine this morning",
           failure: { errorCode: "unparseable", errorDetail: "past_time", pastTime: "10:00", parseRaw: '{"language":"en"}' },
         }),
-        "Remi ❌ Time passed · English · Dubai",
+        "Remi ⏳ Needs a time · English · Dubai",
       ],
       [
         failedWith(
@@ -337,6 +337,41 @@ describe("the subject is outcome · language · city", () => {
       ],
     ];
     for (const [input, subject] of cases) expect(buildTakeStorySubject(input)).toBe(subject);
+  });
+});
+
+// ─── a take that asked for a time ────────────────────────────────────────────
+
+describe("a take that asked 'When should I remind you?'", () => {
+  it("is ⏳ Needs a time, never ❌, and says what the card asked", () => {
+    const email = buildTakeStoryEmail(
+      failedWith(
+        {
+          transcript: "Påminn mig om tandläkaren",
+          failure: { errorCode: "unparseable", errorDetail: "no_time", parseRaw: '{"language":"sv"}' },
+        },
+        { final: "discarded" }
+      )
+    );
+    expect(email.subject).toBe("Remi ⏳ Needs a time · Swedish · Dubai");
+    expect(email.subject).not.toContain("❌");
+    const main = mainText(email.body);
+    expect(main.split("\n")[0]).toBe("⏳ Needs a time");
+    expect(main).toContain(`They saw: "When should I remind you?", then swiped it away`);
+  });
+
+  it("past_time keeps the time they said in what they saw", () => {
+    const main = mainText(
+      buildTakeStoryEmail(
+        failedWith(
+          { failure: { errorCode: "unparseable", errorDetail: "past_time", pastTime: "10:00" } },
+          { final: "discarded" }
+        )
+      ).body
+    );
+    expect(main).toContain(
+      `They saw: "10:00 has already passed today. When should I remind you?", then swiped it away`
+    );
   });
 });
 

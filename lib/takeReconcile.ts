@@ -13,6 +13,7 @@ import {
   type PendingTake,
 } from "./pendingTakes";
 import type { WatchedJob } from "./creationJobWatch";
+import type { GridSchedule } from "../convex/scheduleShape";
 import type { CommitTakeOutcome } from "./takeCommit";
 import type { SpeechEngine } from "./vrSpeech";
 
@@ -276,6 +277,17 @@ export type ReconcileDeps = {
     clientFeatures: readonly string[];
   }) => Promise<{ status: string; capReached?: boolean }>;
   discard: (args: { deviceId: string; creationId: string }) => Promise<{ status: string }>;
+  /**
+   * "When should I remind you?" answered: commit a kept `no_time`/`past_time`
+   * take with the picked schedule (convex/creationJobs.ts `resolveWithTime`).
+   * Optional so a test or a build without it simply cannot resolve.
+   */
+  resolveWithTime?: (args: {
+    deviceId: string;
+    creationId: string;
+    schedule: GridSchedule;
+    edits?: NeedsTimeEdits;
+  }) => Promise<{ status: string }>;
   /** Upload this take's recording. Null when the file is gone (D10). */
   uploadRecording: (take: PendingTake) => Promise<string | null>;
   /** Is the recording still on disk? Only ever false for a `fragileUri` take. */
@@ -874,6 +886,56 @@ export async function retryTake(creationId: string): Promise<void> {
   } catch (e) {
     current.onStage?.(creationId, "retry_error", { error: String(e) });
   }
+}
+
+/** What the sheet may change before a kept reminder is created. */
+export type NeedsTimeEdits = { title: string; description: string; emoji?: string };
+
+/**
+ * - `created`: the server committed the take; reconciliation imports it, and
+ *   the card turns into the reminder with the usual "Reminder created" toast.
+ * - `invalid`: the server will not take that schedule (a time already gone).
+ * - `unavailable`: the take is not waiting for a time any more, or never was.
+ * - `offline`: the call did not land. The card keeps asking.
+ */
+export type ResolveTakeOutcome = "created" | "invalid" | "unavailable" | "offline";
+
+/**
+ * Answer a kept take's "When should I remind you?" (founder decision,
+ * 2026-10-06).
+ *
+ * Nothing local moves before the server answers: the take stays the asking
+ * card until its job is committed, so a kill at any point is safe — a commit
+ * that landed is imported by the next reconciliation pass (failed + committed
+ * = import), and one that did not leaves the question on screen.
+ */
+export async function resolveTakeWithTime(
+  creationId: string,
+  schedule: GridSchedule,
+  edits?: NeedsTimeEdits
+): Promise<ResolveTakeOutcome> {
+  const current = deps;
+  const take = getPendingTake(creationId);
+  if (!current?.resolveWithTime || !take) return "unavailable";
+  let status: string;
+  try {
+    const deviceId = await current.getDeviceId();
+    ({ status } = await current.resolveWithTime({
+      deviceId,
+      creationId,
+      schedule,
+      ...(edits ? { edits } : {}),
+    }));
+  } catch (e) {
+    current.onStage?.(creationId, "resolve_time_error", { error: String(e) });
+    return "offline";
+  }
+  current.onStage?.(creationId, `resolve_time_${status}`);
+  if (status === "committed") {
+    enqueueReconcile(creationId);
+    return "created";
+  }
+  return status === "invalid" ? "invalid" : "unavailable";
 }
 
 export async function cancelTake(creationId: string): Promise<void> {

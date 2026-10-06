@@ -22,6 +22,7 @@ import {
   handleFailedJobPush,
   abandonOrphanBlob,
   reconcileIdle,
+  resolveTakeWithTime,
   retryTake,
   shouldRetryInCloud,
   startForegroundReconcile,
@@ -1669,5 +1670,183 @@ describe("clientFeatures on every begin (OLD-133)", () => {
       const args = call.slice(0, call.indexOf(");"));
       expect(args).toContain("clientFeatures: CLIENT_FEATURES");
     }
+  });
+});
+
+// ─── "When should I remind you?" (founder decision, 2026-10-06) ─────────────
+
+describe("a take kept for want of a time", () => {
+  const dentist = {
+    title: "Call the dentist",
+    description: "Ring tandläkaren.",
+    emoji: "🦷",
+    lang: "sv",
+    frequency: "once",
+    needsTime: true,
+  };
+  const needsTime = (over: Partial<WatchedJob> = {}) =>
+    job({
+      status: "failed",
+      errorCode: "unparseable",
+      errorDetail: "no_time",
+      pendingPlans: [dentist],
+      ...over,
+    });
+  const asking = (over: Partial<PendingTake> = {}) =>
+    take({
+      phase: "failed",
+      errorKind: "unparseable",
+      serverErrorCode: "unparseable",
+      serverErrorDetail: "no_time",
+      pendingPlans: [dentist],
+      ...over,
+    });
+  const grid = {
+    type: "grid" as const,
+    days: { kind: "date" as const, date: "2026-10-07" },
+    times: { kind: "clock" as const, times: ["09:00"] },
+    tzid: "Asia/Riyadh",
+  };
+  const resolving = (h: Harness, answer: () => Promise<{ status: string }>) => {
+    const sent: any[] = [];
+    h.deps.resolveWithTime = async (args) => {
+      sent.push(args);
+      return answer();
+    };
+    configureReconcile(h.deps);
+    return sent;
+  };
+
+  it("a device take: the cloud retry runs first, and only its no_time asks — no flash", async () => {
+    const h = setup();
+    const phases: PendingPhase[] = [];
+    const off = subscribePendingTakes(() => {
+      const phase = getPendingTake("t1")?.phase;
+      if (phase && phases[phases.length - 1] !== phase) phases.push(phase);
+    });
+    h.jobs.set("t1", needsTime());
+    await seed(take({ phase: "processing", sttSource: "device", transcript: "put metrica" }));
+
+    expect(await handleFailedJobPush("t1", needsTime())).toBe("cloud_retry");
+    await reconcileIdle();
+    expect(h.calls.retry).toHaveLength(1);
+    // Still working: neither the device attempt's question nor a failure.
+    expect(pendingCardContent(getPendingTake("t1") as PendingTake, 5).tone).toBe("working");
+
+    const cloud = needsTime({ generation: 2, transcript: "ring tandläkaren" });
+    h.jobs.set("t1", cloud);
+    expect(await handleFailedJobPush("t1", cloud)).toBe("defer_to_reconcile");
+    await reconcileIdle();
+    off();
+
+    const final = getPendingTake("t1") as PendingTake;
+    expect(final.pendingPlans).toEqual([dentist]);
+    const card = pendingCardContent(final, 5);
+    expect(card.tone).toBe("ask");
+    expect(card.text).toBe("When should I remind you?");
+    // `failed` is the take's storage phase; it is reached exactly once, at the end.
+    expect(phases.filter((p) => p === "failed")).toHaveLength(1);
+    expect(phases[phases.length - 1]).toBe("failed");
+  });
+
+  it("a reconcile pass over a still-waiting take keeps it asking", async () => {
+    const h = setup();
+    h.jobs.set("t1", needsTime());
+    await seed(asking());
+
+    enqueueAllPendingTakes();
+    await reconcileIdle();
+
+    expect(pendingCardContent(getPendingTake("t1") as PendingTake, 5).tone).toBe("ask");
+    expect(h.calls.retry).toHaveLength(0);
+    expect(h.calls.recordAgain).toHaveLength(0);
+  });
+
+  it("answering creates it through the server, then imports it like any committed take", async () => {
+    const h = setup();
+    h.jobs.set("t1", needsTime());
+    await seed(asking());
+    const sent = resolving(h, async () => {
+      h.jobs.set("t1", job({ status: "committed", reminderIds: ["r1"] }));
+      return { status: "committed" };
+    });
+
+    expect(await resolveTakeWithTime("t1", grid)).toBe("created");
+    await reconcileIdle();
+
+    expect(sent).toEqual([{ deviceId: "device-1", creationId: "t1", schedule: grid }]);
+    expect(h.calls.imports).toEqual(["t1"]);
+    expect(h.calls.stages).toContain("resolve_time_committed");
+  });
+
+  it("the sheet's edits ride along", async () => {
+    const h = setup();
+    await seed(asking());
+    const sent = resolving(h, async () => ({ status: "committed" }));
+    const edits = { title: "Dentist", description: "Ring nu.", emoji: "📞" };
+
+    await resolveTakeWithTime("t1", grid, edits);
+
+    expect(sent[0]).toEqual({ deviceId: "device-1", creationId: "t1", schedule: grid, edits });
+  });
+
+  it("a kill after the server committed: the next launch imports it", async () => {
+    const h = setup();
+    // The answer landed, then the app died before reconciliation ran.
+    h.jobs.set("t1", job({ status: "committed", reminderIds: ["r1"] }));
+    await seed(asking());
+
+    enqueueAllPendingTakes();
+    await reconcileIdle();
+
+    expect(h.calls.imports).toEqual(["t1"]);
+  });
+
+  it("a refused time leaves the card asking", async () => {
+    const h = setup();
+    await seed(asking());
+    resolving(h, async () => ({ status: "invalid" }));
+
+    expect(await resolveTakeWithTime("t1", grid)).toBe("invalid");
+    expect(getPendingTake("t1")).toMatchObject({ phase: "failed", pendingPlans: [dentist] });
+    expect(h.calls.imports).toHaveLength(0);
+  });
+
+  it("an answer that did not land is offline, and the card keeps asking", async () => {
+    const h = setup();
+    await seed(asking());
+    resolving(h, async () => {
+      throw new Error("network down");
+    });
+
+    expect(await resolveTakeWithTime("t1", grid)).toBe("offline");
+    expect(h.calls.stages).toContain("resolve_time_error");
+    expect(getPendingTake("t1")?.phase).toBe("failed");
+  });
+
+  it("a take that is no longer waiting is unavailable", async () => {
+    const h = setup();
+    await seed(asking());
+    resolving(h, async () => ({ status: "failed" }));
+    expect(await resolveTakeWithTime("t1", grid)).toBe("unavailable");
+    expect(await resolveTakeWithTime("ghost", grid)).toBe("unavailable");
+  });
+
+  it("is unavailable without the server seam", async () => {
+    setup();
+    await seed(asking());
+    expect(await resolveTakeWithTime("t1", grid)).toBe("unavailable");
+  });
+
+  it("Record again on the asking card discards it and opens the recorder", async () => {
+    const h = setup();
+    h.jobs.set("t1", needsTime());
+    await seed(asking());
+
+    await retryTake("t1");
+
+    expect(h.calls.discard).toEqual([{ deviceId: "device-1", creationId: "t1" }]);
+    expect(h.calls.recordAgain).toEqual(["t1"]);
+    expect(getPendingTake("t1")).toBeUndefined();
   });
 });

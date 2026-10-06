@@ -22,6 +22,7 @@ import type * as founderAlerts from "../founderAlerts.js";
 import type * as founderAlertsEmail from "../founderAlertsEmail.js";
 import type * as helpers from "../helpers.js";
 import type * as languages from "../languages.js";
+import type * as needsTime from "../needsTime.js";
 import type * as parseUsage from "../parseUsage.js";
 import type * as reminders from "../reminders.js";
 import type * as scheduleShape from "../scheduleShape.js";
@@ -51,6 +52,7 @@ declare const fullApi: ApiFromModules<{
   founderAlertsEmail: typeof founderAlertsEmail;
   helpers: typeof helpers;
   languages: typeof languages;
+  needsTime: typeof needsTime;
   parseUsage: typeof parseUsage;
   reminders: typeof reminders;
   scheduleShape: typeof scheduleShape;

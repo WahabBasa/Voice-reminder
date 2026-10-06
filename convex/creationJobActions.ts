@@ -36,6 +36,13 @@ import {
   validateCreationPlans,
   type GuardDetail,
 } from "./creationValidate";
+import {
+  isNeedsTimeDetail,
+  planNeedsTime,
+  toPendingPlan,
+  type HeldPlan,
+  type PendingPlan,
+} from "./needsTime";
 import { transcribeAudio, SttError, type SttPerf } from "./stt";
 import { extractParseUsage } from "./parseUsage";
 import type { scheduleFields } from "./schema";
@@ -224,6 +231,26 @@ type MissingScheduleColumns = Exclude<
 const _scheduleColumnsAreComplete = (missing: MissingScheduleColumns): never => missing;
 void _scheduleColumnsAreComplete;
 
+/**
+ * What a `no_time`/`past_time` take keeps (convex/needsTime.ts): every plan as
+ * `commit` would write it, and the card's compact view of each, flagged with
+ * whether it is the one waiting for a time. Capped exactly like a committed
+ * take, so the plans that are later resolved are the ones the gate would see.
+ *
+ * Exported for the unit tests.
+ */
+export function holdPlansForTime(
+  plans: PlannedReminder[],
+  now: number
+): { heldPlans: HeldPlan[]; pendingPlans: PendingPlan[] } {
+  const capped = plans.map(capEveryNDays);
+  const heldPlans = capped.map(toCommitPlan);
+  const pendingPlans = capped.map((plan, i) =>
+    toPendingPlan(heldPlans[i], planNeedsTime(plan, now), plan.timeSpoken)
+  );
+  return { heldPlans, pendingPlans };
+}
+
 // ─── Stages ─────────────────────────────────────────────────────────────────
 
 /**
@@ -238,7 +265,14 @@ async function failJob(
   perf: WorkerPerf,
   // The guard's reason (OLD-130). Only ever passed for a guard_v1 take, so
   // every other failure writes exactly the patch it always has.
-  guard?: { errorDetail: GuardDetail; detectedLanguage?: string; pastTime?: string },
+  guard?: {
+    errorDetail: GuardDetail;
+    detectedLanguage?: string;
+    pastTime?: string;
+    // `no_time`/`past_time` only: the plans the card asks a time for.
+    pendingPlans?: PendingPlan[];
+    heldPlans?: HeldPlan[];
+  },
   // What this run saw that the job row does not hold (OLD-136), kept on the
   // failed take's row for the founder: the parse model's raw answer.
   diag?: ParseDiagnostics
@@ -506,12 +540,18 @@ export const run = internalAction({
         console.error(
           `[VR] creation job: guard rejected — ${verdict.detail}: ${verdict.reason}`
         );
+        // A take that only lacks a usable time keeps what it heard, so the
+        // card can ask "When should I remind you?" instead of failing it.
+        const held = isNeedsTimeDetail(verdict.detail)
+          ? holdPlansForTime(parsed.value.plans, Date.now())
+          : undefined;
         await failJob(ctx, args, "unparseable", perf, {
           errorDetail: verdict.detail,
           ...(verdict.detectedLanguage !== undefined
             ? { detectedLanguage: verdict.detectedLanguage }
             : {}),
           ...(verdict.pastTime !== undefined ? { pastTime: verdict.pastTime } : {}),
+          ...(held ?? {}),
         }, diag);
         logCreationJobPerf(job.creationId, args.generation, "failed", perf);
         return null;
