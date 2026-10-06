@@ -3,9 +3,9 @@
  * alongside the mp3 URL so the device can re-place the AlarmKit sound — or
  * clear a stale one when alarm-wav synthesis was skipped/failed.
  *
- * The action's TTS provider calls are driven through a mocked `fetch`; the
- * ElevenLabs provider is selected (it is the only one that also produces a wav)
- * and Speechify is left unconfigured so both synthesis calls hit ElevenLabs.
+ * The action's TTS provider calls are driven through a mocked `fetch`. Every
+ * line goes to Speechify (ElevenLabs is no longer used), which produces both
+ * the mp3 and the PCM the wav is built from.
  */
 
 jest.mock("openai", () => ({
@@ -27,7 +27,9 @@ function audioResponse() {
         ok: true,
         status: 200,
         headers: { get: () => null },
-        arrayBuffer: async () => new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
+        json: async () => ({
+            audio_data: Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]).toString("base64"),
+        }),
         text: async () => "",
     };
 }
@@ -53,10 +55,8 @@ function makeCtx(reminder: Record<string, any> | null) {
 const OLD_ENV = { ...process.env };
 
 beforeEach(() => {
-    process.env.TTS_PROVIDER = "elevenlabs";
-    process.env.ELEVENLABS_API_KEY = "test-key";
-    process.env.ELEVENLABS_VOICE_ID = "voice_1";
-    delete process.env.SPEECHIFY_API_KEY;
+    process.env.TTS_PROVIDER = "elevenlabs"; // as on the live deployment; ignored
+    process.env.SPEECHIFY_API_KEY = "test-key";
 });
 
 afterEach(() => {
@@ -93,8 +93,8 @@ describe("regenerateReminderAudio return shape", () => {
     it("returns wavUrl: null when alarm-wav synthesis fails", async () => {
         // The mp3 call succeeds; the pcm (alarm wav) call rejects. The action
         // swallows the wav failure, so wavStorageId is undefined → wavUrl null.
-        (global as any).fetch = jest.fn(async (url: string) => {
-            if (String(url).includes("pcm_")) throw new Error("pcm down");
+        (global as any).fetch = jest.fn(async (_url: string, init: any) => {
+            if (String(init?.body ?? "").includes("pcm_")) throw new Error("pcm down");
             return audioResponse();
         });
         const ctx = makeCtx({

@@ -19,8 +19,6 @@ type ResembleProjectsResponse = {
   items?: Array<{ uuid: string; name?: string }>;
 };
 
-type TtsProvider = "resemble" | "elevenlabs";
-
 /**
  * Keep-warm no-op (OLD-106).
  *
@@ -52,15 +50,23 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function getTtsProvider(): TtsProvider {
-  const configured = process.env.TTS_PROVIDER?.toLowerCase();
-  if (configured === "elevenlabs" || configured === "resemble") return configured;
-  if (process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_VOICE_ID) return "elevenlabs";
-  return "resemble";
+/**
+ * The legacy `TTS_PROVIDER` switch, reduced to the one value that still means
+ * anything: an explicit `resemble` sends every line to the old Resemble voice.
+ *
+ * Before 2026-10-06 this was `getTtsProvider()`, and its `elevenlabs` value
+ * (still set on the live deployment) was what switched the modern pipeline on
+ * at all: Speechify for English and Arabic, ElevenLabs for every other
+ * language and whenever no Speechify key was set. Unset, with no ElevenLabs
+ * keys, it fell through to Resemble. ElevenLabs is no longer used, so
+ * `elevenlabs`, unset and any other value now all mean "Speechify".
+ */
+function legacyResembleSelected(): boolean {
+  return process.env.TTS_PROVIDER?.trim().toLowerCase() === "resemble";
 }
 
 import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, LANG_FIELD_LINE, OTHER_LANGUAGE_RULE, GUARD_TIME_SPOKEN_FIELD_LINE, NO_TIME_DEFAULT_INSTRUCTION, GUARD_NO_TIME_INSTRUCTION, GUARD_UNDERSTOOD_INSTRUCTION, readParseEnvelope, type Urgency } from "./helpers";
-import { normalizeLanguageCode, needsMultilingualVoice } from "./languages";
+import { normalizeLanguageCode, speechifyLineLanguage } from "./languages";
 import { buildGridSchedule, legacyFieldsFromGrid, normalizeClockTimes, zonedTimeToUtcMs, type GridSchedule } from "./scheduleShape";
 import { transcribeAudio, SttError, type SttPerf } from "./stt";
 import { extractParseUsage } from "./parseUsage";
@@ -815,26 +821,34 @@ function elevenLabsModelId(): string {
 }
 
 /**
- * Speechify carries all narration (OLD-62/OLD-66): the same Beatrice voice on
- * simba-3.2 for English and simba-multilingual for Arabic-script lines —
- * simba-3.2 does not reject Arabic, it silently mangles it, so the model is
- * picked from the text (containsArabicScript), never from a response. No key
- * in the env means the whole pipeline falls back to ElevenLabs — that is the
- * rollback switch.
+ * Speechify carries all narration (OLD-62/OLD-66, and since 2026-10-06 every
+ * language): the same Beatrice voice on simba-3.2 for English and
+ * simba-multilingual for Arabic-script lines — simba-3.2 does not reject
+ * Arabic, it silently mangles it, so that model is picked from the text
+ * (containsArabicScript), never from a response. Every other language is
+ * picked from the reminder's `lang` (see pickVoiceRoute).
  */
 const SPEECHIFY_DEFAULT_MODEL = "simba-3.2";
-// Speechify retired `simba-multilingual` for new workspaces; ours still serves
-// it because it is pinned to an older API version, and the docs disagree on
-// whether it is switched off or silently re-pointed on 2026-11-21
-// (docs/research/2026-10-05_multilingual-scope.md). Arabic still rides it —
-// OLD-131 deliberately left that route alone; it needs its own move before then.
+// Speechify retired `simba-multilingual` for new workspaces (400
+// model_retired from API version 2026-09-21); ours is pinned below that
+// version, so it still answers. From 2026-11-21 the id keeps answering on such
+// a workspace, served by Speechify's current multilingual model "in every
+// language you send it today" — the audio changes, the integration does not
+// (https://docs.speechify.ai/build/changelog/2026/9/21). Arabic and the
+// languages simba-3.0 does not officially cover ride it.
 const SPEECHIFY_DEFAULT_MULTILINGUAL_MODEL = "simba-multilingual";
+// The API default and Speechify's non-retiring multilingual model, officially
+// for en, de-DE, es-ES / es-MX, fr-FR, it-IT and pt-BR
+// (https://docs.speechify.ai/docs/language-support).
+const SPEECHIFY_SIMBA_30_MODEL = "simba-3.0";
 const SPEECHIFY_DEFAULT_VOICE_ID = "beatrice_32";
 
+function speechifyMultilingualModel(): string {
+  return process.env.SPEECHIFY_MULTILINGUAL_MODEL || SPEECHIFY_DEFAULT_MULTILINGUAL_MODEL;
+}
+
 function speechifyModelFor(text: string): string {
-  if (containsArabicScript(text)) {
-    return process.env.SPEECHIFY_MULTILINGUAL_MODEL || SPEECHIFY_DEFAULT_MULTILINGUAL_MODEL;
-  }
+  if (containsArabicScript(text)) return speechifyMultilingualModel();
   return process.env.SPEECHIFY_MODEL || SPEECHIFY_DEFAULT_MODEL;
 }
 
@@ -842,43 +856,52 @@ function speechifyVoiceId(): string {
   return process.env.SPEECHIFY_VOICE_ID || SPEECHIFY_DEFAULT_VOICE_ID;
 }
 
-function routesToSpeechify(_text: string): boolean {
-  return Boolean(process.env.SPEECHIFY_API_KEY);
-}
-
-/** Which voice speaks one line, and on which model. */
+/**
+ * Which voice speaks one line, and on which model. `language` is Speechify's
+ * locale param (e.g. "sv-SE"); English and Arabic lines carry none, so their
+ * requests stay byte-identical to the ones sent before it existed.
+ *
+ * There is no ElevenLabs route: see pickVoiceRoute.
+ */
 export type VoiceRoute =
   | { provider: "resemble" }
-  | { provider: "speechify"; model: string }
-  | { provider: "elevenlabs"; model: string };
+  | { provider: "speechify"; model: string; language?: string };
 
 /**
  * The one place a spoken line is matched to a voice (OLD-131).
  *
- * `lang` is the reminder row's ISO 639-1 code (reminders.lang). A line in any
- * eleven_v3 language other than English and Arabic goes to the ElevenLabs
- * voice pinned in `ELEVENLABS_VOICE_ID`, on `ELEVENLABS_MODEL_ID` — simba-3.2
- * is English-only and mangles everything else. Every other line takes exactly
- * the route it took before: English and a missing `lang` to Beatrice on
- * simba-3.2, Arabic script to simba-multilingual, ElevenLabs when no Speechify
- * key is set, Resemble when the legacy provider switch says so.
+ * `lang` is the reminder row's ISO 639-1 code (reminders.lang). Every line
+ * goes to Speechify's Beatrice:
+ *   - English and a missing `lang`: simba-3.2, exactly as before.
+ *   - Arabic: unchanged, simba-multilingual when the line carries Arabic
+ *     script, with no `language` param.
+ *   - German, Spanish, French, Italian, Portuguese: simba-3.0, with the
+ *     locale as `language`.
+ *   - Every other language in SPEECHIFY_LINE_LANGUAGES (languages.ts):
+ *     simba-multilingual, with the locale as `language`.
+ *   - Anything else (a language Speechify does not voice cannot get past the
+ *     creation guard) falls back to the English / Arabic route.
  *
- * There is no fallback between voices: a foreign line whose ElevenLabs call
- * fails fails like any other synthesis (see the callers), rather than being
- * read out by an English voice.
+ * ElevenLabs is never selected (2026-10-06: the account was Free Tier, not
+ * licensed for commercial use, and is blocked). `TTS_PROVIDER=elevenlabs`,
+ * still set on the live deployment, is ignored; only an explicit
+ * `TTS_PROVIDER=resemble` still means anything. synthesizeWithElevenLabs is
+ * left in this file but nothing routes to it.
+ *
+ * There is no fallback between voices: a line whose Speechify call fails
+ * fails like any other synthesis (see the callers), rather than being read out
+ * by another voice. A missing SPEECHIFY_API_KEY is such a failure.
  */
 export function pickVoiceRoute(args: { text: string; lang?: string | null }): VoiceRoute {
-  if (getTtsProvider() !== "elevenlabs") return { provider: "resemble" };
+  if (legacyResembleSelected()) return { provider: "resemble" };
   // Decided by the language, not the script: Persian or Urdu is written in
-  // Arabic script but is not Arabic, and simba-multilingual was only ever
-  // vetted for Arabic.
-  if (needsMultilingualVoice(args.lang)) {
-    return { provider: "elevenlabs", model: elevenLabsModelId() };
+  // Arabic script but is not Arabic.
+  const line = speechifyLineLanguage(args.lang);
+  if (line) {
+    const model = line.tier === "simba-3.0" ? SPEECHIFY_SIMBA_30_MODEL : speechifyMultilingualModel();
+    return { provider: "speechify", model, language: line.locale };
   }
-  if (routesToSpeechify(args.text)) {
-    return { provider: "speechify", model: speechifyModelFor(args.text) };
-  }
-  return { provider: "elevenlabs", model: elevenLabsModelId() };
+  return { provider: "speechify", model: speechifyModelFor(args.text) };
 }
 
 /**
@@ -890,7 +913,8 @@ export function pickVoiceRoute(args: { text: string; lang?: string | null }): Vo
  * captured under another, which is exactly the comparison OLD-62/OLD-67 need.
  */
 function ttsModelLabel(route: VoiceRoute): string {
-  return route.provider === "resemble" ? "resemble" : `${route.provider}/${route.model}`;
+  if (route.provider === "resemble") return "resemble";
+  return `${route.provider}/${route.model}${route.language ? `:${route.language}` : ""}`;
 }
 
 /** `Retry-After` in ms, clamped — a provider asking us to wait a minute is not a reason to. */
@@ -900,6 +924,13 @@ function retryAfterMs(header: string | null): number {
   return Math.min(Math.max(seconds * 1000, TTS_RETRY_MIN_MS), TTS_RETRY_MAX_MS);
 }
 
+/**
+ * UNREACHABLE since 2026-10-06: pickVoiceRoute never returns an ElevenLabs
+ * route, so nothing calls this. Kept only as reference until it is deleted;
+ * do not route to it — the ElevenLabs account was Free Tier (no commercial
+ * licence) and is blocked.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function synthesizeWithElevenLabs(args: { text: string; outputFormat?: string }): Promise<Buffer> {
   const apiKey = requireEnv("ELEVENLABS_API_KEY");
   const voiceId = requireEnv("ELEVENLABS_VOICE_ID");
@@ -968,14 +999,21 @@ async function synthesizeWithElevenLabs(args: { text: string; outputFormat?: str
  * `text_normalization` defaults to true server-side, which is what makes
  * "7:30" read as "seven thirty" — do not turn it off.
  */
-async function synthesizeWithSpeechify(args: { text: string; outputFormat?: string }): Promise<Buffer> {
+async function synthesizeWithSpeechify(args: {
+  text: string;
+  route: { model: string; language?: string };
+  outputFormat?: string;
+}): Promise<Buffer> {
   const apiKey = requireEnv("SPEECHIFY_API_KEY");
-  const model = speechifyModelFor(args.text);
-  const formatLabel = args.outputFormat || "mp3";
+  const { model, language } = args.route;
+  const formatLabel = `${args.outputFormat || "mp3"}${language ? ` lang=${language}` : ""}`;
+  // Key order matters: an English / Arabic line (no `language`) must send the
+  // exact bytes it sent before the multilingual route existed.
   const body: Record<string, unknown> = {
     input: args.text,
     voice_id: speechifyVoiceId(),
     model,
+    ...(language ? { language } : {}),
     ...(args.outputFormat ? { output_format: args.outputFormat } : { audio_format: "mp3" }),
   };
 
@@ -1020,17 +1058,17 @@ type SpokenLine = { text: string; title?: string; lang?: string | null };
 
 async function synthesizeReminderTts(args: SpokenLine): Promise<Buffer> {
   const route = pickVoiceRoute(args);
-  if (route.provider === "speechify") return await synthesizeWithSpeechify({ text: args.text });
-  if (route.provider === "elevenlabs") return await synthesizeWithElevenLabs({ text: args.text });
+  if (route.provider === "speechify") return await synthesizeWithSpeechify({ text: args.text, route });
   return await synthesizeWithResemble({ text: args.text, title: args.title });
 }
 
 /**
  * Alarm-ready WAV of one spoken line (iOS AlarmKit custom sound).
- * PCM out from whichever voice pickVoiceRoute picked — Speechify (simba-3.2,
- * or simba-multilingual for Arabic) or ElevenLabs (a non-English, non-Arabic
- * line, or no Speechify key) — all asked for the same ALARM_PCM_OUTPUT_FORMAT,
- * so the bytes are the same pcm_22050 s16le mono layout either way. Shaped into
+ * PCM out from the Speechify route pickVoiceRoute picked (simba-3.2 for
+ * English, simba-multilingual for Arabic, simba-3.0 or simba-multilingual with
+ * a `language` locale for the rest) — all asked for the same
+ * ALARM_PCM_OUTPUT_FORMAT, so the bytes are the same pcm_22050 s16le mono
+ * layout whatever the language (measured live 2026-10-06). Shaped into
  * repeated utterances and wrapped with a 44-byte WAV header in-process.
  * Failure returns null — the alarm degrades to the system default sound and
  * never blocks reminder creation.
@@ -1040,11 +1078,11 @@ async function synthesizeAlarmWav(line: { text: string; lang?: string | null }):
   if (route.provider === "resemble") return null;
   const rate = parsePcmSampleRate(ALARM_PCM_OUTPUT_FORMAT);
   if (rate === null) return null;
-  const { text } = line;
-  const pcm =
-    route.provider === "speechify"
-      ? await synthesizeWithSpeechify({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT })
-      : await synthesizeWithElevenLabs({ text, outputFormat: ALARM_PCM_OUTPUT_FORMAT });
+  const pcm = await synthesizeWithSpeechify({
+    text: line.text,
+    route,
+    outputFormat: ALARM_PCM_OUTPUT_FORMAT,
+  });
   return buildAlarmWav(new Uint8Array(pcm), rate);
 }
 
@@ -1093,7 +1131,7 @@ async function synthesizeAndStoreLineTts(
  * one optional job — so the pool, its index-alignment bookkeeping and its
  * `TTS_LINE_CONCURRENCY` dial are gone with it. The reliability half of that
  * work stays where it belongs: the 429 retry lives inside
- * synthesizeWithElevenLabs, so this call is still rate-limit-survivable.
+ * synthesizeWithSpeechify, so this call is still rate-limit-survivable.
  *
  * Returns undefined rather than throwing when synthesis fails. A missing
  * pre-alert audio is a heads-up that arrives as a silent notification, which is
