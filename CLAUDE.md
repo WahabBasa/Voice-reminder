@@ -169,6 +169,11 @@ Consequence: any `npx convex dev` session — human or agent — pushes straight
 2. Publish the update **in the cloud** through the EAS Workflow `update` job (see Standing Rules), after the change has been tested on a dev build. Production builds are on channel `production`, runtime policy `appVersion`. (A local `eas update` is off-limits: it bundles on this machine.)
 3. Force-quit the app twice: first launch downloads, second applies.
 
+**Publishing rule (learned 2026-10-06, after an update was reported live but never published):**
+- Run `npx.cmd eas-cli workflow:run .eas/workflows/update-<env>.yml --non-interactive` as its **own bare command**. Never chain it after a push, tsc or tests in one long command line: a tool timeout kills the tail of the chain without saying so.
+- Same for `npx.cmd convex dev --once`: run it bare, so the allow rule matches.
+- Never tell the user an update is live until `npx.cmd eas-cli update:list --branch <branch> --limit 1 --non-interactive` shows the new message. "Pushed to GitHub" is not "live on phones".
+
 Native changes (`app.json`, `plugins/`, native deps, Swift under `plugins/ios-src/`) need a new EAS build, not an OTA.
 
 **The Convex URL rides in the JS bundle, not the native shell.** `EXPO_PUBLIC_CONVEX_URL` is inlined by Metro at export time: an EAS build takes it from the EAS env, an `eas update` takes it from this machine's `.env.local`. Today both say `proper-stoat-767`. Never run `eas update` from an environment whose `.env.local` points elsewhere — it would silently repoint every installed app. Switching to prod (OLD-126) therefore means flipping the EAS env, `.env.local`, and shipping a build + OTA together.
