@@ -26,14 +26,18 @@ export const CLIENT_FEATURES: readonly string[] = ["guard_v1"];
 
 /**
  * The one automatic retry (OLD-133). The on-device engine listens in one
- * language. When someone speaks another, it can return confident nonsense, and
- * the server reports `not_understood`. The cloud transcriber handles other
- * languages, so the take gets one more chance there before the card shows an
- * error.
+ * language. When someone speaks another, it can return confident nonsense
+ * ("Put Metrica button on teamer" for Swedish), and the misheard words can trip
+ * any of the server's guard details: `not_understood`, `no_time`, `past_time`
+ * or `unsupported_language`. The cloud transcriber handles other languages, so
+ * the take gets one more chance there before the card shows an error.
+ *
+ * Only a guard rejection earns it: a server or network failure is not a
+ * transcription problem, and a silent take never reached the server.
  *
  * Only once, ever. `cloudRetried` is set before the upload starts and never
  * cleared, so a second failure, or a reconcile pass after a kill, shows the
- * error.
+ * error, and the card then carries the cloud attempt's own detail.
  */
 export function shouldRetryInCloud(
   take: Pick<PendingTake, "sttSource" | "cloudRetried">,
@@ -41,7 +45,7 @@ export function shouldRetryInCloud(
 ): boolean {
   return (
     job.status === "failed" &&
-    job.errorDetail === "not_understood" &&
+    isRecordAgainDetail(job.errorDetail) &&
     take.sttSource === "device" &&
     take.cloudRetried !== true
   );
@@ -468,7 +472,7 @@ async function failFromServer(
 }
 
 /**
- * The automatic cloud retry for a device take the server did not understand
+ * The automatic cloud retry for a device take the server's guard rejected
  * (OLD-133). The same job is re-run with the local recording as its source,
  * through `retry` + `newStorageId`. `begin` would only return the failed job
  * that already exists.

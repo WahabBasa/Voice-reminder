@@ -29,6 +29,7 @@ import {
   type ReconcileDeps,
   type ServerJobStatus,
 } from "../../lib/takeReconcile";
+import { pendingCardContent } from "../../lib/pendingCardContent";
 import {
   __resetPendingTakes,
   getPendingTake,
@@ -984,9 +985,23 @@ describe("the cloud-retry decision (OLD-133)", () => {
     errorDetail: "not_understood",
   });
 
-  it("retries a device take the server did not understand", () => {
-    expect(shouldRetryInCloud({ sttSource: "device" }, failedNotUnderstood)).toBe(true);
-  });
+  const GUARD_DETAILS = ["not_understood", "no_time", "past_time", "unsupported_language"];
+
+  for (const errorDetail of GUARD_DETAILS) {
+    it(`retries a device take the guard rejected as ${errorDetail}`, () => {
+      // A misheard transcript ("Put Metrica button on teamer" for Swedish) can
+      // trip any of the guard's details, not only not_understood.
+      const failed = job({ status: "failed", errorCode: "unparseable", errorDetail });
+      expect(shouldRetryInCloud({ sttSource: "device" }, failed)).toBe(true);
+      expect(failedJobAction({ sttSource: "device" }, failed)).toBe("cloud_retry");
+    });
+
+    it(`does not retry a cloud take, or a device take already retried, on ${errorDetail}`, () => {
+      const failed = job({ status: "failed", errorCode: "unparseable", errorDetail });
+      expect(shouldRetryInCloud({ sttSource: "cloud" }, failed)).toBe(false);
+      expect(shouldRetryInCloud({ sttSource: "device", cloudRetried: true }, failed)).toBe(false);
+    });
+  }
 
   it("retries it once: a take already sent to the cloud is not sent again", () => {
     expect(
@@ -994,16 +1009,25 @@ describe("the cloud-retry decision (OLD-133)", () => {
     ).toBe(false);
   });
 
-  it("leaves cloud takes, other details and older servers alone", () => {
+  it("leaves cloud takes, non-guard failures and older servers alone", () => {
     expect(shouldRetryInCloud({ sttSource: "cloud" }, failedNotUnderstood)).toBe(false);
     expect(shouldRetryInCloud({}, failedNotUnderstood)).toBe(false);
-    for (const errorDetail of ["no_time", "unsupported_language", undefined]) {
+    for (const errorDetail of ["something_new", undefined]) {
       expect(
         shouldRetryInCloud(
           { sttSource: "device" },
           job({ status: "failed", errorCode: "unparseable", errorDetail })
         )
       ).toBe(false);
+    }
+    // A server or network failure is not a transcription problem.
+    for (const errorCode of ["internal", "server", "network", "storage_missing"]) {
+      expect(
+        shouldRetryInCloud({ sttSource: "device" }, job({ status: "failed", errorCode }))
+      ).toBe(false);
+      expect(failedJobAction({ sttSource: "device" }, job({ status: "failed", errorCode }))).toBe(
+        "show_failure"
+      );
     }
     expect(
       shouldRetryInCloud(
@@ -1048,7 +1072,7 @@ describe("what the job watch does with a failed push", () => {
     expect(
       failedJobAction(
         { sttSource: "device" },
-        job({ status: "failed", errorCode: "unparseable", errorDetail: "past_time" })
+        job({ status: "failed", errorCode: "unparseable", errorDetail: "something_new" })
       )
     ).toBe("show_failure");
   });
@@ -1312,6 +1336,82 @@ describe("the automatic cloud retry (OLD-133)", () => {
     });
   });
 
+  describe("a device take the guard rejected for a detail other than not_understood", () => {
+    // The live Swedish take (2026-10-06): en-US dictation heard "Put Metrica
+    // button on teamer", the guard read it as a task with no time, and before
+    // the fix the take never reached the cloud transcriber.
+    const swedishTake = () => deviceTake({ transcript: "Put Metrica button on teamer" });
+
+    it("is retried in the cloud, and the card shows the cloud attempt's own detail", async () => {
+      const h = setup();
+      h.jobs.set("t1", job({ status: "failed", errorCode: "unparseable", errorDetail: "no_time" }));
+      await seed(swedishTake());
+
+      expect(
+        await handleFailedJobPush(
+          "t1",
+          job({ status: "failed", errorCode: "unparseable", errorDetail: "no_time" })
+        )
+      ).toBe("cloud_retry");
+      await reconcileIdle();
+      expect(h.calls.retry).toHaveLength(1);
+      // Shimmering, never the device attempt's "When should I remind you?".
+      expect(pendingCardContent(getPendingTake("t1") as PendingTake, 5)).toMatchObject({
+        shimmer: true,
+        tone: "working",
+      });
+
+      const cloudFailure = job({
+        status: "failed",
+        generation: 2,
+        errorCode: "unparseable",
+        errorDetail: "unsupported_language",
+        detectedLanguage: "sv",
+        transcript: "Påminn mig om att ringa Anna",
+      });
+      h.jobs.set("t1", cloudFailure);
+      expect(await handleFailedJobPush("t1", cloudFailure)).toBe("defer_to_reconcile");
+      await reconcileIdle();
+
+      expect(h.calls.retry).toHaveLength(1);
+      const final = getPendingTake("t1") as PendingTake;
+      expect(final).toMatchObject({
+        phase: "failed",
+        serverErrorDetail: "unsupported_language",
+        detectedLanguage: "sv",
+        transcript: "Påminn mig om att ringa Anna",
+      });
+      const card = pendingCardContent(final, 5);
+      expect(card.text).toMatch(/^Remi doesn't speak .+ yet$/);
+      expect(card.text).not.toMatch(/When should I remind you/);
+      expect(card.heard).toBe('Remi heard: "Påminn mig om att ringa Anna"');
+    });
+
+    it("drops the device attempt's detail when the cloud attempt fails another way", async () => {
+      const h = setup();
+      h.jobs.set(
+        "t1",
+        job({ status: "failed", errorCode: "unparseable", errorDetail: "past_time", pastTime: "10:00" })
+      );
+      await seed(swedishTake());
+      enqueueReconcile("t1");
+      await reconcileIdle();
+      expect(h.calls.retry).toHaveLength(1);
+
+      // The cloud run fails with no guard detail at all.
+      h.jobs.set("t1", job({ status: "failed", generation: 2, errorCode: "internal" }));
+      enqueueReconcile("t1");
+      await reconcileIdle();
+
+      const final = getPendingTake("t1") as PendingTake;
+      expect(final.phase).toBe("failed");
+      expect(final.serverErrorDetail).toBeUndefined();
+      expect(final.pastTime).toBeUndefined();
+      expect(pendingCardContent(final, 5).text).not.toMatch(/already passed/);
+      expect(h.calls.retry).toHaveLength(1);
+    });
+  });
+
   it("runs once even when the failure push and a foreground pass ask together", async () => {
     const h = setup();
     h.jobs.set("t1", notUnderstood());
@@ -1498,7 +1598,8 @@ describe("the automatic cloud retry (OLD-133)", () => {
         detectedLanguage: "sv",
       })
     );
-    await seed(deviceTake());
+    // Already had its one cloud retry, so this failure is final.
+    await seed(deviceTake({ cloudRetried: true }));
 
     enqueueReconcile("t1");
     await reconcileIdle();

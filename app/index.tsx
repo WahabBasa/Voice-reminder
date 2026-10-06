@@ -1104,8 +1104,9 @@ export default function HomeScreen() {
           return;
         }
         if (job.status === "failed") {
-          // A device transcript the server did not understand gets one more
-          // try in the cloud (OLD-133). Reconciliation runs it, single-flight
+          // A device transcript the server's guard rejected (any detail: a
+          // misheard sentence can trip them all) gets one more try in the
+          // cloud (OLD-133). Reconciliation runs it, single-flight
           // per take, and the card keeps shimmering until it lands. A take
           // already handed to that retry is reconciliation's to finish too:
           // this push may be the device attempt's failure arriving after the
@@ -1113,7 +1114,7 @@ export default function HomeScreen() {
           // is about to be created.
           const action = await handleFailedJobPush(creationId, job);
           if (action === "cloud_retry") {
-            creationBreadcrumb("device_not_understood_cloud_retry");
+            creationBreadcrumb("device_guard_cloud_retry", job.errorDetail);
           } else if (action === "defer_to_reconcile") {
             creationBreadcrumb("cloud_retry_failure_deferred");
           } else {
