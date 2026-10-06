@@ -152,6 +152,11 @@ export function decideRetryAction(params: {
 }): RetryAction {
   const { errorKind, hasStorageId, hasRecording, server, serverErrorCode, errorDetail } = params;
 
+  // A silent take never reached the server (OLD-137): the microphone heard
+  // nothing, and the same audio will hear nothing again. Only a new recording
+  // helps.
+  if (errorKind === "silent") return "record_again";
+
   // An unresolved entitlement is a LOCAL block on a job that already committed.
   // It re-enters the import; it must never spend a server retry (C13). A job
   // that is no longer there is no exception: the import is what re-checks the
@@ -338,6 +343,10 @@ async function runOne(creationId: string): Promise<void> {
     await ensureBarrier(current);
     const take = getPendingTake(creationId);
     if (!take) return;
+    // A silent take is failed on the phone and has no job (OLD-137). There is
+    // nothing to ask the server, and a pass must not turn its card's copy into
+    // the generic one. It waits for the user's tap or swipe.
+    if (isSilentFailure(take)) return;
     await dispatchTake(take, current);
   } catch (e) {
     current.onStage?.(creationId, "reconcile_error", { error: String(e) });
@@ -389,6 +398,10 @@ async function dispatchTake(take: PendingTake, current: ReconcileDeps): Promise<
 }
 
 // ─── The individual moves ───────────────────────────────────────────────────
+
+function isSilentFailure(take: PendingTake): boolean {
+  return take.phase === "failed" && take.errorKind === "silent";
+}
 
 async function forget(take: PendingTake, current: ReconcileDeps): Promise<void> {
   await removePendingTake(take.creationId);
@@ -808,7 +821,9 @@ export async function retryTake(creationId: string): Promise<void> {
   if (!current || !take) return;
   try {
     const deviceId = await current.getDeviceId();
-    const job = await current.fetchJob(deviceId, creationId);
+    // A silent take has no job to fetch (OLD-137), and its retry must work
+    // offline: it only opens the recorder.
+    const job = isSilentFailure(take) ? null : await current.fetchJob(deviceId, creationId);
     await runRetry(take, current, deviceId, job, "user");
   } catch (e) {
     current.onStage?.(creationId, "retry_error", { error: String(e) });

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { FeedbackContext } from "./feedbackOutbox";
 import type { Reminder } from "./store";
+import type { PendingTake } from "./pendingTakes";
 
 /**
  * The feedback UI, driven from anywhere.
@@ -67,6 +68,25 @@ export function buildReminderFeedbackContext(reminder: Reminder): FeedbackContex
     reminderDescription: reminder.description,
     schedule,
     sttSource: (reminder as any).sttSource,
+  };
+}
+
+/**
+ * The `kind: "failed_take"` context for the failed card's "Report a problem".
+ * It carries the take's transcript (OLD-137): the card shows it as
+ * "Remi heard", the composer shows it again, and the user chooses to send it.
+ * Length is not capped here: lib/feedbackContext truncates every string field
+ * at send time to keep the context under the server's 8 KB limit.
+ */
+export function failedTakeFeedbackContext(take: PendingTake): FeedbackContext {
+  const transcript = take.transcript?.trim();
+  return {
+    kind: "failed_take",
+    errorKind: take.errorKind,
+    serverErrorCode: take.serverErrorCode,
+    creationId: take.creationId,
+    sttSource: take.sttSource,
+    ...(transcript ? { transcript } : {}),
   };
 }
 

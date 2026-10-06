@@ -3,6 +3,7 @@ import { AppState, Platform } from "react-native";
 import * as Sentry from "@sentry/react-native";
 import { perfLog } from "./perf";
 import { RECORDING_PRESET, RECORDING_FALLBACK_PRESET } from "./recordingPreset";
+import { EMPTY_RECORDING_LEVEL, foldLevelSample, type RecordingLevel } from "./silentTake";
 
 export type PermissionStatus = "granted" | "denied" | "undetermined";
 
@@ -95,6 +96,22 @@ export function setMeteringListener(listener: MeteringListener | null): void {
   meteringListener = listener;
 }
 
+// ─── The take's loudest moment (OLD-137) ────────────────────────────────────
+//
+// The same metering samples that drive the VoiceMeter are folded into a peak
+// for the current take, reset at every start. stopRecording snapshots it, and
+// the stop-tap reads the snapshot to catch a silent recording before upload.
+let liveLevel: RecordingLevel = EMPTY_RECORDING_LEVEL;
+let lastRecordingLevel: RecordingLevel = EMPTY_RECORDING_LEVEL;
+
+/**
+ * The level of the take the last stopRecording finished: its peak dBFS and how
+ * many samples it saw. `{ peakDb: null, samples: 0 }` when metering said nothing.
+ */
+export function getLastRecordingLevel(): RecordingLevel {
+  return lastRecordingLevel;
+}
+
 export async function requestMicrophonePermission(): Promise<PermissionStatus> {
   const { status } = await Audio.requestPermissionsAsync();
   return status as PermissionStatus;
@@ -164,8 +181,10 @@ export async function startRecording(): Promise<void> {
       playsInSilentModeIOS: true,
     });
 
+    liveLevel = EMPTY_RECORDING_LEVEL;
     const onStatusUpdate = (status: Audio.RecordingStatus) => {
       if (status.isRecording && typeof status.metering === "number") {
+        liveLevel = foldLevelSample(liveLevel, status.metering);
         meteringListener?.(status.metering);
       }
     };
@@ -224,6 +243,8 @@ export async function stopRecording(traceId?: string): Promise<string | null> {
   const tStart = Date.now();
   await recording.stopAndUnloadAsync();
   const tUnloaded = Date.now();
+  lastRecordingLevel = liveLevel;
+  liveLevel = EMPTY_RECORDING_LEVEL;
 
   // Not awaited — deliberately. Guaranteed to run to completion, retried once
   // on failure, reported to Sentry if it ever gives up, and awaited by every
@@ -239,6 +260,10 @@ export async function stopRecording(traceId?: string): Promise<string | null> {
       // Its real duration lands separately as audioMode_restored.
       audioModeMs: 0,
       audioModeDeferred: 1,
+      // The take's loudest metering sample (OLD-137), so a syslog shows whether
+      // the mic heard anything. Null peak = metering said nothing.
+      peakDb: lastRecordingLevel.peakDb,
+      levelSamples: lastRecordingLevel.samples,
     });
   }
 

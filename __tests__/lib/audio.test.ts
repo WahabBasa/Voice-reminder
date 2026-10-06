@@ -21,7 +21,13 @@ jest.mock("../../lib/perf", () => ({ perfLog: jest.fn() }));
 import { Audio } from "expo-av";
 import { AppState, type AppStateStatus } from "react-native";
 import * as Sentry from "@sentry/react-native";
-import { getRecording, setMeteringListener, startRecording, stopRecording } from "../../lib/audio";
+import {
+  getLastRecordingLevel,
+  getRecording,
+  setMeteringListener,
+  startRecording,
+  stopRecording,
+} from "../../lib/audio";
 import { perfLog } from "../../lib/perf";
 import { RECORDING_PRESET } from "../../lib/recordingPreset";
 
@@ -167,6 +173,53 @@ it("throws after both presets reject and allows a subsequent start", async () =>
   await startRecording();
   expect(createAsync).toHaveBeenCalledTimes(3);
   expect(getRecording()).toBe(result.recording);
+});
+
+describe("the take's peak level (OLD-137)", () => {
+  async function recordWith(samples: Array<Partial<Audio.RecordingStatus>>, traceId?: string) {
+    createAsync.mockResolvedValueOnce(successfulRecording());
+    await startRecording();
+    const callback = createAsync.mock.calls[createAsync.mock.calls.length - 1][1]!;
+    for (const sample of samples) callback(sample as Audio.RecordingStatus);
+    await stopRecording(traceId);
+    return getLastRecordingLevel();
+  }
+
+  it("keeps the loudest metering sample while recording, and still feeds the meter", async () => {
+    const listener = jest.fn();
+    setMeteringListener(listener);
+    const level = await recordWith([
+      { isRecording: true, metering: -160 },
+      { isRecording: true, metering: -31 },
+      { isRecording: true, metering: -48 },
+      // Paused or stopped ticks are not the take.
+      { isRecording: false, metering: -5 },
+      { isRecording: true },
+    ]);
+    expect(level).toEqual({ peakDb: -31, samples: 3 });
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it("starts every take from nothing", async () => {
+    await recordWith([{ isRecording: true, metering: -10 }]);
+    expect(await recordWith([])).toEqual({ peakDb: null, samples: 0 });
+  });
+
+  it("logs the peak with the stop's perf event", async () => {
+    await recordWith(
+      [
+        { isRecording: true, metering: -70 },
+        { isRecording: true, metering: -62 },
+      ],
+      "trace-1"
+    );
+    expect(perfLog).toHaveBeenCalledWith(
+      "trace-1",
+      "device.recording",
+      "stopRecording_split",
+      expect.objectContaining({ peakDb: -62, levelSamples: 2 })
+    );
+  });
 });
 
 it("does not retry an audio mode rejection", async () => {

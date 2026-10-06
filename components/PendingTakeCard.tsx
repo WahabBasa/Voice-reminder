@@ -124,7 +124,7 @@ function PendingTakeCardView({
               pressed && content.tappable && styles.cardPressed,
             ]}
             accessibilityRole={content.tappable ? "button" : undefined}
-            accessibilityLabel={content.text}
+            accessibilityLabel={content.heard ? `${content.text}. ${content.heard}` : content.text}
           >
             <View style={[styles.chip, isError && styles.chipError]}>
               <AppIcon
@@ -141,6 +141,13 @@ function PendingTakeCardView({
               >
                 {content.text}
               </Text>
+              {/* What Remi heard, when it heard anything (OLD-137): quiet, so the
+                  failure stays the headline. */}
+              {content.heard ? (
+                <Text style={styles.heardText} numberOfLines={2}>
+                  {content.heard}
+                </Text>
+              ) : null}
             </Animated.View>
 
             {content.cancellable && (
@@ -273,6 +280,13 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: colors.statusOverdue,
     fontWeight: "600",
+  },
+  heardText: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textTertiary,
+    fontWeight: "400",
   },
   cancelTap: {
     marginLeft: spacing.sm,

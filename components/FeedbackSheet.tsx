@@ -22,6 +22,7 @@ import {
 } from "../lib/feedbackOutbox";
 import { buildFeedbackContext } from "../lib/feedbackContext";
 import ReminderContextCard from "./ReminderContextCard";
+import { remiHeardLine } from "../lib/pendingCardContent";
 import { borderRadius, colors, scaleFontSize, shadows } from "../lib/theme";
 
 const MAX_FEEDBACK_CHARS = 2000;
@@ -52,6 +53,9 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
   // context sent at Send is exactly the one the entrance handed over.
   const showReminderCard = context?.kind === "reminder";
   const isFailedTake = context?.kind === "failed_take";
+  // What Remi heard on that take (OLD-137), shown so the user sees exactly what
+  // the report will carry before choosing to send it.
+  const heardLine = isFailedTake ? remiHeardLine(context?.transcript) : null;
   // The card needs room above the box, Send included, before anyone drags.
   const snapPoints = useMemo(
     () => (showReminderCard ? ["70%", "90%"] : ["55%", "90%"]),
@@ -135,7 +139,14 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
   const body = (
     <>
       <Text style={[styles.title, isFailedTake && styles.titleWithKicker]}>Send feedback</Text>
-      {isFailedTake ? <Text style={styles.kicker}>Failed recording</Text> : null}
+      {isFailedTake ? (
+        <Text style={[styles.kicker, heardLine ? styles.kickerWithHeard : null]}>Failed recording</Text>
+      ) : null}
+      {heardLine ? (
+        <Text style={styles.heard} numberOfLines={3}>
+          {heardLine}
+        </Text>
+      ) : null}
 
       {showReminderCard && context ? <ReminderContextCard context={context} /> : null}
 
@@ -237,6 +248,15 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     lineHeight: scaleFontSize(20),
     color: colors.textSecondary,
+    marginBottom: 16,
+  },
+  kickerWithHeard: {
+    marginBottom: 4,
+  },
+  heard: {
+    fontSize: scaleFontSize(13),
+    lineHeight: scaleFontSize(18),
+    color: colors.textTertiary,
     marginBottom: 16,
   },
   inputCard: {
