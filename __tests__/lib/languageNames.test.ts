@@ -4,6 +4,7 @@
  * missing, because Hermes may not ship it.
  */
 import { languageName, listeningLabel } from "../../lib/languageNames";
+import { resolveVoiceLocale } from "../../lib/deviceStt";
 
 describe("languageName", () => {
   it("names a language from its code or from a full locale", () => {
@@ -54,6 +55,15 @@ describe("listeningLabel", () => {
   it("names the on-device engine's language", () => {
     expect(listeningLabel("en-US")).toBe("Listening in English");
     expect(listeningLabel("ar-SA")).toBe("Listening in Arabic");
+  });
+
+  it("names a learned spoken language's locale (OLD-140)", () => {
+    expect(listeningLabel(resolveVoiceLocale("auto", ["en-US"], "sv"))).toBe(
+      "Listening in Swedish"
+    );
+    expect(listeningLabel(resolveVoiceLocale("auto", ["en-US"], "he"))).toBe(
+      "Listening in Hebrew"
+    );
   });
 
   it("says nothing rather than guess", () => {

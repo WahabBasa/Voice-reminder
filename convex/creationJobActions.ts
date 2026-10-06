@@ -303,7 +303,10 @@ async function transcribeRecording(
   ctx: ActionCtx,
   audioStorageId: Id<"_storage"> | undefined,
   perf: WorkerPerf,
-  traceId: string
+  traceId: string,
+  // The phone's spoken-language hint (OLD-140); stt.ts gives it to the
+  // primary model only.
+  languageHint?: string
 ): Promise<StageResult<string>> {
   if (!audioStorageId) return { ok: false, code: "storage_missing" };
 
@@ -332,7 +335,10 @@ async function transcribeRecording(
   perf.blobMs = Date.now() - tBlob;
 
   try {
-    const { text, perf: sttPerf } = await transcribeAudio(audioFile);
+    const { text, perf: sttPerf } = await transcribeAudio(
+      audioFile,
+      languageHint ? { language: languageHint } : undefined
+    );
     Object.assign(perf, sttPerf);
     perf.whisperMs = sttPerf.sttMs;
     logSttPerf(traceId, "job", sttPerf);
@@ -493,7 +499,13 @@ export const run = internalAction({
       transcript = deviceTranscript;
     } else {
       perf.sttSource = "cloud";
-      const stt = await transcribeRecording(ctx, job.audioStorageId, perf, job.creationId);
+      const stt = await transcribeRecording(
+        ctx,
+        job.audioStorageId,
+        perf,
+        job.creationId,
+        job.languageHint
+      );
       if (!stt.ok) {
         await failJob(ctx, args, stt.code, perf);
         logCreationJobPerf(job.creationId, args.generation, "failed", perf);

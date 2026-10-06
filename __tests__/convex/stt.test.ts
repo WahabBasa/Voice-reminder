@@ -299,3 +299,44 @@ describe("a missing OpenRouter key", () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 });
+
+// ─── language hint (OLD-140) ────────────────────────────────────────────────
+
+describe("language hint", () => {
+  it("sends the hint to the primary model as `language`", async () => {
+    mockCreate.mockResolvedValue({ text: "ring mamma klockan sex" });
+    await transcribeAudio(file(), { language: "sv" });
+    expect(mockCreate.mock.calls[0][0].language).toBe("sv");
+  });
+
+  it("normalizes the hint's case and whitespace", async () => {
+    mockCreate.mockResolvedValue({ text: "hello" });
+    await transcribeAudio(file(), { language: " HE " });
+    expect(mockCreate.mock.calls[0][0].language).toBe("he");
+  });
+
+  it("sends no language without a hint, or with one that is not a code", async () => {
+    mockCreate.mockResolvedValue({ text: "hello" });
+    await transcribeAudio(file());
+    await transcribeAudio(file(), { language: "swedish" });
+    await transcribeAudio(file(), { language: "" });
+    for (const call of mockCreate.mock.calls) expect("language" in call[0]).toBe(false);
+  });
+
+  it("never sends the hint to the whisper-1 fallback", async () => {
+    mockCreate.mockRejectedValueOnce(new Error("primary down"));
+    mockCreate.mockResolvedValueOnce({ text: "hello" });
+    const { perf } = await transcribeAudio(file(), { language: "sv" });
+    expect(perf.sttFallbackUsed).toBe(true);
+    expect(mockCreate.mock.calls[0][0].language).toBe("sv");
+    expect(mockCreate.mock.calls[1][0].model).toBe(FALLBACK_STT_MODEL);
+    expect("language" in mockCreate.mock.calls[1][0]).toBe(false);
+  });
+
+  it("never sends the hint when whisper-1 is the primary", async () => {
+    mockCreate.mockResolvedValue({ text: "hello" });
+    await transcribeAudio(file(), { model: FALLBACK_STT_MODEL, language: "sv" });
+    expect(mockCreate.mock.calls[0][0].model).toBe(FALLBACK_STT_MODEL);
+    expect("language" in mockCreate.mock.calls[0][0]).toBe(false);
+  });
+});

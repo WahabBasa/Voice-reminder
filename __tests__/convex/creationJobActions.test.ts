@@ -197,6 +197,18 @@ describe("the cloud path", () => {
     await handlerOf(run)(ctx, { jobId: "job_1", generation: 1, scheduledAt: 999_500 });
     expect(commitOf(ctx)?.preCommitPerf.sttSource).toBe("cloud");
   });
+
+  it("hands the job's languageHint to the transcriber's primary model (OLD-140)", async () => {
+    const ctx = makeCtx(makeJob({ languageHint: "sv" }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1, scheduledAt: 999_500 });
+    expect(mockTranscriptionCreate.mock.calls[0][0].language).toBe("sv");
+  });
+
+  it("sends no language for a job without a hint", async () => {
+    const ctx = makeCtx(makeJob());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1, scheduledAt: 999_500 });
+    expect("language" in mockTranscriptionCreate.mock.calls[0][0]).toBe(false);
+  });
 });
 
 describe("a device-transcribed take", () => {

@@ -366,6 +366,10 @@ export default defineSchema({
     // Capabilities the client declared at `begin` (e.g. "guard_v1"). Absent on
     // every job from a build that predates the field.
     clientFeatures: v.optional(v.array(v.string())),
+    // The language the phone expects this take in (OLD-140): its device's
+    // learned `spokenLang`, sent with `begin`/`retry`. Handed to the cloud
+    // transcriber's primary model as a hint; never to whisper-1.
+    languageHint: v.optional(v.string()),
     // Set by `ack` once the client has durably imported the take (spec 1.4).
     ackedAt: v.optional(v.number()),
     // The user's own clock at stop-tap. A one-off's instant is resolved against
@@ -438,6 +442,17 @@ export default defineSchema({
     locale: v.optional(v.string()),
     timezone: v.optional(v.string()),
     iosVersion: v.optional(v.string()),
+    // The language this install's user speaks in (OLD-140), ISO 639-1, learned
+    // from the takes the server understood (convex/spokenLang.ts) and sent back
+    // through `hello` / `preferences` so the phone can listen in it. `At` is
+    // when it was last set or confirmed. A different language waits as the
+    // candidate until enough takes in a row agree; the last counted take's
+    // creationId keeps one take from counting twice.
+    spokenLang: v.optional(v.string()),
+    spokenLangAt: v.optional(v.number()),
+    spokenLangCandidate: v.optional(v.string()),
+    spokenLangCandidateCount: v.optional(v.number()),
+    spokenLangLastCreationId: v.optional(v.string()),
   })
     .index("by_deviceId", ["deviceId"])
     .index("by_firstSeen", ["firstSeenAt"])

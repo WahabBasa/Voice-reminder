@@ -32,6 +32,10 @@ import {
 } from "../../lib/takeReconcile";
 import { pendingCardContent } from "../../lib/pendingCardContent";
 import {
+  __resetSpokenLanguageForTests,
+  rememberSpokenLanguage,
+} from "../../lib/spokenLanguage";
+import {
   __resetPendingTakes,
   getPendingTake,
   loadPendingTakes,
@@ -1669,6 +1673,52 @@ describe("clientFeatures on every begin (OLD-133)", () => {
     for (const call of calls) {
       const args = call.slice(0, call.indexOf(");"));
       expect(args).toContain("clientFeatures: CLIENT_FEATURES");
+    }
+  });
+});
+
+describe("languageHint on every begin and retry (OLD-140)", () => {
+  afterEach(() => __resetSpokenLanguageForTests());
+
+  it("rides a cloud and a device rebegin once the language is known", async () => {
+    await rememberSpokenLanguage("sv");
+    const h = setup();
+    await seed(take({ phase: "processing", audioStorageId: "st1" }));
+    await seed(
+      take({ creationId: "t2", phase: "processing", sttSource: "device", transcript: "köp mjölk" })
+    );
+
+    enqueueReconcile("t1");
+    enqueueReconcile("t2");
+    await reconcileIdle();
+
+    expect(h.calls.begin).toHaveLength(2);
+    for (const args of h.calls.begin) expect(args).toMatchObject({ languageHint: "sv" });
+  });
+
+  it("rides a re-upload retry", async () => {
+    await rememberSpokenLanguage("he");
+    const h = setup();
+    h.jobs.set("t1", job({ status: "failed", errorCode: "storage_missing" }));
+    await seed(take({ phase: "failed", errorKind: "server", audioStorageId: "st1" }));
+    await retryTake("t1");
+    expect(h.calls.retry[0]).toMatchObject({ newStorageId: "st-new", languageHint: "he" });
+  });
+
+  it("is absent while nothing is known, so the args are exactly as before", async () => {
+    const h = setup();
+    await seed(take({ phase: "processing", audioStorageId: "st1" }));
+    enqueueReconcile("t1");
+    await reconcileIdle();
+    expect("languageHint" in h.calls.begin[0]).toBe(false);
+  });
+
+  it("rides both begin calls on the stop-tap paths in the screen", () => {
+    const source = fs.readFileSync(path.join(__dirname, "../../app/index.tsx"), "utf8");
+    const calls = source.split("await beginCreationJob({").slice(1);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.slice(0, call.indexOf(");"))).toContain("...languageHintArg()");
     }
   });
 });

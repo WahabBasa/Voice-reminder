@@ -28,6 +28,7 @@ import { hydrateReminderAudio } from "../lib/audioHydration";
 import { startForegroundReconcile } from "../lib/takeReconcile";
 import { getDeviceId } from "../lib/deviceId";
 import { sendDeviceHello } from "../lib/deviceHello";
+import { startSpokenLanguageSync } from "../lib/spokenLanguage";
 import ErrorBoundary from "../components/ErrorBoundary";
 import FeedbackHost from "../components/FeedbackHost";
 import PermissionPrompt from "../components/PermissionPrompt";
@@ -107,6 +108,11 @@ function StartupTasks() {
   useEffect(() => {
     void sendDeviceHello(convex);
   }, []);
+
+  // The language this install speaks in, as the server learns it from takes
+  // (OLD-140): loaded from disk, then watched live, so the take after the one
+  // that taught it already listens in it.
+  useEffect(() => startSpokenLanguageSync(convex, getDeviceId), []);
 
   // iOS 26 AlarmKit: Done/Later run inside App Intents with the app closed, so
   // their effects only reach the store when we drain the native event log —

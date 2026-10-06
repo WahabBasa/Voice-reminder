@@ -28,6 +28,8 @@ module.exports = {
     "convex/creationValidate.ts",
     "convex/parseUsage.ts",
     "convex/stt.ts",
+    "convex/spokenLang.ts",
+    "lib/spokenLanguage.ts",
   ],
   coverageThreshold: {
     "lib/time.ts": { lines: 85, branches: 70 },
@@ -52,5 +54,7 @@ module.exports = {
     "convex/creationValidate.ts": { lines: 100, branches: 100 },
     "convex/parseUsage.ts": { lines: 100, branches: 100 },
     "convex/stt.ts": { lines: 100, branches: 100 },
+    "convex/spokenLang.ts": { lines: 100, branches: 100 },
+    "lib/spokenLanguage.ts": { lines: 100, branches: 100 },
   },
 };

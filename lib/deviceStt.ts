@@ -16,6 +16,7 @@ import {
   type SpeechStatus,
   type SpeechTranscript,
 } from "./vrSpeech";
+import { normalizeSpokenLang, onDeviceLocaleFor } from "./spokenLanguage";
 
 export type VoiceLanguageSetting = "auto" | "en" | "ar";
 
@@ -29,19 +30,37 @@ export const DEFAULT_STT_TIMEOUT_MS =
   Number.isFinite(ENV_TIMEOUT) && ENV_TIMEOUT > 0 ? ENV_TIMEOUT : 4000;
 
 /**
+ * The learned spoken language (OLD-140) when it should steer the recognizer:
+ * a known language that is not English. English, or nothing learned yet,
+ * leaves `auto` exactly as it was.
+ */
+function steeringLanguage(spokenLang: string | null | undefined): string | null {
+  const lang = normalizeSpokenLang(spokenLang);
+  return lang && lang !== "en" ? lang : null;
+}
+
+/**
  * The locale the on-device engine should be asked for.
  *
- * `auto` walks the device's ordered preferred languages and takes the first one
- * whose language is English or Arabic, mapping it to the canonical locale the
- * engine installs assets for. Nothing matches (a device set to French, say) →
- * English, because the cloud fallback covers everything else anyway.
+ * An explicit Settings choice (en/ar) always wins. Under `auto`, a language the
+ * server has learned this device speaks in (`spokenLang`, OLD-140) comes first
+ * when it is not English: a Swedish speaker on an English iPhone gets sv-SE.
+ * Otherwise `auto` walks the device's ordered preferred languages and takes the
+ * first one whose language is English or Arabic, mapping it to the canonical
+ * locale the engine installs assets for. Nothing matches (a device set to
+ * French, say) → English, because the cloud fallback covers everything else
+ * anyway.
  */
 export function resolveVoiceLocale(
   setting: VoiceLanguageSetting,
-  deviceLocales: readonly string[] | undefined
+  deviceLocales: readonly string[] | undefined,
+  spokenLang?: string | null
 ): string {
   if (setting === "en") return "en-US";
   if (setting === "ar") return "ar-SA";
+
+  const steering = steeringLanguage(spokenLang);
+  if (steering) return onDeviceLocaleFor(steering);
 
   for (const raw of deviceLocales ?? []) {
     if (typeof raw !== "string") continue;
@@ -76,6 +95,46 @@ export function getDeviceLocales(): string[] {
     // An engine without resolvable options leaves the list as-is.
   }
   return out;
+}
+
+/**
+ * Where a finished take's transcript should come from, decided before any
+ * transcription runs (OLD-140).
+ *
+ * `cloud` happens only for a learned non-English language the phone cannot
+ * listen in on-device right now (unsupported, or its assets not installed):
+ * the take skips the on-device attempt that would only mishear it, and goes
+ * straight to the upload, where the cloud transcriber gets the language as a
+ * hint. Every other case is `device`, and runDeviceStt makes its usual checks.
+ */
+export type VoicePlan =
+  | { path: "device"; localeId: string }
+  | { path: "cloud"; localeId: string; reason: "spoken_lang_unavailable" };
+
+export async function resolveVoicePlan(params: {
+  setting: VoiceLanguageSetting;
+  deviceLocales: readonly string[] | undefined;
+  spokenLang: string | null | undefined;
+  engine: SpeechEngine;
+  /** isVRSpeechAvailable(): without the module there is nothing to check. */
+  available: boolean;
+  speechStatus: (localeId: string, engine: SpeechEngine) => Promise<SpeechStatus>;
+}): Promise<VoicePlan> {
+  const { setting, deviceLocales, spokenLang, engine, available } = params;
+  const localeId = resolveVoiceLocale(setting, deviceLocales, spokenLang);
+  if (!available || setting !== "auto" || !steeringLanguage(spokenLang)) {
+    return { path: "device", localeId };
+  }
+
+  let installed = false;
+  try {
+    installed = (await params.speechStatus(localeId, engine)).installed === true;
+  } catch {
+    installed = false;
+  }
+  return installed
+    ? { path: "device", localeId }
+    : { path: "cloud", localeId, reason: "spoken_lang_unavailable" };
 }
 
 /** The native calls runDeviceStt needs, injected so the race is testable. */
@@ -201,6 +260,11 @@ export type VoiceHandoffResult =
 export async function runVoiceHandoff(params: {
   available: boolean;
   hasAudioStorageId: boolean;
+  /**
+   * Set when resolveVoicePlan chose the cloud up front (OLD-140): no device
+   * attempt, and a `device_stt_fallback` perf event carrying this reason.
+   */
+  skipDeviceReason?: string;
   fileUri: string;
   localeId: string;
   engine: SpeechEngine;
@@ -217,6 +281,7 @@ export async function runVoiceHandoff(params: {
   const {
     available,
     hasAudioStorageId,
+    skipDeviceReason,
     fileUri,
     localeId,
     engine,
@@ -233,6 +298,13 @@ export async function runVoiceHandoff(params: {
   if (!available || hasAudioStorageId) {
     await onCloud();
     return { path: "cloud" };
+  }
+
+  // The phone cannot listen in this speaker's language: straight to the cloud.
+  if (skipDeviceReason) {
+    onPerf?.("device_stt_fallback", { reason: skipDeviceReason });
+    await onCloud();
+    return { path: "cloud", reason: skipDeviceReason };
   }
 
   const result = await runDeviceStt(stt, { fileUri, localeId, engine, timeoutMs, requestId });
