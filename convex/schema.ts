@@ -160,7 +160,14 @@ export const failedTakeFields = {
   cloudSttFallbackUsed: v.optional(v.boolean()),
   // The parse model's raw JSON answer, truncated to ~4 KB.
   parseRaw: v.optional(v.string()),
+  // The clock time a `past_time` take named, when the guard reported one.
+  pastTime: v.optional(v.string()),
   audioSeconds: v.optional(v.number()),
+  // Timings for the founder's take email (ms).
+  deviceSttMs: v.optional(v.number()),
+  sttMs: v.optional(v.number()),
+  parseMs: v.optional(v.number()),
+  totalMs: v.optional(v.number()),
   timezone: v.optional(v.string()),
   buildNumber: v.optional(v.string()),
   // The retained recording. Several rows may share one blob (a cloud take
@@ -414,6 +421,37 @@ export default defineSchema({
    */
   failedTakes: defineTable(failedTakeFields)
     .index("by_at", ["at"])
+    .index("by_creation", ["creationId", "generation"])
     .index("by_device_tag", ["deviceTag", "at"])
     .index("by_audio", ["audioStorageId"]),
+
+  /**
+   * One row per take the founder gets (or will get) an email about: the
+   * de-duplication key for convex/founderAlerts.ts `deliverTakeEmail`, which
+   * sends ONE email per take once it has settled, however many attempts failed.
+   * Carries `deviceTag` and a small device snapshot, never the deviceId.
+   * Pruned with takeOutcomes after 30 days.
+   */
+  takeEmails: defineTable({
+    creationId: v.string(),
+    deviceTag: v.string(),
+    jobId: v.id("creationJobs"),
+    // When the first email for this take was scheduled, and when the pending
+    // one is due. `sentAt` is set when an email goes out; a later twist in the
+    // take (a manual retry that recovers or fails again) clears it and
+    // schedules a follow-up.
+    scheduledAt: v.number(),
+    dueAt: v.number(),
+    sentAt: v.optional(v.number()),
+    sentCount: v.number(),
+    newDevice: v.boolean(),
+    firstTake: v.boolean(),
+    timezone: v.optional(v.string()),
+    locale: v.optional(v.string()),
+    buildNumber: v.optional(v.string()),
+    updateId: v.optional(v.string()),
+    iosVersion: v.optional(v.string()),
+  })
+    .index("by_creation", ["creationId"])
+    .index("by_scheduled", ["scheduledAt"]),
 });
