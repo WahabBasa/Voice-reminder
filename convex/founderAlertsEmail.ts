@@ -6,15 +6,15 @@
  * the shaping can be unit-tested without a backend. `convex/devices.ts` and
  * `convex/founderAlerts.ts` gather the facts and call in here.
  *
- * Privacy is enforced by the input types: no builder takes a deviceId or a
- * reminder title. The only per-device handle an email ever carries is
- * `deviceTag` — the first 8 hex of the SHA-256 of the deviceId, enough to
- * correlate two emails, useless for addressing the install.
+ * Privacy is enforced by the input types: no builder takes a deviceId. The only
+ * per-device handle an email ever carries is `deviceTag` — the first 8 hex of
+ * the SHA-256 of the deviceId, enough to correlate two emails, useless for
+ * addressing the install.
  *
- * The one piece of user content is deliberate (OLD-136): a FAILED take's email
- * carries a "Remi heard" section — what the phone and the server transcribed,
- * each cut to 300 characters — because the founder cannot fix a failure
- * without knowing what was said. Successful takes never carry it.
+ * The per-take email (./takeStoryEmail.ts) deliberately carries user content
+ * (OLD-136): what the phone and the server transcribed, each cut to 300
+ * characters, and the reminder a retry created — because the founder cannot
+ * fix a failure without knowing what was said.
  */
 
 export const MINUTE_MS = 60_000;
@@ -196,105 +196,11 @@ export function clip(value: unknown, max: number): string | undefined {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
-/** What Remi heard on a failed take (OLD-136), as the failure email shows it. */
-export type HeardInput = {
-  deviceTranscript?: string;
-  cloudTranscript?: string;
-  cloudSttModel?: string;
-  cloudSttFallbackUsed?: boolean;
-  detectedLanguage?: string;
-};
-
-function quoted(value: string | undefined): string {
-  const cut = clip(value, HEARD_EMAIL_MAX);
-  return cut === undefined ? "(none)" : `"${cut}"`;
-}
-
-/** The "Remi heard" lines of a failure email. */
-export function buildHeardSection(heard: HeardInput): string[] {
-  const model = heard.cloudSttModel
-    ? ` (${heard.cloudSttModel}${heard.cloudSttFallbackUsed ? ", fallback" : ""})`
-    : "";
-  return [
-    "Remi heard:",
-    `  device transcript: ${quoted(heard.deviceTranscript)}`,
-    `  cloud transcript${model}: ${quoted(heard.cloudTranscript)}`,
-    `  detected language: ${or(heard.detectedLanguage, "unknown")}`,
-  ];
-}
-
-export type OutcomeEmailInput = {
-  notify: Exclude<OutcomeNotify, null>;
-  deviceTag: string;
-  creationId: string;
-  newDevice: boolean;
-  firstTake: boolean;
-  reminderCount?: number;
-  errorCode?: string;
-  errorDetail?: string;
-  sttSource?: string;
-  deviceSttLocale?: string;
-  timezone?: string;
-  buildNumber?: string;
-  at: number;
-  /** Failures only (OLD-136): the failedTakes row's transcripts. */
-  heard?: HeardInput;
-};
+// The take email itself (one per take, the whole story) is built in
+// ./takeStoryEmail.ts.
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
-
-export function buildOutcomeSubject(input: OutcomeEmailInput): string {
-  if (input.notify === "first_take_worked") {
-    return `Remi: first take worked — ${plural(input.reminderCount ?? 0, "reminder")} (new user)`;
-  }
-  const code = or(input.errorCode, "unknown");
-  const detail = input.errorDetail ? `/${short(input.errorDetail, 40)}` : "";
-  const who =
-    input.newDevice && input.firstTake
-      ? " (new user, first take)"
-      : input.newDevice
-        ? " (new user)"
-        : "";
-  return `Remi: take failed — ${code}${detail}${who}`;
-}
-
-export function buildOutcomeBody(input: OutcomeEmailInput): string {
-  const lines: string[] = [];
-  if (input.notify === "first_take_worked") {
-    lines.push(`A new device's first take worked: ${plural(input.reminderCount ?? 0, "reminder")}.`);
-  } else {
-    lines.push(
-      input.newDevice && input.firstTake
-        ? "A take failed. It was this new device's FIRST take."
-        : input.newDevice
-          ? "A take failed on a device first seen this week."
-          : "A take failed."
-    );
-    lines.push("");
-    lines.push(`errorCode: ${or(input.errorCode, "unknown")}`);
-    lines.push(`errorDetail: ${or(input.errorDetail, "none")}`);
-    if (input.heard) {
-      lines.push("");
-      lines.push(...buildHeardSection(input.heard));
-    }
-  }
-  lines.push("");
-  lines.push(`device: ${input.deviceTag}`);
-  lines.push(`take: ${input.creationId}`);
-  lines.push(`new device: ${input.newDevice ? "yes" : "no"}`);
-  lines.push(`first take: ${input.firstTake ? "yes" : "no"}`);
-  lines.push(`stt: ${or(input.sttSource, "cloud")}`);
-  lines.push(`device stt locale: ${or(input.deviceSttLocale, "n/a")}`);
-  lines.push(`time zone: ${or(input.timezone, "unknown")}`);
-  lines.push(`local time: ${localTimeIn(input.timezone, input.at)}`);
-  lines.push(`build: ${or(input.buildNumber, "unknown")}`);
-  return lines.join("\n");
-}
-
-export function buildOutcomeEmail(input: OutcomeEmailInput): Email {
-  return { subject: buildOutcomeSubject(input), body: buildOutcomeBody(input) };
 }
 
 // ─── daily summary ───────────────────────────────────────────────────────────

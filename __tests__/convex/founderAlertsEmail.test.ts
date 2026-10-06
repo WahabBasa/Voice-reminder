@@ -10,10 +10,7 @@ import {
   HOUR_MS,
   HEARD_EMAIL_MAX,
   buildDailySummaryEmail,
-  buildHeardSection,
   buildNewDeviceEmail,
-  buildOutcomeEmail,
-  buildOutcomeSubject,
   classifyOutcome,
   cleanField,
   clip,
@@ -21,7 +18,6 @@ import {
   helloShouldWrite,
   localTimeIn,
   validDeviceId,
-  type OutcomeEmailInput,
 } from "../../convex/founderAlertsEmail";
 
 const subtle = webcrypto.subtle as unknown as SubtleCrypto;
@@ -160,126 +156,14 @@ describe("localTimeIn", () => {
   });
 });
 
-describe("buildOutcomeEmail", () => {
-  const failed: OutcomeEmailInput = {
-    notify: "failed",
-    deviceTag: "ba7816bf",
-    creationId: "take_1",
-    newDevice: true,
-    firstTake: true,
-    errorCode: "unparseable",
-    errorDetail: "not_understood",
-    sttSource: "device",
-    deviceSttLocale: "sv-SE",
-    timezone: "Europe/Stockholm",
-    buildNumber: "8",
-    at: AT,
-  };
-
-  it("names the code, the detail and the new-user first take in the subject", () => {
-    expect(buildOutcomeSubject(failed)).toBe(
-      "Remi: take failed — unparseable/not_understood (new user, first take)"
-    );
-  });
-
-  it("marks a new user's later failure, and an old user's failure plainly", () => {
-    expect(buildOutcomeSubject({ ...failed, firstTake: false })).toBe(
-      "Remi: take failed — unparseable/not_understood (new user)"
-    );
-    expect(
-      buildOutcomeSubject({ ...failed, newDevice: false, firstTake: false, errorDetail: undefined })
-    ).toBe("Remi: take failed — unparseable");
-  });
-
-  it("truncates a long detail in the subject", () => {
-    const subject = buildOutcomeSubject({ ...failed, errorDetail: "d".repeat(100) });
-    expect(subject).toContain(`/${"d".repeat(39)}…`);
-  });
-
-  it("puts the diagnostic fields in the failure body", () => {
-    const { body } = buildOutcomeEmail(failed);
-    expect(body).toContain("FIRST take");
-    expect(body).toContain("errorCode: unparseable");
-    expect(body).toContain("errorDetail: not_understood");
-    expect(body).toContain("stt: device");
-    expect(body).toContain("device stt locale: sv-SE");
-    expect(body).toContain("time zone: Europe/Stockholm");
-    expect(body).toContain("build: 8");
-    expect(body).toContain("first take: yes");
-  });
-
-  it("announces a worked first take with the reminder count", () => {
-    const worked = buildOutcomeEmail({
-      ...failed,
-      notify: "first_take_worked",
-      errorCode: undefined,
-      errorDetail: undefined,
-      reminderCount: 2,
-    });
-    expect(worked.subject).toBe("Remi: first take worked — 2 reminders (new user)");
-    expect(worked.body).toContain("2 reminders");
-    expect(worked.body).not.toContain("errorCode");
-    expect(
-      buildOutcomeSubject({ ...failed, notify: "first_take_worked", reminderCount: 1 })
-    ).toBe("Remi: first take worked — 1 reminder (new user)");
-  });
-});
-
-describe("Remi heard (OLD-136)", () => {
-  const failed: OutcomeEmailInput = {
-    notify: "failed",
-    deviceTag: "ba7816bf",
-    creationId: "take_1",
-    newDevice: false,
-    firstTake: false,
-    errorCode: "unparseable",
-    errorDetail: "not_understood",
-    at: AT,
-  };
-
-  it("clip keeps short strings, cuts long ones with an ellipsis, drops empties", () => {
+describe("clip (OLD-136)", () => {
+  it("keeps short strings, cuts long ones with an ellipsis, drops empties", () => {
     expect(clip("hej", 10)).toBe("hej");
     expect(clip("abcdef", 4)).toBe("abc…");
     expect(clip("line one\nline two", 100)).toBe("line one\nline two");
     expect(clip("", 10)).toBeUndefined();
     expect(clip(42, 10)).toBeUndefined();
-  });
-
-  it("shows both transcripts, each truncated to 300 characters, and the language", () => {
-    const lines = buildHeardSection({
-      deviceTranscript: "d".repeat(400),
-      cloudTranscript: "Thank you for watching.",
-      cloudSttModel: "whisper-1",
-      cloudSttFallbackUsed: true,
-      detectedLanguage: "sv",
-    });
-    expect(lines[0]).toBe("Remi heard:");
-    expect(lines[1]).toBe(`  device transcript: "${"d".repeat(HEARD_EMAIL_MAX - 1)}…"`);
-    expect(lines[2]).toBe('  cloud transcript (whisper-1, fallback): "Thank you for watching."');
-    expect(lines[3]).toBe("  detected language: sv");
-  });
-
-  it("says none / unknown for what is missing", () => {
-    expect(buildHeardSection({})).toEqual([
-      "Remi heard:",
-      "  device transcript: (none)",
-      "  cloud transcript: (none)",
-      "  detected language: unknown",
-    ]);
-  });
-
-  it("goes in a failure body, never in a success body, and leaves the subject alone", () => {
-    const heard = { cloudTranscript: "Thank you for watching.", detectedLanguage: "en" };
-    const withHeard = buildOutcomeEmail({ ...failed, heard });
-    expect(withHeard.subject).toBe(buildOutcomeSubject(failed));
-    expect(withHeard.body).toContain(
-      'Remi heard:\n  device transcript: (none)\n  cloud transcript: "Thank you for watching."'
-    );
-    expect(withHeard.body).not.toContain(DEVICE_ID);
-
-    const worked = buildOutcomeEmail({ ...failed, notify: "first_take_worked", reminderCount: 1, heard });
-    expect(worked.body).not.toContain("Remi heard");
-    expect(buildOutcomeEmail(failed).body).not.toContain("Remi heard");
+    expect(HEARD_EMAIL_MAX).toBe(300);
   });
 });
 
@@ -329,15 +213,6 @@ describe("privacy: no builder can leak a deviceId", () => {
     const smuggled = { deviceId: DEVICE_ID, transcript: "secret words", title: "Water" };
     const emails = [
       buildNewDeviceEmail({ deviceTag: "ba7816bf", at: AT, ...(smuggled as any) }),
-      buildOutcomeEmail({
-        notify: "failed",
-        deviceTag: "ba7816bf",
-        creationId: "take_1",
-        newDevice: false,
-        firstTake: false,
-        at: AT,
-        ...(smuggled as any),
-      }),
       buildDailySummaryEmail({
         since: AT - DAY_MS,
         until: AT,

@@ -25,6 +25,8 @@ import type * as parseUsage from "../parseUsage.js";
 import type * as reminders from "../reminders.js";
 import type * as scheduleShape from "../scheduleShape.js";
 import type * as stt from "../stt.js";
+import type * as takeCardCopy from "../takeCardCopy.js";
+import type * as takeStoryEmail from "../takeStoryEmail.js";
 
 import type {
   ApiFromModules,
@@ -50,6 +52,8 @@ declare const fullApi: ApiFromModules<{
   reminders: typeof reminders;
   scheduleShape: typeof scheduleShape;
   stt: typeof stt;
+  takeCardCopy: typeof takeCardCopy;
+  takeStoryEmail: typeof takeStoryEmail;
 }>;
 
 /**

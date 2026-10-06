@@ -65,6 +65,9 @@ type FailurePatch = {
   errorDetail?: string;
   detectedLanguage?: string;
   perf?: Doc<"creationJobs">["perf"];
+  // The guard's `past_time` reason carries the time it named. Read loosely so
+  // this module does not depend on the creation-job patch declaring it yet.
+  pastTime?: unknown;
 };
 
 // ─── record ──────────────────────────────────────────────────────────────────
@@ -111,7 +114,12 @@ export async function recordFailedTake(
     cloudSttModel: !isDevice ? cleanField(perf?.sttModel) : undefined,
     cloudSttFallbackUsed: !isDevice ? perf?.sttFallbackUsed : undefined,
     parseRaw: clip(diagnostics?.parseRaw, PARSE_RAW_MAX),
+    pastTime: cleanField(patch.pastTime ?? (job as { pastTime?: unknown }).pastTime),
     audioSeconds: perf?.sttAudioSeconds,
+    deviceSttMs: isDevice ? job.deviceSttMs : undefined,
+    sttMs: !isDevice ? perf?.sttMs : undefined,
+    parseMs: perf?.parseMs,
+    totalMs: perf?.totalMs,
     timezone: cleanField(job.timezone),
     buildNumber: device?.buildNumber,
     audioStorageId: job.audioStorageId,

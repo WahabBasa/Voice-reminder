@@ -1,8 +1,8 @@
 /**
  * Failed takes (OLD-136) against a real (mocked) Convex: the row a failure
  * writes, the recording a failure keeps, the 7-day purge, the founder's reads
- * and the failure email's "Remi heard" section. The email shaping itself is
- * unit-tested in __tests__/convex/founderAlertsEmail.test.ts.
+ * and what the take email quotes from a row. The email shaping itself is
+ * unit-tested in __tests__/convex/takeStoryEmail.test.ts.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -382,15 +382,19 @@ describe("the failure email", () => {
       errorCode: "unparseable",
       failedTakeId: row._id,
     });
+    await t.mutation(internal.founderAlerts.deliverTakeEmail, {
+      creationId: row.creationId,
+      deviceTag: row.deviceTag,
+    });
 
-    const sent = (await scheduledOf(t, SEND)).map((r) => r.args[0] as { subject: string; body: string });
+    const sent = (await scheduledOf(t, SEND)).map(
+      (r) => r.args[0] as { subject: string; body: string; html: string }
+    );
     const email = sent.at(-1)!;
-    expect(email.subject).toBe("Remi: take failed — unparseable/unsupported_language (new user, first take)");
-    expect(email.body).toContain("Remi heard:");
-    expect(email.body).toContain(`device transcript: "${"å".repeat(299)}…"`);
+    expect(email.subject).toBe("Remi ❌ Doesn't speak Swedish yet — Dubai, new user's first try");
+    expect(email.body).toContain(`1. 📱 Phone heard (on-device, unknown language): "${"å".repeat(299)}…"`);
     expect(email.body).not.toContain("å".repeat(300));
-    expect(email.body).toContain("cloud transcript: (none)");
-    expect(email.body).toContain("detected language: sv");
-    expect(email.body).not.toContain(DEVICE);
+    expect(email.body).toContain("Remi doesn't speak Swedish yet");
+    expect(`${email.body}\n${email.html}`).not.toContain(DEVICE);
   });
 });
