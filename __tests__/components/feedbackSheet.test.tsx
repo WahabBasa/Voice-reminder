@@ -79,3 +79,20 @@ test("a failed take gets the small 'Failed recording' header, others don't", () 
   expect(render({ kind: "settings" }).strings).not.toContain("Failed recording");
   expect(render({ kind: "reminder", reminderId: "r-1" }).strings).not.toContain("Failed recording");
 });
+
+test("a failed take shows what Remi heard under its header (OLD-137)", () => {
+  const strings = render({
+    kind: "failed_take",
+    creationId: "c-1",
+    transcript: "Thank you for watching.",
+  }).strings;
+  expect(strings).toContain("Failed recording");
+  expect(strings).toContain('Remi heard: "Thank you for watching."');
+});
+
+test("no heard line without a transcript, or outside a failed take", () => {
+  const heard = (s: string) => s.startsWith("Remi heard");
+  expect(render({ kind: "failed_take", creationId: "c-1" }).strings.some(heard)).toBe(false);
+  expect(render({ kind: "failed_take", transcript: "   " }).strings.some(heard)).toBe(false);
+  expect(render({ kind: "settings", transcript: "call mom" }).strings.some(heard)).toBe(false);
+});

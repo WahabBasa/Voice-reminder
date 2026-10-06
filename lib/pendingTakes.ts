@@ -34,7 +34,12 @@ export type PendingPhase =
   | "failed"
   | "cancelling";
 
-export type PendingErrorKind = "network" | "unparseable" | "server" | "cap_unverified";
+/**
+ * `silent` is client-only (OLD-137): the recorder's meter never rose above the
+ * silence threshold, so the take failed on the phone without an upload or a
+ * job. Its retry is always a new recording.
+ */
+export type PendingErrorKind = "network" | "unparseable" | "server" | "cap_unverified" | "silent";
 
 /**
  * Why the server could not use the sentence (OLD-130), sent beside
@@ -243,17 +248,23 @@ export function errorKindForServerCode(code: string | undefined): PendingErrorKi
  * Everything a failed job tells the card, as one patch. The detail and the
  * language ride only when the server sent them, so an older server's failure
  * persists exactly as it did before OLD-133.
+ *
+ * The job's transcript rides too (OLD-137), so the card can say what Remi
+ * heard. It overwrites a device transcript, which is how a take that went
+ * through the automatic cloud retry shows the cloud's words, not the phone's.
  */
 export function failedJobPatch(job: {
   errorCode?: string;
   errorDetail?: string;
   detectedLanguage?: string;
+  transcript?: string;
 }): PendingPatch {
   return {
     errorKind: errorKindForServerCode(job.errorCode),
     ...(job.errorCode ? { serverErrorCode: job.errorCode } : {}),
     ...(job.errorDetail ? { serverErrorDetail: job.errorDetail } : {}),
     ...(job.detectedLanguage ? { detectedLanguage: job.detectedLanguage } : {}),
+    ...(job.transcript?.trim() ? { transcript: job.transcript } : {}),
   };
 }
 

@@ -6,6 +6,7 @@
  */
 
 import {
+  FEEDBACK_CONTEXT_KEYS,
   buildFeedbackEmail,
   buildFeedbackSubject,
   buildFeedbackBody,
@@ -100,6 +101,26 @@ describe("buildFeedbackBody", () => {
     expect(body).toContain("kind: reminder");
     expect(body).not.toContain("reminderTitle");
     expect(body).not.toContain("creationId");
+  });
+});
+
+describe("a failed take's transcript (OLD-137)", () => {
+  it("is a whitelisted key", () => {
+    expect(FEEDBACK_CONTEXT_KEYS).toContain("transcript");
+  });
+
+  it("reaches the body beside the take's other details", () => {
+    const body = buildFeedbackBody("id_abcdef", "it didn't hear me", {
+      kind: "failed_take",
+      errorKind: "unparseable",
+      creationId: "take_9",
+      sttSource: "cloud",
+      transcript: "Thank you for watching.",
+    });
+    expect(body).toContain("kind: failed_take");
+    expect(body).toContain("transcript: Thank you for watching.");
+    // Ordered after the take's provenance, before the build fields.
+    expect(body.indexOf("sttSource: cloud")).toBeLessThan(body.indexOf("transcript:"));
   });
 });
 

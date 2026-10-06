@@ -109,7 +109,9 @@ import {
 } from "../lib/takeReconcile";
 import { watchCreationJob, type CreationJobWatchHandle } from "../lib/creationJobWatch";
 import PendingTakeCard, { usePendingTakes } from "../components/PendingTakeCard";
-import { feedbackUi, reminderCreatedToast } from "../lib/feedbackUi";
+import { failedTakeFeedbackContext, feedbackUi, reminderCreatedToast } from "../lib/feedbackUi";
+import { planStopTap } from "../lib/silentTake";
+import { getLastRecordingLevel } from "../lib/audio";
 import { isReminderActive } from "../lib/reminderActive";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { historyOnDay, todayISO } from "../lib/dayOccurrences";
@@ -186,17 +188,10 @@ const onPendingTakeCancel = (creationId: string) => void cancelTake(creationId);
 const onPendingTakeRetry = (creationId: string) => void retryTake(creationId);
 const onPendingTakeDiscard = (creationId: string) => void discardTake(creationId);
 // A failed take is worth a report: hand its debuggable details to the composer.
+// The transcript is what the card already shows as "Remi heard" (OLD-137); the
+// user sees it there and in the composer, and chooses to send it.
 const onPendingTakeReport = (take: PendingTake) =>
-  feedbackUi.openComposer(
-    {
-      kind: "failed_take",
-      errorKind: take.errorKind,
-      serverErrorCode: take.serverErrorCode,
-      creationId: take.creationId,
-      sttSource: take.sttSource,
-    },
-    "Includes details of this failed take."
-  );
+  feedbackUi.openComposer(failedTakeFeedbackContext(take), "Includes details of this failed take.");
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -1306,7 +1301,7 @@ export default function HomeScreen() {
       // The cache file is there RIGHT NOW; what it is not is durable. The take
       // starts out pointing at it, marked fragile, and the copy below promotes
       // it to the documents dir off the hot path.
-      const take = newPendingTake({
+      const fresh = newPendingTake({
         creationId,
         recordingUri: audioUri,
         fragileUri: true,
@@ -1314,6 +1309,19 @@ export default function HomeScreen() {
         localTime: clock.deviceLocalTime,
         timezone: clock.deviceTimezone,
         createdAt: startedAt,
+      });
+
+      // OLD-137: a take whose meter never rose above silence is failed right
+      // here, with nothing uploaded and no job begun. Missing or thin metering
+      // always goes through (lib/silentTake). The level the recorder saw is
+      // snapshotted by stopRecording, which the overlay ran just before this.
+      const level = getLastRecordingLevel();
+      const { take, upload } = planStopTap(fresh, level);
+      perfLog(traceId, "device.processing", "take_level", {
+        creationId,
+        peakDb: level.peakDb,
+        levelSamples: level.samples,
+        silent: !upload,
       });
 
       // One retry, then the legacy blocking error path: nothing optimistic is
@@ -1355,6 +1363,14 @@ export default function HomeScreen() {
         requestAnimationFrame(() =>
           remindersListRef.current?.scrollToOffset({ offset: 0, animated: true })
         );
+      }
+
+      // The silent take is on screen as a failed card and goes no further. Its
+      // tap opens a new recording; a discard deletes the cache file.
+      if (!upload) {
+        creationBreadcrumb("silent_take", "silent");
+        dropCreationRun(creationId);
+        return;
       }
 
       // Detached, in order: make the recording durable, then send it. A copy

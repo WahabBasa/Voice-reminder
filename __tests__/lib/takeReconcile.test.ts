@@ -1069,6 +1069,45 @@ describe("the retry dispatch for a sentence the server could not use (OLD-133)",
   });
 });
 
+describe("a take the phone heard nothing in (OLD-137)", () => {
+  it("is always a new recording, whatever else is true", () => {
+    for (const server of ["failed", null] as const) {
+      expect(
+        decideRetryAction({ errorKind: "silent", hasStorageId: false, hasRecording: true, server })
+      ).toBe("record_again");
+    }
+  });
+
+  it("opens the recorder from the card's tap without asking the server for a job", async () => {
+    const fetchJob = jest.fn(async () => null);
+    const h = setup({ fetchJob });
+    await seed(take({ phase: "failed", errorKind: "silent" }));
+
+    await retryTake("t1");
+
+    expect(fetchJob).not.toHaveBeenCalled();
+    expect(h.calls.uploads).toEqual([]);
+    expect(h.calls.begin).toEqual([]);
+    expect(h.calls.recordAgain).toEqual(["t1"]);
+    expect(getPendingTake("t1")).toBeUndefined();
+    expect(h.calls.recordingsDeleted).toEqual(["t1"]);
+  });
+
+  it("is left alone by a reconciliation pass, copy and all", async () => {
+    const fetchJob = jest.fn(async () => null);
+    const h = setup({ fetchJob });
+    await seed(take({ phase: "failed", errorKind: "silent" }));
+
+    enqueueAllPendingTakes();
+    await reconcileIdle();
+
+    expect(fetchJob).not.toHaveBeenCalled();
+    expect(h.calls.uploads).toEqual([]);
+    expect(h.calls.recordAgain).toEqual([]);
+    expect(getPendingTake("t1")).toMatchObject({ phase: "failed", errorKind: "silent" });
+  });
+});
+
 describe("the automatic cloud retry (OLD-133)", () => {
   const deviceTake = (over: Partial<PendingTake> = {}) =>
     take({

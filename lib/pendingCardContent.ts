@@ -28,14 +28,41 @@ export type PendingCardContent = {
   /** The X. Present in every non-terminal phase except the cancel already running (C4). */
   cancellable: boolean;
   tone: "working" | "error";
+  /**
+   * A failed take's quiet second line: `Remi heard: "…"` (OLD-137). Present
+   * only on a failed card whose take has a transcript.
+   */
+  heard?: string;
 };
 
 const SETTING_UP = "Setting up…";
+
+/** How much of the transcript the "Remi heard" line quotes before it truncates. */
+export const REMI_HEARD_MAX_CHARS = 120;
+
+/**
+ * `Remi heard: "…"` for a transcript, quoting at most `REMI_HEARD_MAX_CHARS`
+ * characters of it and ending a cut one with an ellipsis. Null when there is
+ * nothing to quote. Shared by the failed card and the feedback composer.
+ */
+export function remiHeardLine(transcript: unknown): string | null {
+  if (typeof transcript !== "string") return null;
+  const words = transcript.trim().replace(/\s+/g, " ");
+  if (!words) return null;
+  const quoted =
+    words.length > REMI_HEARD_MAX_CHARS
+      ? `${words.slice(0, REMI_HEARD_MAX_CHARS - 1).trimEnd()}…`
+      : words;
+  return `Remi heard: "${quoted}"`;
+}
 
 const FAILED_COPY: Record<Exclude<PendingErrorKind, "cap_unverified">, string> = {
   network: "Couldn't reach the server — tap to retry",
   unparseable: "Couldn't turn that into a reminder — tap to try again",
   server: "Something went wrong — tap to retry",
+  // OLD-137: the meter never rose above silence, so nothing was sent. The tap
+  // opens a new recording.
+  silent: "We couldn't hear you — check your microphone and try again",
 };
 
 /**
@@ -87,6 +114,7 @@ export function pendingCardContent(
       take.errorKind === "cap_unverified"
         ? getCapGateBlockContent("blocked_unverified", limit).statusText
         : detailCopy ?? FAILED_COPY[take.errorKind ?? "server"];
+    const heard = remiHeardLine(take.transcript);
 
     return {
       text,
@@ -95,6 +123,7 @@ export function pendingCardContent(
       swipeToDiscard: true,
       cancellable: false,
       tone: "error",
+      ...(heard ? { heard } : {}),
     };
   }
 

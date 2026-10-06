@@ -258,6 +258,31 @@ describe("failedJobPatch (OLD-133)", () => {
     });
     expect(failedJobPatch({})).toEqual({ errorKind: "server" });
   });
+
+  it("carries the job's transcript, so the card can say what Remi heard (OLD-137)", () => {
+    expect(
+      failedJobPatch({ errorCode: "unparseable", transcript: "Thank you for watching." })
+    ).toEqual({
+      errorKind: "unparseable",
+      serverErrorCode: "unparseable",
+      transcript: "Thank you for watching.",
+    });
+    // Blank words are no words: the take keeps whatever it already had.
+    expect(failedJobPatch({ errorCode: "internal", transcript: "  " })).toEqual({
+      errorKind: "server",
+      serverErrorCode: "internal",
+    });
+  });
+
+  it("lets the cloud's words replace the device's after the automatic retry", () => {
+    const device = take({ phase: "processing", sttSource: "cloud", transcript: "device words" });
+    const failed = transitionTake(
+      device,
+      "failed",
+      failedJobPatch({ errorCode: "unparseable", transcript: "cloud words" })
+    );
+    expect(failed?.transcript).toBe("cloud words");
+  });
 });
 
 describe("isRecordAgainDetail", () => {

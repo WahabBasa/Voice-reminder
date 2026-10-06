@@ -6,7 +6,11 @@
  * pinned by usageGate's own tests and shown by two other surfaces, so this
  * suite proves the card DERIVES it rather than restating it (C16).
  */
-import { pendingCardContent } from "../../lib/pendingCardContent";
+import {
+  pendingCardContent,
+  remiHeardLine,
+  REMI_HEARD_MAX_CHARS,
+} from "../../lib/pendingCardContent";
 import { getCapGateBlockContent } from "../../lib/usageGate";
 
 const LIMIT = 5;
@@ -147,5 +151,72 @@ describe("a sentence the server could not use (OLD-133)", () => {
       cancellable: false,
       tone: "error",
     });
+  });
+});
+
+describe("a recording the phone heard nothing in (OLD-137)", () => {
+  it("points at the microphone, and stays a failed card", () => {
+    expect(pendingCardContent({ phase: "failed", errorKind: "silent" }, LIMIT)).toEqual({
+      text: "We couldn't hear you — check your microphone and try again",
+      shimmer: false,
+      tappable: true,
+      swipeToDiscard: true,
+      cancellable: false,
+      tone: "error",
+    });
+  });
+});
+
+describe("what Remi heard, on a failed card (OLD-137)", () => {
+  it("quotes the transcript as a quiet second line", () => {
+    const content = pendingCardContent(
+      { phase: "failed", errorKind: "unparseable", transcript: "Thank you for watching." },
+      LIMIT
+    );
+    expect(content.text).toBe("Couldn't turn that into a reminder — tap to try again");
+    expect(content.heard).toBe('Remi heard: "Thank you for watching."');
+  });
+
+  it("has no line when there are no words", () => {
+    expect(pendingCardContent({ phase: "failed", errorKind: "server" }, LIMIT)).not.toHaveProperty(
+      "heard"
+    );
+    expect(
+      pendingCardContent({ phase: "failed", errorKind: "server", transcript: "  \n " }, LIMIT)
+    ).not.toHaveProperty("heard");
+  });
+
+  it("is only ever on a failed card — a working card shows the words as its text", () => {
+    expect(
+      pendingCardContent({ phase: "transcribed", transcript: "call mom" }, LIMIT)
+    ).not.toHaveProperty("heard");
+  });
+});
+
+describe("remiHeardLine", () => {
+  it("quotes a short transcript whole, with its whitespace tidied", () => {
+    expect(remiHeardLine("  call   mom\nat six ")).toBe('Remi heard: "call mom at six"');
+  });
+
+  it("keeps exactly the cap without cutting", () => {
+    const words = "a".repeat(REMI_HEARD_MAX_CHARS);
+    expect(remiHeardLine(words)).toBe(`Remi heard: "${words}"`);
+  });
+
+  it("truncates past about 120 characters, ending in an ellipsis", () => {
+    expect(REMI_HEARD_MAX_CHARS).toBe(120);
+    const long = "remind me to ".repeat(20);
+    const line = remiHeardLine(long) as string;
+    const quoted = line.slice('Remi heard: "'.length, -1);
+    expect(quoted.endsWith("…")).toBe(true);
+    expect(quoted.length).toBeLessThanOrEqual(REMI_HEARD_MAX_CHARS);
+    expect(long.startsWith(quoted.slice(0, -1))).toBe(true);
+  });
+
+  it("is null for anything that is not words", () => {
+    expect(remiHeardLine(undefined)).toBeNull();
+    expect(remiHeardLine(null)).toBeNull();
+    expect(remiHeardLine(42)).toBeNull();
+    expect(remiHeardLine("   ")).toBeNull();
   });
 });

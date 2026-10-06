@@ -1,5 +1,7 @@
+import type { PendingTake } from "../../lib/pendingTakes";
 import {
   buildReminderFeedbackContext,
+  failedTakeFeedbackContext,
   feedbackUi,
   reminderCreatedToast,
   useFeedbackUi,
@@ -38,6 +40,41 @@ function makeReminder(overrides: Partial<Reminder> = {}): Reminder {
 
 afterEach(() => {
   useFeedbackUi.setState({ composer: null, listVisible: false });
+});
+
+describe("failedTakeFeedbackContext (OLD-137)", () => {
+  const failedTake = (over: Partial<PendingTake> = {}): PendingTake => ({
+    creationId: "c-1",
+    phase: "failed",
+    errorKind: "unparseable",
+    serverErrorCode: "unparseable",
+    sttSource: "cloud",
+    recordingUri: "file:///take.m4a",
+    localDate: "2026-10-06",
+    localTime: "09:00",
+    timezone: "Europe/Stockholm",
+    createdAt: 0,
+    attempts: 0,
+    ...over,
+  });
+
+  test("attaches what Remi heard to the report", () => {
+    expect(failedTakeFeedbackContext(failedTake({ transcript: " Thank you for watching. " }))).toEqual({
+      kind: "failed_take",
+      errorKind: "unparseable",
+      serverErrorCode: "unparseable",
+      creationId: "c-1",
+      sttSource: "cloud",
+      transcript: "Thank you for watching.",
+    });
+  });
+
+  test("sends no transcript key when there are no words", () => {
+    expect(failedTakeFeedbackContext(failedTake())).not.toHaveProperty("transcript");
+    expect(failedTakeFeedbackContext(failedTake({ transcript: "  " }))).not.toHaveProperty(
+      "transcript"
+    );
+  });
 });
 
 describe("buildReminderFeedbackContext", () => {

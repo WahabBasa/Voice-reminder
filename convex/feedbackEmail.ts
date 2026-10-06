@@ -23,6 +23,9 @@ export const FEEDBACK_CONTEXT_KEYS = [
   "serverErrorCode",
   "creationId",
   "sttSource",
+  // What Remi heard on a failed take (OLD-137). The user saw it on the card and
+  // in the composer and chose to send it.
+  "transcript",
   "buildNumber",
   "updateId",
   "iosVersion",
