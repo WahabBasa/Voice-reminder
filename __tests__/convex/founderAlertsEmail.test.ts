@@ -205,6 +205,25 @@ describe("buildDailySummaryEmail", () => {
     expect(email.body.indexOf("unparseable: 2")).toBeLessThan(email.body.indexOf("stt_failed: 1"));
     expect(email.body).toContain("Failed takes from new devices: 1");
     expect(email.body).toContain("unparseable/not_understood");
+    // The HTML part carries the same facts in the take emails' styling.
+    expect(email.html).toContain("<table");
+    expect(email.html).toContain("Active devices");
+    expect(email.html).toContain("ba7816bf · Europe/Stockholm · sv-SE · build 8");
+    expect(email.html).toContain("unparseable/not_understood");
+  });
+
+  it("escapes what reaches the HTML", () => {
+    const email = buildDailySummaryEmail({
+      ...base,
+      activeDevices: 1,
+      failed: 1,
+      failedByCode: { "<b>x</b>": 1 },
+      newDeviceFailures: [{ deviceTag: "t", errorCode: "<script>", timezone: "Europe/Stockholm" }],
+    });
+    expect(email.html).not.toContain("<b>x</b>");
+    expect(email.html).not.toContain("<script>");
+    expect(email.html).toContain("&lt;script&gt;");
+    expect(buildDailySummaryEmail(base).html).toContain("Quiet day");
   });
 });
 
@@ -224,8 +243,8 @@ describe("privacy: no builder can leak a deviceId", () => {
         newDeviceFailures: [],
       }),
     ];
-    for (const { subject, body } of emails) {
-      const text = `${subject}\n${body}`;
+    for (const { subject, body, html } of emails) {
+      const text = `${subject}\n${body}\n${html ?? ""}`;
       expect(text).not.toContain(DEVICE_ID);
       expect(text).not.toContain("secret words");
       expect(text).not.toContain("Water");

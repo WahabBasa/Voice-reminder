@@ -6,6 +6,8 @@
  * FEEDBACK_EMAIL_TO, best-effort, from a scheduled action so nothing on a user's
  * path ever waits on email. Every subject/body is built by pure functions
  * (./founderAlertsEmail.ts, ./takeStoryEmail.ts), which never see a deviceId.
+ * The take email goes through ./takeEmailActions.ts `sendTakeEmail` first, for
+ * its best-effort "In English:" lines.
  *
  * `recordOutcome` is scheduled by the creation-job transitions
  * (convex/creationJobs.ts `commit` and `applyCas` → failed). It runs in its own
@@ -33,10 +35,11 @@ import {
   type DailySummaryInput,
 } from "./founderAlertsEmail";
 import {
-  buildTakeStoryEmail,
+  languageFromParseRaw,
   type StoryAttempt,
   type StoryFinal,
   type StoryReminder,
+  type TakeStoryInput,
 } from "./takeStoryEmail";
 import { getDevice, hasPriorFootprint } from "./devices";
 
@@ -228,6 +231,8 @@ export const recordOutcome = internalMutation({
         sentCount: 0,
         newDevice,
         firstTake,
+        firstSeenAt: device?.firstSeenAt,
+        deviceSeeded: device?.seeded,
         timezone: cleanField(job.timezone) ?? device?.timezone,
         locale: device?.locale,
         buildNumber: device?.buildNumber,
@@ -269,7 +274,9 @@ function attemptFromFailedTake(row: Doc<"failedTakes">): StoryAttempt {
     deviceSttMs: row.deviceSttMs,
     sttModel: row.cloudSttModel,
     sttFallbackUsed: row.cloudSttFallbackUsed,
-    language: row.detectedLanguage,
+    // `detectedLanguage` is only set for unsupported_language; otherwise the
+    // parse model's answer says what language the words were in.
+    language: row.detectedLanguage ?? languageFromParseRaw(row.parseRaw),
     audioSeconds: row.audioSeconds,
     sttMs: row.sttMs,
     parseMs: row.parseMs,
@@ -388,7 +395,16 @@ export const deliverTakeEmail = internalMutation({
       return null;
     }
 
-    const email = buildTakeStoryEmail({
+    // Rows written before firstSeenAt was kept on them: ask the device.
+    let firstSeenAt = row.firstSeenAt;
+    let deviceSeeded = row.deviceSeeded;
+    if (firstSeenAt === undefined && job) {
+      const device = await getDevice(ctx, job.deviceId);
+      firstSeenAt = device?.firstSeenAt;
+      deviceSeeded = device?.seeded;
+    }
+
+    const story: TakeStoryInput = {
       creationId: row.creationId,
       deviceTag: row.deviceTag,
       timezone: row.timezone ?? job?.timezone ?? failedRows[0]?.timezone,
@@ -399,12 +415,17 @@ export const deliverTakeEmail = internalMutation({
       recordedAt: job?.createdAt ?? failedRows[0]?.at ?? row.scheduledAt,
       newDevice: row.newDevice,
       firstTake: row.firstTake,
+      firstSeenAt,
+      deviceSeeded,
       attempts,
       final,
       reminders,
       followUp: row.sentCount > 0,
+    };
+    // An action builds and sends it, after a best-effort translation pass.
+    await ctx.scheduler.runAfter(0, internal.takeEmailActions.sendTakeEmail, {
+      story: JSON.stringify(story),
     });
-    await ctx.scheduler.runAfter(0, internal.founderAlerts.sendEmail, email);
     return null;
   },
 });

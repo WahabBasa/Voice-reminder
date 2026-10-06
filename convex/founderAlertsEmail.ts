@@ -17,6 +17,8 @@
  * fix a failure without knowing what was said.
  */
 
+import { emailShell, headline, kvTable, lead, paragraph, sectionHeading } from "./emailHtml";
+
 export const MINUTE_MS = 60_000;
 export const HOUR_MS = 60 * MINUTE_MS;
 export const DAY_MS = 24 * HOUR_MS;
@@ -146,7 +148,7 @@ export function localTimeIn(timezone: string | undefined, at: number): string {
   }
 }
 
-export type Email = { subject: string; body: string };
+export type Email = { subject: string; body: string; html?: string };
 
 // ─── new device ──────────────────────────────────────────────────────────────
 
@@ -232,9 +234,11 @@ export function buildDailySummaryEmail(input: DailySummaryInput): Email {
     `${new Date(input.until).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
   if (isQuiet(input)) {
+    const body = `Quiet day: no new devices, no active devices, no takes (${window}).`;
     return {
       subject: `Remi daily ${day}: quiet day`,
-      body: `Quiet day: no new devices, no active devices, no takes (${window}).`,
+      body,
+      html: emailShell([headline("Quiet day"), lead(body)].join("\n")),
     };
   }
 
@@ -266,5 +270,42 @@ export function buildDailySummaryEmail(input: DailySummaryInput): Email {
     lines.push(`  ${f.deviceTag}  ${or(f.errorCode, "unknown")}${detail}  ${or(f.timezone, "unknown tz")}`);
   }
 
-  return { subject, body: lines.join("\n") };
+  return { subject, body: lines.join("\n"), html: dailySummaryHtml(input, day, window, codes) };
+}
+
+/** The same summary, laid out like the take emails. Same content as the text. */
+function dailySummaryHtml(
+  input: DailySummaryInput,
+  day: string,
+  window: string,
+  codes: Array<[string, number]>
+): string {
+  const out: string[] = [headline(`Remi daily ${day}`), lead(`Window: ${window}`)];
+  out.push(
+    kvTable([
+      ["New devices", String(input.newDevices.length)],
+      ["Active devices", String(input.activeDevices)],
+      ["Takes", `${input.committed} committed, ${input.failed} failed`],
+    ])
+  );
+  if (input.newDevices.length > 0) {
+    out.push(sectionHeading("New devices"));
+    for (const d of input.newDevices) {
+      out.push(
+        paragraph(
+          `${d.deviceTag} · ${or(d.timezone, "unknown tz")} · ${or(d.locale, "unknown locale")} · build ${or(d.buildNumber, "?")}`
+        )
+      );
+    }
+  }
+  if (codes.length > 0) {
+    out.push(sectionHeading("Failed takes by code"));
+    out.push(kvTable(codes.map(([code, count]): [string, string] => [code, String(count)]), { marginTop: 0 }));
+  }
+  out.push(sectionHeading(`Failed takes from new devices: ${input.newDeviceFailures.length}`));
+  for (const f of input.newDeviceFailures) {
+    const detail = f.errorDetail ? `/${short(f.errorDetail, 60)}` : "";
+    out.push(paragraph(`${f.deviceTag} · ${or(f.errorCode, "unknown")}${detail} · ${or(f.timezone, "unknown tz")}`));
+  }
+  return emailShell(out.join("\n"));
 }

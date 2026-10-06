@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { deviceTagFor } from "../../convex/founderAlertsEmail";
+import { buildTakeStoryEmail } from "../../convex/takeStoryEmail";
 import {
   BLOB_DELETE,
   DAY,
@@ -23,7 +24,7 @@ import {
   storeAudio,
 } from "./harness";
 
-const SEND = "founderAlerts:sendEmail";
+const SEND_TAKE = "takeEmailActions:sendTakeEmail";
 const T0 = Date.UTC(2026, 9, 6, 8, 0, 0);
 
 let t: Harness;
@@ -387,12 +388,14 @@ describe("the failure email", () => {
       deviceTag: row.deviceTag,
     });
 
-    const sent = (await scheduledOf(t, SEND)).map(
-      (r) => r.args[0] as { subject: string; body: string; html: string }
+    // The take email goes through takeEmailActions.sendTakeEmail (for its
+    // translation pass); build it from the story it was handed.
+    const sent = (await scheduledOf(t, SEND_TAKE)).map((r) =>
+      buildTakeStoryEmail(JSON.parse((r.args[0] as { story: string }).story))
     );
     const email = sent.at(-1)!;
-    expect(email.subject).toBe("Remi ❌ Doesn't speak Swedish yet — Dubai, new user's first try");
-    expect(email.body).toContain(`1. 📱 Phone heard (on-device, unknown language): "${"å".repeat(299)}…"`);
+    expect(email.subject).toBe("Remi ❌ Unsupported language · Swedish · Dubai");
+    expect(email.body).toContain(`PHONE HEARD\n"${"å".repeat(299)}…"`);
     expect(email.body).not.toContain("å".repeat(300));
     expect(email.body).toContain("Remi doesn't speak Swedish yet");
     expect(`${email.body}\n${email.html}`).not.toContain(DEVICE);
