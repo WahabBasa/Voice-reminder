@@ -42,7 +42,10 @@ function clientCopy(
       // The past_time copy's field (being added on the client); extra on older shapes.
       ...({ pastTime } as object),
     } as Parameters<typeof pendingCardContent>[0],
-    3
+    3,
+    // The email names the time on the 24-hour dial; pin the card to the same
+    // dial so the comparison doesn't follow the CI machine's locale.
+    { hour12: false }
   ).text;
 }
 
