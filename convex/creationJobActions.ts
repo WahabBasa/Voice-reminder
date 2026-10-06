@@ -238,7 +238,10 @@ async function failJob(
   perf: WorkerPerf,
   // The guard's reason (OLD-130). Only ever passed for a guard_v1 take, so
   // every other failure writes exactly the patch it always has.
-  guard?: { errorDetail: GuardDetail; detectedLanguage?: string }
+  guard?: { errorDetail: GuardDetail; detectedLanguage?: string },
+  // What this run saw that the job row does not hold (OLD-136), kept on the
+  // failed take's row for the founder: the parse model's raw answer.
+  diag?: ParseDiagnostics
 ): Promise<void> {
   try {
     await ctx.runMutation(internal.creationJobs.casPatch, {
@@ -246,11 +249,15 @@ async function failJob(
       generation: args.generation,
       expectStatus: ["pending", "transcribed"],
       patch: { status: "failed", errorCode, perf, ...(guard ?? {}) },
+      ...(diag?.parseRaw !== undefined ? { diagnostics: { parseRaw: diag.parseRaw } } : {}),
     });
   } catch (e) {
     console.error("[VR] creation job: could not record failure:", e);
   }
 }
+
+/** Filled by `parseTake` as it goes, so a failure still reports what it got. */
+type ParseDiagnostics = { parseRaw?: string };
 
 type StageResult<T> = { ok: true; value: T } | { ok: false; code: ErrorCode };
 
@@ -321,7 +328,8 @@ async function parseTake(
   transcript: string,
   perf: WorkerPerf,
   traceId: string,
-  guard: boolean
+  guard: boolean,
+  diag: ParseDiagnostics
 ): Promise<StageResult<ParsedTake>> {
   const tParse = Date.now();
   try {
@@ -353,6 +361,7 @@ async function parseTake(
     });
 
     const rawGptResponse = completion.choices[0].message.content || "{}";
+    diag.parseRaw = rawGptResponse;
     // One take can hold several reminders (OLD-93); a single-reminder take is
     // an array of one.
     const planContext = {
@@ -478,9 +487,10 @@ export const run = internalAction({
 
     // 5. Transcript → plans.
     const guard = job.clientFeatures?.includes(GUARD_V1) === true;
-    const parsed = await parseTake(job, transcript, perf, job.creationId, guard);
+    const diag: ParseDiagnostics = {};
+    const parsed = await parseTake(job, transcript, perf, job.creationId, guard, diag);
     if (!parsed.ok) {
-      await failJob(ctx, args, parsed.code, perf);
+      await failJob(ctx, args, parsed.code, perf, undefined, diag);
       logCreationJobPerf(job.creationId, args.generation, "failed", perf);
       return null;
     }
@@ -500,7 +510,7 @@ export const run = internalAction({
           ...(verdict.detectedLanguage !== undefined
             ? { detectedLanguage: verdict.detectedLanguage }
             : {}),
-        });
+        }, diag);
         logCreationJobPerf(job.creationId, args.generation, "failed", perf);
         return null;
       }
@@ -519,7 +529,7 @@ export const run = internalAction({
       console.error(
         `[VR] creation job: plan ${verdict.index} rejected — ${verdict.field}: ${verdict.reason}`
       );
-      await failJob(ctx, args, "unparseable", perf);
+      await failJob(ctx, args, "unparseable", perf, undefined, diag);
       logCreationJobPerf(job.creationId, args.generation, "failed", perf);
       return null;
     }
@@ -536,7 +546,7 @@ export const run = internalAction({
       });
     } catch (e) {
       console.error("[VR] creation job: commit failed:", e);
-      await failJob(ctx, args, "internal", perf);
+      await failJob(ctx, args, "internal", perf, undefined, diag);
       logCreationJobPerf(job.creationId, args.generation, "failed", perf);
       return null;
     }

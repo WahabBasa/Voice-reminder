@@ -134,6 +134,40 @@ export const creationStatusValidator = v.union(
   v.literal("cancelled")
 );
 
+/**
+ * The columns of a `failedTakes` row (OLD-136), shared with
+ * convex/failedTakes.ts so the founder's read can declare its return shape.
+ */
+export const failedTakeFields = {
+  // The job this attempt belonged to; may dangle once the job is collected.
+  jobId: v.id("creationJobs"),
+  creationId: v.string(),
+  generation: v.number(),
+  deviceTag: v.string(),
+  at: v.number(),
+  errorCode: v.optional(v.string()),
+  errorDetail: v.optional(v.string()),
+  detectedLanguage: v.optional(v.string()),
+  sttSource: v.optional(v.string()),
+  deviceSttLocale: v.optional(v.string()),
+  deviceSttEngine: v.optional(v.string()),
+  // The on-device transcript, when the take came from the phone.
+  deviceTranscript: v.optional(v.string()),
+  // The server STT result for THIS attempt, and the model that produced it
+  // (the fallback model when `cloudSttFallbackUsed`).
+  cloudTranscript: v.optional(v.string()),
+  cloudSttModel: v.optional(v.string()),
+  cloudSttFallbackUsed: v.optional(v.boolean()),
+  // The parse model's raw JSON answer, truncated to ~4 KB.
+  parseRaw: v.optional(v.string()),
+  audioSeconds: v.optional(v.number()),
+  timezone: v.optional(v.string()),
+  buildNumber: v.optional(v.string()),
+  // The retained recording. Several rows may share one blob (a cloud take
+  // that failed twice on the same upload).
+  audioStorageId: v.optional(v.id("_storage")),
+};
+
 export default defineSchema({
   reminders: defineTable({
     // Owning install (OLD-74). There are no accounts, so a reminder belongs to
@@ -365,4 +399,21 @@ export default defineSchema({
   })
     .index("by_at", ["at"])
     .index("by_device_tag", ["deviceTag", "at"]),
+
+  /**
+   * One row per FAILED creation-job attempt (OLD-136), kept for 7 days so the
+   * founder can see what Remi heard and why it gave up. Unlike `takeOutcomes`
+   * (content-free, 30 days) this table holds user content: the transcripts, the
+   * parse model's raw answer and, for a cloud take, the recording itself.
+   *
+   * Written by `failedTakes.recordFailedTake`, inside the same transaction that
+   * flips the job to `failed` (convex/creationJobs.ts `applyCas`). Owns its
+   * `audioStorageId`: while a row references a blob, no creation-job cleanup
+   * deletes it, and `failedTakes.purge` deletes it once the last row lets go.
+   * Carries `deviceTag`, never the deviceId.
+   */
+  failedTakes: defineTable(failedTakeFields)
+    .index("by_at", ["at"])
+    .index("by_device_tag", ["deviceTag", "at"])
+    .index("by_audio", ["audioStorageId"]),
 });

@@ -104,6 +104,8 @@ export const recordOutcome = internalMutation({
     jobId: v.id("creationJobs"),
     status: v.union(v.literal("committed"), v.literal("failed")),
     errorCode: v.optional(v.string()),
+    // The failed attempt's row (OLD-136), for the email's "Remi heard" section.
+    failedTakeId: v.optional(v.id("failedTakes")),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -172,7 +174,17 @@ export const recordOutcome = internalMutation({
       console.warn("[VR] founderAlerts.recordOutcome: outcome email cap reached; skipping email");
       return null;
     }
-    const email = buildOutcomeEmail({ notify, ...row });
+    const failedTake = args.failedTakeId ? await ctx.db.get(args.failedTakeId) : null;
+    const heard = failedTake
+      ? {
+          deviceTranscript: failedTake.deviceTranscript,
+          cloudTranscript: failedTake.cloudTranscript,
+          cloudSttModel: failedTake.cloudSttModel,
+          cloudSttFallbackUsed: failedTake.cloudSttFallbackUsed,
+          detectedLanguage: failedTake.detectedLanguage,
+        }
+      : undefined;
+    const email = buildOutcomeEmail({ notify, ...row, heard });
     await ctx.scheduler.runAfter(0, internal.founderAlerts.sendEmail, email);
     return null;
   },

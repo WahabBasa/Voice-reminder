@@ -14,6 +14,7 @@ import type * as creationJobs from "../creationJobs.js";
 import type * as creationValidate from "../creationValidate.js";
 import type * as crons from "../crons.js";
 import type * as devices from "../devices.js";
+import type * as failedTakes from "../failedTakes.js";
 import type * as feedback from "../feedback.js";
 import type * as feedbackEmail from "../feedbackEmail.js";
 import type * as founderAlerts from "../founderAlerts.js";
@@ -38,6 +39,7 @@ declare const fullApi: ApiFromModules<{
   creationValidate: typeof creationValidate;
   crons: typeof crons;
   devices: typeof devices;
+  failedTakes: typeof failedTakes;
   feedback: typeof feedback;
   feedbackEmail: typeof feedbackEmail;
   founderAlerts: typeof founderAlerts;

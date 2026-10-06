@@ -58,4 +58,13 @@ crons.cron(
   {}
 );
 
+// Failed takes (OLD-136): their transcripts and recordings are kept 7 days for
+// debugging, then deleted. Daily; idempotent; a backlog reschedules itself.
+crons.cron(
+  "purge failed takes",
+  "45 4 * * *",
+  internal.failedTakes.purge,
+  {}
+);
+
 export default crons;

@@ -8,12 +8,15 @@ import { webcrypto } from "crypto";
 import {
   DAY_MS,
   HOUR_MS,
+  HEARD_EMAIL_MAX,
   buildDailySummaryEmail,
+  buildHeardSection,
   buildNewDeviceEmail,
   buildOutcomeEmail,
   buildOutcomeSubject,
   classifyOutcome,
   cleanField,
+  clip,
   deviceTagFor,
   helloShouldWrite,
   localTimeIn,
@@ -219,6 +222,64 @@ describe("buildOutcomeEmail", () => {
     expect(
       buildOutcomeSubject({ ...failed, notify: "first_take_worked", reminderCount: 1 })
     ).toBe("Remi: first take worked — 1 reminder (new user)");
+  });
+});
+
+describe("Remi heard (OLD-136)", () => {
+  const failed: OutcomeEmailInput = {
+    notify: "failed",
+    deviceTag: "ba7816bf",
+    creationId: "take_1",
+    newDevice: false,
+    firstTake: false,
+    errorCode: "unparseable",
+    errorDetail: "not_understood",
+    at: AT,
+  };
+
+  it("clip keeps short strings, cuts long ones with an ellipsis, drops empties", () => {
+    expect(clip("hej", 10)).toBe("hej");
+    expect(clip("abcdef", 4)).toBe("abc…");
+    expect(clip("line one\nline two", 100)).toBe("line one\nline two");
+    expect(clip("", 10)).toBeUndefined();
+    expect(clip(42, 10)).toBeUndefined();
+  });
+
+  it("shows both transcripts, each truncated to 300 characters, and the language", () => {
+    const lines = buildHeardSection({
+      deviceTranscript: "d".repeat(400),
+      cloudTranscript: "Thank you for watching.",
+      cloudSttModel: "whisper-1",
+      cloudSttFallbackUsed: true,
+      detectedLanguage: "sv",
+    });
+    expect(lines[0]).toBe("Remi heard:");
+    expect(lines[1]).toBe(`  device transcript: "${"d".repeat(HEARD_EMAIL_MAX - 1)}…"`);
+    expect(lines[2]).toBe('  cloud transcript (whisper-1, fallback): "Thank you for watching."');
+    expect(lines[3]).toBe("  detected language: sv");
+  });
+
+  it("says none / unknown for what is missing", () => {
+    expect(buildHeardSection({})).toEqual([
+      "Remi heard:",
+      "  device transcript: (none)",
+      "  cloud transcript: (none)",
+      "  detected language: unknown",
+    ]);
+  });
+
+  it("goes in a failure body, never in a success body, and leaves the subject alone", () => {
+    const heard = { cloudTranscript: "Thank you for watching.", detectedLanguage: "en" };
+    const withHeard = buildOutcomeEmail({ ...failed, heard });
+    expect(withHeard.subject).toBe(buildOutcomeSubject(failed));
+    expect(withHeard.body).toContain(
+      'Remi heard:\n  device transcript: (none)\n  cloud transcript: "Thank you for watching."'
+    );
+    expect(withHeard.body).not.toContain(DEVICE_ID);
+
+    const worked = buildOutcomeEmail({ ...failed, notify: "first_take_worked", reminderCount: 1, heard });
+    expect(worked.body).not.toContain("Remi heard");
+    expect(buildOutcomeEmail(failed).body).not.toContain("Remi heard");
   });
 });
 

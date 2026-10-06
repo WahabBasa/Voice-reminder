@@ -261,8 +261,8 @@ describe("take outcomes", () => {
 
     const records = (await scheduledOf(t, RECORD)).map((r) => r.args[0]);
     expect(records).toEqual([
-      { jobId, status: "failed", errorCode: "unparseable" },
-      { jobId: stuck, status: "failed", errorCode: "internal" },
+      { jobId, status: "failed", errorCode: "unparseable", failedTakeId: expect.any(String) },
+      { jobId: stuck, status: "failed", errorCode: "internal", failedTakeId: expect.any(String) },
     ]);
   });
 

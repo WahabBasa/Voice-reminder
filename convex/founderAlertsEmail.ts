@@ -6,11 +6,15 @@
  * the shaping can be unit-tested without a backend. `convex/devices.ts` and
  * `convex/founderAlerts.ts` gather the facts and call in here.
  *
- * Privacy is enforced by the input types: no builder takes a deviceId, a
- * transcript, a reminder title or any other user content. The only per-device
- * handle an email ever carries is `deviceTag` — the first 8 hex of the SHA-256
- * of the deviceId, enough to correlate two emails, useless for addressing the
- * install.
+ * Privacy is enforced by the input types: no builder takes a deviceId or a
+ * reminder title. The only per-device handle an email ever carries is
+ * `deviceTag` — the first 8 hex of the SHA-256 of the deviceId, enough to
+ * correlate two emails, useless for addressing the install.
+ *
+ * The one piece of user content is deliberate (OLD-136): a FAILED take's email
+ * carries a "Remi heard" section — what the phone and the server transcribed,
+ * each cut to 300 characters — because the founder cannot fix a failure
+ * without knowing what was said. Successful takes never carry it.
  */
 
 export const MINUTE_MS = 60_000;
@@ -174,6 +178,51 @@ export function buildNewDeviceEmail(input: NewDeviceInput): Email {
 
 // ─── take outcome ────────────────────────────────────────────────────────────
 
+/** Each transcript in a failure email is cut to this many characters. */
+export const HEARD_EMAIL_MAX = 300;
+/** A failedTakes row keeps at most this much of the parse model's raw answer. */
+export const PARSE_RAW_MAX = 4096;
+/** A failedTakes row keeps at most this much of either transcript. */
+export const TRANSCRIPT_STORE_MAX = 4096;
+
+/**
+ * A string cut to `max` characters, with an ellipsis when it was cut. Unlike
+ * `cleanField` it keeps newlines and inner whitespace: it is for content the
+ * founder reads as-is (a transcript, a raw JSON answer), not for a label.
+ */
+export function clip(value: unknown, max: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  if (value.length === 0) return undefined;
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+/** What Remi heard on a failed take (OLD-136), as the failure email shows it. */
+export type HeardInput = {
+  deviceTranscript?: string;
+  cloudTranscript?: string;
+  cloudSttModel?: string;
+  cloudSttFallbackUsed?: boolean;
+  detectedLanguage?: string;
+};
+
+function quoted(value: string | undefined): string {
+  const cut = clip(value, HEARD_EMAIL_MAX);
+  return cut === undefined ? "(none)" : `"${cut}"`;
+}
+
+/** The "Remi heard" lines of a failure email. */
+export function buildHeardSection(heard: HeardInput): string[] {
+  const model = heard.cloudSttModel
+    ? ` (${heard.cloudSttModel}${heard.cloudSttFallbackUsed ? ", fallback" : ""})`
+    : "";
+  return [
+    "Remi heard:",
+    `  device transcript: ${quoted(heard.deviceTranscript)}`,
+    `  cloud transcript${model}: ${quoted(heard.cloudTranscript)}`,
+    `  detected language: ${or(heard.detectedLanguage, "unknown")}`,
+  ];
+}
+
 export type OutcomeEmailInput = {
   notify: Exclude<OutcomeNotify, null>;
   deviceTag: string;
@@ -188,6 +237,8 @@ export type OutcomeEmailInput = {
   timezone?: string;
   buildNumber?: string;
   at: number;
+  /** Failures only (OLD-136): the failedTakes row's transcripts. */
+  heard?: HeardInput;
 };
 
 function plural(n: number, word: string): string {
@@ -224,6 +275,10 @@ export function buildOutcomeBody(input: OutcomeEmailInput): string {
     lines.push("");
     lines.push(`errorCode: ${or(input.errorCode, "unknown")}`);
     lines.push(`errorDetail: ${or(input.errorDetail, "none")}`);
+    if (input.heard) {
+      lines.push("");
+      lines.push(...buildHeardSection(input.heard));
+    }
   }
   lines.push("");
   lines.push(`device: ${input.deviceTag}`);

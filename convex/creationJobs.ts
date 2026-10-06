@@ -39,6 +39,12 @@ import {
   creationStatusValidator,
   scheduleFields,
 } from "./schema";
+import {
+  failureDiagnosticsValidator,
+  recordFailedTake,
+  releaseJobAudio,
+  type FailureDiagnostics,
+} from "./failedTakes";
 
 type JobDoc = Doc<"creationJobs">;
 type CreationStatus = JobDoc["status"];
@@ -241,7 +247,8 @@ async function applyCas(
   job: JobDoc | null,
   generation: number,
   expectStatus: readonly CreationStatus[],
-  patch: CasPatch
+  patch: CasPatch,
+  diagnostics?: FailureDiagnostics
 ): Promise<"applied" | "stale"> {
   if (!job) return "stale";
   if (job.generation !== generation) return "stale";
@@ -249,11 +256,16 @@ async function applyCas(
   if (!expectStatus.includes(job.status)) return "stale";
   await ctx.db.patch(job._id, { ...patch, updatedAt: Date.now() });
   if (patch.status === "failed") {
-    // Founder alerts (OLD-135): every failure — worker or stale sweep — lands here.
+    // Every failure — worker or stale sweep — lands here. The failed attempt is
+    // kept, transcripts and recording included, in this same transaction
+    // (OLD-136), so no later cleanup can race it; then the founder is told
+    // (OLD-135).
+    const failedTakeId = await recordFailedTake(ctx, job, patch, diagnostics);
     await ctx.scheduler.runAfter(0, internal.founderAlerts.recordOutcome, {
       jobId: job._id,
       status: "failed",
       errorCode: patch.errorCode,
+      failedTakeId,
     });
   }
   return "applied";
@@ -521,11 +533,21 @@ export const casPatch = internalMutation({
     generation: v.number(),
     expectStatus: v.array(creationStatusValidator),
     patch: casPatchValidator,
+    // What a failing worker saw that the job row does not hold (OLD-136): the
+    // parse model's raw answer. Read only when `patch.status` is "failed".
+    diagnostics: v.optional(failureDiagnosticsValidator),
   },
   returns: casResultValidator,
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
-    const result = await applyCas(ctx, job, args.generation, args.expectStatus, args.patch);
+    const result = await applyCas(
+      ctx,
+      job,
+      args.generation,
+      args.expectStatus,
+      args.patch,
+      args.diagnostics
+    );
     return { result };
   },
 });
@@ -590,11 +612,10 @@ export const commit = internalMutation({
     }
 
     // The recording has done its job. Scheduled rather than awaited inline for
-    // the same reason OLD-106 moved it out of the fast path (C6).
+    // the same reason OLD-106 moved it out of the fast path (C6). Kept instead
+    // when an earlier attempt of this take failed on it (OLD-136).
     if (job.audioStorageId) {
-      await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
-        storageId: job.audioStorageId,
-      });
+      await releaseJobAudio(ctx, job.audioStorageId);
     }
 
     await ctx.db.patch(args.jobId, {
@@ -662,9 +683,7 @@ export const cancel = mutation({
 
     if (!job) {
       if (args.orphanStorageId) {
-        await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
-          storageId: args.orphanStorageId,
-        });
+        await releaseJobAudio(ctx, args.orphanStorageId);
       }
       return { status: "not_found" as const };
     }
@@ -685,7 +704,7 @@ export const cancel = mutation({
     if (job.audioStorageId) orphans.add(job.audioStorageId);
     if (args.orphanStorageId) orphans.add(args.orphanStorageId);
     for (const storageId of orphans) {
-      await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, { storageId });
+      await releaseJobAudio(ctx, storageId);
     }
 
     return { status: "cancelled" as const };
@@ -776,10 +795,10 @@ export const retry = mutation({
       updatedAt: now,
     });
 
+    // The replaced recording belongs to the failed attempt that used it
+    // (OLD-136), so in practice this keeps it; releaseJobAudio decides.
     if (swapping && job.audioStorageId) {
-      await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
-        storageId: job.audioStorageId,
-      });
+      await releaseJobAudio(ctx, job.audioStorageId);
     }
 
     await ctx.scheduler.runAfter(0, internal.creationJobActions.run, {
@@ -792,7 +811,10 @@ export const retry = mutation({
   },
 });
 
-/** Swipe on a failed card: drop the recording and the job with it. */
+/**
+ * Swipe on a failed card: drop the job, and its recording unless a failed
+ * attempt kept it for the founder (OLD-136; purged after 7 days).
+ */
 export const discard = mutation({
   args: { deviceId: v.string(), creationId: v.string() },
   returns: v.object({
@@ -805,9 +827,7 @@ export const discard = mutation({
       return { status: job.status };
     }
     if (job.audioStorageId) {
-      await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
-        storageId: job.audioStorageId,
-      });
+      await releaseJobAudio(ctx, job.audioStorageId);
     }
     await ctx.db.delete(job._id);
     return { status: "discarded" as const };
@@ -925,12 +945,13 @@ export const sweepStale = internalMutation({
   },
 });
 
-/** Drop one job row, and schedule its recording's deletion if it still has one. */
+/**
+ * Drop one job row, and schedule its recording's deletion if it still has one
+ * and no failed attempt kept it (OLD-136).
+ */
 async function collectJob(ctx: MutationCtx, job: JobDoc): Promise<void> {
   if (job.audioStorageId) {
-    await ctx.scheduler.runAfter(0, internal.reminders.deleteUploadedAudio, {
-      storageId: job.audioStorageId,
-    });
+    await releaseJobAudio(ctx, job.audioStorageId);
   }
   await ctx.db.delete(job._id);
 }
