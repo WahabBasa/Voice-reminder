@@ -42,6 +42,7 @@ import {
   type TakeStoryInput,
 } from "./takeStoryEmail";
 import { getDevice, hasPriorFootprint } from "./devices";
+import { isNeedsTimeDetail } from "./needsTime";
 
 /** takeOutcomes rows older than this are deleted by the prune cron. */
 export const OUTCOME_RETENTION_MS = 30 * DAY_MS;
@@ -204,9 +205,28 @@ export const recordOutcome = internalMutation({
 
     // ── One email per take, not per attempt.
     const pending = await findTakeEmail(ctx, job.creationId, deviceTag);
-    // An email for this take is already on its way; it gathers every attempt,
-    // this one included, when it fires.
-    if (pending && pending.sentAt === undefined) return null;
+    // A take turned away for want of a time is not a failure the user saw: the
+    // card asked "When should I remind you?". Its row is parked, unsent and
+    // with no delivery queued, and only goes out if the user swipes the take
+    // away (`noteAbandonedNeedsTime`). Answering it commits the take, and a
+    // committed take with an unsent row sends nothing.
+    const parked = failed && isNeedsTimeDetail(job.errorDetail);
+    if (pending && pending.sentAt === undefined) {
+      // A parked take that then fails for real (a later retry) is a failure
+      // the user did see: wake its email the way any failure schedules one.
+      // Read off the job as it stands, so a late-running outcome for the
+      // parked failure itself cannot wake it after the user answered.
+      if (pending.parked === true && failed && !parked && job.status === "failed") {
+        await ctx.db.patch(pending._id, { parked: undefined, dueAt: now + TAKE_EMAIL_SETTLE_MS });
+        await ctx.scheduler.runAfter(TAKE_EMAIL_SETTLE_MS, internal.founderAlerts.deliverTakeEmail, {
+          creationId: job.creationId,
+          deviceTag,
+        });
+      }
+      // Otherwise an email for this take is already on its way; it gathers
+      // every attempt, this one included, when it fires.
+      return null;
+    }
 
     // A failure always gets an email; so does any twist in a take whose email
     // already went out (a later manual retry that recovered or failed again);
@@ -220,7 +240,11 @@ export const recordOutcome = internalMutation({
 
     const delay = failed ? TAKE_EMAIL_SETTLE_MS : 0;
     if (pending) {
-      await ctx.db.patch(pending._id, { dueAt: now + delay, sentAt: undefined });
+      await ctx.db.patch(pending._id, {
+        dueAt: now + delay,
+        sentAt: undefined,
+        parked: parked || undefined,
+      });
     } else {
       await ctx.db.insert("takeEmails", {
         creationId: job.creationId,
@@ -238,8 +262,10 @@ export const recordOutcome = internalMutation({
         buildNumber: device?.buildNumber,
         updateId: device?.updateId,
         iosVersion: device?.iosVersion,
+        ...(parked ? { parked: true } : {}),
       });
     }
+    if (parked) return null;
     await ctx.scheduler.runAfter(delay, internal.founderAlerts.deliverTakeEmail, {
       creationId: job.creationId,
       deviceTag,
@@ -247,6 +273,25 @@ export const recordOutcome = internalMutation({
     return null;
   },
 });
+
+/**
+ * The user swiped away a take that was only waiting for a time (called by
+ * creationJobs.discard, before it deletes the job). Its parked email goes out
+ * now, and tells the story as "⏳ Needs a time … then swiped it away".
+ */
+export async function noteAbandonedNeedsTime(
+  ctx: MutationCtx,
+  job: Doc<"creationJobs">
+): Promise<void> {
+  const deviceTag = await deviceTagFor(job.deviceId);
+  const row = await findTakeEmail(ctx, job.creationId, deviceTag);
+  if (!row || row.sentAt !== undefined) return;
+  await ctx.db.patch(row._id, { dueAt: Date.now(), parked: undefined });
+  await ctx.scheduler.runAfter(0, internal.founderAlerts.deliverTakeEmail, {
+    creationId: job.creationId,
+    deviceTag,
+  });
+}
 
 async function findTakeEmail(
   ctx: MutationCtx,
@@ -358,6 +403,9 @@ export const deliverTakeEmail = internalMutation({
       await ctx.scheduler.runAfter(TAKE_EMAIL_RECHECK_MS, internal.founderAlerts.deliverTakeEmail, args);
       return null;
     }
+    // Waiting for the user to pick a time: nothing to tell yet. The row stays
+    // unsent, so a swipe-away can still send it (`noteAbandonedNeedsTime`).
+    if (job?.status === "failed" && isNeedsTimeDetail(job.errorDetail)) return null;
 
     const failedRows = (
       await ctx.db

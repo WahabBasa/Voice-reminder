@@ -114,9 +114,21 @@ type EditReminderSheetProps = {
     onClose: () => void;
     onSave: (updated: Reminder) => void;
     onDelete: (reminder: Reminder) => void;
+    /**
+     * Draft mode: the reminder does not exist yet. "Pick a time…" on a take
+     * that was waiting for one opens the sheet pre-filled with what Remi heard
+     * and its time controls open; Done hands the edited reminder to
+     * `onConfirm` instead of saving a row, and the sheet closes when that
+     * resolves true. Nothing the sheet cannot send (delete, report, the alarm
+     * and heads-up settings) is shown.
+     */
+    draft?: {
+        confirmLabel: string;
+        onConfirm: (reminder: Reminder) => Promise<boolean>;
+    };
 };
 
-export default function EditReminderSheet({ reminder: initialReminder, onClose, onSave, onDelete }: EditReminderSheetProps) {
+export default function EditReminderSheet({ reminder: initialReminder, onClose, onSave, onDelete, draft: draftMode }: EditReminderSheetProps) {
     const traceId = useMemo(() => createTraceId("edit_sheet"), []);
     const router = useRouter();
     const updateConvexReminder = useMutation(api.reminders.update);
@@ -180,7 +192,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const volume = initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume;
     const volumeStyle = initialReminder.volumeStyle ?? DEFAULT_ALARM_SETTINGS.volumeStyle;
 
-    const [showTimesEditor, setShowTimesEditor] = useState(false);
+    // A draft is opened to pick a time, so its time controls start open.
+    const [showTimesEditor, setShowTimesEditor] = useState(draftMode !== undefined);
     const [showRepeatTaskModal, setShowRepeatTaskModal] = useState(false);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -346,6 +359,20 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             until: save.until,
         };
 
+        if (draftMode) {
+            // Nothing is stored here: the caller creates the reminder, and the
+            // sheet stays open (busy) until it says whether that worked.
+            setRegeneratingVoice(true);
+            let created = false;
+            try {
+                created = await draftMode.onConfirm(updatedReminder);
+            } finally {
+                setRegeneratingVoice(false);
+            }
+            if (created) onClose();
+            return;
+        }
+
         try {
             // Update via Zustand store (handles state + persistence)
             await storeUpdateReminder(updatedReminder);
@@ -507,7 +534,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             console.error("[VR] Save error:", error);
             Alert.alert("Error", "Failed to save reminder");
         }
-    }, [reminder, title, emoji, description, draft, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, regenerateReminderAudio, regeneratingVoice, toast, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
+    }, [reminder, title, emoji, description, draft, draftMode, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, regenerateReminderAudio, regeneratingVoice, toast, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
 
     const executeDelete = async () => {
         const reminderId = reminder.id;
@@ -694,6 +721,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             />
                         ) : null}
 
+                        {draftMode ? null : (
+                        <>
                         <View style={styles.separator} />
                         <View style={styles.row}>
                             <View style={styles.rowLeftText}>
@@ -713,6 +742,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
                         <View style={styles.separator} />
                         <SheetRow icon="bell" label="Heads-up" value={preReminderLabel} onPress={cyclePreReminder} />
+                        </>
+                        )}
                     </View>
 
                     {/* Voice note card. While TTS is still generating the row stays
@@ -768,6 +799,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     {/* Report a problem — deliberately set apart from Done and
                         Trash by its own spacing, so it can't be mistaken for
                         either. Opens the composer above this sheet. */}
+                    {draftMode ? null : (
                     <TouchableOpacity
                         style={styles.reportRow}
                         onPress={handleReportProblem}
@@ -776,9 +808,11 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         <AppIcon name="message-square" size={18} color={colors.textSecondary} />
                         <Text style={styles.reportRowLabel}>Report a problem</Text>
                     </TouchableOpacity>
+                    )}
 
                     {/* Trash / Done */}
                     <View style={styles.bottomActions}>
+                        {draftMode ? null : (
                         <TouchableOpacity
                             style={styles.deleteCircle}
                             onPress={() => setShowDeleteConfirm(true)}
@@ -786,6 +820,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         >
                             <AppIcon name="trash-2" size={20} color={colors.destructive} />
                         </TouchableOpacity>
+                        )}
 
                         <TouchableOpacity
                             style={[styles.doneButton, regeneratingVoice && styles.doneButtonDisabled]}
@@ -794,7 +829,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             disabled={regeneratingVoice}
                         >
                             <Text style={styles.doneButtonText}>
-                                {regeneratingVoice ? "Updating voice…" : "Done"}
+                                {draftMode
+                                    ? regeneratingVoice ? "Setting…" : draftMode.confirmLabel
+                                    : regeneratingVoice ? "Updating voice…" : "Done"}
                             </Text>
                             {!regeneratingVoice && <AppIcon name="check" size={18} color="white" />}
                         </TouchableOpacity>

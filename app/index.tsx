@@ -106,7 +106,16 @@ import {
   enqueueReconcile,
   retryTake,
   handleFailedJobPush,
+  resolveTakeWithTime,
+  type ResolveTakeOutcome,
 } from "../lib/takeReconcile";
+import {
+  draftReminderFor,
+  needsTimeFocus,
+  onceGrid,
+  quickChoiceTime,
+  type QuickChoiceId,
+} from "../lib/needsTime";
 import { watchCreationJob, type CreationJobWatchHandle } from "../lib/creationJobWatch";
 import PendingTakeCard, { usePendingTakes } from "../components/PendingTakeCard";
 import { failedTakeFeedbackContext, feedbackUi, reminderCreatedToast } from "../lib/feedbackUi";
@@ -192,6 +201,19 @@ const onPendingTakeDiscard = (creationId: string) => void discardTake(creationId
 // user sees it there and in the composer, and chooses to send it.
 const onPendingTakeReport = (take: PendingTake) =>
   feedbackUi.openComposer(failedTakeFeedbackContext(take), "Includes details of this failed take.");
+/** The user's zone, read when it is needed: they may have travelled since launch. */
+const deviceTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+// "When should I remind you?" answered with a quick choice. The time is worked
+// out at the tap, on the user's own clock; a created take is imported by
+// reconciliation, which shows the usual "Reminder created" toast.
+const onPendingTakeChooseTime = (
+  creationId: string,
+  choice: QuickChoiceId
+): Promise<ResolveTakeOutcome> => {
+  const tzid = deviceTimezone();
+  const { date, time } = quickChoiceTime(choice, Date.now(), tzid);
+  return resolveTakeWithTime(creationId, onceGrid(date, time, tzid));
+};
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -205,6 +227,7 @@ export default function HomeScreen() {
   const retryCreationJob = useMutation(api.creationJobs.retry);
   const discardCreationJob = useMutation(api.creationJobs.discard);
   const ackCreationJob = useMutation(api.creationJobs.ack);
+  const resolveCreationJobWithTime = useMutation(api.creationJobs.resolveWithTime);
   const toast = useToast();
   const insets = useSafeAreaInsets();
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -248,6 +271,11 @@ export default function HomeScreen() {
   const uploadUrlRef = useRef<Promise<string | null> | null>(null);
   // Edit overlay - renders instantly without navigation
   const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
+  // "Pick a time…" on a take waiting for one: the edit sheet in draft mode,
+  // pre-filled with the reminder Remi heard. Nothing is stored until Done.
+  const [timeDraft, setTimeDraft] = useState<{ creationId: string; reminder: Reminder } | null>(
+    null
+  );
   const [recordingTraceId, setRecordingTraceId] = useState<string | null>(null);
   const [canStartRecording, setCanStartRecording] = useState(false);
   const [gateStatusText, setGateStatusText] = useState<string | undefined>(undefined);
@@ -1609,6 +1637,7 @@ export default function HomeScreen() {
       cancel: (args) => cancelCreationJob(args as any) as Promise<any>,
       serverRetry: (args) => retryCreationJob(args as any) as Promise<any>,
       discard: (args) => discardCreationJob(args) as Promise<any>,
+      resolveWithTime: (args) => resolveCreationJobWithTime(args as any) as Promise<any>,
       uploadRecording: async (take) => {
         // A recording that is not there cannot be uploaded, and saying so is
         // what routes the take to "Record again" instead of a doomed retry.
@@ -1646,6 +1675,7 @@ export default function HomeScreen() {
     cancelCreationJob,
     retryCreationJob,
     discardCreationJob,
+    resolveCreationJobWithTime,
     generateAudioUploadUrl,
     importCommittedTake,
     subscribeToJob,
@@ -1693,6 +1723,46 @@ export default function HomeScreen() {
   const handleEditSheetClose = useCallback(() => {
     setEditingReminder(null);
   }, []);
+
+  // "Pick a time…": the kept reminder in the edit sheet, time controls open.
+  const handlePendingTakePickTime = useCallback((take: PendingTake) => {
+    const focus = needsTimeFocus(take.pendingPlans);
+    if (!focus) return;
+    const draft = draftReminderFor(take.creationId, focus.plan, Date.now(), deviceTimezone());
+    setTimeDraft({ creationId: take.creationId, reminder: draft as Reminder });
+  }, []);
+
+  const handleTimeDraftClose = useCallback(() => {
+    setTimeDraft(null);
+  }, []);
+
+  // Done in the draft sheet: create the reminder with what the sheet holds. The
+  // card turns into the reminder through the usual import (and its toast); the
+  // sheet only closes once the server has it.
+  const handleTimeDraftConfirm = useCallback(
+    async (edited: Reminder): Promise<boolean> => {
+      const creationId = timeDraft?.creationId;
+      if (!creationId || !edited.schedule) return false;
+      const outcome = await resolveTakeWithTime(creationId, edited.schedule, {
+        title: edited.title,
+        description: edited.description,
+        ...(edited.emoji ? { emoji: edited.emoji } : {}),
+      });
+      if (outcome === "created") return true;
+      toast.show({
+        title: outcome === "invalid" ? "That time doesn't work" : "Couldn't set that time",
+        message:
+          outcome === "invalid"
+            ? "Pick a time that hasn't passed yet."
+            : outcome === "offline"
+              ? "Check your connection and try again."
+              : "Try again, or record it again.",
+        type: "info",
+      });
+      return false;
+    },
+    [timeDraft, toast]
+  );
 
   // Store handles updates automatically - these callbacks just close the sheet
   const handleEditSheetSave = useCallback((_updated: Reminder) => {
@@ -1963,6 +2033,8 @@ export default function HomeScreen() {
                     onRetry={onPendingTakeRetry}
                     onDiscard={onPendingTakeDiscard}
                     onReport={onPendingTakeReport}
+                    onChooseTime={onPendingTakeChooseTime}
+                    onPickTime={handlePendingTakePickTime}
                   />
                 ))}
               </>
@@ -2054,6 +2126,18 @@ export default function HomeScreen() {
           onClose={handleEditSheetClose}
           onSave={handleEditSheetSave}
           onDelete={handleEditSheetDelete}
+        />
+      )}
+
+      {/* "Pick a time…" — the same sheet, as a draft of the kept reminder. */}
+      {timeDraft && (
+        <EditReminderSheet
+          key={timeDraft.creationId}
+          reminder={timeDraft.reminder}
+          onClose={handleTimeDraftClose}
+          onSave={handleEditSheetSave}
+          onDelete={handleEditSheetDelete}
+          draft={{ confirmLabel: "Remind me", onConfirm: handleTimeDraftConfirm }}
         />
       )}
     </SafeAreaView>

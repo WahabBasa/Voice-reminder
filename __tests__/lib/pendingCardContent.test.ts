@@ -7,6 +7,8 @@
  * suite proves the card DERIVES it rather than restating it (C16).
  */
 import {
+  moreRemindersLine,
+  needsTimePrompt,
   pendingCardContent,
   remiHeardLine,
   REMI_HEARD_MAX_CHARS,
@@ -254,5 +256,130 @@ describe("remiHeardLine", () => {
     expect(remiHeardLine(null)).toBeNull();
     expect(remiHeardLine(42)).toBeNull();
     expect(remiHeardLine("   ")).toBeNull();
+  });
+});
+
+// ─── "When should I remind you?" (founder decision, 2026-10-06) ─────────────
+
+describe("a take the server kept for want of a time", () => {
+  const dentist = {
+    title: "Call the dentist",
+    description: "Ring tandläkaren.",
+    emoji: "🦷",
+    lang: "sv",
+    frequency: "once",
+    needsTime: true,
+  };
+  const pills = {
+    title: "Pills",
+    description: "Take your pills.",
+    frequency: "daily",
+    needsTime: false,
+  };
+  const asking = (
+    serverErrorDetail: string,
+    over: Record<string, unknown> = {},
+    clock: { hour12?: boolean } = { hour12: false }
+  ) =>
+    pendingCardContent(
+      {
+        phase: "failed",
+        errorKind: "unparseable",
+        serverErrorDetail,
+        transcript: "ring tandläkaren",
+        pendingPlans: [dentist],
+        ...over,
+      } as Parameters<typeof pendingCardContent>[0],
+      LIMIT,
+      clock
+    );
+
+  it("no_time: the reminder filled in, and the question — not a failure", () => {
+    expect(asking("no_time")).toEqual({
+      text: "When should I remind you?",
+      shimmer: false,
+      tappable: false,
+      swipeToDiscard: true,
+      cancellable: false,
+      tone: "ask",
+      ask: { title: "Call the dentist", spokenLine: "Ring tandläkaren.", emoji: "🦷" },
+    });
+  });
+
+  it("never wears the failure styling or the failure's Remi-heard line", () => {
+    for (const detail of ["no_time", "past_time"]) {
+      const content = asking(detail);
+      expect(content.tone).toBe("ask");
+      expect(content).not.toHaveProperty("heard");
+      expect(content.tappable).toBe(false);
+    }
+  });
+
+  it("past_time: keeps the time they said visible as context", () => {
+    expect(asking("past_time", { pastTime: "10:00" }).text).toBe(
+      "10:00 has already passed today. When should I remind you?"
+    );
+    expect(asking("past_time", { pastTime: "10:00" }, { hour12: true }).text).toBe(
+      "10:00 am has already passed today. When should I remind you?"
+    );
+  });
+
+  it("past_time: falls back to the plan's said time, then to 'That time'", () => {
+    expect(
+      asking("past_time", { pendingPlans: [{ ...dentist, saidTime: "09:30" }] }).text
+    ).toBe("09:30 has already passed today. When should I remind you?");
+    expect(asking("past_time").text).toBe(
+      "That time has already passed today. When should I remind you?"
+    );
+  });
+
+  it("a take of several shows the one waiting for a time and lists the rest", () => {
+    const content = asking("no_time", { pendingPlans: [pills, dentist] });
+    expect(content.ask).toEqual({
+      title: "Call the dentist",
+      spokenLine: "Ring tandläkaren.",
+      emoji: "🦷",
+      more: "+1 more: Pills",
+    });
+    expect(
+      asking("no_time", {
+        pendingPlans: [pills, dentist, { ...pills, title: "Milk" }],
+      }).ask?.more
+    ).toBe("+2 more: Pills, Milk");
+  });
+
+  it("a reminder with no emoji has no emoji key", () => {
+    const { emoji: _emoji, ...plain } = dentist;
+    expect(asking("no_time", { pendingPlans: [plain] }).ask).toEqual({
+      title: "Call the dentist",
+      spokenLine: "Ring tandläkaren.",
+    });
+  });
+
+  it("without kept plans (an older server) it is the record-again card it always was", () => {
+    expect(asking("no_time", { pendingPlans: undefined })).toMatchObject({
+      tone: "error",
+      tappable: true,
+      text: "When should I remind you? Tap to record again with a time",
+    });
+    expect(asking("no_time", { pendingPlans: [] }).tone).toBe("error");
+  });
+
+  it("only these two details ask; any other keeps its own failure", () => {
+    expect(asking("not_understood").tone).toBe("error");
+    expect(asking("no_time", { errorKind: "server" }).tone).toBe("error");
+  });
+});
+
+describe("needsTimePrompt and moreRemindersLine", () => {
+  it("the prompt defaults to the device's dial", () => {
+    expect(needsTimePrompt("no_time", undefined)).toBe("When should I remind you?");
+    expect(needsTimePrompt("past_time", undefined)).toBe(
+      "That time has already passed today. When should I remind you?"
+    );
+  });
+
+  it("no line when the take holds only the one reminder", () => {
+    expect(moreRemindersLine([])).toBeUndefined();
   });
 });

@@ -31,7 +31,7 @@ import {
 } from "./emailHtml";
 import { HEARD_EMAIL_MAX, clip } from "./founderAlertsEmail";
 import { needsMultilingualVoice, normalizeLanguageCode } from "./languages";
-import { phoneCopyForServerFailure } from "./takeCardCopy";
+import { askCardPrompt, phoneCopyForServerFailure } from "./takeCardCopy";
 
 export { escapeHtml };
 
@@ -482,10 +482,11 @@ export function outcomeLabel(verdict: StoryVerdict): string {
       return "❌ Not understood";
     case "silent":
       return "❌ Silent";
+    // Not failures the user saw: the card asked "When should I remind you?"
+    // over the reminder it had heard (founder decision, 2026-10-06).
     case "no_time":
-      return "❌ No time";
     case "past_time":
-      return "❌ Time passed";
+      return "⏳ Needs a time";
     case "unsupported_language":
       return "❌ Unsupported language";
     default:
@@ -588,12 +589,14 @@ function sawLine(input: TakeStoryInput): string {
   if (input.final === "cancelled") return "They saw: nothing, they cancelled the take";
   if (input.final === "running") return "They saw: a working card, Remi was still retrying";
   const f = lastFailed(input.attempts)?.failure ?? {};
-  const copy = phoneCopyForServerFailure({
-    errorCode: f.errorCode,
-    errorDetail: f.errorDetail,
-    detectedLanguage: f.detectedLanguage,
-    pastTime: f.pastTime,
-  });
+  const copy =
+    askCardPrompt(f.errorDetail, f.pastTime) ??
+    phoneCopyForServerFailure({
+      errorCode: f.errorCode,
+      errorDetail: f.errorDetail,
+      detectedLanguage: f.detectedLanguage,
+      pastTime: f.pastTime,
+    });
   const after = input.final === "discarded" ? ", then swiped it away" : "";
   return `They saw: "${copy}"${after}`;
 }

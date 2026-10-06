@@ -77,7 +77,7 @@ async function emails(): Promise<SentEmail[]> {
       const email = row.args[0] as SentEmail;
       // convex-test may already have run sendTakeEmail, which hands the same
       // take email on to sendEmail; it is counted once, from its story.
-      if (!/^Remi [✅⚠❌]/u.test(email.subject)) out.push(email);
+      if (!/^Remi [✅⚠❌⏳]/u.test(email.subject)) out.push(email);
     }
   }
   return out;
@@ -618,6 +618,147 @@ describe("one email per take", () => {
     expect(email.body).toContain(", then swiped it away");
     // The job is gone, but the takeEmails row kept the install's first hello.
     expect(email.body).toContain("first seen today");
+  });
+});
+
+// ─── a take that asked "When should I remind you?" ───────────────────────────
+
+describe("a take waiting for a time (⏳)", () => {
+  const PLANS = {
+    pendingPlans: [
+      { title: "Water", description: "Drink your water.", frequency: "once", needsTime: true },
+    ],
+    heldPlans: [commitPlan()],
+  };
+
+  async function asksForATime(errorDetail: "no_time" | "past_time" = "no_time") {
+    await hello();
+    const { jobId, creationId } = await insertJob(t, {
+      status: "transcribed",
+      deviceId: NEW_ID,
+      transcript: "Remind me to drink water",
+    });
+    await failJob(jobId, 1, {
+      errorCode: "unparseable",
+      errorDetail,
+      ...(errorDetail === "past_time" ? { pastTime: "10:00" } : {}),
+      ...PLANS,
+    });
+    await t.mutation(internal.founderAlerts.recordOutcome, {
+      jobId,
+      status: "failed",
+      errorCode: "unparseable",
+    });
+    return { jobId, creationId };
+  }
+
+  test("sends nothing while it waits, but logs the outcome and parks its email", async () => {
+    const { creationId } = await asksForATime();
+
+    expect(await scheduledOf(t, DELIVER)).toHaveLength(0);
+    expect((await outcomes()).map((o) => o.errorDetail)).toContain("no_time");
+    const rows = await t.run(async (ctx) => await ctx.db.query("takeEmails").collect());
+    expect(rows).toHaveLength(1);
+    expect(rows[0].sentAt).toBeUndefined();
+
+    // An email that was already due (an earlier attempt's) does not go either.
+    await deliver(creationId);
+    expect((await emails()).map((e) => e.subject)).toEqual([
+      "Remi: new device (Europe/Stockholm, sv-SE)",
+    ]);
+    const [row] = await t.run(async (ctx) => await ctx.db.query("takeEmails").collect());
+    expect(row.sentAt).toBeUndefined();
+  });
+
+  test("answered: the reminder is made and the founder hears nothing", async () => {
+    const { jobId, creationId } = await asksForATime();
+    const result = await t.mutation(api.creationJobs.resolveWithTime, {
+      deviceId: NEW_ID,
+      creationId,
+      schedule: {
+        type: "grid",
+        days: { kind: "date", date: "2026-10-06" },
+        times: { kind: "clock", times: ["09:00"] },
+        tzid: CLOCK.timezone,
+      },
+    });
+    expect(result.status).toBe("committed");
+    await t.mutation(internal.founderAlerts.recordOutcome, { jobId, status: "committed" });
+
+    expect(await scheduledOf(t, DELIVER)).toHaveLength(0);
+    expect((await emails()).map((e) => e.subject)).toEqual([
+      "Remi: new device (Europe/Stockholm, sv-SE)",
+    ]);
+  });
+
+  test("swiped away: one ⏳ Needs a time email, never ❌", async () => {
+    const { creationId } = await asksForATime();
+    await t.mutation(api.creationJobs.discard, { deviceId: NEW_ID, creationId });
+
+    const queued = await scheduledOf(t, DELIVER);
+    expect(queued.map((r) => r.args[0])).toEqual([
+      { creationId, deviceTag: await deviceTagFor(NEW_ID) },
+    ]);
+    await deliver(creationId);
+    const email = (await emails()).at(-1)!;
+    expect(email.subject).toBe("Remi ⏳ Needs a time · Dubai");
+    expect(email.body).toContain(`They saw: "When should I remind you?", then swiped it away`);
+    expect(`${email.subject}${email.body}`).not.toContain("❌");
+  });
+
+  test("a later real failure of a parked take wakes its email", async () => {
+    const { jobId, creationId } = await asksForATime();
+    // A retry of the same take that fails for a reason the user did see.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(jobId, { status: "transcribed", generation: 2, attempts: 2 });
+    });
+    await failJob(jobId, 2, { errorCode: "unparseable", errorDetail: "not_understood" });
+    await t.mutation(internal.founderAlerts.recordOutcome, {
+      jobId,
+      status: "failed",
+      errorCode: "unparseable",
+    });
+
+    const queued = await scheduledOf(t, DELIVER);
+    expect(queued).toHaveLength(1);
+    expect((queued[0] as any).scheduledTime).toBe(T0 + TAKE_EMAIL_SETTLE_MS);
+    const [row] = await t.run(async (ctx) => await ctx.db.query("takeEmails").collect());
+    expect(row.parked).toBeUndefined();
+    await deliver(creationId);
+    expect((await emails()).at(-1)!.subject).toBe("Remi ❌ Not understood · Dubai");
+  });
+
+  test("past_time swiped away says which time had passed", async () => {
+    const { creationId } = await asksForATime("past_time");
+    await t.mutation(api.creationJobs.discard, { deviceId: NEW_ID, creationId });
+    await deliver(creationId);
+    const email = (await emails()).at(-1)!;
+    expect(email.subject).toBe("Remi ⏳ Needs a time · Dubai");
+    expect(email.body).toContain("10:00 has already passed today. When should I remind you?");
+  });
+
+  test("a discard of any other failure does not re-send an email that already went", async () => {
+    const { jobId, creationId } = await insertJob(t, { status: "transcribed", deviceId: NEW_ID });
+    await failJob(jobId, 1, { errorCode: "unparseable", errorDetail: "not_understood" });
+    await t.mutation(internal.founderAlerts.recordOutcome, {
+      jobId,
+      status: "failed",
+      errorCode: "unparseable",
+    });
+    const before = (await scheduledOf(t, DELIVER)).length;
+    await t.mutation(api.creationJobs.discard, { deviceId: NEW_ID, creationId });
+    expect(await scheduledOf(t, DELIVER)).toHaveLength(before);
+  });
+
+  test("a waiting take with no parked email (outcome never logged) sends nothing on discard", async () => {
+    const { jobId, creationId } = await insertJob(t, { status: "transcribed", deviceId: NEW_ID });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(jobId, { status: "failed", errorCode: "unparseable", errorDetail: "no_time" });
+    });
+    expect(await t.mutation(api.creationJobs.discard, { deviceId: NEW_ID, creationId })).toEqual({
+      status: "discarded",
+    });
+    expect(await scheduledOf(t, DELIVER)).toHaveLength(0);
   });
 });
 

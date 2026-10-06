@@ -363,6 +363,83 @@ describe("the guard (OLD-130)", () => {
     expect(commitOf(ctx)).toBeUndefined();
   });
 
+  it("no_time keeps what it heard: every plan held, the card's view of each", async () => {
+    // "Call the dentist (no time), and take my pills every day at 8".
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "sv",
+      plans: [
+        { ...waterPlan(), title: "Pills", lang: "en" },
+        {
+          ...waterPlan(),
+          title: "Ring tandläkaren",
+          description: "Dags att ringa tandläkaren.",
+          emoji: "🦷",
+          frequency: "once",
+          timeSpoken: false,
+          lang: "sv",
+        },
+      ],
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    const patch = failOf(ctx).patch;
+    expect(patch.errorDetail).toBe("no_time");
+    expect(patch.pendingPlans).toEqual([
+      {
+        title: "Pills",
+        description: "Drink your water.",
+        emoji: "💧",
+        lang: "en",
+        frequency: "daily",
+        needsTime: false,
+      },
+      {
+        title: "Ring tandläkaren",
+        description: "Dags att ringa tandläkaren.",
+        emoji: "🦷",
+        lang: "sv",
+        frequency: "once",
+        needsTime: true,
+      },
+    ]);
+    // The full plans, as commit would write them — the spoken line and its
+    // language included, so the reminder made later speaks in Swedish.
+    expect(patch.heldPlans).toHaveLength(2);
+    expect(patch.heldPlans[1]).toMatchObject({
+      title: "Ring tandläkaren",
+      description: "Dags att ringa tandläkaren.",
+      ttsText: "Dags att ringa tandläkaren.",
+      lang: "sv",
+    });
+  });
+
+  it("past_time keeps the plans too, with the time the user said", async () => {
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "en",
+      plans: [
+        { ...waterPlan(), frequency: "once", time: "10:00", onceAt: NOW - 101 * 60_000, timeSpoken: true },
+      ],
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(failOf(ctx).patch.pendingPlans).toEqual([
+      expect.objectContaining({ saidTime: "10:00", needsTime: true }),
+    ]);
+  });
+
+  it("any other guard detail keeps nothing", async () => {
+    mockPlanTake.mockReturnValue({ understood: false, language: "en", plans: [] });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(failOf(ctx).patch).not.toHaveProperty("pendingPlans");
+    expect(failOf(ctx).patch).not.toHaveProperty("heldPlans");
+  });
+
   it("past_time for a one-off already behind the clock, with the spoken time", async () => {
     // "Today at 10", said at 11:41: a dated, timed one-off 101 minutes ago.
     mockPlanTake.mockReturnValue({

@@ -34,11 +34,21 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
+  commitPlanValidator,
   creationErrorDetailValidator,
   creationPerfValidator,
   creationStatusValidator,
+  gridScheduleValidator,
+  pendingPlanValidator,
   scheduleFields,
 } from "./schema";
+import {
+  isNeedsTimeDetail,
+  resolveHeldPlans,
+  type HeldPlan,
+  type PendingPlan,
+} from "./needsTime";
+import { noteAbandonedNeedsTime } from "./founderAlerts";
 import {
   failureDiagnosticsValidator,
   recordFailedTake,
@@ -90,27 +100,17 @@ const audioStatusValidator = v.union(
   v.literal("failed")
 );
 
-/**
- * One reminder the worker wants committed: every column `reminders.create`
- * would have written, plus the two lines its TTS job needs. `ttsText` and
- * `preTtsText` are scheduling inputs, not columns — they are destructured off
- * before the row is inserted.
- */
-const commitPlanValidator = v.object({
-  title: v.string(),
-  description: v.string(),
-  // The one shared list (OLD-97), so a new schedule axis cannot land in the
-  // table and be dropped on the way in through here.
-  ...scheduleFields,
-  emoji: v.optional(v.string()),
-  preReminderMinutes: v.optional(v.number()),
-  urgency: v.optional(urgencyValidator),
-  persistent: v.optional(v.boolean()),
-  ttsText: v.string(),
-  preTtsText: v.optional(v.string()),
-  // ISO 639-1 language of the spoken content (OLD-130), stored on the row.
-  lang: v.optional(v.string()),
-});
+// Drift guard: convex/needsTime.ts restates both plan shapes without Convex
+// imports. If the validators in convex/schema.ts move, these stop compiling.
+type CommitPlanDoc = typeof commitPlanValidator.type;
+type PendingPlanDoc = typeof pendingPlanValidator.type;
+const _heldPlansAgree = (a: CommitPlanDoc, b: HeldPlan): [HeldPlan, CommitPlanDoc] => [a, b];
+const _pendingPlansAgree = (a: PendingPlanDoc, b: PendingPlan): [PendingPlan, PendingPlanDoc] => [
+  a,
+  b,
+];
+void _heldPlansAgree;
+void _pendingPlansAgree;
 
 /** Fields a CAS write is allowed to move. Never `generation`, never `attempts`. */
 const casPatchValidator = v.object({
@@ -120,6 +120,10 @@ const casPatchValidator = v.object({
   errorDetail: v.optional(creationErrorDetailValidator),
   detectedLanguage: v.optional(v.string()),
   pastTime: v.optional(v.string()),
+  // A `no_time`/`past_time` take's plans, kept for the "When should I remind
+  // you?" card (convex/needsTime.ts).
+  pendingPlans: v.optional(v.array(pendingPlanValidator)),
+  heldPlans: v.optional(v.array(commitPlanValidator)),
   perf: v.optional(creationPerfValidator),
 });
 
@@ -164,6 +168,9 @@ const watchedJobValidator = v.object({
   detectedLanguage: v.optional(v.string()),
   // For `past_time`: the one-off's spoken time, "HH:MM" on the user's clock.
   pastTime: v.optional(v.string()),
+  // For `no_time`/`past_time`: what Remi heard, so the card can ask "When
+  // should I remind you?" over the reminder instead of failing it.
+  pendingPlans: v.optional(v.array(pendingPlanValidator)),
   reminderIds: v.optional(v.array(v.id("reminders"))),
   perf: v.optional(creationPerfValidator),
   updatedAt: v.number(),
@@ -235,6 +242,8 @@ type CasPatch = {
   errorDetail?: JobDoc["errorDetail"];
   detectedLanguage?: string;
   pastTime?: string;
+  pendingPlans?: JobDoc["pendingPlans"];
+  heldPlans?: JobDoc["heldPlans"];
   perf?: JobDoc["perf"];
 };
 
@@ -393,6 +402,9 @@ export const get = query({
       errorDetail: job.errorDetail,
       detectedLanguage: job.detectedLanguage,
       pastTime: job.pastTime,
+      ...(job.pendingPlans && job.pendingPlans.length > 0
+        ? { pendingPlans: job.pendingPlans }
+        : {}),
       reminderIds: job.reminderIds,
       perf: job.perf,
       updatedAt: job.updatedAt,
@@ -557,6 +569,66 @@ export const casPatch = internalMutation({
   },
 });
 
+/** Everything a failed attempt left on the row, cleared by the next run or commit. */
+const CLEARED_FAILURE = {
+  errorCode: undefined,
+  errorDetail: undefined,
+  detectedLanguage: undefined,
+  pastTime: undefined,
+  pendingPlans: undefined,
+  heldPlans: undefined,
+};
+
+/**
+ * Insert every row of a take, stamp each with its `creationId`, schedule each
+ * one's TTS job, and release the recording. Shared by the worker's `commit` and
+ * by `resolveWithTime`, so a reminder made from a picked time is the same row,
+ * spoken the same way in the same voice, as one made straight from a take.
+ */
+async function insertPlans(
+  ctx: MutationCtx,
+  job: JobDoc,
+  plans: readonly CommitPlanDoc[],
+  now: number
+): Promise<Id<"reminders">[]> {
+  const reminderIds: Id<"reminders">[] = [];
+
+  for (const plan of plans) {
+    const { ttsText, preTtsText, ...row } = plan;
+    const reminderId = await ctx.db.insert("reminders", {
+      ...row,
+      deviceId: job.deviceId,
+      creationId: job.creationId,
+      // Audio is deferred exactly as the fast path defers it: the row exists
+      // and is schedulable now, the spoken line lands in a later patch.
+      audioStatus: "pending" as const,
+      // Set here rather than only in the TTS job, so there is no window where
+      // a row that will grow a pre-alert reads as one that never asked for one.
+      audioExtrasStatus: preTtsText ? ("pending" as const) : undefined,
+      audioUpdatedAt: now,
+      createdAt: now,
+    });
+    reminderIds.push(reminderId);
+
+    await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
+      reminderId,
+      title: plan.title,
+      ttsText,
+      preTtsText,
+      // The row's own language picks the voice (OLD-131).
+      lang: row.lang,
+    });
+  }
+
+  // The recording has done its job. Scheduled rather than awaited inline for
+  // the same reason OLD-106 moved it out of the fast path (C6). Kept instead
+  // when an earlier attempt of this take failed on it (OLD-136).
+  if (job.audioStorageId) {
+    await releaseJobAudio(ctx, job.audioStorageId);
+  }
+  return reminderIds;
+}
+
 /**
  * The whole take lands here, or none of it (spec 1.4).
  *
@@ -587,51 +659,14 @@ export const commit = internalMutation({
     if (job.status !== "transcribed") return { result: "stale" as const };
 
     const now = Date.now();
-    const reminderIds: Id<"reminders">[] = [];
-
-    for (const plan of args.plans) {
-      const { ttsText, preTtsText, ...row } = plan;
-      const reminderId = await ctx.db.insert("reminders", {
-        ...row,
-        deviceId: job.deviceId,
-        creationId: job.creationId,
-        // Audio is deferred exactly as the fast path defers it: the row exists
-        // and is schedulable now, the spoken line lands in a later patch.
-        audioStatus: "pending" as const,
-        // Set here rather than only in the TTS job, so there is no window where
-        // a row that will grow a pre-alert reads as one that never asked for one.
-        audioExtrasStatus: preTtsText ? ("pending" as const) : undefined,
-        audioUpdatedAt: now,
-        createdAt: now,
-      });
-      reminderIds.push(reminderId);
-
-      await ctx.scheduler.runAfter(0, internal.actions.generateReminderTtsForReminder, {
-        reminderId,
-        title: plan.title,
-        ttsText,
-        preTtsText,
-        // The row's own language picks the voice (OLD-131).
-        lang: row.lang,
-      });
-    }
-
-    // The recording has done its job. Scheduled rather than awaited inline for
-    // the same reason OLD-106 moved it out of the fast path (C6). Kept instead
-    // when an earlier attempt of this take failed on it (OLD-136).
-    if (job.audioStorageId) {
-      await releaseJobAudio(ctx, job.audioStorageId);
-    }
+    const reminderIds = await insertPlans(ctx, job, args.plans, now);
 
     await ctx.db.patch(args.jobId, {
       status: "committed" as const,
       reminderIds,
       perf: args.preCommitPerf,
       // A commit after a retry clears the previous attempt's error.
-      errorCode: undefined,
-      errorDetail: undefined,
-      detectedLanguage: undefined,
-      pastTime: undefined,
+      ...CLEARED_FAILURE,
       updatedAt: now,
     });
     // Founder alerts (OLD-135).
@@ -790,10 +825,7 @@ export const retry = mutation({
       status: "pending" as const,
       generation,
       attempts: job.attempts + 1,
-      errorCode: undefined,
-      errorDetail: undefined,
-      detectedLanguage: undefined,
-      pastTime: undefined,
+      ...CLEARED_FAILURE,
       ...(args.clientFeatures !== undefined
         ? { clientFeatures: sanitizeClientFeatures(args.clientFeatures) }
         : {}),
@@ -819,6 +851,82 @@ export const retry = mutation({
 });
 
 /**
+ * "When should I remind you?" answered (convex/needsTime.ts).
+ *
+ * A take the guard turned away as `no_time` or `past_time` kept its plans; this
+ * commits them with the time the user picked, through the same insert the
+ * worker's `commit` uses — so each row is stamped with the take's creationId,
+ * its spoken line is voiced by the usual TTS job in the voice its `lang` picks,
+ * and the client imports it exactly like any committed take.
+ *
+ * Idempotent: a second tap on an already-committed take returns its rows. A
+ * schedule the strict gate will not accept (a one-off in the past, say) is
+ * `invalid` and leaves the take waiting.
+ */
+export const resolveWithTime = mutation({
+  args: {
+    deviceId: v.string(),
+    creationId: v.string(),
+    schedule: gridScheduleValidator,
+    // From the pre-filled edit sheet; absent for a quick choice.
+    edits: v.optional(
+      v.object({
+        title: v.string(),
+        description: v.string(),
+        emoji: v.optional(v.string()),
+      })
+    ),
+  },
+  returns: v.object({
+    status: v.union(statusOrMissingValidator, v.literal("invalid")),
+    reminderIds: v.optional(v.array(v.id("reminders"))),
+  }),
+  handler: async (ctx, args) => {
+    const job = await findJob(ctx, args.deviceId, args.creationId);
+    if (!job) return { status: "not_found" as const };
+    if (job.status === "committed") {
+      return { status: job.status, reminderIds: job.reminderIds };
+    }
+    if (
+      job.status !== "failed" ||
+      !isNeedsTimeDetail(job.errorDetail) ||
+      !job.heldPlans ||
+      job.heldPlans.length === 0
+    ) {
+      return { status: job.status };
+    }
+
+    const now = Date.now();
+    const resolved = resolveHeldPlans({
+      held: job.heldPlans,
+      pending: job.pendingPlans ?? [],
+      schedule: args.schedule,
+      edits: args.edits,
+      timezone: job.timezone,
+      now,
+    });
+    if (!resolved.ok) {
+      // Content-free: the reason names a field, never the user's words.
+      console.error(`[VR] creation job: picked time refused — ${resolved.reason}`);
+      return { status: "invalid" as const };
+    }
+
+    const reminderIds = await insertPlans(ctx, job, resolved.plans, now);
+    await ctx.db.patch(job._id, {
+      status: "committed" as const,
+      reminderIds,
+      ...CLEARED_FAILURE,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(0, internal.founderAlerts.recordOutcome, {
+      jobId: job._id,
+      status: "committed",
+    });
+    return { status: "committed" as const, reminderIds };
+  },
+});
+
+/**
  * Swipe on a failed card: drop the job, and its recording unless a failed
  * attempt kept it for the founder (OLD-136; purged after 7 days).
  */
@@ -832,6 +940,11 @@ export const discard = mutation({
     if (!job) return { status: "not_found" as const };
     if (job.status !== "failed" && job.status !== "cancelled") {
       return { status: job.status };
+    }
+    // A take that was only waiting for a time sent the founder nothing while
+    // it waited. Swiping it away is the moment it becomes worth an email.
+    if (job.status === "failed" && isNeedsTimeDetail(job.errorDetail)) {
+      await noteAbandonedNeedsTime(ctx, job);
     }
     if (job.audioStorageId) {
       await releaseJobAudio(ctx, job.audioStorageId);
