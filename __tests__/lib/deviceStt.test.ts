@@ -8,6 +8,7 @@
  */
 import {
   resolveVoiceLocale,
+  resolveVoicePlan,
   runDeviceStt,
   runVoiceHandoff,
   type DeviceSttDeps,
@@ -64,6 +65,92 @@ describe("resolveVoiceLocale", () => {
 
   it("ignores non-string entries in the device list", () => {
     expect(resolveVoiceLocale("auto", [undefined as any, 5 as any, "ar"])).toBe("ar-SA");
+  });
+
+  // OLD-140: the language the server learned this device speaks in.
+  it("auto listens in a learned non-English language", () => {
+    expect(resolveVoiceLocale("auto", ["en-US"], "sv")).toBe("sv-SE");
+    expect(resolveVoiceLocale("auto", ["en-GB"], "he")).toBe("he-IL");
+    expect(resolveVoiceLocale("auto", ["en-US"], "de")).toBe("de-DE");
+    // It outranks the device's own Arabic too.
+    expect(resolveVoiceLocale("auto", ["ar-EG"], "sv")).toBe("sv-SE");
+  });
+
+  it("a learned English, or nothing learned, leaves auto exactly as it was", () => {
+    for (const spoken of ["en", null, undefined, "", "bogus"]) {
+      expect(resolveVoiceLocale("auto", ["en-GB", "fr-FR"], spoken)).toBe("en-US");
+      expect(resolveVoiceLocale("auto", ["ar-EG", "en-US"], spoken)).toBe("ar-SA");
+      expect(resolveVoiceLocale("auto", [], spoken)).toBe("en-US");
+    }
+  });
+
+  it("an explicit Settings choice still wins over a learned language", () => {
+    expect(resolveVoiceLocale("en", ["en-US"], "sv")).toBe("en-US");
+    expect(resolveVoiceLocale("ar", ["en-US"], "he")).toBe("ar-SA");
+  });
+});
+
+// ─── resolveVoicePlan (OLD-140) ─────────────────────────────────────────────
+
+describe("resolveVoicePlan", () => {
+  const plan = (
+    over: Partial<Parameters<typeof resolveVoicePlan>[0]> = {}
+  ): Parameters<typeof resolveVoicePlan>[0] => ({
+    setting: "auto",
+    deviceLocales: ["en-US"],
+    spokenLang: "sv",
+    engine: "dictation",
+    available: true,
+    speechStatus: jest.fn(async () => installed()),
+    ...over,
+  });
+
+  it("listens on-device in the learned language when the phone has it", async () => {
+    const params = plan();
+    expect(await resolveVoicePlan(params)).toEqual({ path: "device", localeId: "sv-SE" });
+    expect(params.speechStatus).toHaveBeenCalledWith("sv-SE", "dictation");
+  });
+
+  it("goes straight to the cloud when the phone cannot listen in it", async () => {
+    const unsupported = plan({
+      spokenLang: "he",
+      speechStatus: async () => installed({ supported: false, installed: false }),
+    });
+    expect(await resolveVoicePlan(unsupported)).toEqual({
+      path: "cloud",
+      localeId: "he-IL",
+      reason: "spoken_lang_unavailable",
+    });
+    // Supported but assets not on the phone yet: cloud too, never a wait.
+    const notInstalled = plan({ speechStatus: async () => installed({ installed: false }) });
+    expect((await resolveVoicePlan(notInstalled)).path).toBe("cloud");
+    // A status check that throws is the same answer.
+    const throwing = plan({
+      speechStatus: async () => {
+        throw new Error("boom");
+      },
+    });
+    expect((await resolveVoicePlan(throwing)).path).toBe("cloud");
+  });
+
+  it("English devices are unchanged: no extra status check, today's locale", async () => {
+    for (const spokenLang of ["en", null, undefined]) {
+      const params = plan({ spokenLang });
+      expect(await resolveVoicePlan(params)).toEqual({ path: "device", localeId: "en-US" });
+      expect(params.speechStatus).not.toHaveBeenCalled();
+    }
+  });
+
+  it("an explicit Settings choice is never second-guessed", async () => {
+    const params = plan({ setting: "en" });
+    expect(await resolveVoicePlan(params)).toEqual({ path: "device", localeId: "en-US" });
+    expect(params.speechStatus).not.toHaveBeenCalled();
+  });
+
+  it("without the module there is nothing to check", async () => {
+    const params = plan({ available: false });
+    expect(await resolveVoicePlan(params)).toEqual({ path: "device", localeId: "sv-SE" });
+    expect(params.speechStatus).not.toHaveBeenCalled();
   });
 });
 
@@ -307,5 +394,31 @@ describe("runVoiceHandoff", () => {
     expect(result).toEqual({ path: "cloud" });
     expect(onCloud).toHaveBeenCalledTimes(1);
     expect(stt.speechTranscribeFile).not.toHaveBeenCalled();
+  });
+
+  it("goes straight to the cloud when the plan said so, and says why (OLD-140)", async () => {
+    const stt = makeDeps({ speechStatus: jest.fn() as any, speechTranscribeFile: jest.fn() as any });
+    const onCloud = jest.fn(async () => {});
+    const onPerf = jest.fn();
+
+    const result = await runVoiceHandoff({
+      ...base,
+      localeId: "he-IL",
+      available: true,
+      hasAudioStorageId: false,
+      skipDeviceReason: "spoken_lang_unavailable",
+      stt,
+      onDevice: async () => {},
+      onCloud,
+      onPerf,
+    });
+
+    expect(result).toEqual({ path: "cloud", reason: "spoken_lang_unavailable" });
+    expect(onCloud).toHaveBeenCalledTimes(1);
+    expect(stt.speechStatus).not.toHaveBeenCalled();
+    expect(stt.speechTranscribeFile).not.toHaveBeenCalled();
+    expect(onPerf).toHaveBeenCalledWith("device_stt_fallback", {
+      reason: "spoken_lang_unavailable",
+    });
   });
 });

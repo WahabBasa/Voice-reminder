@@ -20,6 +20,7 @@ import {
   buildHelloArgs,
   sendDeviceHello,
 } from "../../lib/deviceHello";
+import { __resetSpokenLanguageForTests, getSpokenLanguage } from "../../lib/spokenLanguage";
 
 beforeEach(() => {
   __resetDeviceHelloForTests();
@@ -42,6 +43,17 @@ it("calls devices.hello once per launch", async () => {
   await sendDeviceHello({ mutation });
   expect(mutation).toHaveBeenCalledTimes(1);
   expect(mutation).toHaveBeenCalledWith(api.devices.hello, expect.objectContaining({ deviceId: "dev_123" }));
+});
+
+it("keeps the spoken language hello answers with (OLD-140)", async () => {
+  __resetSpokenLanguageForTests();
+  await sendDeviceHello({ mutation: jest.fn(async () => ({ result: "updated", spokenLang: "sv" })) });
+  expect(getSpokenLanguage()).toBe("sv");
+
+  // An answer without one never clears it.
+  __resetDeviceHelloForTests();
+  await sendDeviceHello({ mutation: jest.fn(async () => ({ result: "throttled" })) });
+  expect(getSpokenLanguage()).toBe("sv");
 });
 
 it("swallows a failed call", async () => {

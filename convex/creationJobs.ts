@@ -82,6 +82,19 @@ export const MAX_ATTEMPTS = 3;
  */
 const clientFeaturesValidator = v.optional(v.array(v.string()));
 
+/**
+ * `languageHint` as `begin`/`retry` receive it (OLD-140): the device's learned
+ * spoken language, for the cloud transcriber. Optional — absent means "guess".
+ */
+const languageHintValidator = v.optional(v.string());
+
+/** A hint is kept only when it is an ISO 639-1 code; anything else is dropped. */
+export function sanitizeLanguageHint(hint: string | undefined): string | undefined {
+  if (typeof hint !== "string") return undefined;
+  const code = hint.trim().toLowerCase();
+  return /^[a-z]{2}$/.test(code) ? code : undefined;
+}
+
 /** Bounded and deduped before it is stored; it is a flag list, not a payload. */
 function sanitizeClientFeatures(features: string[] | undefined): string[] | undefined {
   if (features === undefined) return undefined;
@@ -145,6 +158,8 @@ const workerJobValidator = v.object({
   deviceSttLocale: v.optional(v.string()),
   // Whether this take opted into the guard ("guard_v1", OLD-130).
   clientFeatures: v.optional(v.array(v.string())),
+  // The phone's spoken-language hint for the cloud transcriber (OLD-140).
+  languageHint: v.optional(v.string()),
   localDate: v.string(),
   localTime: v.string(),
   timezone: v.string(),
@@ -313,6 +328,7 @@ export const begin = mutation({
     localTime: v.string(),
     timezone: v.string(),
     clientFeatures: clientFeaturesValidator,
+    languageHint: languageHintValidator,
   },
   returns: v.object({
     jobId: v.id("creationJobs"),
@@ -367,6 +383,7 @@ export const begin = mutation({
       localTime: args.localTime,
       timezone: args.timezone,
       clientFeatures: sanitizeClientFeatures(args.clientFeatures),
+      languageHint: sanitizeLanguageHint(args.languageHint),
       createdAt: now,
       updatedAt: now,
     });
@@ -535,6 +552,7 @@ export const getJob = internalQuery({
       deviceSttEngine: job.deviceSttEngine,
       deviceSttLocale: job.deviceSttLocale,
       clientFeatures: job.clientFeatures,
+      languageHint: job.languageHint,
       localDate: job.localDate,
       localTime: job.localTime,
       timezone: job.timezone,
@@ -777,6 +795,8 @@ export const retry = mutation({
     deviceSttLocale: v.optional(v.string()),
     // Replaces the stored list when given (OLD-130); omitted keeps it.
     clientFeatures: clientFeaturesValidator,
+    // Replaces the stored hint when given (OLD-140); omitted keeps it.
+    languageHint: languageHintValidator,
   },
   returns: v.object({
     status: statusOrMissingValidator,
@@ -828,6 +848,9 @@ export const retry = mutation({
       ...CLEARED_FAILURE,
       ...(args.clientFeatures !== undefined
         ? { clientFeatures: sanitizeClientFeatures(args.clientFeatures) }
+        : {}),
+      ...(args.languageHint !== undefined
+        ? { languageHint: sanitizeLanguageHint(args.languageHint) }
         : {}),
       ...(swapping ? { audioStorageId: args.newStorageId } : {}),
       ...sourcePatch,

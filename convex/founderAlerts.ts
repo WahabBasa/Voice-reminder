@@ -41,7 +41,7 @@ import {
   type StoryReminder,
   type TakeStoryInput,
 } from "./takeStoryEmail";
-import { getDevice, hasPriorFootprint } from "./devices";
+import { getDevice, hasPriorFootprint, learnSpokenLanguage } from "./devices";
 import { isNeedsTimeDetail } from "./needsTime";
 import { correctLanguageByScript } from "./scriptLanguage";
 
@@ -166,6 +166,16 @@ export const recordOutcome = internalMutation({
         timezone: cleanField(job.timezone),
       });
       device = await ctx.db.get(id);
+    }
+
+    // The language this take was understood in teaches the device which one
+    // its user speaks (OLD-140). Best-effort: it never costs the founder log.
+    if (device) {
+      try {
+        await learnSpokenLanguage(ctx, device, job, args.status);
+      } catch (e) {
+        console.error("[VR] founderAlerts.recordOutcome: spoken-language update failed:", e);
+      }
     }
 
     const prior = await ctx.db

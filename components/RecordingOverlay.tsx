@@ -36,6 +36,7 @@ import {
 import { createTraceId, perfLog } from "../lib/perf";
 import { concentricCardRadius } from "../lib/screenCorners";
 import { getDeviceLocales, resolveVoiceLocale } from "../lib/deviceStt";
+import { getSpokenLanguage } from "../lib/spokenLanguage";
 import { isVRSpeechAvailable } from "../lib/vrSpeech";
 import { listeningLabel } from "../lib/languageNames";
 import { useSettingsStore } from "../lib/settingsStore";
@@ -94,12 +95,17 @@ export default function RecordingOverlay({
   // The language the on-device engine will hear, so someone speaking another
   // one knows why it may not understand them (OLD-133). The locale is the one
   // the stop-tap hands the engine. Without the engine the cloud transcribes,
-  // and it hears any language, so there is nothing to say.
+  // and it hears any language, so there is nothing to say. A learned spoken
+  // language (OLD-140) is the locale used, so it is the one named: "Listening
+  // in Swedish". When the phone cannot listen in it on-device, the cloud is
+  // hinted with that same language, so the label still holds.
   const voiceLanguage = useSettingsStore((s) => s.settings.voiceLanguage);
   const listeningText = useMemo(
     () =>
       visible && isVRSpeechAvailable()
-        ? listeningLabel(resolveVoiceLocale(voiceLanguage, getDeviceLocales()))
+        ? listeningLabel(
+            resolveVoiceLocale(voiceLanguage, getDeviceLocales(), getSpokenLanguage())
+          )
         : null,
     [visible, voiceLanguage]
   );

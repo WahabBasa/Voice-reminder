@@ -14,7 +14,13 @@
  * `seedFromReminders` has run; the seed makes it explicit (`seeded: true`).
  */
 
-import { mutation, internalMutation, type MutationCtx, type QueryCtx } from "./_generated/server";
+import {
+  mutation,
+  query,
+  internalMutation,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
@@ -26,6 +32,8 @@ import {
   helloShouldWrite,
   validDeviceId,
 } from "./founderAlertsEmail";
+import { isNeedsTimeDetail } from "./needsTime";
+import { majorityLang, nextSpokenLang } from "./spokenLang";
 
 /** Above this many brand-new installs in an hour, stop emailing (summary still counts them). */
 export const MAX_NEW_DEVICE_EMAILS_PER_HOUR = 20;
@@ -94,7 +102,9 @@ export const hello = mutation({
     timezone: v.optional(v.string()),
     iosVersion: v.optional(v.string()),
   },
-  returns: v.object({ result: helloResult }),
+  // `spokenLang` (OLD-140): the language this install speaks in, once the
+  // server has learned it. Older builds ignore it.
+  returns: v.object({ result: helloResult, spokenLang: v.optional(v.string()) }),
   handler: async (ctx, args) => {
     const deviceId = validDeviceId(args.deviceId);
     if (!deviceId) throw new Error("devices.hello: invalid deviceId");
@@ -102,7 +112,7 @@ export const hello = mutation({
     const now = Date.now();
     const existing = await getDevice(ctx, deviceId);
     if (existing && !helloShouldWrite(existing.lastSeenAt, now)) {
-      return { result: "throttled" as const };
+      return { result: "throttled" as const, ...spokenLangOf(existing) };
     }
 
     const fields = {
@@ -119,7 +129,7 @@ export const hello = mutation({
         if (value !== undefined) (patch as Record<string, unknown>)[key] = value;
       }
       await ctx.db.patch(existing._id, patch);
-      return { result: "updated" as const };
+      return { result: "updated" as const, ...spokenLangOf(existing) };
     }
 
     const seeded = await hasPriorFootprint(ctx, deviceId);
@@ -147,6 +157,67 @@ export const hello = mutation({
     return { result: "new" as const };
   },
 });
+
+function spokenLangOf(device: Doc<"devices">): { spokenLang?: string } {
+  return device.spokenLang ? { spokenLang: device.spokenLang } : {};
+}
+
+// ─── spoken language (OLD-140) ───────────────────────────────────────────────
+
+/**
+ * The install's preferences the phone reads back: today only the language it
+ * speaks in. Watched by the app (lib/spokenLanguage.ts), so a language learned
+ * mid-session reaches the next take without waiting for the next launch.
+ */
+export const preferences = query({
+  args: { deviceId: v.string() },
+  returns: v.object({ spokenLang: v.optional(v.string()) }),
+  handler: async (ctx, args) => {
+    const deviceId = validDeviceId(args.deviceId);
+    if (!deviceId) return {};
+    const device = await getDevice(ctx, deviceId);
+    return device ? spokenLangOf(device) : {};
+  },
+});
+
+/**
+ * The language a take was understood in, or undefined when it says nothing
+ * about the speaker: a committed take's reminders, by majority; a take waiting
+ * for a time (`no_time` / `past_time`), from the plans it kept. Any other
+ * failure was not understood, so it does not count.
+ */
+export async function understoodTakeLang(
+  ctx: QueryCtx | MutationCtx,
+  job: Doc<"creationJobs">,
+  status: "committed" | "failed"
+): Promise<string | undefined> {
+  if (status === "committed") {
+    const langs: (string | undefined)[] = [];
+    for (const id of job.reminderIds ?? []) {
+      langs.push((await ctx.db.get(id))?.lang);
+    }
+    return majorityLang(langs);
+  }
+  if (isNeedsTimeDetail(job.errorDetail)) {
+    return majorityLang((job.pendingPlans ?? []).map((p) => p.lang));
+  }
+  return undefined;
+}
+
+/**
+ * Teach a device the language of one take (convex/spokenLang.ts has the rule).
+ * Called by founderAlerts.recordOutcome for every terminal take.
+ */
+export async function learnSpokenLanguage(
+  ctx: MutationCtx,
+  device: Doc<"devices">,
+  job: Doc<"creationJobs">,
+  status: "committed" | "failed"
+): Promise<void> {
+  const lang = await understoodTakeLang(ctx, job, status);
+  const patch = nextSpokenLang(device, { lang, creationId: job.creationId }, Date.now());
+  if (patch) await ctx.db.patch(device._id, patch);
+}
 
 // ─── seedFromReminders ───────────────────────────────────────────────────────
 

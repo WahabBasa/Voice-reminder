@@ -88,6 +88,18 @@ function resolveModel(optionModel?: string): string {
   return DEFAULT_STT_MODEL;
 }
 
+/**
+ * The `language` param for one request, or undefined when none should be sent
+ * (OLD-140). Only an ISO 639-1 code, and never to whisper-1: the bake-off
+ * showed whisper TRANSLATES into a hinted language rather than transcribing,
+ * while a wrong hint on the gpt-4o family was harmless.
+ */
+function languageParam(model: string, hint: string | undefined): string | undefined {
+  if (/whisper/i.test(model)) return undefined;
+  const code = hint?.trim().toLowerCase();
+  return code && /^[a-z]{2}$/.test(code) ? code : undefined;
+}
+
 /** Pass an existing File unchanged; wrap a plain Blob as the recording. */
 function asFile(input: Blob | File): File {
   if (input instanceof File) return input;
@@ -143,10 +155,14 @@ function validTranscript(response: unknown): string | null {
  * a request. A failure of the primary — rejection, timeout, malformed body or
  * empty transcript — triggers one fallback to `openai/whisper-1`, unless the
  * primary already was whisper-1, in which case there is no second attempt.
+ *
+ * `language` is the phone's spoken-language hint (OLD-140). It goes to the
+ * primary model only, and never when the primary is whisper-1; the fallback
+ * always guesses.
  */
 export async function transcribeAudio(
   input: Blob | File,
-  options?: { model?: string }
+  options?: { model?: string; language?: string }
 ): Promise<{ text: string; perf: SttPerf }> {
   const requestedModel = resolveModel(options?.model);
   const perf: SttPerf = {
@@ -174,11 +190,13 @@ export async function transcribeAudio(
 
   // ── Primary attempt ─────────────────────────────────────────────────────
   const tPrimary = Date.now();
+  const language = languageParam(requestedModel, options?.language);
   try {
     const response = await client.audio.transcriptions.create({
       file,
       model: requestedModel,
       response_format: "json",
+      ...(language ? { language } : {}),
     });
     const text = validTranscript(response);
     perf.sttPrimaryMs = Date.now() - tPrimary;

@@ -2,6 +2,7 @@ import { api } from "../convex/_generated/api";
 import { getDeviceId } from "./deviceId";
 import { getDeviceLocales } from "./deviceStt";
 import { getRuntimeInfo } from "./feedbackContext";
+import { rememberSpokenLanguage, spokenLangFromResponse } from "./spokenLanguage";
 
 /**
  * The once-per-launch check-in behind the founder's new-device alerts
@@ -10,6 +11,10 @@ import { getRuntimeInfo } from "./feedbackContext";
  * Fire-and-forget by contract: it resolves on every path, never throws, and
  * nothing waits on it. The server throttles to one write an hour per device, so
  * a launch that lands inside that hour costs one indexed read and nothing else.
+ *
+ * The answer carries the language the server has learned this install speaks
+ * in (OLD-140), which is kept for the recognizer and the cloud hint
+ * (./spokenLanguage.ts).
  */
 
 /** The one ConvexReactClient method this needs — and all a test needs to fake. */
@@ -51,7 +56,8 @@ export async function sendDeviceHello(client: HelloClient): Promise<void> {
   if (sentThisLaunch) return;
   sentThisLaunch = true;
   try {
-    await client.mutation(api.devices.hello, await buildHelloArgs());
+    const response = await client.mutation(api.devices.hello, await buildHelloArgs());
+    await rememberSpokenLanguage(spokenLangFromResponse(response));
   } catch (e) {
     console.log("[VR] deviceHello: check-in failed (ignored):", e);
   }

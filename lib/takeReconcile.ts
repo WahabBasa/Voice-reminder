@@ -16,6 +16,7 @@ import type { WatchedJob } from "./creationJobWatch";
 import type { GridSchedule } from "../convex/scheduleShape";
 import type { CommitTakeOutcome } from "./takeCommit";
 import type { SpeechEngine } from "./vrSpeech";
+import { languageHintArg } from "./spokenLanguage";
 
 /**
  * What this client can handle, sent on every call that begins or re-begins a
@@ -254,6 +255,8 @@ export type ReconcileDeps = {
       localTime: string;
       timezone: string;
       clientFeatures: readonly string[];
+      /** The learned spoken language, for the cloud transcriber (OLD-140). */
+      languageHint?: string;
     } & (
       | { audioStorageId: string }
       | {
@@ -275,6 +278,7 @@ export type ReconcileDeps = {
     creationId: string;
     newStorageId?: string;
     clientFeatures: readonly string[];
+    languageHint?: string;
   }) => Promise<{ status: string; capReached?: boolean }>;
   discard: (args: { deviceId: string; creationId: string }) => Promise<{ status: string }>;
   /**
@@ -541,6 +545,7 @@ async function retryInCloud(
       creationId,
       newStorageId: storageId,
       clientFeatures: CLIENT_FEATURES,
+      ...languageHintArg(),
     });
   } catch (e) {
     current.onStage?.(creationId, "cloud_retry_failed", { error: String(e) });
@@ -658,6 +663,7 @@ async function beginAndSubscribe(
           localTime: take.localTime,
           timezone: take.timezone,
           clientFeatures: CLIENT_FEATURES,
+          ...languageHintArg(),
         }
       : {
           deviceId,
@@ -671,6 +677,7 @@ async function beginAndSubscribe(
           localTime: take.localTime,
           timezone: take.timezone,
           clientFeatures: CLIENT_FEATURES,
+          ...languageHintArg(),
         }
   );
   const processing = await updatePendingTake(
@@ -793,6 +800,7 @@ async function runRetry(
         creationId: take.creationId,
         newStorageId: storageId,
         clientFeatures: CLIENT_FEATURES,
+        ...languageHintArg(),
       });
       await afterServerRetry(take, current, deviceId, result, trigger);
       return;
@@ -802,6 +810,7 @@ async function runRetry(
         deviceId,
         creationId: take.creationId,
         clientFeatures: CLIENT_FEATURES,
+        ...languageHintArg(),
       });
       await afterServerRetry(take, current, deviceId, result, trigger);
       return;

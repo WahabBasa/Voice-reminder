@@ -70,9 +70,15 @@ import {
   defaultDeviceSttDeps,
   getDeviceLocales,
   resolveVoiceLocale,
+  resolveVoicePlan,
   runVoiceHandoff,
   type DeviceSttSuccess,
 } from "../lib/deviceStt";
+import {
+  getSpokenLanguage,
+  languageHintArg,
+  loadSpokenLanguage,
+} from "../lib/spokenLanguage";
 import { creationBreadcrumb } from "../lib/sentry";
 import { getActiveReminderCount, getFreeActiveLimit } from "../lib/usage";
 import {
@@ -1026,7 +1032,9 @@ export default function HomeScreen() {
   const warmDeviceStt = useCallback(() => {
     if (!isVRSpeechAvailable()) return;
     const { voiceLanguage, voiceEngine } = useSettingsStore.getState().settings;
-    const localeId = resolveVoiceLocale(voiceLanguage, getDeviceLocales());
+    // The learned spoken language (OLD-140) steers `auto`, so a Swedish
+    // speaker's phone fetches the Swedish assets before they are needed.
+    const localeId = resolveVoiceLocale(voiceLanguage, getDeviceLocales(), getSpokenLanguage());
     void speechPrepare(localeId, voiceEngine ?? DEFAULT_STT_ENGINE).catch(() => {});
   }, []);
 
@@ -1063,6 +1071,7 @@ export default function HomeScreen() {
       const store = useSettingsStore.getState();
       if (!store.hasLoadedSettings) await store.loadSettings().catch(() => {});
       if (useSettingsStore.getState().settings.aiConsentAcceptedAt === null) return;
+      await loadSpokenLanguage();
       warmDeviceStt();
     })();
   }, [warmDeviceStt]);
@@ -1219,6 +1228,7 @@ export default function HomeScreen() {
           localTime: take.localTime,
           timezone: take.timezone,
           clientFeatures: CLIENT_FEATURES,
+          ...languageHintArg(),
         } as any);
         creationBreadcrumb("job_begun");
 
@@ -1284,6 +1294,7 @@ export default function HomeScreen() {
           localTime: take.localTime,
           timezone: take.timezone,
           clientFeatures: CLIENT_FEATURES,
+          ...languageHintArg(),
         } as any);
         creationBreadcrumb("job_begun_device");
 
@@ -1449,13 +1460,26 @@ export default function HomeScreen() {
         // Device-first (spec §3): try the on-device transcriber, and only fall
         // to the upload+begin path if it can't or won't produce a transcript.
         // The perf events ride the take's traceId, exactly like the cloud path.
+        // A learned non-English language the phone cannot listen in on-device
+        // skips the device attempt entirely (OLD-140): it would only mishear.
         const { voiceLanguage, voiceEngine } = useSettingsStore.getState().settings;
+        const engine = voiceEngine ?? DEFAULT_STT_ENGINE;
+        const available = isVRSpeechAvailable();
+        const plan = await resolveVoicePlan({
+          setting: voiceLanguage,
+          deviceLocales: getDeviceLocales(),
+          spokenLang: getSpokenLanguage(),
+          engine,
+          available,
+          speechStatus: defaultDeviceSttDeps.speechStatus,
+        });
         await runVoiceHandoff({
-          available: isVRSpeechAvailable(),
+          available,
           hasAudioStorageId: !!live.audioStorageId,
+          skipDeviceReason: plan.path === "cloud" ? plan.reason : undefined,
           fileUri: live.recordingUri,
-          localeId: resolveVoiceLocale(voiceLanguage, getDeviceLocales()),
-          engine: voiceEngine ?? DEFAULT_STT_ENGINE,
+          localeId: plan.localeId,
+          engine,
           timeoutMs: DEFAULT_STT_TIMEOUT_MS,
           requestId: live.creationId,
           stt: defaultDeviceSttDeps,
