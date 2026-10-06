@@ -1,0 +1,10 @@
+name: Publish iOS update to development
+
+jobs:
+  publish_ios_development_update:
+    type: update
+    environment: development
+    params:
+      branch: development
+      platform: ios
+      message: "main @ 3d7f6db (step 1: parse guard, cloud retry, ElevenLabs routing, first-tap fix, feedback card, founder alerts)"

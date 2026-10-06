@@ -1,0 +1,10 @@
+name: Publish iOS update to production
+
+jobs:
+  publish_ios_production_update:
+    type: update
+    environment: production
+    params:
+      branch: production
+      platform: ios
+      message: "main @ 3d7f6db (step 1: parse guard, cloud retry, ElevenLabs routing, first-tap fix, feedback card, founder alerts)"
