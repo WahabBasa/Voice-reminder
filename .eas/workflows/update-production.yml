@@ -7,4 +7,4 @@ jobs:
     params:
       branch: production
       platform: ios
-      message: "main @ 3d7f6db (step 1: parse guard, cloud retry, ElevenLabs routing, first-tap fix, feedback card, founder alerts)"
+      message: "main @ 813961a (failed-take retention, silence check, Remi heard, past-time ask, retry flash fix, story emails)"
