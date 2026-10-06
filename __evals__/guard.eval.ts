@@ -60,7 +60,7 @@ function nowFor(context: PromptContext): number {
 }
 
 type Expected =
-  | { pass: true; lang: string; frequency?: string }
+  | { pass: true; lang: string; frequency?: string; time?: string; date?: string }
   | { pass: false; detail: GuardDetail; pastTime?: string };
 
 const CASES: { name: string; text: string; expected: Expected; context?: PromptContext }[] = [
@@ -112,6 +112,78 @@ const CASES: { name: string; text: string; expected: Expected; context?: PromptC
       timezone: "Asia/Dubai",
     },
     expected: { pass: false, detail: "past_time", pastTime: "10:00" },
+  },
+  // The live rejection (2026-10-06): a clean Swedish transcript phrased as
+  // "I will remind you to…" came back understood=false, twice. Any phrasing
+  // that names a task and/or a time is a request; only takes with nothing
+  // actionable in them are not understood.
+  {
+    name: "Swedish, 'I will remind you' phrasing with a relative time",
+    text: "Jag kommer att påminna dig om att dricka vatten om tio minuter.",
+    expected: { pass: true, lang: "sv", frequency: "once", time: "14:10" },
+  },
+  {
+    name: "Swedish, 'I have to' phrasing",
+    text: "Jag måste ringa mamma klockan fem",
+    expected: { pass: true, lang: "sv", frequency: "once" },
+  },
+  {
+    name: "Arabic, remind me at ten tonight",
+    text: "ذكرني أشرب مية الساعة عشرة بالليل",
+    expected: { pass: true, lang: "ar", frequency: "once", time: "22:00" },
+  },
+  {
+    name: "English, 'I'll' phrasing",
+    text: "I'll call the dentist tomorrow at 9",
+    expected: { pass: true, lang: "en", frequency: "once" },
+  },
+  {
+    name: "English, 'don't let me forget' phrasing",
+    text: "don't let me forget the keys in 20 minutes",
+    expected: { pass: true, lang: "en", frequency: "once", time: "14:20" },
+  },
+  // The rule is about meaning, not about any one language: an action and/or a
+  // time, in any grammar. These keep the eval from passing on Swedish alone.
+  // Clock: Thursday 2026-08-13 14:00 (PROMPT_CONTEXT).
+  {
+    name: "Swahili, Swahili clock (saa nne asubuhi = 10 AM)",
+    text: "Nikumbushe kunywa maji saa nne asubuhi",
+    expected: { pass: true, lang: "sw", frequency: "once", time: "10:00" },
+  },
+  {
+    name: "German, 'I have to' with halb drei",
+    text: "Ich muss um halb drei den Arzt anrufen",
+    expected: { pass: true, lang: "de", frequency: "once", time: "14:30" },
+  },
+  {
+    name: "Japanese, bare statement tomorrow at 3 PM",
+    text: "明日の午後3時に薬を飲む",
+    expected: { pass: true, lang: "ja", frequency: "once", time: "15:00", date: "2026-08-14" },
+  },
+  {
+    name: "Hinglish, kal shaam 5 baje",
+    text: "kal shaam 5 baje mummy ko call karna",
+    expected: { pass: true, lang: "hi", frequency: "once", time: "17:00", date: "2026-08-14" },
+  },
+  {
+    name: "Spanish, 'I will remind you' phrasing in an hour",
+    text: "Te voy a recordar llamar a Juan en una hora",
+    expected: { pass: true, lang: "es", frequency: "once", time: "15:00" },
+  },
+  {
+    name: "French, 'don't forget' in a quarter of an hour",
+    text: "N'oublie pas de sortir le linge dans un quart d'heure",
+    expected: { pass: true, lang: "fr", frequency: "once", time: "14:15" },
+  },
+  {
+    name: "silence hallucination",
+    text: "Thank you for watching.",
+    expected: { pass: false, detail: "not_understood" },
+  },
+  {
+    name: "unrelated chatter with no task",
+    text: "You're coming up for me not you",
+    expected: { pass: false, detail: "not_understood" },
   },
 ];
 
@@ -175,6 +247,12 @@ describeLive("parse guard (live model)", () => {
             take.plans.some((plan) => plan.frequency !== expected.frequency)
           ) {
             misses.push(`${label} frequency ${take.plans.map((p) => p.frequency).join(",")}`);
+          }
+          if (expected.time !== undefined && take.plans.some((plan) => plan.time !== expected.time)) {
+            misses.push(`${label} time ${take.plans.map((p) => p.time).join(",")}, wanted ${expected.time}`);
+          }
+          if (expected.date !== undefined && take.plans.some((plan) => plan.date !== expected.date)) {
+            misses.push(`${label} date ${take.plans.map((p) => p.date).join(",")}, wanted ${expected.date}`);
           }
         } else if (verdict.ok || verdict.detail !== expected.detail) {
           misses.push(

@@ -81,8 +81,9 @@ export const GUARD_UNDERSTOOD_INSTRUCTION = `
 
 UNDERSTANDING:
 - Add two top-level fields next to "reminders": {"understood": true | false, "language": "ISO 639-1 code of the language the user spoke, lowercase", "reminders": [...]}
-- The input is a speech-to-text transcript and may be misheard. If it is not a request to be reminded of something, is gibberish, or you cannot tell what the task is, return "understood": false and "reminders": []. Never invent a task.
-- A short but clear request ("water at 8", "call mom") IS understood.`;
+- The input is a speech-to-text transcript. Anything that names a task or action and/or a time IS a reminder request, in any language or wording: "remind me…", "I will…", "I'll remind you…", "you have to…", "don't let me forget…", "can you remind me…?", or a bare "water at 8".
+- Return "understood": false and "reminders": [] ONLY when nothing in it is actionable: gibberish, a silence artifact like "Thank you for watching.", or chatter with no task. Never invent a task.
+- A task with no time is still understood.`;
 
 /**
  * The guard's top-level answer, read off a raw parse response before any

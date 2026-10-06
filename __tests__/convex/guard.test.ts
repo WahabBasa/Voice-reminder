@@ -80,6 +80,25 @@ describe("buildSystemPrompt — guard_v1", () => {
     expect(guarded).toContain("Never invent a task.");
   });
 
+  // The 2026-10-06 rejection: a clean Swedish "I will remind you to drink water
+  // in ten minutes" came back understood=false. Wording is never the test.
+  it("reads any phrasing that names a task or a time as a request", () => {
+    expect(GUARD_UNDERSTOOD_INSTRUCTION).toContain(
+      "Anything that names a task or action and/or a time IS a reminder request, in any language or wording"
+    );
+    for (const phrasing of ['"I will…"', '"I\'ll remind you…"', '"don\'t let me forget…"', '"can you remind me…?"']) {
+      expect(GUARD_UNDERSTOOD_INSTRUCTION).toContain(phrasing);
+    }
+  });
+
+  it("reserves not-understood for takes with nothing actionable in them", () => {
+    expect(GUARD_UNDERSTOOD_INSTRUCTION).toContain(
+      'Return "understood": false and "reminders": [] ONLY when nothing in it is actionable'
+    );
+    expect(GUARD_UNDERSTOOD_INSTRUCTION).toContain('"Thank you for watching."');
+    expect(GUARD_UNDERSTOOD_INSTRUCTION).toContain("A task with no time is still understood");
+  });
+
   it("keeps the guard text in the cacheable prefix", () => {
     const prefix = guarded.slice(0, guarded.indexOf("CURRENT CONTEXT:"));
     expect(prefix).toContain(GUARD_UNDERSTOOD_INSTRUCTION);
