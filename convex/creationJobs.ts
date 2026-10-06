@@ -119,6 +119,7 @@ const casPatchValidator = v.object({
   errorCode: v.optional(v.string()),
   errorDetail: v.optional(creationErrorDetailValidator),
   detectedLanguage: v.optional(v.string()),
+  pastTime: v.optional(v.string()),
   perf: v.optional(creationPerfValidator),
 });
 
@@ -161,6 +162,8 @@ const watchedJobValidator = v.object({
   // for `unsupported_language`, which language. Absent for everyone else.
   errorDetail: v.optional(creationErrorDetailValidator),
   detectedLanguage: v.optional(v.string()),
+  // For `past_time`: the one-off's spoken time, "HH:MM" on the user's clock.
+  pastTime: v.optional(v.string()),
   reminderIds: v.optional(v.array(v.id("reminders"))),
   perf: v.optional(creationPerfValidator),
   updatedAt: v.number(),
@@ -231,6 +234,7 @@ type CasPatch = {
   errorCode?: string;
   errorDetail?: JobDoc["errorDetail"];
   detectedLanguage?: string;
+  pastTime?: string;
   perf?: JobDoc["perf"];
 };
 
@@ -388,6 +392,7 @@ export const get = query({
       errorCode: job.errorCode,
       errorDetail: job.errorDetail,
       detectedLanguage: job.detectedLanguage,
+      pastTime: job.pastTime,
       reminderIds: job.reminderIds,
       perf: job.perf,
       updatedAt: job.updatedAt,
@@ -626,6 +631,7 @@ export const commit = internalMutation({
       errorCode: undefined,
       errorDetail: undefined,
       detectedLanguage: undefined,
+      pastTime: undefined,
       updatedAt: now,
     });
     // Founder alerts (OLD-135).
@@ -787,6 +793,7 @@ export const retry = mutation({
       errorCode: undefined,
       errorDetail: undefined,
       detectedLanguage: undefined,
+      pastTime: undefined,
       ...(args.clientFeatures !== undefined
         ? { clientFeatures: sanitizeClientFeatures(args.clientFeatures) }
         : {}),

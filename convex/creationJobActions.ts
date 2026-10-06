@@ -238,7 +238,7 @@ async function failJob(
   perf: WorkerPerf,
   // The guard's reason (OLD-130). Only ever passed for a guard_v1 take, so
   // every other failure writes exactly the patch it always has.
-  guard?: { errorDetail: GuardDetail; detectedLanguage?: string },
+  guard?: { errorDetail: GuardDetail; detectedLanguage?: string; pastTime?: string },
   // What this run saw that the job row does not hold (OLD-136), kept on the
   // failed take's row for the founder: the parse model's raw answer.
   diag?: ParseDiagnostics
@@ -496,11 +496,12 @@ export const run = internalAction({
     }
 
     // 5b. The guard (OLD-130), for a client that opted in: not a reminder, a
-    //     language Remi cannot speak, or a one-off with no time said. Each
-    //     fails as the `unparseable` every client already handles, plus the
-    //     reason a new client can show. Content-free log: no transcript.
+    //     language Remi cannot speak, a one-off with no time said, or a
+    //     one-off whose time has already passed today. Each fails as the
+    //     `unparseable` every client already handles, plus the reason a new
+    //     client can show. Content-free log: no transcript.
     if (guard) {
-      const verdict = guardTake(parsed.value);
+      const verdict = guardTake({ ...parsed.value, now: Date.now() });
       if (!verdict.ok) {
         console.error(
           `[VR] creation job: guard rejected — ${verdict.detail}: ${verdict.reason}`
@@ -510,6 +511,7 @@ export const run = internalAction({
           ...(verdict.detectedLanguage !== undefined
             ? { detectedLanguage: verdict.detectedLanguage }
             : {}),
+          ...(verdict.pastTime !== undefined ? { pastTime: verdict.pastTime } : {}),
         }, diag);
         logCreationJobPerf(job.creationId, args.generation, "failed", perf);
         return null;

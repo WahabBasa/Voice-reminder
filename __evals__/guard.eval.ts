@@ -35,18 +35,35 @@ if (!API_KEY) {
 const MODEL = "openai/gpt-5.6-luna";
 const SAMPLES_PER_CASE = 3;
 
-const PROMPT_CONTEXT = {
+type PromptContext = {
+  currentDate: string;
+  currentDayOfWeek: string;
+  currentTime: string;
+  timezone: string;
+};
+
+const PROMPT_CONTEXT: PromptContext = {
   currentDate: "2026-08-13",
   currentDayOfWeek: "Thursday",
   currentTime: "14:00",
   timezone: "Asia/Dubai",
 };
 
+/**
+ * The instant a context's wall clock names, for the guard's past-time check.
+ * Every context here is in Asia/Dubai, which is UTC+4 all year round.
+ */
+function nowFor(context: PromptContext): number {
+  const [year, month, day] = context.currentDate.split("-").map(Number);
+  const [hours, minutes] = context.currentTime.split(":").map(Number);
+  return Date.UTC(year, month - 1, day, hours - 4, minutes);
+}
+
 type Expected =
   | { pass: true; lang: string; frequency?: string }
-  | { pass: false; detail: GuardDetail };
+  | { pass: false; detail: GuardDetail; pastTime?: string };
 
-const CASES: { name: string; text: string; expected: Expected }[] = [
+const CASES: { name: string; text: string; expected: Expected; context?: PromptContext }[] = [
   {
     name: "en-US dictation of Swedish speech",
     text: "Kilometer got lead",
@@ -72,6 +89,30 @@ const CASES: { name: string; text: string; expected: Expected }[] = [
     text: "Remind me to take my medicine tomorrow at 9pm",
     expected: { pass: true, lang: "en", frequency: "once" },
   },
+  // The founder's take (2026-10-06): "today at 10", said at 11:41. Ten this
+  // morning has gone, so the guard asks rather than guessing 22:00.
+  {
+    name: "a one-off today at a time that has already passed",
+    text: "I'll drink water today at 10",
+    context: {
+      currentDate: "2026-10-06",
+      currentDayOfWeek: "Tuesday",
+      currentTime: "11:41",
+      timezone: "Asia/Dubai",
+    },
+    expected: { pass: false, detail: "past_time", pastTime: "10:00" },
+  },
+  {
+    name: "the same take in Arabic",
+    text: "هشرب مية النهارده الساعة عشرة",
+    context: {
+      currentDate: "2026-10-06",
+      currentDayOfWeek: "Tuesday",
+      currentTime: "11:41",
+      timezone: "Asia/Dubai",
+    },
+    expected: { pass: false, detail: "past_time", pastTime: "10:00" },
+  },
 ];
 
 describeLive("parse guard (live model)", () => {
@@ -88,6 +129,7 @@ describeLive("parse guard (live model)", () => {
   for (const testCase of CASES) {
     it(`"${testCase.name}" gets the expected verdict across ${SAMPLES_PER_CASE} samples`, async () => {
       const misses: string[] = [];
+      const context = testCase.context ?? PROMPT_CONTEXT;
 
       for (let sample = 0; sample < SAMPLES_PER_CASE; sample++) {
         const label = `[${testCase.name} #${sample + 1}]`;
@@ -97,7 +139,7 @@ describeLive("parse guard (live model)", () => {
           reasoning_effort: "none",
           max_tokens: 2000,
           messages: [
-            { role: "system", content: buildSystemPrompt(PROMPT_CONTEXT, { guard: true }) },
+            { role: "system", content: buildSystemPrompt(context, { guard: true }) },
             { role: "user", content: testCase.text },
           ],
         });
@@ -107,15 +149,16 @@ describeLive("parse guard (live model)", () => {
         try {
           take = planTakeFromRawParse(raw, {
             transcript: testCase.text,
-            currentTime: PROMPT_CONTEXT.currentTime,
-            currentDate: PROMPT_CONTEXT.currentDate,
-            timezone: PROMPT_CONTEXT.timezone,
+            currentTime: context.currentTime,
+            currentDate: context.currentDate,
+            timezone: context.timezone,
           });
         } catch {
           misses.push(`${label} unplannable response: ${raw.slice(0, 200)}`);
           continue;
         }
-        const verdict = guardTake(take);
+        // `now` as the worker passes it, so the past-time check runs too.
+        const verdict = guardTake({ ...take, now: nowFor(context) });
         const expected = testCase.expected;
 
         if (expected.pass) {
@@ -137,6 +180,8 @@ describeLive("parse guard (live model)", () => {
           misses.push(
             `${label} verdict ${verdict.ok ? "ok" : verdict.detail}, wanted ${expected.detail}: ${raw.slice(0, 300)}`
           );
+        } else if (expected.pastTime !== undefined && verdict.pastTime !== expected.pastTime) {
+          misses.push(`${label} pastTime ${verdict.pastTime}, wanted ${expected.pastTime}`);
         }
       }
 

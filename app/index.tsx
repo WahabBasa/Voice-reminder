@@ -105,7 +105,7 @@ import {
   enqueueAllPendingTakes,
   enqueueReconcile,
   retryTake,
-  shouldRetryInCloud,
+  handleFailedJobPush,
 } from "../lib/takeReconcile";
 import { watchCreationJob, type CreationJobWatchHandle } from "../lib/creationJobWatch";
 import PendingTakeCard, { usePendingTakes } from "../components/PendingTakeCard";
@@ -1106,17 +1106,20 @@ export default function HomeScreen() {
         if (job.status === "failed") {
           // A device transcript the server did not understand gets one more
           // try in the cloud (OLD-133). Reconciliation runs it, single-flight
-          // per take, and the card keeps shimmering until it lands.
-          const current = getPendingTake(creationId);
-          if (current && shouldRetryInCloud(current, job)) {
+          // per take, and the card keeps shimmering until it lands. A take
+          // already handed to that retry is reconciliation's to finish too:
+          // this push may be the device attempt's failure arriving after the
+          // retry began, and showing it would flash an error over a take that
+          // is about to be created.
+          const action = await handleFailedJobPush(creationId, job);
+          if (action === "cloud_retry") {
             creationBreadcrumb("device_not_understood_cloud_retry");
-            enqueueReconcile(creationId);
-            return;
+          } else if (action === "defer_to_reconcile") {
+            creationBreadcrumb("cloud_retry_failure_deferred");
+          } else {
+            creationBreadcrumb("job_failed", failedJobPatch(job).errorKind);
+            dropCreationRun(creationId);
           }
-          const patch = failedJobPatch(job);
-          creationBreadcrumb("job_failed", patch.errorKind);
-          dropCreationRun(creationId);
-          await updatePendingTake(creationId, "failed", patch);
           return;
         }
         if (job.status === "cancelled") {

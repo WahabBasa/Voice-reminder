@@ -186,6 +186,16 @@ describe("transitionTake", () => {
     expect(next?.cloudRetried).toBe(true);
   });
 
+  it("clears a past_time failure's spoken time on the way out", () => {
+    const failed = take({
+      phase: "failed",
+      errorKind: "unparseable",
+      serverErrorDetail: "past_time",
+      pastTime: "10:00",
+    });
+    expect(transitionTake(failed, "processing")).not.toHaveProperty("pastTime");
+  });
+
   it("lets a transcribed device take go back to processing for its cloud retry", () => {
     expect(canTransition("transcribed", "processing")).toBe(true);
   });
@@ -251,6 +261,17 @@ describe("failedJobPatch (OLD-133)", () => {
     });
   });
 
+  it("carries a past_time take's spoken time", () => {
+    expect(
+      failedJobPatch({ errorCode: "unparseable", errorDetail: "past_time", pastTime: "10:00" })
+    ).toEqual({
+      errorKind: "unparseable",
+      serverErrorCode: "unparseable",
+      serverErrorDetail: "past_time",
+      pastTime: "10:00",
+    });
+  });
+
   it("is exactly the old patch for an older server that sends neither", () => {
     expect(failedJobPatch({ errorCode: "unparseable" })).toEqual({
       errorKind: "unparseable",
@@ -286,10 +307,11 @@ describe("failedJobPatch (OLD-133)", () => {
 });
 
 describe("isRecordAgainDetail", () => {
-  it("is the three details a new recording fixes, and nothing else", () => {
+  it("is the four details a new recording fixes, and nothing else", () => {
     expect(isRecordAgainDetail("not_understood")).toBe(true);
     expect(isRecordAgainDetail("no_time")).toBe(true);
     expect(isRecordAgainDetail("unsupported_language")).toBe(true);
+    expect(isRecordAgainDetail("past_time")).toBe(true);
     expect(isRecordAgainDetail("something_new")).toBe(false);
     expect(isRecordAgainDetail(undefined)).toBe(false);
   });

@@ -117,6 +117,42 @@ describe("a sentence the server could not use (OLD-133)", () => {
     );
   });
 
+  describe("a one-off whose time had already passed (past_time)", () => {
+    const past = (pastTime: string | undefined, hour12: boolean) =>
+      pendingCardContent(
+        { phase: "failed", errorKind: "unparseable", serverErrorDetail: "past_time", pastTime },
+        LIMIT,
+        { hour12 }
+      );
+
+    it("names the time on a 24-hour dial and asks when", () => {
+      expect(past("10:00", false).text).toBe(
+        "10:00 has already passed today. When should I remind you? Tap to record again."
+      );
+    });
+
+    it("names the time on a 12-hour dial with its meridiem", () => {
+      expect(past("10:00", true).text).toBe(
+        "10:00 am has already passed today. When should I remind you? Tap to record again."
+      );
+    });
+
+    it("still asks when the server sent no time", () => {
+      expect(past(undefined, false).text).toBe(
+        "That time has already passed today. When should I remind you? Tap to record again."
+      );
+    });
+
+    it("is a failed card the user taps to record again", () => {
+      expect(past("10:00", false)).toMatchObject({
+        shimmer: false,
+        tappable: true,
+        swipeToDiscard: true,
+        tone: "error",
+      });
+    });
+  });
+
   it("names the language Remi does not speak", () => {
     expect(unparseable("unsupported_language", "sv").text).toBe("Remi doesn't speak Swedish yet");
   });

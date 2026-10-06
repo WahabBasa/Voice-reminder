@@ -47,14 +47,23 @@ export type PendingErrorKind = "network" | "unparseable" | "server" | "cap_unver
  * it as a plain string, because an older or newer server may send something
  * else. The card acts only on these three.
  */
-export type ServerErrorDetail = "not_understood" | "no_time" | "unsupported_language";
+export type ServerErrorDetail =
+  | "not_understood"
+  | "no_time"
+  | "unsupported_language"
+  | "past_time";
 
 /**
  * The details that mean "this sentence will not work, say another one": the
  * card's retry opens the recorder instead of re-running the same audio.
  */
 export function isRecordAgainDetail(detail: string | undefined): detail is ServerErrorDetail {
-  return detail === "not_understood" || detail === "no_time" || detail === "unsupported_language";
+  return (
+    detail === "not_understood" ||
+    detail === "no_time" ||
+    detail === "unsupported_language" ||
+    detail === "past_time"
+  );
 }
 
 export type PendingTake = {
@@ -81,6 +90,8 @@ export type PendingTake = {
   serverErrorDetail?: string;
   /** The ISO 639-1 language the server heard, for the unsupported-language copy. */
   detectedLanguage?: string;
+  /** For `past_time`: the one-off's spoken time, "HH:MM" on the user's clock. */
+  pastTime?: string;
   /**
    * Set when a device take the server did not understand is handed to the
    * cloud for its one automatic retry (OLD-133), and never cleared. This flag
@@ -149,6 +160,7 @@ export type PendingPatch = {
   serverErrorCode?: string;
   serverErrorDetail?: string;
   detectedLanguage?: string;
+  pastTime?: string;
   cloudRetried?: boolean;
   audioStorageId?: string;
   recordingUri?: string;
@@ -176,6 +188,7 @@ export function transitionTake(
     delete next.serverErrorCode;
     delete next.serverErrorDetail;
     delete next.detectedLanguage;
+    delete next.pastTime;
   }
   return next;
 }
@@ -257,6 +270,7 @@ export function failedJobPatch(job: {
   errorCode?: string;
   errorDetail?: string;
   detectedLanguage?: string;
+  pastTime?: string;
   transcript?: string;
 }): PendingPatch {
   return {
@@ -264,6 +278,7 @@ export function failedJobPatch(job: {
     ...(job.errorCode ? { serverErrorCode: job.errorCode } : {}),
     ...(job.errorDetail ? { serverErrorDetail: job.errorDetail } : {}),
     ...(job.detectedLanguage ? { detectedLanguage: job.detectedLanguage } : {}),
+    ...(job.pastTime ? { pastTime: job.pastTime } : {}),
     ...(job.transcript?.trim() ? { transcript: job.transcript } : {}),
   };
 }

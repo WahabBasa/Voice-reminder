@@ -20,7 +20,7 @@ import {
   NO_TIME_DEFAULT_INSTRUCTION,
   readParseEnvelope,
 } from "../../convex/helpers";
-import { guardTake } from "../../convex/creationValidate";
+import { PAST_TIME_GRACE_MS, guardTake } from "../../convex/creationValidate";
 
 const PROMPT_CONTEXT = {
   currentDate: "2026-08-13",
@@ -305,6 +305,110 @@ describe("guardTake", () => {
     expect(
       guardTake({ understood: true, language: "en", plans: [null, once({ timeSpoken: false })] })
     ).toMatchObject({ ok: false, detail: "no_time", reason: expect.stringContaining("plan 1") });
+  });
+
+  describe("past_time", () => {
+    // 11:41 in Asia/Dubai (UTC+4) on 2026-10-06: the founder's take.
+    const NOW = Date.UTC(2026, 9, 6, 7, 41);
+    // "today at 10" → 10:00 Dubai = 06:00 UTC, 1h41m behind NOW.
+    const TEN_TODAY = Date.UTC(2026, 9, 6, 6, 0);
+
+    it("a one-off already 1h41m in the past fails with the spoken time", () => {
+      expect(
+        guardTake({
+          understood: true,
+          language: "ar",
+          plans: [once({ lang: "ar", time: "10:00", onceAt: TEN_TODAY })],
+          now: NOW,
+        })
+      ).toEqual({
+        ok: false,
+        detail: "past_time",
+        pastTime: "10:00",
+        reason: expect.stringContaining("plan 0"),
+      });
+    });
+
+    it("a one-off within the grace window still passes", () => {
+      const justNow = NOW - PAST_TIME_GRACE_MS;
+      expect(
+        guardTake({
+          understood: true,
+          language: "en",
+          plans: [once({ time: "11:39", onceAt: justNow })],
+          now: NOW,
+        })
+      ).toEqual({ ok: true });
+    });
+
+    it("a one-off just past the grace window fails", () => {
+      expect(
+        guardTake({
+          understood: true,
+          language: "en",
+          plans: [once({ time: "11:38", onceAt: NOW - PAST_TIME_GRACE_MS - 1 })],
+          now: NOW,
+        })
+      ).toMatchObject({ ok: false, detail: "past_time", pastTime: "11:38" });
+    });
+
+    it("a future one-off passes", () => {
+      expect(
+        guardTake({
+          understood: true,
+          language: "en",
+          plans: [once({ time: "22:00", onceAt: TEN_TODAY + 12 * 3_600_000 })],
+          now: NOW,
+        })
+      ).toEqual({ ok: true });
+    });
+
+    it("any past one-off in a multi take fails it, and a malformed time is left off", () => {
+      expect(
+        guardTake({
+          understood: true,
+          language: "en",
+          plans: [once({ time: "22:00", onceAt: NOW + 3_600_000 }), once({ time: "10", onceAt: TEN_TODAY })],
+          now: NOW,
+        })
+      ).toEqual({ ok: false, detail: "past_time", reason: expect.stringContaining("plan 1") });
+    });
+
+    it("repeating reminders and one-offs without an instant are not checked", () => {
+      expect(
+        guardTake({
+          understood: true,
+          language: "en",
+          plans: [
+            null,
+            once({ frequency: "daily", time: "10:00", onceAt: TEN_TODAY }),
+            once({ time: "10:00" }),
+          ],
+          now: NOW,
+        })
+      ).toEqual({ ok: true });
+    });
+
+    it("without `now` the check is skipped", () => {
+      expect(
+        guardTake({
+          understood: true,
+          language: "en",
+          plans: [once({ time: "10:00", onceAt: TEN_TODAY })],
+        })
+      ).toEqual({ ok: true });
+    });
+
+    it("no_time outranks past_time", () => {
+      expect(
+        guardTake({
+          understood: true,
+          language: "en",
+          plans: [once({ timeSpoken: false, time: "10:00", onceAt: TEN_TODAY })],
+          now: NOW,
+        })
+      ).toMatchObject({ detail: "no_time" });
+    });
   });
 
   it("absent or unreadable fields never reject", () => {

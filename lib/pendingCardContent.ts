@@ -1,5 +1,6 @@
 import { getCapGateBlockContent } from "./usageGate";
 import { languageName } from "./languageNames";
+import { formatClockTime, type ClockFormatOptions } from "./time";
 import type { PendingErrorKind, PendingPhase } from "./pendingTakes";
 
 /**
@@ -71,14 +72,24 @@ const FAILED_COPY: Record<Exclude<PendingErrorKind, "cap_unverified">, string> =
  * these. A detail this build does not know, or none at all (an older server),
  * keeps the generic `unparseable` line.
  */
-function unparseableDetailCopy(detail: string | undefined, detectedLanguage?: string): string | null {
+function unparseableDetailCopy(
+  detail: string | undefined,
+  take: { detectedLanguage?: string; pastTime?: string },
+  clock: ClockFormatOptions
+): string | null {
   switch (detail) {
     case "not_understood":
       return "Didn't catch that — tap to record again";
     case "no_time":
       return "When should I remind you? Tap to record again with a time";
     case "unsupported_language":
-      return `Remi doesn't speak ${languageName(detectedLanguage) ?? "this language"} yet`;
+      return `Remi doesn't speak ${languageName(take.detectedLanguage) ?? "this language"} yet`;
+    case "past_time": {
+      // A one-off whose time had already gone by today ("today at 10", said at
+      // 11:41). Named in the dial the rest of the app uses, then the question.
+      const named = take.pastTime ? formatClockTime(take.pastTime, clock) : "";
+      return `${named || "That time"} has already passed today. When should I remind you? Tap to record again.`;
+    }
     default:
       return null;
   }
@@ -100,15 +111,18 @@ export function pendingCardContent(
     errorKind?: PendingErrorKind;
     serverErrorDetail?: string;
     detectedLanguage?: string;
+    pastTime?: string;
   },
-  limit: number
+  limit: number,
+  /** The clock dial for a named time. Defaults to the device's; tests pin it. */
+  clock: ClockFormatOptions = {}
 ): PendingCardContent {
   if (take.phase === "failed") {
     // An unresolved entitlement is a failed take like any other — it just gets
     // the sentence the rest of the app already uses for it.
     const detailCopy =
       take.errorKind === "unparseable"
-        ? unparseableDetailCopy(take.serverErrorDetail, take.detectedLanguage)
+        ? unparseableDetailCopy(take.serverErrorDetail, take, clock)
         : null;
     const text =
       take.errorKind === "cap_unverified"

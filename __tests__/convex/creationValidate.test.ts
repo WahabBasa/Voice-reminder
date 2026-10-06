@@ -13,6 +13,7 @@ import {
   MAX_TITLE_LENGTH,
   isCalendarDate,
   isClockTime,
+  guardTake,
   isIanaTimezone,
   validateCreationPlan,
   validateCreationPlans,
@@ -668,6 +669,31 @@ describe("accepts what the legacy planner produces", () => {
     const plans = plansFor({ ...base, time: "08:00", frequency: "once", date: "2020-01-01" });
     expect(plans[0]).toMatchObject({ explicitDate: true, explicitTime: true });
     expect(validateCreationPlans(plans, { timezone: TZ, now: Date.now() })).toEqual({ ok: true });
+  });
+
+  it("'today at 10', said at 11:41: the gate passes it, the guard asks (past_time)", () => {
+    // The founder's take (2026-10-06, Asia/Dubai). The model dated it today
+    // and timed it 10:00, so both halves are explicit and the gate's past rule
+    // lets it through on purpose. Only the guard, for a guard_v1 client, turns
+    // it into a question instead of a reminder that would never ring.
+    const plans = planRemindersFromRawParse(
+      JSON.stringify({
+        reminders: [{ ...base, time: "10:00", frequency: "once", date: "2026-10-06", timeSpoken: true }],
+      }),
+      { transcript: "", currentTime: "11:41:00", currentDate: "2026-10-06", timezone: TZ }
+    );
+    const now = Date.UTC(2026, 9, 6, 7, 41);
+    expect(plans[0]).toMatchObject({
+      explicitDate: true,
+      explicitTime: true,
+      onceAt: Date.UTC(2026, 9, 6, 6, 0),
+    });
+    expect(validateCreationPlans(plans, { timezone: TZ, now })).toEqual({ ok: true });
+    expect(guardTake({ understood: true, language: "en", plans, now })).toMatchObject({
+      ok: false,
+      detail: "past_time",
+      pastTime: "10:00",
+    });
   });
 
   it("marks a one-off whose day and time it had to invent", () => {

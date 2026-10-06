@@ -47,6 +47,48 @@ export function shouldRetryInCloud(
   );
 }
 
+export type FailedJobAction = "cloud_retry" | "defer_to_reconcile" | "show_failure";
+
+/**
+ * What the job watch does with a `failed` push (OLD-133).
+ *
+ * - `cloud_retry`: the take earns its one cloud retry. Reconciliation runs it.
+ * - `defer_to_reconcile`: the take has already been handed to the cloud retry.
+ *   The push may be the device attempt's own failure arriving after a
+ *   reconcile pass already started the retry (a foreground sweep that read the
+ *   same failed job first), and the watch cannot tell that from the retry's
+ *   final answer. Reconciliation can: it is single-flight per take, so it
+ *   waits for a retry in flight and then reads the job fresh. The card keeps
+ *   shimmering until then and never flashes the device failure.
+ * - `show_failure`: everything else, exactly as before.
+ */
+export function failedJobAction(
+  take: Pick<PendingTake, "sttSource" | "cloudRetried"> | null | undefined,
+  job: Pick<WatchedJob, "status" | "errorDetail">
+): FailedJobAction {
+  if (take && shouldRetryInCloud(take, job)) return "cloud_retry";
+  if (take?.cloudRetried === true) return "defer_to_reconcile";
+  return "show_failure";
+}
+
+/**
+ * The job watch's whole `failed` branch: either hand the take to
+ * reconciliation, which keeps its card shimmering, or put the failure on the
+ * card. Returns what it did so the caller can log it.
+ */
+export async function handleFailedJobPush(
+  creationId: string,
+  job: WatchedJob
+): Promise<FailedJobAction> {
+  const action = failedJobAction(getPendingTake(creationId), job);
+  if (action === "show_failure") {
+    await updatePendingTake(creationId, "failed", failedJobPatch(job));
+  } else {
+    enqueueReconcile(creationId);
+  }
+  return action;
+}
+
 /**
  * Reconciliation (spec §2.5) and the retry dispatch (§2.6).
  *

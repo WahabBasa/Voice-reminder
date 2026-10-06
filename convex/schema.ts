@@ -122,7 +122,10 @@ export const creationPerfValidator = v.object({
 export const creationErrorDetailValidator = v.union(
   v.literal("not_understood"),
   v.literal("no_time"),
-  v.literal("unsupported_language")
+  v.literal("unsupported_language"),
+  // A one-off whose time had already passed when the take was parsed ("today
+  // at 10", said at 11:41). The card asks when instead of guessing.
+  v.literal("past_time")
 );
 
 /** The five states a creation job can be in. The last three are terminal. */
@@ -296,6 +299,8 @@ export default defineSchema({
     errorDetail: v.optional(creationErrorDetailValidator),
     // ISO 639-1 code of the language an `unsupported_language` take was in.
     detectedLanguage: v.optional(v.string()),
+    // The spoken one-off time ("HH:MM", the user's clock) of a `past_time` take.
+    pastTime: v.optional(v.string()),
     // Capabilities the client declared at `begin` (e.g. "guard_v1"). Absent on
     // every job from a build that predates the field.
     clientFeatures: v.optional(v.array(v.string())),

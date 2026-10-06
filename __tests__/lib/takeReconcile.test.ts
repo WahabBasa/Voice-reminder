@@ -18,6 +18,8 @@ import {
   discardTake,
   enqueueAllPendingTakes,
   enqueueReconcile,
+  failedJobAction,
+  handleFailedJobPush,
   abandonOrphanBlob,
   reconcileIdle,
   retryTake,
@@ -32,6 +34,7 @@ import {
   getPendingTake,
   loadPendingTakes,
   putPendingTake,
+  subscribePendingTakes,
   updatePendingTake,
   type PendingPhase,
   type PendingTake,
@@ -1011,8 +1014,66 @@ describe("the cloud-retry decision (OLD-133)", () => {
   });
 });
 
+describe("what the job watch does with a failed push", () => {
+  const failedNotUnderstood = job({
+    status: "failed",
+    errorCode: "unparseable",
+    errorDetail: "not_understood",
+  });
+
+  it("hands a device take the server did not understand to its cloud retry", () => {
+    expect(failedJobAction({ sttSource: "device" }, failedNotUnderstood)).toBe("cloud_retry");
+  });
+
+  it("defers every failure of a take already handed to the cloud retry", () => {
+    // The device attempt's own failure can arrive after a reconcile pass has
+    // started the retry; the watch cannot tell it from the retry's answer.
+    for (const sttSource of ["device", "cloud"] as const) {
+      expect(failedJobAction({ sttSource, cloudRetried: true }, failedNotUnderstood)).toBe(
+        "defer_to_reconcile"
+      );
+      expect(
+        failedJobAction(
+          { sttSource, cloudRetried: true },
+          job({ status: "failed", errorCode: "internal" })
+        )
+      ).toBe("defer_to_reconcile");
+    }
+  });
+
+  it("shows every other failure, exactly as before", () => {
+    expect(failedJobAction({ sttSource: "cloud" }, failedNotUnderstood)).toBe("show_failure");
+    expect(failedJobAction({}, failedNotUnderstood)).toBe("show_failure");
+    expect(failedJobAction(undefined, failedNotUnderstood)).toBe("show_failure");
+    expect(
+      failedJobAction(
+        { sttSource: "device" },
+        job({ status: "failed", errorCode: "unparseable", errorDetail: "past_time" })
+      )
+    ).toBe("show_failure");
+  });
+
+  it("puts a plain failure on the card", async () => {
+    setup();
+    await seed(take({ phase: "processing", sttSource: "cloud" }));
+
+    const failed = job({
+      status: "failed",
+      errorCode: "unparseable",
+      errorDetail: "past_time",
+      pastTime: "10:00",
+    });
+    expect(await handleFailedJobPush("t1", failed)).toBe("show_failure");
+    expect(getPendingTake("t1")).toMatchObject({
+      phase: "failed",
+      serverErrorDetail: "past_time",
+      pastTime: "10:00",
+    });
+  });
+});
+
 describe("the retry dispatch for a sentence the server could not use (OLD-133)", () => {
-  for (const errorDetail of ["not_understood", "no_time", "unsupported_language"]) {
+  for (const errorDetail of ["not_understood", "no_time", "unsupported_language", "past_time"]) {
     it(`offers a new recording for ${errorDetail}, never the same audio again`, () => {
       for (const server of ["failed", null] as const) {
         expect(
@@ -1151,6 +1212,105 @@ describe("the automatic cloud retry (OLD-133)", () => {
       expect(h.calls.subscribes).toEqual(["t1"]);
     });
   }
+
+  /** Every phase the take passes through, as the card would see it. */
+  const watchPhases = () => {
+    const seen: PendingPhase[] = [];
+    const off = subscribePendingTakes(() => {
+      const phase = getPendingTake("t1")?.phase;
+      if (phase && seen[seen.length - 1] !== phase) seen.push(phase);
+    });
+    return { seen, off };
+  };
+
+  it("never shows a failure when the watch's push lands after a foreground pass began the retry", async () => {
+    // The founder's flash (2026-10-06): a foreground sweep read the failed job
+    // and started the retry; the watch then delivered the same failure. Before
+    // the fix the watch saw `cloudRetried` and put it on the card.
+    let pushed: Promise<unknown> | null = null;
+    const h = setup({
+      uploadRecording: async (t) => {
+        h.calls.uploads.push(t.creationId);
+        // Mid-upload: the job watch delivers the device attempt's failure.
+        pushed = handleFailedJobPush("t1", notUnderstood());
+        await pushed;
+        return "st-new";
+      },
+      serverRetry: async (args) => {
+        h.calls.retry.push(args);
+        h.jobs.set("t1", job({ status: "pending", generation: 2 }));
+        return { status: "pending" };
+      },
+    });
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake({ phase: "transcribed" }));
+    const phases = watchPhases();
+
+    enqueueAllPendingTakes();
+    await reconcileIdle();
+
+    expect(await pushed).toBe("defer_to_reconcile");
+    expect(h.calls.retry).toHaveLength(1);
+    // The deferred push re-ran reconciliation, which found the retry's job
+    // pending and watched it.
+    expect(h.calls.subscribes).toContain("t1");
+    expect(getPendingTake("t1")).toMatchObject({ phase: "processing", cloudRetried: true });
+
+    // The cloud run commits: one import, and the take is gone.
+    h.jobs.set("t1", job({ status: "committed", generation: 2 }));
+    enqueueReconcile("t1");
+    await reconcileIdle();
+    phases.off();
+
+    expect(h.calls.imports).toEqual(["t1"]);
+    expect(phases.seen).not.toContain("failed");
+  });
+
+  it("never shows a failure when the device failure is pushed again after the retry started", async () => {
+    // The same push arriving after the whole pass (a resubscribe that read a
+    // stale document, say): still the retry's, still no failure.
+    const h = setup({
+      serverRetry: async (args) => {
+        h.calls.retry.push(args);
+        h.jobs.set("t1", job({ status: "pending", generation: 2 }));
+        return { status: "pending" };
+      },
+    });
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+    const phases = watchPhases();
+
+    expect(await handleFailedJobPush("t1", notUnderstood())).toBe("cloud_retry");
+    await reconcileIdle();
+    expect(await handleFailedJobPush("t1", notUnderstood())).toBe("defer_to_reconcile");
+    await reconcileIdle();
+    phases.off();
+
+    expect(h.calls.retry).toHaveLength(1);
+    expect(phases.seen).not.toContain("failed");
+    expect(getPendingTake("t1")?.phase).toBe("processing");
+  });
+
+  it("shows the cloud run's own failure once reconciliation reads it", async () => {
+    const h = setup();
+    h.jobs.set("t1", notUnderstood());
+    await seed(deviceTake());
+    await handleFailedJobPush("t1", notUnderstood());
+    await reconcileIdle();
+
+    h.jobs.set("t1", notUnderstood({ generation: 2, transcript: "cloud words" }));
+    expect(await handleFailedJobPush("t1", notUnderstood({ generation: 2 }))).toBe(
+      "defer_to_reconcile"
+    );
+    await reconcileIdle();
+
+    expect(h.calls.retry).toHaveLength(1);
+    expect(getPendingTake("t1")).toMatchObject({
+      phase: "failed",
+      serverErrorDetail: "not_understood",
+      transcript: "cloud words",
+    });
+  });
 
   it("runs once even when the failure push and a foreground pass ask together", async () => {
     const h = setup();

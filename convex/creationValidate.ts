@@ -195,7 +195,14 @@ export function validateCreationPlans(
 export const GUARD_V1 = "guard_v1";
 
 /** Why the guard turned a take away. Rides on the job row as `errorDetail`. */
-export type GuardDetail = "not_understood" | "no_time" | "unsupported_language";
+export type GuardDetail = "not_understood" | "no_time" | "unsupported_language" | "past_time";
+
+/**
+ * How far in the past a one-off may land before the guard asks instead of
+ * committing it (`past_time`). "Remind me at 11:40", said at 11:41, is a
+ * reminder for right now, not a mistake.
+ */
+export const PAST_TIME_GRACE_MS = 2 * 60_000;
 
 export type GuardVerdict =
   | { ok: true }
@@ -204,6 +211,11 @@ export type GuardVerdict =
       detail: GuardDetail;
       /** ISO 639-1, set only (and always) for `unsupported_language`. */
       detectedLanguage?: string;
+      /**
+       * The one-off's wall-clock time ("HH:MM", the user's own clock), set only
+       * for `past_time`, so the card can say which time has already passed.
+       */
+      pastTime?: string;
       /** For logs — never user-facing, never the transcript. */
       reason: string;
     };
@@ -223,6 +235,11 @@ export type GuardVerdict =
  *      reminder ("every day drink water") keeps the default time it has always
  *      had; only a one-off without a time is a guess about WHEN that the app
  *      would otherwise ring a minute from now.
+ *   4. a one-off whose resolved instant is already more than
+ *      `PAST_TIME_GRACE_MS` behind `now` → `past_time`. "I'll drink water today
+ *      at 10", said at 11:41, would otherwise commit a reminder that never
+ *      rings. The guard asks the user rather than guessing they meant 22:00.
+ *      Only checked when the caller passes `now`.
  *
  * Absent fields never reject: a response that did not carry `understood`,
  * `language`/`lang` or `timeSpoken` goes on to the strict gate as before.
@@ -231,6 +248,8 @@ export function guardTake(take: {
   understood: boolean | undefined;
   language: unknown;
   plans: readonly unknown[];
+  /** The job's clock. Without it the past-time check (4) is skipped. */
+  now?: number;
 }): GuardVerdict {
   if (take.understood === false) {
     return { ok: false, detail: "not_understood", reason: "model did not understand the take" };
@@ -263,6 +282,22 @@ export function guardTake(take: {
     if (!isPlainObject(plan)) continue;
     if (plan.frequency === "once" && plan.timeSpoken === false) {
       return { ok: false, detail: "no_time", reason: `plan ${index}: one-off with no time said` };
+    }
+  }
+
+  if (take.now !== undefined) {
+    const now = take.now;
+    for (let index = 0; index < take.plans.length; index++) {
+      const plan = take.plans[index];
+      if (!isPlainObject(plan) || plan.frequency !== "once") continue;
+      if (!isFiniteNumber(plan.onceAt)) continue;
+      if (now - plan.onceAt <= PAST_TIME_GRACE_MS) continue;
+      return {
+        ok: false,
+        detail: "past_time",
+        ...(isClockTime(plan.time) ? { pastTime: plan.time } : {}),
+        reason: `plan ${index}: one-off resolves ${Math.round((now - plan.onceAt) / 60000)} min in the past`,
+      };
     }
   }
 

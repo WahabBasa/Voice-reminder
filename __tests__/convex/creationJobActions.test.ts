@@ -363,6 +363,68 @@ describe("the guard (OLD-130)", () => {
     expect(commitOf(ctx)).toBeUndefined();
   });
 
+  it("past_time for a one-off already behind the clock, with the spoken time", async () => {
+    // "Today at 10", said at 11:41: a dated, timed one-off 101 minutes ago.
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "ar",
+      plans: [
+        {
+          ...waterPlan(),
+          frequency: "once",
+          time: "10:00",
+          onceAt: NOW - 101 * 60_000,
+          timeSpoken: true,
+          lang: "ar",
+        },
+      ],
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(failOf(ctx).patch).toMatchObject({
+      status: "failed",
+      errorCode: "unparseable",
+      errorDetail: "past_time",
+      pastTime: "10:00",
+    });
+    expect(commitOf(ctx)).toBeUndefined();
+  });
+
+  it("a one-off inside the grace window still commits", async () => {
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "en",
+      plans: [{ ...waterPlan(), frequency: "once", time: "10:00", onceAt: NOW - 60_000 }],
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(failOf(ctx)).toBeUndefined();
+    expect(commitOf(ctx)).toBeDefined();
+  });
+
+  it("without guard_v1 a past one-off is not asked about", async () => {
+    // A 1.0 client's take never reaches the guard, so the strict gate alone
+    // decides — exactly as before past_time existed.
+    const actions = jest.requireMock("../../convex/actions") as any;
+    const legacy = jest
+      .spyOn(actions, "planRemindersFromRawParse")
+      .mockReturnValueOnce([
+        { ...waterPlan(), frequency: "once", time: "10:00", onceAt: NOW - 101 * 60_000 },
+      ]);
+    try {
+      const ctx = makeCtx(makeJob());
+      await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+      expect(legacy).toHaveBeenCalled();
+      expect(failOf(ctx)).toBeUndefined();
+      expect(commitOf(ctx).plans[0].onceAt).toBe(NOW - 101 * 60_000);
+    } finally {
+      legacy.mockRestore();
+    }
+  });
+
   it("unsupported_language carries the detected language", async () => {
     mockPlanTake.mockReturnValue({
       understood: true,

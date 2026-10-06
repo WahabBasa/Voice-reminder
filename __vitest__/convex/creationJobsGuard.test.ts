@@ -126,6 +126,58 @@ describe("errorDetail on the watched document", () => {
     });
   });
 
+  test("a past_time failure exposes the spoken time through get, and keeps a failedTakes row", async () => {
+    const { jobId, creationId } = await insertJob(t, {
+      clientFeatures: ["guard_v1"],
+      status: "transcribed",
+      transcript: "I'll drink water today at 10",
+    });
+    await t.mutation(internal.creationJobs.casPatch, {
+      jobId,
+      generation: 1,
+      expectStatus: ["pending", "transcribed"],
+      patch: {
+        status: "failed",
+        errorCode: "unparseable",
+        errorDetail: "past_time",
+        pastTime: "10:00",
+      },
+    });
+
+    const watched = await t.query(api.creationJobs.get, { deviceId: DEVICE, creationId });
+    expect(watched).toMatchObject({
+      status: "failed",
+      errorCode: "unparseable",
+      errorDetail: "past_time",
+      pastTime: "10:00",
+    });
+    expect(watched).not.toHaveProperty("detectedLanguage");
+
+    const failed = await t.run(async (ctx) => await ctx.db.query("failedTakes").collect());
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      creationId,
+      errorCode: "unparseable",
+      errorDetail: "past_time",
+      cloudTranscript: "I'll drink water today at 10",
+    });
+  });
+
+  test("retry clears a past_time attempt's spoken time", async () => {
+    const { creationId } = await insertJob(t, {
+      status: "failed",
+      errorCode: "unparseable",
+      errorDetail: "past_time",
+      pastTime: "10:00",
+    });
+    await t.mutation(api.creationJobs.retry, { deviceId: DEVICE, creationId });
+
+    const job = await readJob(t, DEVICE, creationId);
+    expect(job!.status).toBe("pending");
+    expect(job).not.toHaveProperty("errorDetail");
+    expect(job).not.toHaveProperty("pastTime");
+  });
+
   test("a failure without a detail returns exactly the old keys", async () => {
     const { jobId, creationId } = await insertJob(t);
     await t.mutation(internal.creationJobs.casPatch, {
