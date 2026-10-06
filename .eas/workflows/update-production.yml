@@ -7,4 +7,4 @@ jobs:
     params:
       branch: production
       platform: ios
-      message: "main @ 7fc80be (When should I remind you? follow-up for no-time and past-time takes)"
+      message: "main @ 2d1791a (remember each device's spoken language; correct language tagging)"
