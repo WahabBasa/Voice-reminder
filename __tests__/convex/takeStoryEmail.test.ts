@@ -188,7 +188,7 @@ describe("the subject says the outcome in plain words", () => {
     expect(buildTakeStorySubject(input)).toBe("Remi ❌ Time already passed — Dubai");
     const { body } = buildTakeStoryEmail(input);
     expect(body).toContain("→ Rejected: the time had already passed (09:00)");
-    expect(body).toContain("09:00 has already passed — tap to record again");
+    expect(body).toContain("09:00 has already passed today. When should I remind you? Tap to record again.");
   });
 
   it("unsupported_language names the language once", () => {

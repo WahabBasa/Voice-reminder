@@ -49,9 +49,7 @@ function detailCopy(
     case "unsupported_language":
       return `Remi doesn't speak ${languageName(detectedLanguage) ?? "this language"} yet`;
     case "past_time":
-      return pastTime
-        ? `${pastTime} has already passed — tap to record again`
-        : "That time has already passed — tap to record again";
+      return `${pastTime || "That time"} has already passed today. When should I remind you? Tap to record again.`;
     default:
       return null;
   }

@@ -39,7 +39,7 @@
   <li>The finished reminder wording is turned into the spoken audio your alarm plays.</li>
   <li>Your original recording is then deleted from our backend. The reminder text and the generated audio stay, because the app needs them to remind you.</li>
 </ol>
-<p><strong>The one exception: a recording that doesn't become a reminder.</strong> Sometimes VoiceReminder can't turn what you said into a reminder &mdash; the recording was silent, the words weren't understood, or something went wrong on our side. When that happens we keep that recording, the text it was turned into, and the error, for up to 7 days. We use them only to find and fix the problem, and then they're deleted automatically. Recordings that do become reminders are never kept.</p>
+<p><strong>Failed recordings.</strong> If a recording fails to become a reminder, we keep it and its transcript for up to 7 days. We use them only to see where things went wrong and track down the issue in the app so we can fix it. Then they're deleted automatically.</p>
 <p>Steps 2 to 4 are the ones VoiceReminder can't do on its own. They run on specialist speech and language providers that work to our instructions: each one performs the single step described, hands the result straight back, and is never permitted to use your recording for anything of its own. Section 5 lists everyone involved and what each is allowed to do.</p>
 <p>Because that work happens off your phone, the app asks for your explicit permission before your first recording and won't record until you agree. You stay in charge of it: you can stop at any time by turning off microphone access for VoiceReminder in your device's <strong>Settings</strong> &mdash; nothing further is recorded or processed from that moment, and reminders you've already made keep working. You can also skip voice entirely and type reminders by hand.</p>
 
@@ -68,7 +68,7 @@
 
 <h2>6. How long we keep it</h2>
 <ul>
-  <li><strong>Voice recordings:</strong> deleted from our backend as soon as processing finishes &mdash; normally within seconds of you speaking. The one exception is a recording VoiceReminder couldn't turn into a reminder: we keep it, the text it was turned into, and the error for up to 7 days, only to find and fix the problem, and then they're deleted automatically. Apart from that, we do not keep an archive of your recordings.</li>
+  <li><strong>Voice recordings:</strong> deleted from our backend as soon as processing finishes &mdash; normally within seconds of you speaking. If a recording fails, we keep it for up to 7 days to see where things went wrong and fix the issue, then delete it. We do not keep an archive of your recordings.</li>
   <li><strong>Reminder text and generated audio:</strong> kept until you delete the reminder. Deleting a reminder in the app deletes its stored text and its audio files from our backend as well.</li>
   <li><strong>Reminders on your device:</strong> stored locally so the app works offline, and removed when you delete the reminder or uninstall the app.</li>
   <li><strong>Feedback:</strong> kept for up to 12 months so we can look into it and follow up, then deleted. Deleting a reminder does <em>not</em> delete a feedback report that mentioned it &mdash; the report is a separate record of something you told us, and it stays until its own time is up.</li>
@@ -105,7 +105,7 @@
 <p>Most of it you can do yourself, instantly: delete a reminder in the app and its text and audio are deleted from our backend too, and turning off microphone access for VoiceReminder in your device's Settings stops any further voice processing.</p>
 <div class="card">
   <p>For anything else &mdash; a copy of your data, or deletion of everything associated with your install &mdash; email <a href="mailto:athea.hab@gmail.com">athea.hab@gmail.com</a> and say what you'd like. Because the app has no accounts, we can't look you up by name or email, so please include enough detail to identify your records (for example the titles and times of a few of your reminders); we may ask a follow-up question before acting. We'll respond within 30 days, free of charge.</p>
-  <p>If you'd rather not wait: deleting every reminder in the app, then uninstalling it, removes everything we hold that relates to you. (Anything kept from a recording that failed is deleted automatically within 7 days.)</p>
+  <p>If you'd rather not wait: deleting every reminder in the app, then uninstalling it, removes everything we hold that relates to you. (Failed recordings are deleted automatically within 7 days.)</p>
 </div>
 
 <h2>11. Children's privacy</h2>

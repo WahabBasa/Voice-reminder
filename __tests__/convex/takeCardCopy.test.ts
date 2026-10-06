@@ -111,7 +111,7 @@ describe("the server's card copy mirrors the client's", () => {
       "Something went wrong — tap to retry"
     );
     expect(phoneCopyForServerFailure({ errorCode: "unparseable", errorDetail: "past_time" })).toBe(
-      "That time has already passed — tap to record again"
+      "That time has already passed today. When should I remind you? Tap to record again."
     );
   });
 
