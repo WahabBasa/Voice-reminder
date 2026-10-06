@@ -451,6 +451,9 @@ export default defineSchema({
     sentCount: v.number(),
     newDevice: v.boolean(),
     firstTake: v.boolean(),
+    // The install's first hello and pre-launch flag, for "first seen today".
+    firstSeenAt: v.optional(v.number()),
+    deviceSeeded: v.optional(v.boolean()),
     timezone: v.optional(v.string()),
     locale: v.optional(v.string()),
     buildNumber: v.optional(v.string()),

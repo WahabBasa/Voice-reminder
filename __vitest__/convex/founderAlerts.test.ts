@@ -25,10 +25,13 @@ import {
   commitPlan,
   harness,
   insertJob,
+  scheduledJobs,
   scheduledOf,
 } from "./harness";
+import { buildTakeStoryEmail } from "../../convex/takeStoryEmail";
 
 const SEND = "founderAlerts:sendEmail";
+const SEND_TAKE = "takeEmailActions:sendTakeEmail";
 const RECORD = "founderAlerts:recordOutcome";
 const DELIVER = "founderAlerts:deliverTakeEmail";
 const NEW_ID = "0123456789abcdef0123456789abcdef";
@@ -60,8 +63,24 @@ async function outcomes(): Promise<Doc<"takeOutcomes">[]> {
 
 type SentEmail = { subject: string; body: string; html?: string };
 
+/**
+ * Every founder email queued, in order: the ones handed straight to sendEmail,
+ * and the take emails queued for takeEmailActions.sendTakeEmail (built here
+ * from the story it was given, without the translation pass).
+ */
 async function emails(): Promise<SentEmail[]> {
-  return (await scheduledOf(t, SEND)).map((row) => row.args[0] as SentEmail);
+  const out: SentEmail[] = [];
+  for (const row of await scheduledJobs(t)) {
+    if (row.name === SEND_TAKE) {
+      out.push(buildTakeStoryEmail(JSON.parse((row.args[0] as { story: string }).story)));
+    } else if (row.name === SEND) {
+      const email = row.args[0] as SentEmail;
+      // convex-test may already have run sendTakeEmail, which hands the same
+      // take email on to sendEmail; it is counted once, from its story.
+      if (!/^Remi [✅⚠❌]/u.test(email.subject)) out.push(email);
+    }
+  }
+  return out;
 }
 
 /** Fire the take email for a creationId by hand (it is scheduled ~75 s out). */
@@ -76,13 +95,15 @@ async function deliver(creationId: string, deviceId = NEW_ID) {
 async function failJob(
   jobId: Id<"creationJobs">,
   generation: number,
-  patch: Record<string, unknown>
+  patch: Record<string, unknown>,
+  diagnostics?: { parseRaw?: string }
 ) {
   await t.mutation(internal.creationJobs.casPatch, {
     jobId,
     generation,
     expectStatus: ["pending", "transcribed"],
     patch: { status: "failed", ...patch } as never,
+    ...(diagnostics ? { diagnostics } : {}),
   });
 }
 
@@ -335,10 +356,11 @@ describe("take outcomes", () => {
     const sent = await emails();
     expect(sent.map((e) => e.subject)).toEqual([
       "Remi: new device (Europe/Stockholm, sv-SE)",
-      "Remi ✅ First take worked — Dubai, new user",
+      "Remi ✅ Created · Dubai",
     ]);
-    expect(sent[1].body).toContain("they got 2 reminders");
-    expect(sent[1].html).toContain("Reminders created");
+    expect(sent[1].body).toContain("They saw: their new reminders");
+    expect(sent[1].body).toContain("first seen today");
+    expect(sent[1].html).toMatch(/<h2[^>]*>Created<\/h2>/);
   });
 
   test("a second committed take is logged but silent", async () => {
@@ -372,8 +394,9 @@ describe("take outcomes", () => {
 
     await deliver(creationId);
     const email = (await emails()).at(-1)!;
-    expect(email.subject).toBe("Remi ❌ Couldn't understand — Dubai, new user's first try");
-    expect(email.body).toContain("Didn't catch that — tap to record again");
+    expect(email.subject).toBe("Remi ❌ Not understood · Dubai");
+    expect(email.body).toContain(`They saw: "Didn't catch that — tap to record again"`);
+    expect(email.body).toContain("WHY\nThe parser decided this wasn't a reminder.");
     expect(`${email.subject}${email.body}${email.html}`).not.toContain(NEW_ID);
   });
 
@@ -391,7 +414,11 @@ describe("take outcomes", () => {
     await failJob(jobId, 1, { errorCode: "stt_failed" });
     await t.mutation(internal.founderAlerts.recordOutcome, { jobId, status: "failed", errorCode: "stt_failed" });
     await deliver(creationId);
-    expect((await emails()).map((e) => e.subject)).toEqual(["Remi ❌ Transcription failed — Dubai"]);
+    const [email] = await emails();
+    expect(email.subject).toBe("Remi ❌ Server error · Dubai");
+    // A pre-launch install reads as an old one.
+    expect(email.body).toContain("first seen earlier");
+    expect(email.body).toContain("Server error: transcription returned nothing.");
   });
 
   test("a take from an install that never said hello registers it as new", async () => {
@@ -401,9 +428,7 @@ describe("take outcomes", () => {
 
     const [device] = await devices();
     expect(device).toMatchObject({ deviceId: NEW_ID, seeded: false, lastSeenAt: 0, firstSeenAt: T0 });
-    expect((await emails()).map((e) => e.subject)).toEqual([
-      "Remi ✅ First take worked — Dubai, new user",
-    ]);
+    expect((await emails()).map((e) => e.subject)).toEqual(["Remi ✅ Created · Dubai"]);
     // Its next hello is not throttled and is not a second "new device".
     expect(await hello()).toEqual({ result: "updated" });
     expect(await emails()).toHaveLength(1);
@@ -452,13 +477,19 @@ describe("one email per take", () => {
   test("several failed attempts schedule ONE email that tells them all", async () => {
     const { jobId, creationId } = await deviceTakeFails();
     await cloudRetryTranscribed(jobId, "Kom ihåg att… nej, vänta");
-    await failJob(jobId, 2, {
-      errorCode: "unparseable",
-      errorDetail: "not_understood",
-      detectedLanguage: "sv",
-      // The worker's failure patch carries this run's perf.
-      perf: { sttModel: "openai/gpt-4o-transcribe", sttFallbackUsed: false, sttAudioSeconds: 3.4 },
-    });
+    // As in production: no detectedLanguage (the guard sets it only for
+    // unsupported_language); the language is in the parse model's answer.
+    await failJob(
+      jobId,
+      2,
+      {
+        errorCode: "unparseable",
+        errorDetail: "not_understood",
+        // The worker's failure patch carries this run's perf.
+        perf: { sttModel: "openai/gpt-4o-transcribe", sttFallbackUsed: false, sttAudioSeconds: 3.4 },
+      },
+      { parseRaw: '{"understood":false,"language":"sv","reminders":[]}' }
+    );
     await t.mutation(internal.founderAlerts.recordOutcome, { jobId, status: "failed", errorCode: "unparseable" });
 
     // De-duplicated per creationId: the second failure queues nothing new.
@@ -473,13 +504,13 @@ describe("one email per take", () => {
 
     const sent = await emails();
     expect(sent).toHaveLength(1);
-    expect(sent[0].subject).toBe("Remi ❌ Couldn't understand — Dubai (Swedish), new user's first try");
-    expect(sent[0].body).toContain('1. 📱 Phone heard (on-device, English): "Kilometer got lead"');
-    expect(sent[0].body).toContain("→ Rejected: not a reminder → retried on the server.");
-    expect(sent[0].body).toContain('2. ☁️ Server heard (language: Swedish, model: openai/gpt-4o-transcribe): "Kom ihåg att… nej, vänta"');
-    expect(sent[0].body).toContain("Codes: #1 unparseable/not_understood · #2 unparseable/not_understood");
-    expect(sent[0].body).toMatch(/#1 failedTakes id \S+ \(no audio kept: on-device take\)/);
-    expect(sent[0].html).toContain("2. ☁️ Server heard");
+    expect(sent[0].subject).toBe("Remi ❌ Not understood · Swedish · Dubai");
+    expect(sent[0].body).toContain('PHONE HEARD\n"Kilometer got lead"');
+    expect(sent[0].body).toContain('SERVER HEARD\n"Kom ihåg att… nej, vänta"');
+    expect(sent[0].body).toContain("Language     Swedish (server) · phone listened in English");
+    expect(sent[0].body).toContain("Codes #1 unparseable/not_understood · #2 unparseable/not_understood");
+    expect(sent[0].body).toMatch(/#1 failedTakes \S+ \(no audio: on-device take\)/);
+    expect(sent[0].html).toMatch(/<h2[^>]*>Server heard<\/h2>/);
     expect(`${sent[0].body}${sent[0].html}`).not.toContain(NEW_ID);
   });
 
@@ -498,11 +529,10 @@ describe("one email per take", () => {
     await deliver(creationId);
     const sent = await emails();
     expect(sent.map((e) => e.subject)).toEqual([
-      "Remi ⚠️ Recovered on server retry — Dubai (English), new user's first try",
+      "Remi ⚠️ Recovered · English · Dubai",
     ]);
-    expect(sent[0].body).toContain('→ Created "Water" for');
-    expect(sent[0].body).toContain("Spoken line: \"Drink your water.\"");
-    expect(sent[0].body).toContain("Language: English · voice: English voice");
+    expect(sent[0].body).toMatch(/CREATED\n"Water"\n.* · English · English voice/);
+    expect(sent[0].body).toContain("The server retry made the reminder.");
   });
 
   test("a retry still running when the email is due is looked at again, then sent anyway", async () => {
@@ -522,7 +552,7 @@ describe("one email per take", () => {
     await deliver(creationId);
     const sent = await emails();
     expect(sent).toHaveLength(1);
-    expect(sent[0].body).toContain("was still retrying when this email went out");
+    expect(sent[0].body).toContain("A retry was still running when this email went out.");
   });
 
   test("a later twist after the email went out sends a follow-up", async () => {
@@ -539,8 +569,8 @@ describe("one email per take", () => {
 
     const subjects = (await emails()).map((e) => e.subject);
     expect(subjects).toEqual([
-      "Remi ❌ Couldn't understand — Dubai, new user's first try",
-      "Remi ⚠️ Recovered on server retry — Dubai, new user's first try (follow-up)",
+      "Remi ❌ Not understood · Dubai",
+      "Remi ⚠️ Recovered · Dubai (follow-up)",
     ]);
   });
 
@@ -561,13 +591,33 @@ describe("one email per take", () => {
     expect(await emails()).toHaveLength(0);
   });
 
+  test("sendTakeEmail sends the email even when translation is unavailable", async () => {
+    const { creationId } = await deviceTakeFails();
+    await deliver(creationId);
+    const [queued] = await scheduledOf(t, SEND_TAKE);
+    const saved = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    try {
+      await t.action(internal.takeEmailActions.sendTakeEmail, queued.args[0] as { story: string });
+    } finally {
+      if (saved !== undefined) process.env.OPENROUTER_API_KEY = saved;
+    }
+    const sent = (await scheduledOf(t, SEND)).map((r) => r.args[0] as SentEmail);
+    const email = sent.at(-1)!;
+    expect(email.subject).toBe("Remi ❌ Not understood · Dubai");
+    expect(email.html).toContain("<blockquote");
+    expect(email.body).not.toContain("In English");
+  });
+
   test("a discarded failed take still gets its email", async () => {
     const { jobId, creationId } = await deviceTakeFails();
     await t.run(async (ctx) => await ctx.db.delete(jobId));
     await deliver(creationId);
     const [email] = await emails();
-    expect(email.subject).toBe("Remi ❌ Couldn't understand — Dubai, new user's first try");
-    expect(email.body).toContain("Then they swiped the card away.");
+    expect(email.subject).toBe("Remi ❌ Not understood · Dubai");
+    expect(email.body).toContain(", then swiped it away");
+    // The job is gone, but the takeEmails row kept the install's first hello.
+    expect(email.body).toContain("first seen today");
   });
 });
 
