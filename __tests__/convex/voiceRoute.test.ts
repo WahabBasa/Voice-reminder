@@ -463,7 +463,11 @@ describe("parse prompt language rule", () => {
         };
         for (const prompt of [buildSystemPrompt(ctx), buildSystemPrompt(ctx, { guard: true })]) {
             expect(prompt).toContain(OTHER_LANGUAGE_RULE);
-            expect(prompt).toContain('- If the input is in English, return "title" and "description" in English');
+            // No language is singled out (OLD-139): an English/Arabic framing
+            // biased the `lang` tag of every other Arabic-script language to "ar".
+            expect(prompt).not.toContain("ENGLISH or ARABIC");
+            expect(prompt).not.toContain('- If the input is in Arabic, return');
+            expect(prompt).not.toContain('- If the input is in English, return');
         }
     });
 });

@@ -43,6 +43,7 @@ import {
 } from "./takeStoryEmail";
 import { getDevice, hasPriorFootprint } from "./devices";
 import { isNeedsTimeDetail } from "./needsTime";
+import { correctLanguageByScript } from "./scriptLanguage";
 
 /** takeOutcomes rows older than this are deleted by the prune cron. */
 export const OUTCOME_RETENTION_MS = 30 * DAY_MS;
@@ -309,19 +310,23 @@ async function findTakeEmail(
 
 function attemptFromFailedTake(row: Doc<"failedTakes">): StoryAttempt {
   const isDevice = row.sttSource === "device";
+  const transcript = isDevice ? row.deviceTranscript : row.cloudTranscript;
   return {
     generation: row.generation,
     source: isDevice ? "device" : "cloud",
     status: "failed",
-    transcript: isDevice ? row.deviceTranscript : row.cloudTranscript,
+    transcript,
     deviceSttLocale: row.deviceSttLocale,
     deviceSttEngine: row.deviceSttEngine,
     deviceSttMs: row.deviceSttMs,
     sttModel: row.cloudSttModel,
     sttFallbackUsed: row.cloudSttFallbackUsed,
     // `detectedLanguage` is only set for unsupported_language; otherwise the
-    // parse model's answer says what language the words were in.
-    language: row.detectedLanguage ?? languageFromParseRaw(row.parseRaw),
+    // parse model's answer says what language the words were in, corrected by
+    // the transcript's script as the worker corrects it (OLD-139).
+    language:
+      row.detectedLanguage ??
+      correctLanguageByScript(languageFromParseRaw(row.parseRaw), [transcript]),
     audioSeconds: row.audioSeconds,
     sttMs: row.sttMs,
     parseMs: row.parseMs,

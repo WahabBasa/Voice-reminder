@@ -514,6 +514,26 @@ describe("one email per take", () => {
     expect(`${sent[0].body}${sent[0].html}`).not.toContain(NEW_ID);
   });
 
+  test("the email names the transcript's language over a wrong \"ar\" from the parse (OLD-139)", async () => {
+    const { jobId, creationId } = await deviceTakeFails();
+    await cloudRetryTranscribed(jobId, "תזכיר לי להתקשר לאמא");
+    await failJob(
+      jobId,
+      2,
+      { errorCode: "unparseable", errorDetail: "not_understood" },
+      { parseRaw: '{"understood":false,"language":"ar","reminders":[]}' }
+    );
+    await t.mutation(internal.founderAlerts.recordOutcome, { jobId, status: "failed", errorCode: "unparseable" });
+
+    at(T0 + TAKE_EMAIL_SETTLE_MS);
+    await deliver(creationId);
+
+    const sent = await emails();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain("Language     Hebrew (server)");
+    expect(sent[0].body).not.toContain("Arabic");
+  });
+
   test("a take that failed and then recovered gets one 'recovered' email", async () => {
     const { jobId, creationId } = await deviceTakeFails();
     await cloudRetryTranscribed(jobId, "Remind me to drink water at eight");

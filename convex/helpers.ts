@@ -56,14 +56,17 @@ MULTIPLE REMINDERS IN ONE REQUEST:
 // above CURRENT CONTEXT, so they cache like the rest of the prompt.
 
 // One field of the per-reminder JSON format, for every client. What the line
-// will later be voiced in (reminders.lang).
-export const LANG_FIELD_LINE = `"lang": "ISO 639-1 code of the language the user spoke this reminder in, lowercase (e.g. \\"en\\", \\"ar\\")",`;
+// will later be voiced in (reminders.lang). Its examples used to be only "en"
+// and "ar", and the model tagged Hebrew, Hindi, Persian and Urdu "ar" (OLD-139):
+// the examples now span scripts, and the tag names the language, not the script.
+export const LANG_FIELD_LINE = `"lang": "the ISO 639-1 code of the language the user actually spoke, lowercase (e.g. \\"en\\", \\"sv\\", \\"he\\", \\"hi\\", \\"ur\\", \\"fa\\", \\"ja\\", \\"sw\\"), never the most famous language of its script",`;
 
-// One line of the prompt's LANGUAGE RULES, for every client (OLD-131). The two
-// rules above it only name English and Arabic, which left a Swedish take free
-// to come back with an English title and line — and the line is what the voice
-// speaks, so it must stay in the language the voice is picked for.
-export const OTHER_LANGUAGE_RULE = `- If the input is in any other language, return "title", "description" and "preDescription" in that same language; never translate them into English`;
+// The prompt's one LANGUAGE RULES line on output language, for every client
+// (OLD-131, OLD-139). It used to sit under an Arabic rule and an English rule,
+// which left a Swedish take free to come back with an English title and line —
+// and the line is what the voice speaks, so it must stay in the language the
+// voice is picked for. One rule for every language, none singled out.
+export const OTHER_LANGUAGE_RULE = `- Return "title", "description" and "preDescription" in the language the user spoke, whatever it is; never translate them into English`;
 
 // Guard only: one more per-reminder field, rendered right under "times".
 export const GUARD_TIME_SPOKEN_FIELD_LINE = `"timeSpoken": true | false (true only if the user said a clock time, a part of the day like "tonight", or a relative time like "in 20 minutes"; false if you had to pick the time yourself),`;

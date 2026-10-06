@@ -169,6 +169,61 @@ describe("lang on the plan", () => {
   });
 });
 
+describe("lang corrected by the transcript's script (OLD-139)", () => {
+  // Bake-off transcripts the parse model tagged "ar" (outputs/stt-bakeoff2).
+  const MISTAGGED: [string, string, string][] = [
+    ["Hebrew", "בעוד עשרים דקות תזכירי לי להוציא את הכביסה.", "he"],
+    ["Hindi", "मुझे याद दिलाना कि कल शाम पांच बजे मम्मी को फोन करना है।", "hi"],
+    ["Urdu", "تیس منٹ بعد مجھے یاد دلانا کہ کپڑے مشین سے نکالنے ہیں۔", "ur"],
+    ["Persian", "بیست دقیقه دیگه یادم بنداز لباسا رو از ماشین دربیارم.", "fa"],
+  ];
+  const ARABIC = "ذكرني أن أتصل بأمي غداً الساعة الخامسة مساء.";
+
+  it.each(MISTAGGED)("a %s take tagged \"ar\" gets its own language, take and plan", (_n, transcript, lang) => {
+    const take = planTakeFromRawParse(
+      JSON.stringify({ understood: true, language: "ar", reminders: [reminder({ lang: "ar", timeSpoken: true })] }),
+      { ...PLAN_CONTEXT, transcript }
+    );
+    expect(take.language).toBe(lang);
+    expect(take.plans[0].lang).toBe(lang);
+  });
+
+  it("real Arabic tagged \"ar\" stays Arabic", () => {
+    const take = planTakeFromRawParse(
+      JSON.stringify({ understood: true, language: "ar", reminders: [reminder({ lang: "ar", timeSpoken: true })] }),
+      { ...PLAN_CONTEXT, transcript: ARABIC }
+    );
+    expect(take.language).toBe("ar");
+    expect(take.plans[0].lang).toBe("ar");
+  });
+
+  it("the corrected language is what the guard checks", () => {
+    // Persian is not voiceable: tagged "ar" it slipped through as Arabic.
+    const take = planTakeFromRawParse(
+      JSON.stringify({ understood: true, language: "ar", reminders: [reminder({ lang: "ar", timeSpoken: true })] }),
+      { ...PLAN_CONTEXT, transcript: MISTAGGED[3][1] }
+    );
+    expect(guardTake(take)).toMatchObject({ ok: false, detail: "unsupported_language", detectedLanguage: "fa" });
+  });
+
+  it("the reminder's own title and line count when the transcript is not in reach", () => {
+    const plan = buildReminderPlan(
+      reminder({ lang: "ar", title: "להתקשר לאמא", description: "תתקשר לאמא." }),
+      PLAN_CONTEXT
+    );
+    expect(plan.lang).toBe("he");
+  });
+
+  it("a Latin-script take keeps the model's tag", () => {
+    const take = planTakeFromRawParse(
+      JSON.stringify({ understood: true, language: "sv", reminders: [reminder({ lang: "sv", timeSpoken: true })] }),
+      { ...PLAN_CONTEXT, transcript: "påminn mig klockan tio om tandläkaren" }
+    );
+    expect(take.language).toBe("sv");
+    expect(take.plans[0].lang).toBe("sv");
+  });
+});
+
 describe("readParseEnvelope / planTakeFromRawParse", () => {
   it("reads the envelope fields and leaves the old shapes alone", () => {
     expect(readParseEnvelope({ understood: false, language: "en", reminders: [] })).toEqual({

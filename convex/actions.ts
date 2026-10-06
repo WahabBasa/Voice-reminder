@@ -67,6 +67,7 @@ function legacyResembleSelected(): boolean {
 
 import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, LANG_FIELD_LINE, OTHER_LANGUAGE_RULE, GUARD_TIME_SPOKEN_FIELD_LINE, NO_TIME_DEFAULT_INSTRUCTION, GUARD_NO_TIME_INSTRUCTION, GUARD_UNDERSTOOD_INSTRUCTION, readParseEnvelope, type Urgency } from "./helpers";
 import { normalizeLanguageCode, speechifyLineLanguage } from "./languages";
+import { correctLanguageByScript } from "./scriptLanguage";
 import { buildGridSchedule, legacyFieldsFromGrid, normalizeClockTimes, zonedTimeToUtcMs, type GridSchedule } from "./scheduleShape";
 import { transcribeAudio, SttError, type SttPerf } from "./stt";
 import { extractParseUsage } from "./parseUsage";
@@ -450,8 +451,13 @@ export function buildReminderPlan(
   // Pre-reminder (heads-up) fields. The '<title> in N minutes' stand-in is
   // only opener-free when the title is, so the chooser knows about both.
   // The reminder's own language answer first; the take's `language` stands in
-  // for a reminder that left it out.
-  const lang = normalizeLanguageCode(parsed.lang) ?? normalizeLanguageCode(context.fallbackLang);
+  // for a reminder that left it out. Then the script gets the last word where
+  // it names the language outright (OLD-139): the model tags Hebrew, Hindi,
+  // Persian and Urdu as "ar", and this tag picks the voice and the guard's verdict.
+  const lang = correctLanguageByScript(
+    normalizeLanguageCode(parsed.lang) ?? normalizeLanguageCode(context.fallbackLang),
+    [context.transcript, parsed.title, parsed.description]
+  );
   const { preReminderMinutes, preDescription, rawPreDescription } =
     normalizePreReminder(parsed.preReminderMinutes, parsed.preDescription);
   const preTtsText = buildHeadsUpTtsText({
@@ -549,7 +555,9 @@ export type ParsedTake = {
 export function planTakeFromRawParse(rawGptResponse: string, context: PlanContext): ParsedTake {
   const parsed = JSON.parse(rawGptResponse);
   const envelope = readParseEnvelope(parsed);
-  const language = normalizeLanguageCode(envelope.language);
+  // Corrected by the transcript's script, as each plan's `lang` is (OLD-139):
+  // this is the language the guard checks and the failed-take email names.
+  const language = correctLanguageByScript(envelope.language, [context.transcript]);
   if (envelope.understood === false || envelope.empty) {
     return { understood: envelope.understood, language, plans: [] };
   }
@@ -592,7 +600,7 @@ export function buildSystemPrompt(
   // The guard (OLD-130) is opt-in per creation job ("guard_v1"). Without it the
   // prompt is the one every shipped build has always been sent, plus `lang`.
   const guard = options.guard === true;
-  return `Parse the user's reminder request into structured JSON. The input may be in ENGLISH or ARABIC.
+  return `Parse the user's reminder request into structured JSON. The input may be in any language.
 
 ${SPOKEN_LINE_RULES_SECTION}
 
@@ -634,13 +642,11 @@ TITLE RULES:
 - Arabic follows the same rule at a natural Arabic length
 
 LANGUAGE RULES:
-- If the input is in Arabic, return "title" and "description" in Arabic
-- If the input is in English, return "title" and "description" in English
 ${OTHER_LANGUAGE_RULE}
 - The JSON field names and "frequency"/"days" values always remain in English
 - For Arabic days: الأحد=sun, الاثنين=mon, الثلاثاء=tue, الأربعاء=wed, الخميس=thu, الجمعة=fri, السبت=sat
 
-DATE PARSING RULES (English & Arabic):
+DATE PARSING RULES (any language; English & Arabic examples):
 - "Sunday"/"يوم الأحد", "tomorrow"/"غداً", "today"/"اليوم" → calculate actual YYYY-MM-DD
 - "next Sunday"/"الأحد القادم" → find the NEXT occurrence
 - "in 3 days"/"بعد ثلاثة أيام" → add days to current date
