@@ -33,6 +33,7 @@ import {
   validDeviceId,
 } from "./founderAlertsEmail";
 import { isNeedsTimeDetail } from "./needsTime";
+import { normalizeLanguageCode } from "./languages";
 import { majorityLang, nextSpokenLang } from "./spokenLang";
 
 /** Above this many brand-new installs in an hour, stop emailing (summary still counts them). */
@@ -177,6 +178,42 @@ export const preferences = query({
     if (!deviceId) return {};
     const device = await getDevice(ctx, deviceId);
     return device ? spokenLangOf(device) : {};
+  },
+});
+
+/**
+ * Founder-only: set an install's spoken language by hand, so its next take is
+ * heard in that language from the start instead of after one learned take.
+ * `device` is the tag from a take email or a full deviceId.
+ *
+ *   npx convex run devices:setSpokenLang '{"device":"237dcc2b","lang":"he"}'
+ */
+export const setSpokenLang = internalMutation({
+  args: { device: v.string(), lang: v.string() },
+  returns: v.object({ deviceTag: v.string(), spokenLang: v.string() }),
+  handler: async (ctx, args) => {
+    const lang = normalizeLanguageCode(args.lang);
+    if (!lang) throw new Error(`devices.setSpokenLang: unknown language "${args.lang}"`);
+    const needle = args.device.trim();
+    let device = await getDevice(ctx, needle);
+    if (!device) {
+      const matches = await ctx.db
+        .query("devices")
+        .withIndex("by_deviceTag", (q) => q.eq("deviceTag", needle.toLowerCase()))
+        .take(2);
+      if (matches.length > 1) {
+        throw new Error(`devices.setSpokenLang: tag "${needle}" matches more than one install`);
+      }
+      device = matches[0] ?? null;
+    }
+    if (!device) throw new Error(`devices.setSpokenLang: no device matches "${needle}"`);
+    await ctx.db.patch(device._id, {
+      spokenLang: lang,
+      spokenLangAt: Date.now(),
+      spokenLangCandidate: undefined,
+      spokenLangCandidateCount: undefined,
+    });
+    return { deviceTag: device.deviceTag, spokenLang: lang };
   },
 });
 
