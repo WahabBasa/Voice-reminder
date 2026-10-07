@@ -6,7 +6,12 @@
  * reply newer than the watermark; the watermark only ever moves forward; and a
  * note that was never answered can never be unseen.
  */
-import { hasUnseenResponses, nextWatermark, type RespondedItem } from "../../lib/feedbackSeen";
+import {
+  bannerCopy,
+  hasUnseenResponses,
+  nextWatermark,
+  type RespondedItem,
+} from "../../lib/feedbackSeen";
 
 describe("hasUnseenResponses", () => {
   it("is true when a response is newer than the watermark", () => {
@@ -44,5 +49,38 @@ describe("nextWatermark", () => {
     const items: RespondedItem[] = [{}, { respondedAt: null }];
     expect(nextWatermark(items, 250)).toBe(250);
     expect(nextWatermark(items)).toBe(0);
+  });
+});
+
+describe("bannerCopy", () => {
+  it("uses the message copy when every unseen response is from the founder", () => {
+    const items: RespondedItem[] = [
+      { respondedAt: 200, origin: "founder" },
+      { respondedAt: 50 }, // a reply already seen does not count
+    ];
+    expect(bannerCopy(items, 100)).toEqual({
+      title: "You have a message from Remi",
+      message: "Tap to read",
+    });
+  });
+
+  it("keeps the reply copy when an unseen reply is mixed in", () => {
+    const items: RespondedItem[] = [
+      { respondedAt: 200, origin: "founder" },
+      { respondedAt: 150 },
+    ];
+    expect(bannerCopy(items, 100)).toEqual({
+      title: "Your feedback was updated",
+      message: "Tap to see",
+    });
+  });
+
+  it("keeps the reply copy for plain replies and when nothing is unseen", () => {
+    expect(bannerCopy([{ respondedAt: 150, origin: null }], 100).title).toBe(
+      "Your feedback was updated"
+    );
+    expect(bannerCopy([{ respondedAt: 50, origin: "founder" }], 100).title).toBe(
+      "Your feedback was updated"
+    );
   });
 });

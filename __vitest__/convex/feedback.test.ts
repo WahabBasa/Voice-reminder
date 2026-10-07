@@ -172,3 +172,130 @@ describe("setStatus", () => {
     expect(row.note).toBeUndefined();
   });
 });
+
+// ─── messageDevice ───────────────────────────────────────────────────────────
+
+describe("messageDevice", () => {
+  const MESSAGE_DEVICE = internal.feedback.messageDevice;
+
+  async function addDevice(deviceId: string, deviceTag: string) {
+    await t.run(async (ctx) => {
+      await ctx.db.insert("devices", {
+        deviceId,
+        deviceTag,
+        firstSeenAt: 1,
+        lastSeenAt: 1,
+        seeded: false,
+      });
+    });
+  }
+
+  test("resolves a tag (any case) to the device and inserts an answered founder row", async () => {
+    await addDevice(DEVICE, "237dcc2b");
+    await addDevice(OTHER_DEVICE, "aaaa0000");
+
+    const res = await t.mutation(MESSAGE_DEVICE, {
+      device: " 237DCC2B ",
+      message: "  Fixed — please try again.  ",
+    });
+    expect(res.deviceTag).toBe("237dcc2b");
+
+    const rows = await allFeedback();
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row).toMatchObject({
+      deviceId: DEVICE,
+      text: "Your recording didn't go through",
+      status: "fixed",
+      note: "Fixed — please try again.",
+      origin: "founder",
+    });
+    expect(row.clientId).toMatch(/^founder-\d+$/);
+    expect(row.respondedAt).toEqual(expect.any(Number));
+    expect(row.createdAt).toBe(row.respondedAt);
+    expect(row.updatedAt).toBe(row.respondedAt);
+    expect(row.receivedAt).toBe(row.respondedAt);
+    expect(row.context).toBeUndefined();
+
+    // The founder is never emailed about their own message.
+    expect(await scheduledOf(t, NOTIFY)).toHaveLength(0);
+  });
+
+  test("accepts a full deviceId, plus an explicit about line and status", async () => {
+    await addDevice(DEVICE, "237dcc2b");
+    await t.mutation(MESSAGE_DEVICE, {
+      device: DEVICE,
+      message: "Try again now",
+      about: "  Your reminder to call the bank  ",
+      status: "looking",
+    });
+    const [row] = await allFeedback();
+    expect(row).toMatchObject({
+      deviceId: DEVICE,
+      text: "Your reminder to call the bank",
+      status: "looking",
+      note: "Try again now",
+    });
+  });
+
+  test("a blank about falls back to the default line", async () => {
+    await addDevice(DEVICE, "237dcc2b");
+    await t.mutation(MESSAGE_DEVICE, { device: "237dcc2b", message: "hi", about: "   " });
+    expect((await allFeedback())[0].text).toBe("Your recording didn't go through");
+  });
+
+  test("throws on an unknown tag and writes nothing", async () => {
+    await addDevice(DEVICE, "237dcc2b");
+    await expect(
+      t.mutation(MESSAGE_DEVICE, { device: "deadbeef", message: "hi" })
+    ).rejects.toThrow(/no device matches "deadbeef"/);
+    expect(await allFeedback()).toHaveLength(0);
+  });
+
+  test("throws when a tag matches more than one install", async () => {
+    await addDevice(DEVICE, "237dcc2b");
+    await addDevice(OTHER_DEVICE, "237dcc2b");
+    await expect(
+      t.mutation(MESSAGE_DEVICE, { device: "237dcc2b", message: "hi" })
+    ).rejects.toThrow(/more than one install/);
+    expect(await allFeedback()).toHaveLength(0);
+  });
+
+  test("rejects an empty or oversized message, an oversized about, and an empty device", async () => {
+    await addDevice(DEVICE, "237dcc2b");
+    await expect(
+      t.mutation(MESSAGE_DEVICE, { device: "237dcc2b", message: "   " })
+    ).rejects.toThrow(/message must not be empty/);
+    await expect(
+      t.mutation(MESSAGE_DEVICE, { device: "237dcc2b", message: "x".repeat(2001) })
+    ).rejects.toThrow(/2000/);
+    await expect(
+      t.mutation(MESSAGE_DEVICE, { device: "237dcc2b", message: "hi", about: "y".repeat(2001) })
+    ).rejects.toThrow(/about must be at most/);
+    await expect(t.mutation(MESSAGE_DEVICE, { device: "  ", message: "hi" })).rejects.toThrow(
+      /device must not be empty/
+    );
+    expect(await allFeedback()).toHaveLength(0);
+  });
+
+  test("shows up in listForDevice with origin founder, alongside the device's own reports", async () => {
+    await addDevice(DEVICE, "237dcc2b");
+    await submit({ clientId: "mine", createdAt: 100 });
+    await t.mutation(MESSAGE_DEVICE, { device: "237dcc2b", message: "We fixed it" });
+
+    const rows = await t.query(api.feedback.listForDevice, { deviceId: DEVICE });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      origin: "founder",
+      note: "We fixed it",
+      status: "fixed",
+      respondedAt: expect.any(Number),
+    });
+    expect(rows[1].clientId).toBe("mine");
+    expect(rows[1].origin).toBeUndefined();
+    expect((rows[0] as Record<string, unknown>).deviceId).toBeUndefined();
+
+    // And never on another device's list.
+    expect(await t.query(api.feedback.listForDevice, { deviceId: OTHER_DEVICE })).toHaveLength(0);
+  });
+});

@@ -7,7 +7,7 @@ import { api } from "../convex/_generated/api";
 import { useToast } from "./ToastProvider";
 import { getDeviceId } from "../lib/deviceId";
 import { useFeedbackUi } from "../lib/feedbackUi";
-import { hasUnseenResponses, nextWatermark } from "../lib/feedbackSeen";
+import { bannerCopy, hasUnseenResponses, nextWatermark } from "../lib/feedbackSeen";
 import {
   flush,
   type FeedbackSubmitInput,
@@ -99,9 +99,10 @@ export default function FeedbackHost() {
     const newest = nextWatermark(items, watermark);
     if (newest <= banneredForRef.current) return;
     banneredForRef.current = newest;
+    const { title, message } = bannerCopy(items, watermark);
     toast.show({
-      title: "Your feedback was updated",
-      message: "Tap to see",
+      title,
+      message,
       type: "info",
       onPress: openList,
     });

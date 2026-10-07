@@ -414,6 +414,9 @@ export default defineSchema({
     // Server time the founder last set a status; only setStatus writes it.
     respondedAt: v.optional(v.number()),
     updatedAt: v.number(),
+    // "founder" on a message the founder sent to this device unprompted
+    // (feedback.messageDevice); absent on the user's own reports.
+    origin: v.optional(v.literal("founder")),
   })
     .index("by_device", ["deviceId", "createdAt"])
     .index("by_client", ["deviceId", "clientId"]),
@@ -455,6 +458,8 @@ export default defineSchema({
     spokenLangLastCreationId: v.optional(v.string()),
   })
     .index("by_deviceId", ["deviceId"])
+    // Founder lookups by the tag the alert emails carry (feedback.messageDevice).
+    .index("by_deviceTag", ["deviceTag"])
     .index("by_firstSeen", ["firstSeenAt"])
     .index("by_lastSeen", ["lastSeenAt"]),
 

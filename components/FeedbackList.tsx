@@ -21,6 +21,8 @@ export type ServerFeedback = {
   note?: string;
   respondedAt?: number;
   updatedAt: number;
+  /** "founder" on a message the founder sent to this device unprompted. */
+  origin?: "founder";
 };
 
 type DisplayStatus = "queued" | "received" | "looking" | "fixed";
@@ -31,6 +33,8 @@ type FeedbackRow = {
   createdAt: number;
   status: DisplayStatus;
   note?: string;
+  /** A message from Remi rather than a report this device sent. */
+  fromRemi?: boolean;
 };
 
 const STATUS_LABEL: Record<DisplayStatus, string> = {
@@ -79,6 +83,7 @@ export function mergeFeedback(
       createdAt: row.createdAt,
       status: row.status,
       note: row.note,
+      fromRemi: row.origin === "founder",
     });
   }
 
@@ -144,22 +149,42 @@ export default function FeedbackList({ visible, items, onClose }: FeedbackListPr
         {rows.length === 0 ? (
           <Text style={styles.empty}>Nothing sent yet.</Text>
         ) : (
-          rows.map((row) => (
-            <View key={row.key} style={styles.row}>
-              <View style={styles.rowHeader}>
-                <Text style={styles.date}>{formatDate(row.createdAt)}</Text>
-                <View style={[styles.chip, chipStyleFor(row.status)]}>
-                  <Text style={[styles.chipText, chipTextStyleFor(row.status)]}>
-                    {STATUS_LABEL[row.status]}
-                  </Text>
+          rows.map((row) =>
+            row.fromRemi ? (
+              // A message from Remi: a "Message from Remi" chip in place of a
+              // status, so nothing implies they reported something. The short
+              // context line sits above the message itself.
+              <View key={row.key} style={styles.row}>
+                <View style={styles.rowHeader}>
+                  <Text style={styles.date}>{formatDate(row.createdAt)}</Text>
+                  <View style={[styles.chip, styles.chipNeutral]}>
+                    <Text style={[styles.chipText, styles.chipTextNeutral]}>
+                      Message from Remi
+                    </Text>
+                  </View>
                 </View>
+                <Text style={styles.about} numberOfLines={2}>
+                  {row.text}
+                </Text>
+                {row.note ? <Text style={styles.text}>{row.note}</Text> : null}
               </View>
-              <Text style={styles.text} numberOfLines={2}>
-                {row.text}
-              </Text>
-              {row.note ? <Text style={styles.note}>{row.note}</Text> : null}
-            </View>
-          ))
+            ) : (
+              <View key={row.key} style={styles.row}>
+                <View style={styles.rowHeader}>
+                  <Text style={styles.date}>{formatDate(row.createdAt)}</Text>
+                  <View style={[styles.chip, chipStyleFor(row.status)]}>
+                    <Text style={[styles.chipText, chipTextStyleFor(row.status)]}>
+                      {STATUS_LABEL[row.status]}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.text} numberOfLines={2}>
+                  {row.text}
+                </Text>
+                {row.note ? <Text style={styles.note}>{row.note}</Text> : null}
+              </View>
+            )
+          )
         )}
       </BottomSheetScrollView>
     </BottomSheet>
@@ -257,6 +282,12 @@ const styles = StyleSheet.create({
     fontSize: scaleFontSize(15),
     lineHeight: scaleFontSize(21),
     color: colors.textPrimary,
+  },
+  about: {
+    fontSize: scaleFontSize(13),
+    lineHeight: scaleFontSize(18),
+    color: colors.textSecondary,
+    marginBottom: 6,
   },
   note: {
     fontSize: scaleFontSize(14),

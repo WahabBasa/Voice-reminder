@@ -1,5 +1,9 @@
 // Founder: Dashboard → Functions → feedback:setStatus → run with {id, status, note}.
 // If a fix needs a newer app, write the note as 'Fixed in version X — please update'.
+// Founder, unprompted message to one device (the tag from a take email, or a full deviceId):
+//   npx convex run feedback:messageDevice '{"device":"237dcc2b","message":"Fixed — please try again."}'
+// Optional "about" sets the line old app versions show as the report text
+// (default "Your recording didn't go through").
 
 /**
  * In-app user feedback (schema: `feedback`).
@@ -47,7 +51,11 @@ const listItemValidator = v.object({
   note: v.optional(v.string()),
   respondedAt: v.optional(v.number()),
   updatedAt: v.number(),
+  origin: v.optional(v.literal("founder")),
 });
+
+/** What a founder message shows as the "report" line when no `about` is given. */
+export const DEFAULT_FOUNDER_ABOUT = "Your recording didn't go through";
 
 // ─── submit ──────────────────────────────────────────────────────────────────
 
@@ -143,6 +151,7 @@ export const listForDevice = query({
       note: row.note,
       respondedAt: row.respondedAt,
       updatedAt: row.updatedAt,
+      origin: row.origin,
     }));
   },
 });
@@ -152,8 +161,8 @@ export const listForDevice = query({
 /**
  * The founder sets a report's status and optional reply from the dashboard.
  * `note` omitted leaves the existing note untouched; `note: ""` clears it.
- * Stamps `respondedAt` and `updatedAt` — this is the ONLY place `respondedAt`
- * is ever written.
+ * Stamps `respondedAt` and `updatedAt`. Only the founder's two mutations ever
+ * write `respondedAt`: this one, and `messageDevice` on the rows it inserts.
  */
 export const setStatus = internalMutation({
   args: {
@@ -180,6 +189,86 @@ export const setStatus = internalMutation({
     }
     await ctx.db.patch(args.id, patch);
     return null;
+  },
+});
+
+// ─── messageDevice (founder-only) ────────────────────────────────────────────
+
+/**
+ * The founder writes to one install that never filed a report — e.g. after a
+ * failed take, to say "fixed, try again". `device` is the 8-hex tag the founder
+ * emails carry (devices.deviceTag) or a full deviceId.
+ *
+ * Delivered as a feedback row that is already answered (`note` + `respondedAt`),
+ * so every shipped client surfaces it through the existing reply banner and list
+ * with no new client code; `origin: "founder"` lets newer clients frame it as a
+ * message instead of a report. Never schedules the founder notify email.
+ */
+export const messageDevice = internalMutation({
+  args: {
+    device: v.string(),
+    message: v.string(),
+    about: v.optional(v.string()),
+    status: v.optional(statusValidator),
+  },
+  returns: v.object({ id: v.id("feedback"), deviceTag: v.string() }),
+  handler: async (ctx, args) => {
+    const message = args.message.trim();
+    if (message.length === 0) {
+      throw new Error("feedback.messageDevice: message must not be empty");
+    }
+    if (message.length > MAX_TEXT_LENGTH) {
+      throw new Error(
+        `feedback.messageDevice: message must be at most ${MAX_TEXT_LENGTH} characters (got ${message.length})`
+      );
+    }
+    const about = args.about?.trim() || DEFAULT_FOUNDER_ABOUT;
+    if (about.length > MAX_TEXT_LENGTH) {
+      throw new Error(
+        `feedback.messageDevice: about must be at most ${MAX_TEXT_LENGTH} characters (got ${about.length})`
+      );
+    }
+
+    const needle = args.device.trim();
+    if (needle.length === 0) {
+      throw new Error("feedback.messageDevice: device must not be empty");
+    }
+    // A full deviceId first; otherwise treat it as a tag (case-insensitive).
+    let device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", needle))
+      .first();
+    if (!device) {
+      const tag = needle.toLowerCase();
+      const matches = await ctx.db
+        .query("devices")
+        .withIndex("by_deviceTag", (q) => q.eq("deviceTag", tag))
+        .take(2);
+      if (matches.length > 1) {
+        throw new Error(
+          `feedback.messageDevice: device tag "${tag}" matches more than one install; pass the full deviceId instead`
+        );
+      }
+      device = matches[0] ?? null;
+    }
+    if (!device) {
+      throw new Error(`feedback.messageDevice: no device matches "${needle}"`);
+    }
+
+    const now = Date.now();
+    const id = await ctx.db.insert("feedback", {
+      clientId: `founder-${now}`,
+      deviceId: device.deviceId,
+      text: about,
+      createdAt: now,
+      receivedAt: now,
+      status: args.status ?? ("fixed" as const),
+      note: message,
+      respondedAt: now,
+      updatedAt: now,
+      origin: "founder" as const,
+    });
+    return { id, deviceTag: device.deviceTag };
   },
 });
 
