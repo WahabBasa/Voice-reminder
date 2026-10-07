@@ -7,4 +7,4 @@ jobs:
     params:
       branch: production
       platform: ios
-      message: "main @ 4ed05c0 (instant swipe-to-discard on failed and asking cards)"
+      message: "main @ 81cbaa5 (messages from Remi; instant swipe-to-discard)"
