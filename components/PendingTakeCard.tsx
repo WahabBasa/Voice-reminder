@@ -1,7 +1,8 @@
-import { memo, useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
   Easing,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -14,6 +15,7 @@ import AppIcon from "./AppIcon";
 import {
   getPendingTakesSnapshot,
   subscribePendingTakes,
+  visiblePendingTakes,
   type PendingTake,
 } from "../lib/pendingTakes";
 import { pendingCardContent, type PendingCardContent } from "../lib/pendingCardContent";
@@ -39,12 +41,23 @@ const RESOLVE_NOTES: Record<Exclude<ResolveTakeOutcome, "created">, string> = {
  * tests rather than by this file.
  */
 
-/** The outbox, as React state. */
+/**
+ * The outbox, as React state: every take that still has a card. A discarded
+ * take waiting for its server discard is hidden.
+ */
 export function usePendingTakes(): PendingTake[] {
-  return useSyncExternalStore(subscribePendingTakes, getPendingTakesSnapshot, getPendingTakesSnapshot);
+  const all = useSyncExternalStore(
+    subscribePendingTakes,
+    getPendingTakesSnapshot,
+    getPendingTakesSnapshot
+  );
+  return useMemo(() => visiblePendingTakes(all), [all]);
 }
 
 const DISCARD_THRESHOLD = -80;
+/** Far enough left that the card is off any phone screen. */
+const DISCARD_SLIDE_TO = -600;
+const DISCARD_OUT_MS = 180;
 
 export type PendingTakeCardProps = {
   take: PendingTake;
@@ -97,10 +110,12 @@ function PendingTakeCardView({
 }
 
 /** Swipe left to reveal the discard button — shared by the failed and asking cards. */
-function useSwipeToDiscard(enabled: boolean) {
+function useSwipeToDiscard(enabled: boolean, onDiscard: () => void) {
   const translateX = useSharedValue(0);
+  const fade = useSharedValue(1);
+  const [leaving, setLeaving] = useState(false);
   const panGesture = Gesture.Pan()
-    .enabled(enabled)
+    .enabled(enabled && !leaving)
     .activeOffsetX([-10, 10])
     .onUpdate((event) => {
       if (event.translationX < 0) {
@@ -116,7 +131,32 @@ function useSwipeToDiscard(enabled: boolean) {
   const discardStyle = useAnimatedStyle(() => ({
     opacity: Math.min(1, Math.abs(translateX.value) / 80),
   }));
-  return { translateX, panGesture, cardStyle, discardStyle };
+  const containerStyle = useAnimatedStyle(() => ({ opacity: fade.value }));
+  // The trash press answers at once: the card slides off to the left and fades,
+  // and the take is dropped as the slide ends. The server discard runs behind
+  // it (lib/takeReconcile `discardTake`), so nothing here waits on the network.
+  const discard = useCallback(() => {
+    if (leaving) return;
+    setLeaving(true);
+    const timing = { duration: DISCARD_OUT_MS, easing: Easing.in(Easing.quad) };
+    fade.value = withTiming(0, timing);
+    translateX.value = withTiming(DISCARD_SLIDE_TO, timing, () => {
+      runOnJS(onDiscard)();
+    });
+  }, [fade, leaving, onDiscard, translateX]);
+  // A discarded card unmounts as soon as its take is hidden. One still here
+  // well after the slide means the discard never took (the take could not be
+  // marked), so it comes back rather than sitting invisible.
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = setTimeout(() => {
+      fade.value = withTiming(1, { duration: 150 });
+      translateX.value = withSpring(0);
+      setLeaving(false);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [fade, leaving, translateX]);
+  return { panGesture, cardStyle, discardStyle, containerStyle, discard };
 }
 
 /**
@@ -143,7 +183,11 @@ function AskingCard({
   onPickTime?: PendingTakeCardProps["onPickTime"];
 }) {
   const ask = content.ask!;
-  const { translateX, panGesture, cardStyle, discardStyle } = useSwipeToDiscard(true);
+  const discardThis = useCallback(() => onDiscard(take.creationId), [onDiscard, take.creationId]);
+  const { panGesture, cardStyle, discardStyle, containerStyle, discard } = useSwipeToDiscard(
+    true,
+    discardThis
+  );
   const [busy, setBusy] = useState<QuickChoiceId | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -165,13 +209,10 @@ function AskingCard({
   );
 
   return (
-    <View style={styles.container}>
+    <Animated.View style={[styles.container, containerStyle]}>
       <Animated.View style={[styles.discardAction, discardStyle]}>
         <Pressable
-          onPress={() => {
-            translateX.value = withSpring(0);
-            onDiscard(take.creationId);
-          }}
+          onPress={discard}
           style={styles.discardButton}
           accessibilityRole="button"
           accessibilityLabel="Discard this reminder"
@@ -255,7 +296,7 @@ function AskingCard({
           </Pressable>
         </Animated.View>
       </GestureDetector>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -274,8 +315,10 @@ function WorkingOrFailedCard({
   onDiscard: (creationId: string) => void;
   onReport?: (take: PendingTake) => void;
 }) {
-  const { translateX, panGesture, cardStyle, discardStyle } = useSwipeToDiscard(
-    content.swipeToDiscard
+  const discardThis = useCallback(() => onDiscard(take.creationId), [onDiscard, take.creationId]);
+  const { panGesture, cardStyle, discardStyle, containerStyle, discard } = useSwipeToDiscard(
+    content.swipeToDiscard,
+    discardThis
   );
   const pulse = useSharedValue(1);
 
@@ -298,14 +341,11 @@ function WorkingOrFailedCard({
   const isError = content.tone === "error";
 
   return (
-    <View style={styles.container}>
+    <Animated.View style={[styles.container, containerStyle]}>
       {content.swipeToDiscard && (
         <Animated.View style={[styles.discardAction, discardStyle]}>
           <Pressable
-            onPress={() => {
-              translateX.value = withSpring(0);
-              onDiscard(take.creationId);
-            }}
+            onPress={discard}
             style={styles.discardButton}
             accessibilityRole="button"
             accessibilityLabel="Discard this recording"
@@ -380,7 +420,7 @@ function WorkingOrFailedCard({
           )}
         </Animated.View>
       </GestureDetector>
-    </View>
+    </Animated.View>
   );
 }
 

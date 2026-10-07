@@ -149,6 +149,11 @@ export function decideReconcileAction(
     return status === "failed" ? "discard_then_remove" : "cancel_then_remove";
   }
 
+  // The card was swiped away. A pass never actually reads this cell (it sends
+  // the discard without fetching, see `finishDiscard`); it is here so the table
+  // stays total.
+  if (phase === "discarding") return "discard_then_remove";
+
   if (status === "failed") return "fail_from_server";
 
   if (status === null) {
@@ -405,6 +410,10 @@ async function runOne(creationId: string): Promise<void> {
     await ensureBarrier(current);
     const take = getPendingTake(creationId);
     if (!take) return;
+    if (take.phase === "discarding") {
+      await finishDiscard(take, current);
+      return;
+    }
     // A silent take is failed on the phone and has no job (OLD-137). There is
     // nothing to ask the server, and a pass must not turn its card's copy into
     // the generic one. It waits for the user's tap or swipe.
@@ -750,6 +759,35 @@ async function discardThenRemove(
   await forget(take, current);
 }
 
+/**
+ * The server half of a swipe-to-discard. The card is already gone (see
+ * `discardTake`); the take stays in the outbox, hidden, until the server
+ * answers. A call that throws (offline, a server error) leaves it there, and
+ * the next sweep — every launch and every foreground — sends it again. That is
+ * what keeps a lost discard from leaving the job, its blob and the founder's
+ * abandoned-needs-time email behind.
+ *
+ * `discard` answers with the job's status when the job was not failed, so no
+ * fetch is needed first.
+ */
+async function finishDiscard(take: PendingTake, current: ReconcileDeps): Promise<void> {
+  const deviceId = await current.getDeviceId();
+  const result = await current.discard({ deviceId, creationId: take.creationId });
+  current.onStage?.(take.creationId, `discard_${result.status}`);
+  if (result.status === "committed") {
+    // The discard lost to a commit (a time picked a moment before the swipe):
+    // the reminder exists, so it is imported, exactly like a lost cancel.
+    await runImport(take, current, "committed");
+    return;
+  }
+  if (result.status === "pending" || result.status === "transcribed") {
+    // A job that is still working cannot be discarded, only stopped.
+    await cancelThenRemove(take, current, deviceId);
+    return;
+  }
+  await forget(take, current);
+}
+
 // ─── §2.6, callable directly from the card ──────────────────────────────────
 
 async function runRetry(
@@ -954,17 +992,36 @@ export async function cancelTake(creationId: string): Promise<void> {
   enqueueReconcile(creationId);
 }
 
+/**
+ * Swipe-to-discard on a failed or asking card.
+ *
+ * Optimistic: the take moves to `discarding` before anything touches the
+ * network, which hides its card on this tick, and its recording is deleted
+ * (the server discard never needs it). The discard itself goes through
+ * reconciliation (`finishDiscard`), which retries on every sweep until the
+ * server has answered. A silent take never had a job, so it is simply forgotten.
+ */
 export async function discardTake(creationId: string): Promise<void> {
   const current = deps;
   const take = getPendingTake(creationId);
   if (!current || !take) return;
   try {
-    const deviceId = await current.getDeviceId();
-    await current.discard({ deviceId, creationId }).catch(() => ({ status: "error" }));
+    if (isSilentFailure(take)) {
+      await forget(take, current);
+      return;
+    }
+    const marked = await updatePendingTake(creationId, "discarding");
+    if (!marked) {
+      // Not a failed take any more (a retry started under the swipe): stopping
+      // it is the closest honest answer.
+      await cancelTake(creationId);
+      return;
+    }
+    void current.deleteRecording(take).catch(() => {});
+    enqueueReconcile(creationId);
   } catch (e) {
     current.onStage?.(creationId, "discard_error", { error: String(e) });
   }
-  await forget(take, current);
 }
 
 /** Cross-platform: every return to the foreground drains the outbox. */

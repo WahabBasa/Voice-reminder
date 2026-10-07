@@ -33,6 +33,8 @@ import {
   subscribePendingTakes,
   transitionTake,
   updatePendingTake,
+  isVisiblePendingTake,
+  visiblePendingTakes,
   type PendingTake,
 } from "../../lib/pendingTakes";
 
@@ -120,6 +122,36 @@ describe("canTransition", () => {
     // A cancel is not undone by pretending the upload is still running.
     expect(canTransition("cancelling", "uploading")).toBe(false);
     expect(canTransition("recording_saved", "transcribed")).toBe(false);
+  });
+});
+
+describe("a discarded take", () => {
+  it("can only be swiped away from a failed card", () => {
+    expect(canTransition("failed", "discarding")).toBe(true);
+    expect(canTransition("processing", "discarding")).toBe(false);
+    expect(canTransition("cancelling", "discarding")).toBe(false);
+  });
+
+  it("never turns back into a card a job watch could draw", () => {
+    for (const to of ["recording_saved", "uploading", "processing", "transcribed", "failed", "cancelling"] as const) {
+      expect(canTransition("discarding", to)).toBe(false);
+    }
+    // A discard that lost to a commit imports, like a lost cancel.
+    expect(canTransition("discarding", "committing")).toBe(true);
+  });
+
+  it("is hidden from the card layer", () => {
+    expect(isVisiblePendingTake({ phase: "discarding" })).toBe(false);
+    expect(isVisiblePendingTake({ phase: "failed" })).toBe(true);
+
+    const kept = take({ creationId: "a", phase: "failed" });
+    const gone = take({ creationId: "b", phase: "discarding" });
+    expect(visiblePendingTakes([kept, gone])).toEqual([kept]);
+  });
+
+  it("leaves the list's identity alone when nothing is hidden", () => {
+    const list = [take({ creationId: "a" }), take({ creationId: "b", phase: "failed" })];
+    expect(visiblePendingTakes(list)).toBe(list);
   });
 });
 

@@ -38,10 +38,12 @@ import {
 import {
   __resetPendingTakes,
   getPendingTake,
+  getPendingTakesSnapshot,
   loadPendingTakes,
   putPendingTake,
   subscribePendingTakes,
   updatePendingTake,
+  visiblePendingTakes,
   type PendingPhase,
   type PendingTake,
 } from "../../lib/pendingTakes";
@@ -124,6 +126,17 @@ describe("the reconciliation table", () => {
         [null, "cancel_then_remove"],
         ["pending", "cancel_then_remove"],
         ["transcribed", "cancel_then_remove"],
+        ["committed", "import"],
+        ["failed", "discard_then_remove"],
+        ["cancelled", "remove_local"],
+      ],
+    ],
+    [
+      ["discarding"],
+      [
+        [null, "discard_then_remove"],
+        ["pending", "discard_then_remove"],
+        ["transcribed", "discard_then_remove"],
         ["committed", "import"],
         ["failed", "discard_then_remove"],
         ["cancelled", "remove_local"],
@@ -721,29 +734,188 @@ describe("a cancel", () => {
 });
 
 describe("a discard", () => {
-  it("tells the server, then drops the take and its recording", async () => {
-    const h = setup();
+  /** A discard call that hangs until the test lets it through. */
+  function gatedDiscard(h: () => Harness, status = "discarded") {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const discard: ReconcileDeps["discard"] = async (args) => {
+      await gate;
+      h().calls.discard.push(args);
+      return { status };
+    };
+    return { discard, release: () => release() };
+  }
+
+  it("hides the card and deletes the recording before the server answers", async () => {
+    let h!: Harness;
+    const gated = gatedDiscard(() => h);
+    h = setup({ discard: gated.discard });
     await seed(take({ phase: "failed", errorKind: "unparseable" }));
 
     await discardTake("t1");
 
-    expect(h.calls.discard[0]).toMatchObject({ creationId: "t1" });
+    expect(getPendingTake("t1")?.phase).toBe("discarding");
+    expect(visiblePendingTakes(getPendingTakesSnapshot())).toEqual([]);
+    expect(h.calls.recordingsDeleted).toContain("t1");
+    expect(h.calls.discard).toEqual([]);
+
+    gated.release();
+    await reconcileIdle();
+    expect(h.calls.discard).toEqual([{ deviceId: "device-1", creationId: "t1" }]);
     expect(getPendingTake("t1")).toBeUndefined();
-    expect(h.calls.recordingsDeleted).toEqual(["t1"]);
   });
 
-  it("drops the take locally even when the server refuses", async () => {
+  it("sends the discard without fetching the job first", async () => {
+    const fetched: string[] = [];
     const h = setup({
-      discard: async () => {
-        throw new Error("offline");
+      fetchJob: async (_deviceId, creationId) => {
+        fetched.push(creationId);
+        return null;
       },
     });
     await seed(take({ phase: "failed", errorKind: "server" }));
 
     await discardTake("t1");
+    await reconcileIdle();
+
+    expect(fetched).toEqual([]);
+    expect(h.calls.discard).toHaveLength(1);
+    expect(h.calls.stages).toContain("discard_discarded");
+  });
+
+  it("keeps a hidden tombstone when the server cannot be reached, and retries on the next sweep", async () => {
+    let online = false;
+    const h = setup({
+      discard: async (args) => {
+        if (!online) throw new Error("offline");
+        h.calls.discard.push(args);
+        return { status: "discarded" };
+      },
+    });
+    await seed(take({ phase: "failed", errorKind: "server" }));
+
+    await discardTake("t1");
+    await reconcileIdle();
+
+    expect(h.calls.stages).toContain("reconcile_error");
+    expect(getPendingTake("t1")?.phase).toBe("discarding");
+    expect(visiblePendingTakes(getPendingTakesSnapshot())).toEqual([]);
+    // On disk, so the retry outlives a kill too.
+    const raw = JSON.parse((await AsyncStorage.getItem("@pending_takes")) as string);
+    expect(raw[0]).toMatchObject({ creationId: "t1", phase: "discarding" });
+
+    online = true;
+    enqueueAllPendingTakes();
+    await reconcileIdle();
+
+    expect(h.calls.discard).toEqual([{ deviceId: "device-1", creationId: "t1" }]);
+    expect(getPendingTake("t1")).toBeUndefined();
+  });
+
+  it("is not brought back by a job watch push that lands before the discard", async () => {
+    let h!: Harness;
+    const gated = gatedDiscard(() => h);
+    h = setup({ discard: gated.discard });
+    const plans = [{ title: "Call mom", description: "", frequency: "once", needsTime: true }];
+    await seed(
+      take({
+        phase: "failed",
+        errorKind: "unparseable",
+        serverErrorDetail: "no_time",
+        pendingPlans: plans,
+      })
+    );
+
+    await discardTake("t1");
+
+    // The watch pushes the same failed job again, and the other hops a watch
+    // can make are refused too.
+    const failed = job({
+      status: "failed",
+      errorCode: "unparseable",
+      errorDetail: "no_time",
+      pendingPlans: plans,
+    });
+    expect(await handleFailedJobPush("t1", failed)).toBe("show_failure");
+    expect(await updatePendingTake("t1", "transcribed")).toBeNull();
+    expect(await updatePendingTake("t1", "failed", { errorKind: "network" })).toBeNull();
+    expect(getPendingTake("t1")?.phase).toBe("discarding");
+    expect(visiblePendingTakes(getPendingTakesSnapshot())).toEqual([]);
+
+    gated.release();
+    await reconcileIdle();
+    expect(getPendingTake("t1")).toBeUndefined();
+  });
+
+  it("imports a take whose job committed before the discard reached it", async () => {
+    const h = setup({ discard: async () => ({ status: "committed" }) });
+    await seed(take({ phase: "failed", errorKind: "unparseable" }));
+
+    await discardTake("t1");
+    await reconcileIdle();
+
+    expect(h.calls.imports).toEqual(["t1"]);
+  });
+
+  it("stops a job that is still working instead of discarding it", async () => {
+    const h = setup({ discard: async () => ({ status: "pending" }) });
+    await seed(take({ phase: "failed", errorKind: "server", audioStorageId: "st1" }));
+
+    await discardTake("t1");
+    await reconcileIdle();
+
+    expect(h.calls.cancel[0]).toMatchObject({ creationId: "t1", orphanStorageId: "st1" });
+    expect(getPendingTake("t1")).toBeUndefined();
+  });
+
+  it("forgets a take whose job the server no longer has", async () => {
+    const h = setup({ discard: async () => ({ status: "not_found" }) });
+    await seed(take({ phase: "failed", errorKind: "server" }));
+
+    await discardTake("t1");
+    await reconcileIdle();
 
     expect(getPendingTake("t1")).toBeUndefined();
+    expect(h.calls.stages).toContain("discard_not_found");
+  });
+
+  it("forgets a silent take on the spot: it never had a job (OLD-137)", async () => {
+    const h = setup();
+    await seed(take({ phase: "failed", errorKind: "silent" }));
+
+    await discardTake("t1");
+
+    expect(getPendingTake("t1")).toBeUndefined();
+    expect(h.calls.discard).toEqual([]);
     expect(h.calls.recordingsDeleted).toEqual(["t1"]);
+  });
+
+  it("cancels a take that started working again under the swipe", async () => {
+    const h = setup();
+    h.jobs.set("t1", job({ status: "pending" }));
+    await seed(take({ phase: "processing" }));
+
+    await discardTake("t1");
+    await reconcileIdle();
+
+    expect(h.calls.discard).toEqual([]);
+    expect(h.calls.cancel[0]).toMatchObject({ creationId: "t1" });
+    expect(getPendingTake("t1")).toBeUndefined();
+  });
+
+  it("leaves the card up when the take cannot be marked", async () => {
+    const h = setup();
+    await seed(take({ phase: "failed", errorKind: "server" }));
+    const spy = jest.spyOn(AsyncStorage, "setItem").mockRejectedValueOnce(new Error("disk full"));
+
+    await discardTake("t1");
+    spy.mockRestore();
+
+    expect(getPendingTake("t1")?.phase).toBe("failed");
+    expect(h.calls.stages).toContain("discard_error");
+    expect(h.calls.discard).toEqual([]);
   });
 
   it("does nothing for a take that is already gone", async () => {

@@ -32,7 +32,8 @@ export type PendingPhase =
   | "transcribed"
   | "committing"
   | "failed"
-  | "cancelling";
+  | "cancelling"
+  | "discarding";
 
 /**
  * `silent` is client-only (OLD-137): the recorder's meter never rose above the
@@ -198,9 +199,14 @@ const NEXT_PHASES: Record<PendingPhase, readonly PendingPhase[]> = {
   committing: ["failed", "cancelling"],
   // `failed` is retryable-terminal, exactly like the server's own: every retry
   // dispatch in §2.6 re-enters the pipeline from here.
-  failed: ["uploading", "processing", "transcribed", "committing", "cancelling"],
+  failed: ["uploading", "processing", "transcribed", "committing", "cancelling", "discarding"],
   // A cancel that lost the race still has to import what the server committed.
   cancelling: ["committing", "failed"],
+  // The user swiped the card away. The take is hidden at once and stays here
+  // only until the server's discard lands, so a lost discard is retried on the
+  // next sweep. Nothing a job watch pushes can bring it back as a card: the only
+  // way out is a discard that lost to a commit, which imports like a lost cancel.
+  discarding: ["committing"],
 };
 
 /** Phases that are still working, and therefore still cancellable (C4). */
@@ -212,6 +218,23 @@ export const NON_TERMINAL_PHASES: readonly PendingPhase[] = [
   "committing",
   "cancelling",
 ];
+
+/**
+ * Whether the card layer draws this take. A discarded take is gone from the
+ * user's point of view the moment they press the trash, even while its server
+ * discard is still on its way.
+ */
+export function isVisiblePendingTake(take: Pick<PendingTake, "phase">): boolean {
+  return take.phase !== "discarding";
+}
+
+/**
+ * The takes the card layer draws. Returns the same array when nothing is
+ * hidden, so a memoized reader keeps its identity.
+ */
+export function visiblePendingTakes(takes: PendingTake[]): PendingTake[] {
+  return takes.every(isVisiblePendingTake) ? takes : takes.filter(isVisiblePendingTake);
+}
 
 export function isTerminalPhase(phase: PendingPhase): boolean {
   return phase === "failed";
