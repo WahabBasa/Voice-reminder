@@ -26,6 +26,8 @@ import type * as needsTime from "../needsTime.js";
 import type * as parseUsage from "../parseUsage.js";
 import type * as reminders from "../reminders.js";
 import type * as scheduleShape from "../scheduleShape.js";
+import type * as scriptLanguage from "../scriptLanguage.js";
+import type * as spokenLang from "../spokenLang.js";
 import type * as stt from "../stt.js";
 import type * as takeCardCopy from "../takeCardCopy.js";
 import type * as takeEmailActions from "../takeEmailActions.js";
@@ -56,6 +58,8 @@ declare const fullApi: ApiFromModules<{
   parseUsage: typeof parseUsage;
   reminders: typeof reminders;
   scheduleShape: typeof scheduleShape;
+  scriptLanguage: typeof scriptLanguage;
+  spokenLang: typeof spokenLang;
   stt: typeof stt;
   takeCardCopy: typeof takeCardCopy;
   takeEmailActions: typeof takeEmailActions;
