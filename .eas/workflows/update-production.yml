@@ -7,4 +7,4 @@ jobs:
     params:
       branch: production
       platform: ios
-      message: "main @ 2d1791a (remember each device's spoken language; correct language tagging)"
+      message: "main @ 4ed05c0 (instant swipe-to-discard on failed and asking cards)"
