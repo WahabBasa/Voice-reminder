@@ -1,0 +1,10 @@
+VERSION 1.0 READY_FOR_SALE
+{
+ "description": "You don't forget because you don't care. You forget because your day is loud.\n\nRemi is the talking alarm clock for people who forget a lot. Speak a reminder once and Remi remembers it — then says it back to you, out loud, at exactly the right time. Not a silent banner you swipe away without reading. A voice that tells you what to do, when it's time to do it.\n\nHOW IT WORKS\n• Say it once: \"remind me to drink water every hour\" — done\n• Remi turns your words into a spoken alarm on the schedule you asked for\n• When it's time, your phone speaks the reminder out loud — even from the lock screen\n• Snooze it, and Remi keeps nagging until it's actually done\n\nBUILT FOR REAL SCHEDULES\n• Exact times, multiple times a day, intervals, every-N-days\n• Meds, water, wake-ups, errands — anything you keep missing\n\n\nReminders you hear get done. Reminders you glance at get forgotten. That's the whole idea.\n\nTerms of Use: https://wahabbasa.github.io/voicereminder-legal/terms.html\nPrivacy Policy: https://wahabbasa.github.io/voicereminder-legal/privacy.html\n\n\n",
+ "locale": "en-US",
+ "keywords": "remember,forgetful,memory,habit,routine,task,daily,speak,audio,wake,adhd,med,water,aloud",
+ "marketingUrl": null,
+ "promotionalText": "\"Drink your water.\" An alarm that says your reminder out loud — on time, and again until it's done.",
+ "supportUrl": "https://wahabbasa.github.io/voicereminder-legal",
+ "whatsNew": null
+}
