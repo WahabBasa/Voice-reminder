@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { CURRENT_SCHEMA_VERSION, type Reminder } from "./store";
 import { buildGridSchedule, legacyFieldsFromGrid, type GridSchedule } from "./schedule";
 import { isPremiumSchedule } from "./usageGate";
@@ -362,8 +363,8 @@ export function describeTakeOutcome(outcome: {
   // and did not get, where the cap is a number they can also read off the list.
   if (blockedPremium > 0) {
     return {
-      title: `${created} of ${total} reminders created`,
-      message: "Repeating every few minutes is a Pro feature — tap to upgrade.",
+      title: t("take.partial.title", { created, total }),
+      message: t("take.partial.premium"),
       type: "warning",
       upgrade: true,
       upgradeContext: "interval",
@@ -372,8 +373,8 @@ export function describeTakeOutcome(outcome: {
 
   if (dropped > 0) {
     return {
-      title: `${created} of ${total} reminders created`,
-      message: `Free plan keeps ${limit} reminders active — tap to upgrade.`,
+      title: t("take.partial.title", { created, total }),
+      message: t("take.partial.cap", { limit }),
       type: "warning",
       upgrade: true,
     };
@@ -381,15 +382,15 @@ export function describeTakeOutcome(outcome: {
 
   if (failed > 0) {
     return {
-      title: `${created} of ${total} reminders created`,
-      message: "The rest couldn't be saved. Try recording them again.",
+      title: t("take.partial.title", { created, total }),
+      message: t("take.partial.failed"),
       type: "warning",
       upgrade: false,
     };
   }
 
   if (created > 1) {
-    return { title: `${created} reminders created`, type: "success", upgrade: false };
+    return { title: t("take.multiCreated", { count: created }), type: "success", upgrade: false };
   }
 
   return null;

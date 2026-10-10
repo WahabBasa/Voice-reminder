@@ -1,3 +1,5 @@
+import { intlLocales, t } from "../../lib/i18n";
+import { weekdayShortLabel } from "../../lib/weekdayLabels";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import AppIcon from "../AppIcon";
@@ -43,7 +45,7 @@ interface DaysPageProps {
 }
 
 function capitalizeDay(day: string): string {
-  return day.charAt(0).toUpperCase() + day.slice(1, 3).toLowerCase();
+  return weekdayShortLabel(day.slice(0, 3).toLowerCase());
 }
 
 /**
@@ -63,7 +65,7 @@ export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number)
   // is gone and the schedule text comes back.
   if (isToday) {
     const snoozeUntil = getSnoozeUntil(reminder.id, nowMs);
-    if (snoozeUntil !== undefined) return `Rings again ${formatClockAt(snoozeUntil)}`;
+    if (snoozeUntil !== undefined) return t("time.ringsAgain", { time: formatClockAt(snoozeUntil) });
   }
 
   const grid = reminder.schedule;
@@ -73,7 +75,10 @@ export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number)
     if (grid.times.kind === "interval" && isToday) {
       const next = nextGridOccurrence(grid, nowMs);
       if (next !== null) {
-        return `Every ${formatEveryMinutes(grid.times.everyMinutes)} · ${formatNextIn(next, nowMs)}`;
+        return t("days.subtitle.intervalNext", {
+          duration: formatEveryMinutes(grid.times.everyMinutes),
+          next: formatNextIn(next, nowMs),
+        });
       }
     }
     return describeGridSubtitle(grid);
@@ -88,7 +93,7 @@ export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number)
         reminder.intervalMs,
         nowMs
       );
-      return `${every} · ${formatNextIn(scheduledFor, nowMs)}`;
+      return t("time.dateAndTime", { date: every, time: formatNextIn(scheduledFor, nowMs) });
     }
     return every;
   }
@@ -97,11 +102,14 @@ export function subtitleFor(reminder: Reminder, isToday: boolean, nowMs: number)
   const time = formatClockTime(reminder.time ?? "");
   if (reminder.frequency === "daily") {
     const n = reminder.intervalDays && reminder.intervalDays > 1 ? reminder.intervalDays : 1;
-    return `${time} · ${n === 1 ? "Daily" : `Every ${n} days`}`;
+    return t("schedule.timesAndDays", {
+      times: time,
+      days: n === 1 ? t("schedule.daily") : t("schedule.everyNDays", { count: n }),
+    });
   }
   if (reminder.frequency === "weekly" || reminder.frequency === "custom") {
     const days = (reminder.days ?? []).map(capitalizeDay).join(", ");
-    return days ? `${time} · ${days}` : `${time} · Weekly`;
+    return t("schedule.timesAndDays", { times: time, days: days || t("schedule.weekly") });
   }
   return time;
 }
@@ -193,7 +201,7 @@ export default function DaysPage({
       if (active.length === 0 && completedItems.length === 0) {
         return (
           <View style={styles.emptyDay}>
-            <Text style={styles.emptyDayText}>Nothing on this day</Text>
+            <Text style={styles.emptyDayText}>{t("days.empty")}</Text>
           </View>
         );
       }
@@ -236,9 +244,9 @@ export default function DaysPage({
   );
 
   const selected = parseISODate(selectedDate);
-  const weekdayName = selected.toLocaleDateString([], { weekday: "long" });
+  const weekdayName = selected.toLocaleDateString(intlLocales(), { weekday: "long" });
   const monthLabel = `${selected
-    .toLocaleDateString([], { month: "short" })
+    .toLocaleDateString(intlLocales(), { month: "short" })
     .toUpperCase()} ${selected.getFullYear()}`;
 
   return (
@@ -249,7 +257,7 @@ export default function DaysPage({
           style={styles.monthButton}
           onPress={() => setMonthSheetVisible(true)}
           accessibilityRole="button"
-          accessibilityLabel="Open month picker"
+          accessibilityLabel={t("days.monthPicker.a11y")}
         >
           <Text style={styles.monthButtonText}>{monthLabel}</Text>
           <AppIcon name="chevron-right" size={16} color={colors.textSecondary} />

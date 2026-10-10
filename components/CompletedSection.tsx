@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import { useState } from "react";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { colors, spacing, borderRadius } from "../lib/theme";
@@ -25,7 +26,7 @@ export default function CompletedSection({
         onPress={() => setCollapsed((prev) => !prev)}
         style={({ pressed }) => [styles.headerPill, pressed && styles.headerPressed]}
       >
-        <Text style={styles.headerText}>COMPLETE ({items.length})</Text>
+        <Text style={styles.headerText}>{t("today.completed.header", { count: items.length })}</Text>
         <AppIcon
           name="chevron-down"
           size={16}

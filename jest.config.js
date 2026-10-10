@@ -31,6 +31,9 @@ module.exports = {
     "convex/scriptLanguage.ts",
     "convex/spokenLang.ts",
     "lib/spokenLanguage.ts",
+    "lib/i18n.ts",
+    "lib/appLanguage.ts",
+    "lib/weekdayLabels.ts",
   ],
   coverageThreshold: {
     "lib/time.ts": { lines: 85, branches: 70 },
@@ -58,5 +61,8 @@ module.exports = {
     "convex/scriptLanguage.ts": { lines: 100, branches: 100 },
     "convex/spokenLang.ts": { lines: 100, branches: 100 },
     "lib/spokenLanguage.ts": { lines: 100, branches: 100 },
+    "lib/i18n.ts": { lines: 90, branches: 85 },
+    "lib/appLanguage.ts": { lines: 95, branches: 90 },
+    "lib/weekdayLabels.ts": { lines: 85, branches: 100 },
   },
 };

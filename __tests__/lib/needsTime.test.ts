@@ -7,7 +7,7 @@
 import {
   EVENING_TIME,
   MORNING_TIME,
-  PICK_A_TIME_LABEL,
+  pickATimeLabel,
   QUICK_CHOICES,
   draftReminderFor,
   needsTimeFocus,
@@ -31,7 +31,7 @@ describe("the choices the card offers", () => {
       "This evening",
       "Tomorrow morning",
     ]);
-    expect(PICK_A_TIME_LABEL).toBe("Pick a time…");
+    expect(pickATimeLabel()).toBe("Pick a time…");
     expect([EVENING_TIME, MORNING_TIME]).toEqual(["18:00", "09:00"]);
   });
 });

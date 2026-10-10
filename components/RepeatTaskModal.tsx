@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import React, { useEffect, useState } from "react";
 import {
   Modal,
@@ -41,11 +42,11 @@ type RepeatTaskModalProps = {
   onCancel: () => void;
 };
 
-const MODES: { label: string; value: DaysMode }[] = [
-  { label: "Every day", value: "everyday" },
-  { label: "Weekly", value: "weekdays" },
-  { label: "Every N days", value: "everyNDays" },
-  { label: "On a date", value: "date" },
+const MODES: { label: () => string; value: DaysMode }[] = [
+  { label: () => t("repeat.mode.everyDay"), value: "everyday" },
+  { label: () => t("repeat.mode.weekly"), value: "weekdays" },
+  { label: () => t("repeat.mode.everyNDays"), value: "everyNDays" },
+  { label: () => t("repeat.mode.date"), value: "date" },
 ];
 
 export default function RepeatTaskModal({
@@ -86,7 +87,7 @@ export default function RepeatTaskModal({
       <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={styles.overlay}>
           <View style={styles.modal}>
-            <Text style={styles.title}>Repeat</Text>
+            <Text style={styles.title}>{t("repeat.title")}</Text>
 
             <View style={styles.modeGrid}>
               {MODES.map((option) => {
@@ -99,7 +100,7 @@ export default function RepeatTaskModal({
                     activeOpacity={0.7}
                   >
                     <Text style={[styles.modeChipText, selected && styles.modeChipTextSelected]}>
-                      {option.label}
+                      {option.label()}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -107,22 +108,22 @@ export default function RepeatTaskModal({
             </View>
 
             {mode === "everyday" ? (
-              <Text style={styles.hint}>Rings every day at the times you set.</Text>
+              <Text style={styles.hint}>{t("repeat.hint.everyDay")}</Text>
             ) : null}
 
             {mode === "weekdays" ? (
               <View style={styles.section}>
-                <Text style={styles.sectionLabel}>Repeat on</Text>
+                <Text style={styles.sectionLabel}>{t("repeat.section.repeatOn")}</Text>
                 <DaySelector selectedDays={weekdays} onToggle={toggleDay} />
                 {weekdays.length === 0 ? (
-                  <Text style={styles.hint}>Pick at least one day.</Text>
+                  <Text style={styles.hint}>{t("repeat.hint.pickOneDay")}</Text>
                 ) : null}
               </View>
             ) : null}
 
             {mode === "everyNDays" ? (
               <View style={styles.section}>
-                <Text style={styles.sectionLabel}>Repeat every</Text>
+                <Text style={styles.sectionLabel}>{t("repeat.section.repeatEvery")}</Text>
                 <View style={styles.stepper}>
                   <TouchableOpacity
                     style={styles.stepperButton}
@@ -139,7 +140,7 @@ export default function RepeatTaskModal({
                       −
                     </Text>
                   </TouchableOpacity>
-                  <Text style={styles.stepperValue}>{everyNDays} days</Text>
+                  <Text style={styles.stepperValue}>{t("repeat.stepper.days", { count: everyNDays })}</Text>
                   <TouchableOpacity
                     style={styles.stepperButton}
                     onPress={() => stepEveryNDays(1)}
@@ -156,17 +157,17 @@ export default function RepeatTaskModal({
                     </Text>
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.hint}>Counts from the start date, same times each turn.</Text>
+                <Text style={styles.hint}>{t("repeat.hint.everyNDays")}</Text>
               </View>
             ) : null}
 
             {mode === "date" ? (
-              <Text style={styles.hint}>Rings once, on the date you pick below.</Text>
+              <Text style={styles.hint}>{t("repeat.hint.date")}</Text>
             ) : null}
 
             <View style={styles.actions}>
               <TouchableOpacity onPress={onCancel} style={styles.actionButton} activeOpacity={0.7}>
-                <Text style={styles.cancelText}>CANCEL</Text>
+                <Text style={styles.cancelText}>{t("repeat.cancel")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => isValid && onConfirm({ mode, weekdays, everyNDays })}
@@ -174,7 +175,7 @@ export default function RepeatTaskModal({
                 disabled={!isValid}
                 activeOpacity={0.7}
               >
-                <Text style={styles.doneText}>DONE</Text>
+                <Text style={styles.doneText}>{t("repeat.done")}</Text>
               </TouchableOpacity>
             </View>
           </View>

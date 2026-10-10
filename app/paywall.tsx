@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
@@ -43,13 +44,13 @@ import FooterLegalRow from "../components/paywall/FooterLegalRow";
 import { AwardBadgeRow, ProofCarousel, TestimonialWall } from "../components/paywall/ProofSlots";
 import { PAYWALL_GUTTER, paywallColors, paywallWeight } from "../components/paywall/paywallTheme";
 
-const ERROR_COPY: Record<Exclude<PurchaseErrorCategory, "cancelled">, string> = {
-    network: "No connection to the App Store. Check your internet and try again.",
-    not_allowed: "Purchases aren't allowed on this device. Check Screen Time restrictions.",
-    already_owned: "You already own this subscription — tap Restore purchase.",
-    payment_pending: "Your purchase is awaiting approval. Pro unlocks once it goes through.",
-    store_problem: "The App Store is having trouble right now. Please try again shortly.",
-    unknown: "Something went wrong. Please try again.",
+const ERROR_COPY: Record<Exclude<PurchaseErrorCategory, "cancelled">, () => string> = {
+    network: () => t("paywall.error.network"),
+    not_allowed: () => t("paywall.error.notAllowed"),
+    already_owned: () => t("paywall.error.alreadyOwned"),
+    payment_pending: () => t("paywall.error.paymentPending"),
+    store_problem: () => t("paywall.error.storeProblem"),
+    unknown: () => t("paywall.error.unknown"),
 };
 
 export default function PaywallScreen() {
@@ -162,8 +163,8 @@ export default function PaywallScreen() {
     const handlePurchase = async () => {
         if (!selectedPackage) {
             toast.show({
-                title: "Error",
-                message: "Please select a plan.",
+                title: t("common.error"),
+                message: t("paywall.toast.selectPlan"),
                 type: "error",
             });
             return;
@@ -178,15 +179,15 @@ export default function PaywallScreen() {
             // Check if pro entitlement is now active
             if (customerInfo.entitlements.active[PRO_ENTITLEMENT_ID]) {
                 toast.show({
-                    title: "Pro Activated! 🎉",
-                    message: `Welcome to ${PRO_PRODUCT_NAME}!`,
+                    title: t("paywall.toast.activated.title"),
+                    message: t("paywall.toast.activated.message", { product: PRO_PRODUCT_NAME }),
                     type: "success",
                 });
                 router.back();
             } else {
                 toast.show({
-                    title: "Purchase Complete",
-                    message: "Thank you for subscribing!",
+                    title: t("paywall.toast.complete.title"),
+                    message: t("paywall.toast.complete.message"),
                     type: "success",
                 });
                 router.back();
@@ -199,7 +200,7 @@ export default function PaywallScreen() {
             } else {
                 // Log silently, show inline error banner (not toast)
                 console.log("[RevenueCat] Purchase error (silent):", category, error);
-                showError(ERROR_COPY[category]);
+                showError(ERROR_COPY[category]());
             }
         } finally {
             setIsPurchasing(false);
@@ -216,8 +217,8 @@ export default function PaywallScreen() {
 
         if (result.status === "restored") {
             toast.show({
-                title: "Purchases Restored",
-                message: `${PRO_PRODUCT_NAME} is active on this device again.`,
+                title: t("paywall.toast.restored.title"),
+                message: t("paywall.toast.restored.message", { product: PRO_PRODUCT_NAME }),
                 type: "success",
             });
             setIsRestoring(false);
@@ -230,18 +231,18 @@ export default function PaywallScreen() {
             // this user "nothing was found" reads as the store losing their
             // purchase, when the honest answer is that the plan ran out.
             toast.show({
-                title: "Subscription Expired",
-                message: `Your ${PRO_PRODUCT_NAME} subscription has ended. You can subscribe again below.`,
+                title: t("paywall.toast.expired.title"),
+                message: t("paywall.toast.expired.message", { product: PRO_PRODUCT_NAME }),
                 type: "info",
             });
         } else if (result.status === "nothing_to_restore") {
             toast.show({
-                title: "Nothing to Restore",
-                message: "No previous subscription was found for this account.",
+                title: t("paywall.toast.nothing.title"),
+                message: t("paywall.toast.nothing.message"),
                 type: "info",
             });
         } else {
-            showError(ERROR_COPY[result.category === "cancelled" ? "unknown" : result.category]);
+            showError(ERROR_COPY[result.category === "cancelled" ? "unknown" : result.category]());
         }
 
         setIsRestoring(false);
@@ -253,7 +254,7 @@ export default function PaywallScreen() {
         try {
             await openInAppBrowser(url);
         } catch (e) {
-            showError("Couldn't open that link. Please try again.");
+            showError(t("paywall.error.linkFailed"));
         }
     };
 
@@ -308,7 +309,7 @@ export default function PaywallScreen() {
                 activeOpacity={0.7}
                 hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
                 accessibilityRole="button"
-                accessibilityLabel="Close"
+                accessibilityLabel={t("paywall.close.a11y")}
             >
                 <AppIcon name="x" size={20} color={paywallColors.ink} />
             </TouchableOpacity>

@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 /**
  * Pure decision logic extracted from lib/notifications.ts.
  *
@@ -224,11 +225,10 @@ export function buildPreAlertBody(
   title: string | undefined,
   preReminderMinutes: number
 ): string {
-  const subject = (title ?? "").trim() || "your reminder";
-  const unit = preReminderMinutes === 1 ? "minute" : "minutes";
+  const subject = (title ?? "").trim() || t("notification.preAlert.fallbackSubject");
   // No lead-in. The voice rewrite (OLD-95) banned "Heads up" from spoken lines;
   // visible notification copy follows the same rule — say the thing, nothing else.
-  return `${subject} in ${preReminderMinutes} ${unit}`;
+  return t("notification.preAlert.body", { subject, count: preReminderMinutes });
 }
 
 // ─── Group 7: Ring cadence (how the spoken lines play while ringing) ───────

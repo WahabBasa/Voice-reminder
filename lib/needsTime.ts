@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type { GridSchedule } from "../convex/scheduleShape";
 import type { PendingPlan } from "./pendingTakes";
 
@@ -26,18 +27,29 @@ export type QuickChoice = {
   time: string;
 };
 
-const LABELS: Record<QuickChoiceId, string> = {
-  in_1_hour: "In 1 hour",
-  this_evening: "This evening",
-  tomorrow_morning: "Tomorrow morning",
+const LABELS: Record<QuickChoiceId, () => string> = {
+  in_1_hour: () => t("quickChoice.in1Hour"),
+  this_evening: () => t("quickChoice.thisEvening"),
+  tomorrow_morning: () => t("quickChoice.tomorrowMorning"),
 };
 
-/** The labels, in the order the card shows them. "Pick a time…" follows. */
-export const QUICK_CHOICES: ReadonlyArray<{ id: QuickChoiceId; label: string }> = (
+/**
+ * The labels, in the order the card shows them. "Pick a time…" follows.
+ * `label` is read at render time, so it follows the UI language.
+ */
+export const QUICK_CHOICES: ReadonlyArray<{ id: QuickChoiceId; readonly label: string }> = (
   ["in_1_hour", "this_evening", "tomorrow_morning"] as const
-).map((id) => ({ id, label: LABELS[id] }));
+).map((id) => ({
+  id,
+  get label() {
+    return LABELS[id]();
+  },
+}));
 
-export const PICK_A_TIME_LABEL = "Pick a time…";
+/** "Pick a time…", in the UI language. */
+export function pickATimeLabel(): string {
+  return t("quickChoice.pickTime");
+}
 export const EVENING_TIME = "18:00";
 export const MORNING_TIME = "09:00";
 const HOUR_MS = 60 * 60_000;
@@ -97,7 +109,7 @@ export function nextCalendarDay(date: string): string {
  *   - "Tomorrow morning": 09:00 on tomorrow's date.
  */
 export function quickChoiceTime(id: QuickChoiceId, nowMs: number, tzid: string): QuickChoice {
-  const label = LABELS[id];
+  const label = LABELS[id]();
   const now = wallClockIn(nowMs, tzid);
   const inAnHour = wallClockIn(nowMs + HOUR_MS, tzid);
   switch (id) {

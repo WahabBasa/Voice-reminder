@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import {
   View,
   Text,
@@ -385,18 +386,21 @@ export default function RecordingOverlay({
     });
 
   const getStatusText = () => {
-    if (startFailed) return "Couldn't start the microphone. Tap to try again.";
-    if (permissionDenied) return "Microphone access required";
-    if (state === "processing") return "Creating your reminder...";
-    if (state === "paused") return "Paused";
-    if (state === "recording") return "Listening...";
+    if (startFailed) return t("recording.status.micFailed");
+    if (permissionDenied) return t("recording.status.micDenied");
+    if (state === "processing") return t("recording.status.processing");
+    if (state === "paused") return t("recording.status.paused");
+    if (state === "recording") return t("recording.status.listening");
     if (!canStartRecording) {
       // The screen owns the gate copy and supplies it with the lock. This
       // fallback only covers a lock that arrived without any — nothing in the
       // gate consults the network, so it must not read like a wait on one.
-      return gateStatusText ?? (showUpgradeCta ? "Upgrade to continue" : "Getting ready...");
+      return (
+        gateStatusText ??
+        (showUpgradeCta ? t("recording.status.upgradeToContinue") : t("recording.status.gettingReady"))
+      );
     }
-    return "Tap the mic to start";
+    return t("recording.status.tapToStart");
   };
 
   const showGateLock = state === "idle" && !canStartRecording && showUpgradeCta;
@@ -435,7 +439,7 @@ export default function RecordingOverlay({
             >
               <View style={styles.handleBar} />
 
-              <Text style={styles.title}>New Recording</Text>
+              <Text style={styles.title}>{t("recording.title")}</Text>
 
               {listeningText && (
                 <Text style={styles.listeningText} numberOfLines={1}>
@@ -448,7 +452,7 @@ export default function RecordingOverlay({
                   <View style={styles.gateLeft}>
                     <AppIcon name="crown" size={14} color={colors.accent} />
                     <Text style={styles.gateText} numberOfLines={2}>
-                      {gateStatusText ?? "Free limit reached"}
+                      {gateStatusText ?? t("recording.gate.freeLimit")}
                     </Text>
                   </View>
                   {showUpgradeCta && onUpgradePress && (
@@ -457,7 +461,14 @@ export default function RecordingOverlay({
                       onPress={onUpgradePress}
                       activeOpacity={0.85}
                     >
-                      <Text style={styles.upgradeButtonText}>Upgrade</Text>
+                      <Text
+                        style={styles.upgradeButtonText}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.75}
+                      >
+                        {t("recording.gate.upgrade")}
+                      </Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -468,7 +479,7 @@ export default function RecordingOverlay({
                     slot — the bars that were listening keep moving while we
                     build the reminder. */}
                 {state === "processing" ? (
-                  <ProcessingWave accessibilityLabel="Creating your reminder" />
+                  <ProcessingWave accessibilityLabel={t("recording.processing.a11y")} />
                 ) : (
                   <VoiceMeter active={state === "recording"} />
                 )}
@@ -485,7 +496,7 @@ export default function RecordingOverlay({
 
               {state === "processing" && (
                 <View style={styles.processingRow}>
-                  <Text style={styles.processingText}>Processing…</Text>
+                  <Text style={styles.processingText}>{t("recording.processing.label")}</Text>
                 </View>
               )}
 

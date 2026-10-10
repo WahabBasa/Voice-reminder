@@ -1,3 +1,5 @@
+import { intlLocales, t } from "../../lib/i18n";
+import { weekdayFullLabel, weekdayNarrowLabel } from "../../lib/weekdayLabels";
 import { useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -5,7 +7,8 @@ import AppIcon from "../AppIcon";
 import { borderRadius, colors, scaleFontSize, shadows, spacing } from "../../lib/theme";
 import { parseISODate, toISODate } from "../../lib/dayOccurrences";
 
-const DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
+/** Monday-first, like the strip and the month grid. */
+const WEEK_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 
 interface MonthSheetProps {
   visible: boolean;
@@ -40,7 +43,7 @@ export default function MonthSheet({
     }
   }, [visible, selectedDate]);
 
-  const monthLabel = monthDate.toLocaleDateString([], { month: "long", year: "numeric" });
+  const monthLabel = monthDate.toLocaleDateString(intlLocales(), { month: "long", year: "numeric" });
 
   // 7-wide rows; leading/trailing blanks are null.
   const weeks = useMemo(() => {
@@ -77,7 +80,7 @@ export default function MonthSheet({
             style={styles.navButton}
             onPress={() => shiftMonth(-1)}
             accessibilityRole="button"
-            accessibilityLabel="Previous month"
+            accessibilityLabel={t("monthSheet.prev.a11y")}
           >
             <AppIcon name="chevron-left" size={20} color={colors.textPrimary} />
           </Pressable>
@@ -86,16 +89,16 @@ export default function MonthSheet({
             style={styles.navButton}
             onPress={() => shiftMonth(1)}
             accessibilityRole="button"
-            accessibilityLabel="Next month"
+            accessibilityLabel={t("monthSheet.next.a11y")}
           >
             <AppIcon name="chevron-right" size={20} color={colors.textPrimary} />
           </Pressable>
         </View>
 
         <View style={styles.letterRow}>
-          {DAY_LETTERS.map((letter, index) => (
-            <Text key={index} style={styles.letter}>
-              {letter}
+          {WEEK_ORDER.map((day) => (
+            <Text key={day} style={styles.letter} accessibilityLabel={weekdayFullLabel(day)}>
+              {weekdayNarrowLabel(day)}
             </Text>
           ))}
         </View>

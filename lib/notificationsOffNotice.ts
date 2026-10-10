@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { openNotificationSettingsSafe } from "./notifications";
 import { isNotificationPermissionError } from "./notificationDecisions";
 
@@ -24,8 +25,8 @@ export function showNotificationsOffNoticeOnce(toast: ToastLike): boolean {
   if (shownThisSession) return false;
   shownThisSession = true;
   toast.show({
-    title: "Reminder saved — notifications are off",
-    message: "Turn them on in Settings to get alerted",
+    title: t("notificationsOff.title"),
+    message: t("notificationsOff.message"),
     type: "info",
     durationMs: 4000,
     onPress: () => {

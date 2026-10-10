@@ -1,3 +1,8 @@
+
+import { getUiLocale, intlLocales, t } from "../lib/i18n";
+import LanguageSheet from "../components/LanguageSheet";
+import { getChosenLanguage, loadAppLanguage } from "../lib/appLanguage";
+import { currentLanguageChoice, pickLanguage } from "../lib/pickLanguage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -147,6 +152,14 @@ import {
 import NetInfo from "@react-native-community/netinfo";
 
 // Pager pages: 0 = Reminders, 1 = Days, 2 = Settings (see docs/ui-redesign.md gesture map).
+/**
+ * Set when the first-run language step hands off to the recording the user
+ * tapped for. A pick that changes the UI language remounts the screen tree
+ * (app/_layout keys the Stack on it), so the NEW HomeScreen picks this up on
+ * mount and carries on into the consent card, now in the chosen language.
+ */
+let resumeRecordingOnMount = false;
+
 const PAGE_TODAY = 0;
 const PAGE_DAYS = 1;
 const PAGE_SETTINGS = 2;
@@ -206,7 +219,7 @@ const onPendingTakeDiscard = (creationId: string) => void discardTake(creationId
 // The transcript is what the card already shows as "Remi heard" (OLD-137); the
 // user sees it there and in the composer, and chooses to send it.
 const onPendingTakeReport = (take: PendingTake) =>
-  feedbackUi.openComposer(failedTakeFeedbackContext(take), "Includes details of this failed take.");
+  feedbackUi.openComposer(failedTakeFeedbackContext(take), t("feedback.notice.failedTake"));
 /** The user's zone, read when it is needed: they may have travelled since launch. */
 const deviceTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 // "When should I remind you?" answered with a quick choice. The time is worked
@@ -287,6 +300,7 @@ export default function HomeScreen() {
   const [gateStatusText, setGateStatusText] = useState<string | undefined>(undefined);
   const [showUpgradeCta, setShowUpgradeCta] = useState(false);
   const [showConsentCard, setShowConsentCard] = useState(false);
+  const [showLanguageStep, setShowLanguageStep] = useState(false);
   // Typed composer (OLD-101) — opened from the header's + button (Tiimo pattern).
   const [showComposer, setShowComposer] = useState(false);
   const [composerTraceId, setComposerTraceId] = useState<string | null>(null);
@@ -488,6 +502,15 @@ export default function HomeScreen() {
       await settingsState.loadSettings();
     }
     if (useSettingsStore.getState().settings.aiConsentAcceptedAt === null) {
+      // First run: the language comes first, so the transcriber hears the
+      // first recording in it and the consent card reads in it. Only for a
+      // brand-new install (no consent yet) that never picked one.
+      await loadAppLanguage();
+      if (getChosenLanguage() === null) {
+        perfLog(traceId, "ui.recording", "open_blocked_language");
+        setShowLanguageStep(true);
+        return;
+      }
       perfLog(traceId, "ui.recording", "open_blocked_consent");
       setShowConsentCard(true);
       return;
@@ -525,7 +548,7 @@ export default function HomeScreen() {
     if (!hasLoadedReminders && !cachedPro) {
       perfLog(traceId, "ui.recording", "gate_requested_while_not_loaded");
       setCanStartRecording(false);
-      setGateStatusText("Loading reminders...");
+      setGateStatusText(t("today.gate.loading"));
 
       await loadReminders().catch(() => {});
       if (gateTraceRef.current !== traceId) return;
@@ -591,7 +614,7 @@ export default function HomeScreen() {
       setShowConsentCard(false);
       const outcome = await resolveAiConsent(choice);
       if (outcome.error === "persist_failed") {
-        Alert.alert("Couldn't save your choice", "Please try again.");
+        Alert.alert(t("today.alert.saveChoiceFailed.title"), t("common.pleaseTryAgain"));
         return;
       }
       if (outcome.proceedToRecording) {
@@ -600,6 +623,31 @@ export default function HomeScreen() {
     },
     [handleOpenRecording]
   );
+
+  // The first-run language pick, then on into the recording the user tapped
+  // for. A UI-language change remounts this screen; the new one resumes.
+  const handleLanguageStepConfirm = useCallback(
+    async (code: string) => {
+      setShowLanguageStep(false);
+      const before = getUiLocale();
+      resumeRecordingOnMount = true;
+      await pickLanguage(code);
+      if (getUiLocale() === before) {
+        resumeRecordingOnMount = false;
+        void handleOpenRecording();
+      }
+    },
+    [handleOpenRecording]
+  );
+
+  // The remounted screen after a first-run pick that changed the UI language.
+  useEffect(() => {
+    if (!resumeRecordingOnMount) return;
+    resumeRecordingOnMount = false;
+    void handleOpenRecording();
+    // Mount only: this is a one-shot hand-off from the previous instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * Schedule every reminder a take produced.
@@ -1003,10 +1051,7 @@ export default function HomeScreen() {
         // not mean retyping.
         console.log("[VR] Typed reminder failed:", error);
         perfLog(traceId, "device.processing", "typed_action_error", { error: String(error) });
-        Alert.alert(
-          "Error",
-          "Failed to create your reminder. Check your internet connection and try again."
-        );
+        Alert.alert(t("common.error"), t("today.alert.createFailed.message"));
       } finally {
         setIsComposerSubmitting(false);
       }
@@ -1383,10 +1428,7 @@ export default function HomeScreen() {
       if (!persisted) {
         dropCreationRun(creationId);
         setShowRecording(false);
-        Alert.alert(
-          "Error",
-          "Couldn't save your recording. Check your device storage and try again."
-        );
+        Alert.alert(t("common.error"), t("today.alert.recordingSaveFailed.message"));
         return;
       }
 
@@ -1535,8 +1577,8 @@ export default function HomeScreen() {
         // rather than a new one being invented for it.
         creationBreadcrumb("import_produced_nothing");
         toast.show({
-          title: "Error",
-          message: "Failed to process your reminder. Check your internet connection and try again.",
+          title: t("common.error"),
+          message: t("today.toast.processFailed.message"),
           type: "error",
           durationMs: 4000,
         });
@@ -1774,13 +1816,13 @@ export default function HomeScreen() {
       });
       if (outcome === "created") return true;
       toast.show({
-        title: outcome === "invalid" ? "That time doesn't work" : "Couldn't set that time",
+        title: outcome === "invalid" ? t("today.toast.timeInvalid.title") : t("today.toast.timeFailed.title"),
         message:
           outcome === "invalid"
-            ? "Pick a time that hasn't passed yet."
+            ? t("today.toast.timeInvalid.message")
             : outcome === "offline"
-              ? "Check your connection and try again."
-              : "Try again, or record it again.",
+              ? t("today.toast.timeOffline.message")
+              : t("today.toast.timeUnavailable.message"),
         type: "info",
       });
       return false;
@@ -1923,7 +1965,7 @@ export default function HomeScreen() {
   }, []);
 
   const dateLabel = useMemo(() => {
-    return new Date(nowMs).toLocaleDateString([], {
+    return new Date(nowMs).toLocaleDateString(intlLocales(), {
       weekday: "long",
       month: "short",
       day: "numeric",
@@ -1990,7 +2032,7 @@ export default function HomeScreen() {
           <View style={styles.header}>
             <View style={styles.headerTop}>
               <View style={styles.headerTitleWrap}>
-                <Text style={styles.headerTitle}>Reminders</Text>
+                <Text style={styles.headerTitle}>{t("today.header.title")}</Text>
                 <Text style={styles.headerDate}>{dateLabel}</Text>
               </View>
               <View style={styles.headerActions}>
@@ -2001,7 +2043,14 @@ export default function HomeScreen() {
                     onPress={openPaywall}
                   >
                     <AppIcon name="crown" size={14} color="white" style={styles.proIcon} />
-                    <Text style={styles.proPillText}>Get Pro</Text>
+                    <Text
+                      style={styles.proPillText}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.75}
+                    >
+                      {t("today.header.getPro")}
+                    </Text>
                   </TouchableOpacity>
                 )}
                 <TouchableOpacity
@@ -2009,7 +2058,7 @@ export default function HomeScreen() {
                   activeOpacity={0.85}
                   onPress={() => void handleOpenComposer()}
                   accessibilityRole="button"
-                  accessibilityLabel="Add a reminder by typing"
+                  accessibilityLabel={t("today.header.addTyped.a11y")}
                 >
                   <Plus size={20} color={colors.textHeading} strokeWidth={2} />
                 </TouchableOpacity>
@@ -2099,7 +2148,7 @@ export default function HomeScreen() {
           {showOfflineMessage && (
             <View style={[styles.offlineMessage, { bottom: (Platform.OS === "ios" ? 110 : 100) + insets.bottom }]}>
               <AppIcon name="wifi-off" size={18} color={colors.textSecondary} />
-              <Text style={styles.offlineText}>No internet connection</Text>
+              <Text style={styles.offlineText}>{t("today.offline.banner")}</Text>
               <TouchableOpacity onPress={() => setShowOfflineMessage(false)} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
                 <AppIcon name="x" size={16} color={colors.textTertiary} />
               </TouchableOpacity>
@@ -2136,6 +2185,15 @@ export default function HomeScreen() {
         onDismiss={handleComposerDismiss}
       />
 
+      {/* First-run language step — before the AI disclosure, once */}
+      <LanguageSheet
+        visible={showLanguageStep}
+        initialCode={currentLanguageChoice()}
+        confirmLabel={t("language.sheet.continue")}
+        onConfirm={(code) => void handleLanguageStepConfirm(code)}
+        onDismiss={() => setShowLanguageStep(false)}
+      />
+
       {/* First-run AI disclosure — gates the very first recording */}
       <AiConsentCard
         visible={showConsentCard}
@@ -2161,7 +2219,7 @@ export default function HomeScreen() {
           onClose={handleTimeDraftClose}
           onSave={handleEditSheetSave}
           onDelete={handleEditSheetDelete}
-          draft={{ confirmLabel: "Remind me", onConfirm: handleTimeDraftConfirm }}
+          draft={{ confirmLabel: t("today.timeDraft.confirm"), onConfirm: handleTimeDraftConfirm }}
         />
       )}
     </SafeAreaView>
@@ -2215,8 +2273,12 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderRadius: 999,
     marginRight: 10,
+    // Longer translations ("Quero o Pro") shrink the label rather than push the header.
+    maxWidth: 150,
+    flexShrink: 1,
   },
   proPillText: {
+    flexShrink: 1,
     color: "white",
     fontWeight: "600",
     fontSize: scaleFontSize(14),

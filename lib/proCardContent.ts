@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 /**
  * What the Pro card in Settings says, and what tapping it does.
  *
@@ -42,22 +43,22 @@ export function getProCardContent(
   if (status === "pro") {
     return {
       title: productName,
-      subtitle: "Active · Unlimited reminders",
+      subtitle: t("proCard.pro.subtitle"),
       action: "manage",
     };
   }
 
   if (status === "unknown") {
     return {
-      title: "Subscription",
-      subtitle: "Can't check right now · Tap to retry",
+      title: t("proCard.unknown.title"),
+      subtitle: t("proCard.unknown.subtitle"),
       action: "retry",
     };
   }
 
   return {
-    title: "Upgrade to Pro",
-    subtitle: "Unlimited active reminders",
+    title: t("proCard.free.title"),
+    subtitle: t("proCard.free.subtitle"),
     action: "upgrade",
   };
 }
@@ -88,22 +89,22 @@ export function getRestoreOutcomeContent(
   if (outcome === "restored") {
     return {
       proStatus: "pro",
-      title: "Purchases restored",
-      message: `${productName} is active on this device again.`,
+      title: t("restore.restored.title"),
+      message: t("restore.restored.message", { product: productName }),
     };
   }
 
   if (outcome === "expired") {
     return {
       proStatus: "free",
-      title: "Subscription expired",
-      message: `Your ${productName} subscription has ended. You can subscribe again any time.`,
+      title: t("restore.expired.title"),
+      message: t("restore.expired.message", { product: productName }),
     };
   }
 
   return {
     proStatus: "free",
-    title: "Nothing to restore",
-    message: "No previous subscription was found for this account.",
+    title: t("restore.nothing.title"),
+    message: t("restore.nothing.message"),
   };
 }

@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import { useEffect } from "react";
 import { StyleSheet, View, ViewStyle } from "react-native";
 import Animated, {
@@ -77,7 +78,7 @@ interface ProcessingWaveProps {
 export default function ProcessingWave({
   color = colors.accent,
   height = 26,
-  accessibilityLabel = "Processing",
+  accessibilityLabel = t("common.processing.a11y"),
   style,
 }: ProcessingWaveProps) {
   const wave = useSharedValue(0);

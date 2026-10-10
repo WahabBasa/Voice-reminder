@@ -1,3 +1,4 @@
+import { t } from "../../lib/i18n";
 import { StyleSheet, Text, View } from "react-native";
 import { scaleFontSize } from "../../lib/theme";
 import { FONT_DISPLAY } from "../../lib/fonts";
@@ -43,8 +44,10 @@ export default function FeatureTable() {
       <View style={styles.container}>
         <View style={styles.headRow}>
           <View style={styles.featureCol} />
-          <Text style={styles.colHead}>PRO</Text>
-          <Text style={styles.colHead}>FREE</Text>
+          <Text style={styles.colHead}>{t("paywall.table.col.pro")}</Text>
+          <Text style={styles.colHead} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+            {t("paywall.table.col.free")}
+          </Text>
         </View>
 
         {rows.map((row) => (

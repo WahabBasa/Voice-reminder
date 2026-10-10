@@ -26,7 +26,9 @@ import {
   type RingRecord,
   type RingSnapshot,
 } from "./ringLifecycle";
-import { describeGridSubtitle, formatEveryMinutes } from "../components/schedule/scheduleDraft";
+import { describeGridParts, formatEveryMinutes } from "../components/schedule/scheduleDraft";
+import { intlLocale, t } from "./i18n";
+import { weekdayShortLabel } from "./weekdayLabels";
 
 export type SnoozeSnapshot = Readonly<Record<string, number>>;
 export type DisplayDue = { at: number | null; source: "snooze" | "grid" | "legacy" | "unknown" | "ring" };
@@ -222,17 +224,21 @@ export function nextLine(card: ActiveCard, nowMs: number, options: ClockFormatOp
   if (card.ringState === "due-now") return formatDueNow();
   if (card.ringState === "missed") return formatMissedAt(card.occurrenceAt ?? card.due.at ?? nowMs, options);
   const at = card.due.at;
-  if (at === null) return "No next ring scheduled";
+  if (at === null) return t("reminders.next.none");
   if (card.due.source === "snooze") return formatRingsAgain(at, options);
-  if (card.overdue) return `Overdue · ${overdueSubtitle(card.reminder, [], nowMs, options)}`;
+  if (card.overdue) return t("reminders.next.overdue", { when: overdueSubtitle(card.reminder, [], nowMs, options) });
   if (at - nowMs < 86_400_000) return formatNextIn(at, nowMs);
   const today = todayISO(nowMs);
   const date = todayISO(at);
-  if (date === addDaysISO(today, 1)) return `Tomorrow · ${formatClockAt(at, options)}`;
+  if (date === addDaysISO(today, 1)) return t("reminders.next.tomorrow", { time: formatClockAt(at, options) });
   for (let days = 2; days <= 6; days++) {
-    if (date === addDaysISO(today, days)) return `Next in ${days} days`;
+    if (date === addDaysISO(today, days)) return t("time.nextIn.days", { count: days });
   }
-  return `${new Date(at).toLocaleDateString("en", { month: "short", day: "numeric" })} · ${formatClockAt(at, options)}`;
+  const locale = intlLocale();
+  return t("time.dateAndTime", {
+    date: new Date(at).toLocaleDateString(locale === "default" ? "en" : locale, { month: "short", day: "numeric" }),
+    time: formatClockAt(at, options),
+  });
 }
 
 export function patternLine(
@@ -240,25 +246,32 @@ export function patternLine(
 ): string {
   // A one-off's "pattern" is its date. Real `nowMs` matters for date-less one-offs, whose
   // target rolls forward from now; 0 would print a 1970 date.
-  if (reminder.frequency === "once") return `Once · ${overdueSubtitle(reminder, [], nowMs, options)}`;
+  if (reminder.frequency === "once") {
+    return t("reminders.pattern.once", { when: overdueSubtitle(reminder, [], nowMs, options) });
+  }
+  // "<pattern> · <times>": the pattern leads on this list, unlike the card.
+  const line = (pattern: string, time: string) => t("time.dateAndTime", { date: pattern, time });
   if (reminder.schedule) {
-    const description = describeGridSubtitle(reminder.schedule, options);
-    if (reminder.schedule.times.kind === "interval") return description;
-    const [times, days] = description.split(" · ");
-    const pattern = reminder.schedule.days.kind === "weekdays" && reminder.schedule.days.days.length
-      ? `Every ${days}` : days;
-    return pattern ? `${pattern} · ${times}` : times;
+    const parts = describeGridParts(reminder.schedule, options);
+    if (parts.interval) return parts.interval;
+    if (!parts.days) return parts.times;
+    const pattern = parts.weekdays ? t("reminders.pattern.everyDays", { days: parts.days }) : parts.days;
+    return line(pattern, parts.times);
   }
   if (reminder.frequency === "interval") {
-    return reminder.intervalMs ? `Every ${formatEveryMinutes(reminder.intervalMs / 60_000)}` : "";
+    return reminder.intervalMs
+      ? t("schedule.everyDuration", { duration: formatEveryMinutes(reminder.intervalMs / 60_000) })
+      : "";
   }
   const time = formatClockTime(reminder.time ?? "", options);
   if (reminder.frequency === "daily") {
     const n = reminder.intervalDays ?? 1;
-    return `${n > 1 ? `Every ${n} days` : "Daily"} · ${time}`;
+    return line(n > 1 ? t("schedule.everyNDays", { count: n }) : t("schedule.daily"), time);
   }
-  const days = (reminder.days ?? []).map((day) => day[0].toUpperCase() + day.slice(1, 3).toLowerCase()).join(", ");
-  return `${days ? `Every ${days}` : "Weekly"} · ${time}`;
+  const days = (reminder.days ?? [])
+    .map((day) => weekdayShortLabel(day.slice(0, 3).toLowerCase()))
+    .join(", ");
+  return line(days ? t("reminders.pattern.everyDays", { days }) : t("schedule.weekly"), time);
 }
 
 export function overdueDays(reminders: Reminder[], history: ReminderHistory[], nowMs: number): Set<string> {

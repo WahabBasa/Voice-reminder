@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import notifee, {
   AndroidImportance,
   AndroidCategory,
@@ -406,7 +407,7 @@ async function scheduleSnoozeOccurrenceFromNotification(
     alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
   };
   const channelId = `reminder_${reminderId}`;
-  const title = (data.title as string) || notification.title || "Reminder";
+  const title = (data.title as string) || notification.title || t("notification.fallbackTitle");
   // Identical text, identical audio — a comeback is the same ring again.
   const body = (data.description as string) || notification.body || "";
 

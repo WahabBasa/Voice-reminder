@@ -11,7 +11,8 @@ import {
   type TimesMode,
 } from "./schedule/scheduleDraft";
 import { normalizeClockTimes } from "../lib/schedule";
-import { formatClockTime } from "../lib/time";
+import { formatClockTime, usesHour12Format } from "../lib/time";
+import { t } from "../lib/i18n";
 import { borderRadius, colors, scaleFontSize } from "../lib/theme";
 
 /**
@@ -76,6 +77,7 @@ export default function TimesEditor({
 }: TimesEditorProps) {
   const [picker, setPicker] = useState<PickerTarget | null>(null);
 
+  const hour12 = usesHour12Format();
   const pickerInitial = useMemo(() => {
     if (!picker) return { hours: 9, minutes: 0 };
     if (picker.kind === "windowStart") return toHoursMinutes(windowStart);
@@ -141,8 +143,13 @@ export default function TimesEditor({
           onPress={() => selectMode("clock")}
           activeOpacity={0.7}
         >
-          <Text style={[styles.modeChipText, mode === "clock" && styles.modeChipTextSelected]}>
-            Set times
+          <Text
+            style={[styles.modeChipText, mode === "clock" && styles.modeChipTextSelected]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
+          >
+            {t("times.mode.setTimes")}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -157,8 +164,13 @@ export default function TimesEditor({
               color={mode === "interval" ? "#ffffff" : colors.textSecondary}
             />
           ) : null}
-          <Text style={[styles.modeChipText, mode === "interval" && styles.modeChipTextSelected]}>
-            Interval
+          <Text
+            style={[styles.modeChipText, mode === "interval" && styles.modeChipTextSelected]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
+          >
+            {t("times.mode.interval")}
           </Text>
         </TouchableOpacity>
       </View>
@@ -178,7 +190,7 @@ export default function TimesEditor({
                   onPress={() => removeTime(index)}
                   hitSlop={8}
                   activeOpacity={0.7}
-                  accessibilityLabel={`Remove ${formatClockTime(time)}`}
+                  accessibilityLabel={t("times.remove.a11y", { time: formatClockTime(time) })}
                 >
                   <AppIcon name="x" size={13} color={colors.textSecondary} />
                 </TouchableOpacity>
@@ -191,14 +203,14 @@ export default function TimesEditor({
               onPress={() => setPicker({ kind: "time", index: -1 })}
               activeOpacity={0.7}
             >
-              <Text style={styles.addChipText}>+ Add time</Text>
+              <Text style={styles.addChipText}>{t("times.addTime")}</Text>
             </TouchableOpacity>
           ) : null}
         </View>
       ) : (
         <View style={styles.intervalBlock}>
           <View style={styles.intervalRow}>
-            <Text style={styles.intervalLabel}>Every</Text>
+            <Text style={styles.intervalLabel}>{t("times.every")}</Text>
             <View style={styles.stepper}>
               <TouchableOpacity
                 style={styles.stepperButton}
@@ -230,7 +242,7 @@ export default function TimesEditor({
           </View>
 
           <View style={styles.intervalRow}>
-            <Text style={styles.intervalLabel}>Between</Text>
+            <Text style={styles.intervalLabel}>{t("times.between")}</Text>
             <View style={styles.windowRow}>
               <TouchableOpacity
                 style={styles.windowPill}
@@ -250,7 +262,7 @@ export default function TimesEditor({
             </View>
           </View>
 
-          <Text style={styles.intervalHint}>Stays quiet outside the window.</Text>
+          <Text style={styles.intervalHint}>{t("times.hint.window")}</Text>
         </View>
       )}
 
@@ -263,22 +275,30 @@ export default function TimesEditor({
           setIsVisible={(next: boolean) => {
             if (!next) setPicker(null);
           }}
-          modalTitle="Select time"
+          modalTitle={t("times.picker.title")}
+          confirmButtonText={t("common.done")}
+          cancelButtonText={t("common.cancel")}
           onCancel={() => setPicker(null)}
-          amLabel="AM"
-          pmLabel="PM"
+          amLabel={t("times.picker.am")}
+          pmLabel={t("times.picker.pm")}
           initialValue={pickerInitial}
           onConfirm={({ hours, minutes, seconds }) => {
-            // react-native-timer-picker's AM/PM wheel rides in `seconds`.
+            // 12-hour: react-native-timer-picker's AM/PM wheel rides in `seconds`
+            // (patches/). 24-hour: the hour wheel is the hour.
             const isPm = (seconds ?? 0) >= 12;
-            const hour24 = (hours % 12) + (isPm ? 12 : 0);
+            const hour24 = hour12 ? (hours % 12) + (isPm ? 12 : 0) : hours;
             applyPickedTime(
               `${String(hour24).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`
             );
           }}
           styles={{ theme: "light" }}
-          useAmPmWheel
-          use12HourPicker
+          // Follows the device's 12/24-hour setting, like every printed time.
+          useAmPmWheel={hour12}
+          use12HourPicker={hour12}
+          hideSeconds={!hour12}
+          padHoursWithZero={!hour12}
+          hourLabel={hour12 ? undefined : ""}
+          minuteLabel={hour12 ? undefined : ""}
         />
       ) : null}
     </View>

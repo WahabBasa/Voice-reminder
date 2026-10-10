@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { create } from "zustand";
 import type { FeedbackContext } from "./feedbackOutbox";
 import type { Reminder } from "./store";
@@ -102,15 +103,15 @@ export function reminderCreatedToast(
   resolveLive: (id: string) => Reminder | undefined
 ) {
   return {
-    title: "Reminder created",
+    title: t("take.created.title"),
     message: reminder.emoji ? `${reminder.emoji} ${reminder.title}` : reminder.title,
     type: "success" as const,
     durationMs: 5000,
-    actionLabel: "Not right?",
+    actionLabel: t("take.created.action"),
     onPress: () =>
       feedbackUi.openReminderComposer(
         resolveLive(reminder.id) ?? reminder,
-        "Includes this reminder's details."
+        t("feedback.notice.reminder")
       ),
   };
 }

@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { TouchableOpacity } from "@gorhom/bottom-sheet";
@@ -70,7 +71,7 @@ export function ReminderContextCardView({
           <View style={styles.separator} />
           <View style={styles.spokenRow}>
             <View style={styles.spokenText}>
-              <Text style={styles.spokenLabel}>Remi says</Text>
+              <Text style={styles.spokenLabel}>{t("feedback.context.remiSays")}</Text>
               <Text style={styles.spoken} numberOfLines={3} testID="reminder-context-spoken">
                 {spoken}
               </Text>
@@ -81,7 +82,7 @@ export function ReminderContextCardView({
                 onPress={onTogglePlay}
                 activeOpacity={0.7}
                 accessibilityRole="button"
-                accessibilityLabel={playing ? "Stop" : "Play what Remi says"}
+                accessibilityLabel={playing ? t("feedback.context.stop.a11y") : t("feedback.context.play.a11y")}
                 testID="reminder-context-play"
               >
                 <AppIcon name={playing ? "square" : "play"} size={14} color="#ffffff" />

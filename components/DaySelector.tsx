@@ -1,15 +1,9 @@
+import { weekdayFullLabel, weekdayNarrowLabel } from "../lib/weekdayLabels";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { colors, spacing, borderRadius } from "../lib/theme";
 
-const DAYS = [
-  { key: "mon", label: "M" },
-  { key: "tue", label: "T" },
-  { key: "wed", label: "W" },
-  { key: "thu", label: "T" },
-  { key: "fri", label: "F" },
-  { key: "sat", label: "S" },
-  { key: "sun", label: "S" },
-];
+/** Monday first. Letters come from the catalog; the circles have no room for more. */
+const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((key) => ({ key }));
 
 interface DaySelectorProps {
   selectedDays: string[];
@@ -42,6 +36,10 @@ export default function DaySelector({
             onPress={() => !readonly && onToggle?.(day.key)}
             disabled={readonly}
             activeOpacity={readonly ? 1 : 0.7}
+            // Letters are ambiguous in some languages (pt-BR: S T Q Q S S D).
+            accessibilityRole="checkbox"
+            accessibilityLabel={weekdayFullLabel(day.key)}
+            accessibilityState={{ checked: isActive, disabled: readonly }}
           >
             <Text
               style={[
@@ -50,7 +48,7 @@ export default function DaySelector({
                 isActive && styles.dayTextActive,
               ]}
             >
-              {day.label}
+              {weekdayNarrowLabel(day.key)}
             </Text>
           </TouchableOpacity>
         );

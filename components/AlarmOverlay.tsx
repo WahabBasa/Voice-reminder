@@ -1,3 +1,5 @@
+import { t } from "../lib/i18n";
+import { formatClockAt } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BackHandler,
@@ -589,7 +591,7 @@ export function AlarmOverlay({
         </View>
 
         <Text style={styles.time}>
-          {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          {formatClockAt(Date.now())}
         </Text>
 
         <Text style={styles.title}>{title}</Text>
@@ -598,7 +600,7 @@ export function AlarmOverlay({
         {isPlaying && (
           <View style={styles.playingIndicator}>
             <AppIcon name="volume-2" size={20} color="rgba(255,255,255,0.7)" />
-            <Text style={styles.playingText}>Playing...</Text>
+            <Text style={styles.playingText}>{t("alarmOverlay.playing")}</Text>
           </View>
         )}
       </View>
@@ -606,12 +608,12 @@ export function AlarmOverlay({
       <View style={styles.actions}>
         <TouchableOpacity style={styles.snoozeButton} onPress={handleSnooze} activeOpacity={0.8}>
           <AppIcon name="clock" size={24} color="white" />
-          <Text style={styles.snoozeText}>Later</Text>
+          <Text style={styles.snoozeText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("alarmOverlay.later")}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.dismissButton} onPress={handleDismiss} activeOpacity={0.8}>
           <AppIcon name="check" size={24} color="white" />
-          <Text style={styles.dismissText}>Done</Text>
+          <Text style={styles.dismissText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("alarmOverlay.done")}</Text>
         </TouchableOpacity>
       </View>
     </View>

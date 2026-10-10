@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { isIntervalGrid, type GridSchedule } from "./schedule";
 // Type only, and deliberately from proCardContent rather than purchases: this
 // module must stay importable without the native purchases SDK (it reaches the
@@ -72,17 +73,17 @@ export function getCapGateBlockContent(
 ): CapGateBlockContent {
   if (block === "blocked_unverified") {
     return {
-      statusText: "Can't verify your subscription. Check your internet connection and try again.",
-      toastTitle: "Can't verify your subscription",
-      toastMessage: "Check your internet connection and try again.",
+      statusText: t("gate.unverified.status"),
+      toastTitle: t("gate.unverified.toastTitle"),
+      toastMessage: t("gate.unverified.toastMessage"),
       offersUpgrade: false,
     };
   }
 
   return {
-    statusText: `You've reached ${limit} active reminders. Upgrade for unlimited.`,
-    toastTitle: `You've reached ${limit} active reminders`,
-    toastMessage: "Tap to upgrade for unlimited.",
+    statusText: t("gate.limit.status", { limit }),
+    toastTitle: t("gate.limit.toastTitle", { limit }),
+    toastMessage: t("gate.limit.toastMessage"),
     offersUpgrade: true,
   };
 }

@@ -1,3 +1,7 @@
+import { t } from "../lib/i18n";
+import { endonymFor, useChosenLanguage } from "../lib/appLanguage";
+import { currentLanguageChoice, pickLanguage } from "../lib/pickLanguage";
+import LanguageSheet from "../components/LanguageSheet";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -28,10 +32,11 @@ import { useFeedbackUi } from "../lib/feedbackUi";
 import type { VoiceLanguageSetting } from "../lib/deviceStt";
 import type { SpeechEngine } from "../lib/vrSpeech";
 
-const VOICE_LANGUAGE_LABELS: Record<VoiceLanguageSetting, string> = {
-  auto: "Automatic",
-  en: "English",
-  ar: "العربية",
+const VOICE_LANGUAGE_LABELS: Record<VoiceLanguageSetting, () => string> = {
+  auto: () => t("settings.voiceLanguage.auto"),
+  en: () => t("settings.voiceLanguage.en"),
+  // An endonym, never translated.
+  ar: () => "العربية",
 };
 
 type SettingsRowProps = {
@@ -111,17 +116,18 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
   const showVoiceEngineRow = process.env.EXPO_PUBLIC_VR_PERF_LOGS === "1";
 
   const handlePickVoiceLanguage = () => {
-    Alert.alert(
-      "Voice language",
-      "Which language to transcribe your recordings in on this iPhone. Automatic follows your device languages.",
-      [
-        { text: VOICE_LANGUAGE_LABELS.auto, onPress: () => void setVoiceLanguage("auto") },
-        { text: VOICE_LANGUAGE_LABELS.en, onPress: () => void setVoiceLanguage("en") },
-        { text: VOICE_LANGUAGE_LABELS.ar, onPress: () => void setVoiceLanguage("ar") },
-        { text: "Cancel", style: "cancel" },
-      ]
-    );
+    Alert.alert(t("settings.row.voiceLanguage"), t("settings.voiceLanguage.alert.message"), [
+      { text: VOICE_LANGUAGE_LABELS.auto(), onPress: () => void setVoiceLanguage("auto") },
+      { text: VOICE_LANGUAGE_LABELS.en(), onPress: () => void setVoiceLanguage("en") },
+      { text: VOICE_LANGUAGE_LABELS.ar(), onPress: () => void setVoiceLanguage("ar") },
+      { text: t("common.cancel"), style: "cancel" },
+    ]);
   };
+
+  // App language (UI + the voice hint): the wheel, shared with the first run.
+  const chosenLanguage = useChosenLanguage();
+  const [showLanguageSheet, setShowLanguageSheet] = useState(false);
+  const languageChoice = chosenLanguage ?? currentLanguageChoice();
 
   const handlePickVoiceEngine = () => {
     Alert.alert("Voice engine (dev)", "On-device transcription model", [
@@ -176,18 +182,16 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
     const status = await forceRefreshProStatus();
     setProStatus(status);
     if (status === "unknown") {
-      Alert.alert(
-        "Couldn't check your subscription",
-        "Check your connection and try again in a moment."
-      );
+      Alert.alert(t("settings.alert.checkFailed.title"), t("settings.alert.checkFailed.message"));
     }
   };
 
   const versionLabel = useMemo(() => {
     const version = Constants.expoConfig?.version ?? "1.0.0";
     const build = (Constants as any).nativeBuildVersion ?? (Constants as any).expoConfig?.ios?.buildNumber;
-    if (!build) return `v${version}`;
-    return `v${version} (${build})`;
+    // Brand + version: the same in every language, so no catalog entry without a build.
+    if (!build) return `Remi v${version}`;
+    return t("settings.version", { version, build: String(build) });
   }, []);
 
   // App Review 3.1.1 wants restore reachable outside the paywall too.
@@ -199,10 +203,10 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
 
     if (result.status === "error") {
       Alert.alert(
-        "Restore failed",
+        t("settings.alert.restoreFailed.title"),
         result.category === "network"
-          ? "No connection to the App Store. Check your internet and try again."
-          : "Couldn't reach the App Store. Please try again shortly."
+          ? t("settings.alert.restoreFailed.offline")
+          : t("settings.alert.restoreFailed.store")
       );
       return;
     }
@@ -221,10 +225,7 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
   const handleManageSubscription = async () => {
     const opened = await openManageSubscriptions();
     if (!opened) {
-      Alert.alert(
-        "Couldn't open subscriptions",
-        "Manage your subscription under Settings › your Apple Account › Subscriptions."
-      );
+      Alert.alert(t("settings.alert.manageFailed.title"), t("settings.alert.manageFailed.message"));
     }
   };
 
@@ -234,7 +235,7 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
     try {
       await openInAppBrowser(url);
     } catch (e) {
-      Alert.alert("Unable to open link", "Please try again later.");
+      Alert.alert(t("settings.alert.linkFailed.title"), t("settings.alert.linkFailed.message"));
     }
   };
 
@@ -254,7 +255,7 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
             <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
           </TouchableOpacity>
         ) : null}
-        <Text style={styles.headerTitle}>Settings</Text>
+        <Text style={styles.headerTitle}>{t("settings.title")}</Text>
       </View>
 
       {/* Pro card: the upgrade pitch for a confirmed free user, the
@@ -284,30 +285,39 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
       </TouchableOpacity>
 
       {/* General: the ONE notifications entry point */}
-      <Text style={styles.sectionLabel}>General</Text>
+      <Text style={styles.sectionLabel}>{t("settings.section.general")}</Text>
       <View style={styles.card}>
         <SettingsRow
+          icon="globe"
+          label={t("settings.row.language")}
+          subtitle={endonymFor(languageChoice)}
+          onPress={() => setShowLanguageSheet(true)}
+        />
+        <View style={styles.separator} />
+        <SettingsRow
           icon="bell"
-          label="Notifications & alarms"
-          subtitle="Permissions, scheduled alarms & system settings"
+          label={t("settings.row.notifications")}
+          subtitle={t("settings.row.notifications.subtitle")}
           onPress={() => router.push("/diagnostics")}
         />
         <View style={styles.separator} />
         <SettingsRow
           icon="refresh-cw"
-          label="Restore purchases"
-          subtitle={isRestoring ? "Restoring…" : "Already subscribed? Get Pro back"}
+          label={t("settings.row.restore")}
+          subtitle={isRestoring ? t("settings.row.restore.restoring") : t("settings.row.restore.subtitle")}
           onPress={isRestoring ? undefined : handleRestore}
         />
       </View>
 
       {/* Voice: how recordings get transcribed on this device */}
-      <Text style={styles.sectionLabel}>Voice</Text>
+      <Text style={styles.sectionLabel}>{t("settings.section.voice")}</Text>
       <View style={styles.card}>
         <SettingsRow
           icon="mic"
-          label="Voice language"
-          subtitle={`Transcribed on this iPhone · ${VOICE_LANGUAGE_LABELS[voiceLanguage]}`}
+          label={t("settings.row.voiceLanguage")}
+          subtitle={t("settings.row.voiceLanguage.subtitle", {
+            language: VOICE_LANGUAGE_LABELS[voiceLanguage](),
+          })}
           onPress={handlePickVoiceLanguage}
         />
         {showVoiceEngineRow ? (
@@ -324,44 +334,55 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
       </View>
 
       {/* Feedback: a direct line to the developer, and where past notes stand */}
-      <Text style={styles.sectionLabel}>Feedback</Text>
+      <Text style={styles.sectionLabel}>{t("settings.section.feedback")}</Text>
       <View style={styles.card}>
         <SettingsRow
           icon="message-square"
-          label="Send feedback"
-          subtitle="Tell the developer what's working or what isn't"
+          label={t("settings.row.sendFeedback")}
+          subtitle={t("settings.row.sendFeedback.subtitle")}
           onPress={() => openFeedbackComposer({ kind: "settings" })}
         />
         <View style={styles.separator} />
         <SettingsRow
           icon="info"
-          label="Your feedback"
-          subtitle="See what you've sent and any replies"
+          label={t("settings.row.yourFeedback")}
+          subtitle={t("settings.row.yourFeedback.subtitle")}
           onPress={openFeedbackList}
         />
       </View>
 
       {/* About: the two legal documents, reachable without leaving the app
           (Guideline 5.1.1(i) wants the policy in-app and easy to find) */}
-      <Text style={styles.sectionLabel}>About</Text>
+      <Text style={styles.sectionLabel}>{t("settings.section.about")}</Text>
       <View style={styles.card}>
         <SettingsRow
           icon="shield"
-          label="Privacy Policy"
-          subtitle="What we collect and who processes it"
+          label={t("settings.row.privacy")}
+          subtitle={t("settings.row.privacy.subtitle")}
           onPress={() => void handleOpenLegalLink(PRIVACY_POLICY_URL)}
         />
         <View style={styles.separator} />
         <SettingsRow
           icon="file-text"
-          label="Terms of Use"
-          subtitle="Subscription terms and app licence"
+          label={t("settings.row.terms")}
+          subtitle={t("settings.row.terms.subtitle")}
           onPress={() => void handleOpenLegalLink(TERMS_OF_USE_URL)}
         />
       </View>
 
       {/* Version footer */}
-      <Text style={styles.versionFooter}>Remi {versionLabel}</Text>
+      <Text style={styles.versionFooter}>{versionLabel}</Text>
+
+      <LanguageSheet
+        visible={showLanguageSheet}
+        initialCode={languageChoice}
+        confirmLabel={t("common.done")}
+        onConfirm={(code) => {
+          setShowLanguageSheet(false);
+          void pickLanguage(code);
+        }}
+        onDismiss={() => setShowLanguageSheet(false)}
+      />
     </ScrollView>
   );
 }

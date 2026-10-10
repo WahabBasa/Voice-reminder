@@ -1,3 +1,4 @@
+import { t } from "../../lib/i18n";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { scaleFontSize } from "../../lib/theme";
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from "../../lib/legalLinks";
@@ -31,7 +32,7 @@ export default function FooterLegalRow({ onOpenLink, onRestore, busy }: FooterLe
         hitSlop={hitSlop}
         accessibilityRole="link"
       >
-        <Text style={styles.link}>Terms of Use</Text>
+        <Text style={styles.link}>{t("paywall.legal.terms")}</Text>
       </TouchableOpacity>
 
       <Text style={styles.separator}>·</Text>
@@ -43,7 +44,7 @@ export default function FooterLegalRow({ onOpenLink, onRestore, busy }: FooterLe
         hitSlop={hitSlop}
         accessibilityRole="link"
       >
-        <Text style={styles.link}>Privacy Policy</Text>
+        <Text style={styles.link}>{t("paywall.legal.privacy")}</Text>
       </TouchableOpacity>
 
       <Text style={styles.separator}>·</Text>
@@ -56,7 +57,7 @@ export default function FooterLegalRow({ onOpenLink, onRestore, busy }: FooterLe
         disabled={busy}
         accessibilityRole="button"
       >
-        <Text style={[styles.link, busy && styles.linkBusy]}>Restore</Text>
+        <Text style={[styles.link, busy && styles.linkBusy]}>{t("paywall.legal.restore")}</Text>
       </TouchableOpacity>
     </View>
   );

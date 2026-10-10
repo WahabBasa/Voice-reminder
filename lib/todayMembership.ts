@@ -16,6 +16,7 @@
  */
 
 import { isCompletedOnDay, occurrencesForDay } from "./dayOccurrences";
+import { intlLocale, t } from "./i18n";
 import { getReminderNextDueTimestamp, statusOf } from "./reminderActive";
 import { type Reminder, type ReminderHistory } from "./store";
 import { formatClockAt, type ClockFormatOptions } from "./time";
@@ -54,8 +55,9 @@ export function overdueSubtitle(
   const ring = overdueRingTime(reminder, history, nowMs);
   const date = new Date(ring);
   if (Number.isNaN(date.getTime())) return "";
-  const day = date.toLocaleDateString([], { month: "short", day: "numeric" });
-  return `${day} · ${formatClockAt(date, options)}`;
+  const locale = intlLocale();
+  const day = date.toLocaleDateString(locale === "default" ? [] : locale, { month: "short", day: "numeric" });
+  return t("time.dateAndTime", { date: day, time: formatClockAt(date, options) });
 }
 
 /**

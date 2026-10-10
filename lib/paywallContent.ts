@@ -10,6 +10,7 @@
  *    content arrays are empty and their flags are off (see PAYWALL_PROOF_FLAGS).
  */
 
+import { splitTag, t } from "./i18n";
 import type { PurchasesPackage } from "react-native-purchases";
 import { getFreeActiveLimit } from "./usageGate";
 
@@ -56,18 +57,37 @@ export const AWARD_BADGES: AwardBadge[] = [];
  */
 export const PAYWALL_COPY = {
   /** Three lines, one per row of the serif display hero. */
-  heroLines: ["Forget less.", "Remember", "on time."],
-  heroSubtitle:
-    "Say a reminder once. It's spoken back to you out loud at the right time, so you know exactly what to do.",
-  affinityLine: "Built for people who forget a lot.",
-  featureHeading: "What Pro adds",
-  closingHeadline: "Forget less. Get things done on time.",
-  brandStatement: "Made by one developer who kept forgetting things.",
-  restoreLabel: "Restore purchase",
+  get heroLines(): string[] {
+    return [t("paywall.hero.default.line1"), t("paywall.hero.default.line2"), t("paywall.hero.default.line3")];
+  },
+  get heroSubtitle() {
+    return t("paywall.hero.default.subtitle");
+  },
+  get affinityLine() {
+    return t("paywall.affinity");
+  },
+  get featureHeading() {
+    return t("paywall.table.heading");
+  },
+  get closingHeadline() {
+    return t("paywall.closing.headline");
+  },
+  get brandStatement() {
+    return t("paywall.closing.brand");
+  },
+  get restoreLabel() {
+    return t("paywall.restore");
+  },
   /** Annual card pill. A value claim we can stand behind — not a popularity one. */
-  annualBadge: "BEST VALUE",
-  plansUnavailable: "Plans couldn't load right now.",
-  plansUnavailableHint: "Check your connection and reopen this screen.",
+  get annualBadge() {
+    return t("paywall.card.badge");
+  },
+  get plansUnavailable() {
+    return t("paywall.plansUnavailable");
+  },
+  get plansUnavailableHint() {
+    return t("paywall.plansUnavailable.hint");
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -83,12 +103,12 @@ export type PaywallContext = "default" | "interval";
 
 export type HeroCopy = { lines: string[]; subtitle: string };
 
-const HERO_COPY: Record<PaywallContext, HeroCopy> = {
-  default: { lines: PAYWALL_COPY.heroLines, subtitle: PAYWALL_COPY.heroSubtitle },
-  interval: {
-    lines: ["Repeat it", "until it's", "done."],
-    subtitle: "Pro repeats one reminder every few minutes, inside the hours you pick.",
-  },
+const HERO_COPY: Record<PaywallContext, () => HeroCopy> = {
+  default: () => ({ lines: PAYWALL_COPY.heroLines, subtitle: PAYWALL_COPY.heroSubtitle }),
+  interval: () => ({
+    lines: [t("paywall.hero.interval.line1"), t("paywall.hero.interval.line2"), t("paywall.hero.interval.line3")],
+    subtitle: t("paywall.hero.interval.subtitle"),
+  }),
 };
 
 /** Route params arrive as strings (or arrays of them), and may be anything. */
@@ -98,7 +118,7 @@ export function resolvePaywallContext(value: unknown): PaywallContext {
 }
 
 export function getHeroCopy(context: PaywallContext): HeroCopy {
-  return HERO_COPY[context];
+  return HERO_COPY[context]();
 }
 
 // ---------------------------------------------------------------------------
@@ -127,12 +147,16 @@ const text = (label: string): TierCell => ({ kind: "text", label });
 export function getFeatureRows(): FeatureRow[] {
   const freeLimit = getFreeActiveLimit();
   return [
-    { feature: "Set a reminder just by saying it", pro: CHECK, free: CHECK },
-    { feature: "Alarms that say what they're for", pro: CHECK, free: CHECK },
-    { feature: "One reminder, several times a day", pro: CHECK, free: CHECK },
-    { feature: "Weekdays, dates, every few days", pro: CHECK, free: CHECK },
-    { feature: "Reminders running at once", pro: text("Unlimited"), free: text(String(freeLimit)) },
-    { feature: "Repeat every few minutes, in the hours you pick", pro: CHECK, free: NONE },
+    { feature: t("paywall.table.row.voice"), pro: CHECK, free: CHECK },
+    { feature: t("paywall.table.row.spokenAlarms"), pro: CHECK, free: CHECK },
+    { feature: t("paywall.table.row.severalTimes"), pro: CHECK, free: CHECK },
+    { feature: t("paywall.table.row.schedules"), pro: CHECK, free: CHECK },
+    {
+      feature: t("paywall.table.row.activeCount"),
+      pro: text(t("paywall.table.cell.unlimited")),
+      free: text(String(freeLimit)),
+    },
+    { feature: t("paywall.table.row.interval"), pro: CHECK, free: NONE },
   ];
 }
 
@@ -140,16 +164,27 @@ export function getFeatureRows(): FeatureRow[] {
 // Store data → card copy
 // ---------------------------------------------------------------------------
 
-const PERIOD_UNIT_LABELS: Record<string, string> = { D: "day", W: "week", M: "month", Y: "year" };
+type TermUnit = "day" | "week" | "month" | "year";
+type Term = { count: number; unit: TermUnit };
+
+const PERIOD_UNITS: Record<string, TermUnit> = { D: "day", W: "week", M: "month", Y: "year" };
 const PERIOD_UNIT_MONTHS: Record<string, number> = { D: 1 / 30, W: 1 / 4.345, M: 1, Y: 12 };
 
-const PACKAGE_TYPE_TERMS: Record<string, string> = {
-  WEEKLY: "week",
-  MONTHLY: "month",
-  TWO_MONTH: "2 months",
-  THREE_MONTH: "3 months",
-  SIX_MONTH: "6 months",
-  ANNUAL: "year",
+const PACKAGE_TYPE_TERMS: Record<string, Term> = {
+  WEEKLY: { count: 1, unit: "week" },
+  MONTHLY: { count: 1, unit: "month" },
+  TWO_MONTH: { count: 2, unit: "month" },
+  THREE_MONTH: { count: 3, unit: "month" },
+  SIX_MONTH: { count: 6, unit: "month" },
+  ANNUAL: { count: 1, unit: "year" },
+};
+
+/** Each unit's catalog key, spelled out so the key checker can see them. */
+const TERM_LABEL: Record<TermUnit, (count: number) => string> = {
+  day: (count) => t("paywall.term.day", { count }),
+  week: (count) => t("paywall.term.week", { count }),
+  month: (count) => t("paywall.term.month", { count }),
+  year: (count) => t("paywall.term.year", { count }),
 };
 
 const PACKAGE_TYPE_MONTHS: Record<string, number> = {
@@ -168,14 +203,18 @@ function parsePeriod(pkg: PurchasesPackage): { count: number; unit: string } | n
   return { count: Number(match[1]), unit: match[2] };
 }
 
-/** Billing term as words: "month", "year", "6 months". Store data first, package type as fallback. */
-export function getTermLabel(pkg: PurchasesPackage): string {
+/** The billing term: store data first, package type as fallback. Null when neither says. */
+function getTerm(pkg: PurchasesPackage): Term | null {
   const parsed = parsePeriod(pkg);
-  const unit = parsed ? PERIOD_UNIT_LABELS[parsed.unit] : undefined;
-  if (parsed && unit) {
-    return parsed.count === 1 ? unit : `${parsed.count} ${unit}s`;
-  }
-  return PACKAGE_TYPE_TERMS[pkg.packageType] ?? "billing period";
+  const unit = parsed ? PERIOD_UNITS[parsed.unit] : undefined;
+  if (parsed && unit) return { count: parsed.count, unit };
+  return PACKAGE_TYPE_TERMS[pkg.packageType] ?? null;
+}
+
+/** Billing term as words: "month", "year", "6 months". */
+export function getTermLabel(pkg: PurchasesPackage): string {
+  const term = getTerm(pkg);
+  return term ? TERM_LABEL[term.unit](term.count) : t("paywall.term.fallback");
 }
 
 /** Term length in months, used only to sort plans into the monthly/annual slots. */
@@ -190,18 +229,18 @@ function getTermMonths(pkg: PurchasesPackage): number {
 
 /** "Billed monthly" / "Billed yearly" — the reference card's second line. */
 function getBilledLabel(pkg: PurchasesPackage): string {
-  const term = getTermLabel(pkg);
-  if (term === "month") return "Billed monthly";
-  if (term === "year") return "Billed yearly";
-  if (term === "week") return "Billed weekly";
-  return `Billed every ${term}`;
+  const term = getTerm(pkg);
+  if (term?.count === 1 && term.unit === "month") return t("paywall.billed.monthly");
+  if (term?.count === 1 && term.unit === "year") return t("paywall.billed.yearly");
+  if (term?.count === 1 && term.unit === "week") return t("paywall.billed.weekly");
+  return t("paywall.billed.every", { term: getTermLabel(pkg) });
 }
 
-const TERM_SHORT_LABELS: Record<string, string> = {
-  month: "mo",
-  year: "yr",
-  week: "wk",
-  day: "day",
+const TERM_SHORT_LABELS: Record<TermUnit, () => string> = {
+  month: () => t("paywall.termShort.month"),
+  year: () => t("paywall.termShort.year"),
+  week: () => t("paywall.termShort.week"),
+  day: () => t("paywall.termShort.day"),
 };
 
 /**
@@ -209,8 +248,8 @@ const TERM_SHORT_LABELS: Record<string, string> = {
  * Anything without a natural abbreviation keeps its long form.
  */
 export function getShortTermLabel(pkg: PurchasesPackage): string {
-  const term = getTermLabel(pkg);
-  return TERM_SHORT_LABELS[term] ?? term;
+  const term = getTerm(pkg);
+  return term?.count === 1 ? TERM_SHORT_LABELS[term.unit]() : getTermLabel(pkg);
 }
 
 /**
@@ -231,23 +270,18 @@ function resolveFreeTrial(pkg: PurchasesPackage): { count: number; unit: string 
   return null;
 }
 
-const TRIAL_UNIT_LABELS: Record<string, string> = {
-  DAY: "day",
-  WEEK: "week",
-  MONTH: "month",
-  YEAR: "year",
+const TRIAL_LENGTH: Record<string, (count: number) => string> = {
+  DAY: (count) => t("paywall.trial.days", { count }),
+  MONTH: (count) => t("paywall.trial.months", { count }),
+  YEAR: (count) => t("paywall.trial.years", { count }),
 };
 
 /** "7 days", "1 month". Weeks are spelled in days — that's how a trial gets read. */
 function formatTrialLength(trial: { count: number; unit: string } | null): string | null {
   if (!trial) return null;
-  if (trial.unit === "WEEK") {
-    const days = trial.count * 7;
-    return `${days} days`;
-  }
-  const label = TRIAL_UNIT_LABELS[trial.unit];
-  if (!label) return null;
-  return trial.count === 1 ? `1 ${label}` : `${trial.count} ${label}s`;
+  if (trial.unit === "WEEK") return TRIAL_LENGTH.DAY(trial.count * 7);
+  const length = TRIAL_LENGTH[trial.unit];
+  return length ? length(trial.count) : null;
 }
 
 export type PlanCopy = {
@@ -275,7 +309,7 @@ export function describePlan(pkg: PurchasesPackage): PlanCopy {
     termShortLabel: getShortTermLabel(pkg),
     billedLabel: getBilledLabel(pkg),
     trialLength,
-    trialLabel: trialLength ? `(${trialLength} trial)` : "(No trial)",
+    trialLabel: trialLength ? t("paywall.trialLabel", { length: trialLength }) : t("paywall.noTrial"),
   };
 }
 
@@ -321,9 +355,9 @@ export function selectPlanPair(packages: PurchasesPackage[]): {
 
 /** Sticky CTA label. Only promises a trial when the store grants one. */
 export function buildCtaLabel(plan: PlanCopy | null): string {
-  if (!plan) return "Plans unavailable";
-  if (plan.trialLength) return `Start ${plan.trialLength} free trial`;
-  return `Subscribe for ${plan.priceString} / ${plan.termLabel}`;
+  if (!plan) return t("paywall.cta.unavailable");
+  if (plan.trialLength) return t("paywall.cta.trial", { length: plan.trialLength });
+  return t("paywall.cta.subscribe", { price: plan.priceString, term: plan.termLabel });
 }
 
 /**
@@ -335,7 +369,17 @@ export type CaptionSegment = { text: string; bold?: boolean };
 export type CaptionLine = CaptionSegment[];
 
 /** "No commitment. Cancel anytime." — true on both plans, so it never varies. */
-const CAPTION_COMMITMENT_LINE = "No commitment. Cancel anytime.";
+const commitmentLine = () => t("paywall.caption.commitment");
+
+/** A caption sentence with its `<b>` run marked bold, empty runs dropped. */
+function boldRun(message: string): CaptionLine {
+  const { before, inner, after } = splitTag(message, "b");
+  const line: CaptionLine = [];
+  if (before) line.push({ text: before });
+  if (inner) line.push({ text: inner, bold: true });
+  if (after) line.push({ text: after });
+  return line;
+}
 
 /** Flattens a caption line back to plain text (labels, tests, logs). */
 export function captionLineToString(line: CaptionLine): string {
@@ -352,22 +396,16 @@ export function buildHonestyCaption(plan: PlanCopy | null): CaptionLine[] {
     return [[{ text: PAYWALL_COPY.plansUnavailable }], [{ text: PAYWALL_COPY.plansUnavailableHint }]];
   }
 
-  const price: CaptionSegment = {
-    text: `${plan.priceString}/${plan.termShortLabel}`,
-    bold: true,
-  };
+  const price = { price: plan.priceString, termShort: plan.termShortLabel };
 
   if (plan.trialLength) {
     return [
-      [{ text: `${plan.trialLength} free trial, ` }, price, { text: "." }],
-      [{ text: CAPTION_COMMITMENT_LINE }],
+      boldRun(t("paywall.caption.trial", { length: plan.trialLength, ...price })),
+      [{ text: commitmentLine() }],
     ];
   }
 
-  return [
-    [{ text: "No free trial, " }, price, { text: "." }],
-    [{ text: CAPTION_COMMITMENT_LINE }],
-  ];
+  return [boldRun(t("paywall.caption.noTrial", price)), [{ text: commitmentLine() }]];
 }
 
 /**
@@ -376,10 +414,10 @@ export function buildHonestyCaption(plan: PlanCopy | null): CaptionLine[] {
  */
 export function buildDisclosure(pkg: PurchasesPackage | null, productName: string): string {
   if (!pkg) {
-    return `${productName} is an auto-renewing subscription. Payment is charged to your Apple Account at confirmation of purchase and renews automatically until canceled. Manage or cancel anytime in Settings > Apple Account > Subscriptions.`;
+    return t("paywall.legal.disclosure.generic", { product: productName });
   }
 
   const term = getTermLabel(pkg);
   const price = pkg.product.priceString;
-  return `${productName} is ${price} every ${term}. Payment is charged to your Apple Account at confirmation of purchase. It renews automatically for ${price} every ${term}, and your account is charged within 24 hours before each renewal, unless auto-renew is turned off at least 24 hours before the current period ends. Manage or cancel anytime in Settings > Apple Account > Subscriptions.`;
+  return t("paywall.legal.disclosure.priced", { product: productName, price, term });
 }

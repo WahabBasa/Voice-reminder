@@ -36,7 +36,13 @@ export default function PaywallHero({
 
       <View style={styles.copy}>
         {hero.lines.map((line) => (
-          <Text key={line} style={styles.heroLine}>
+          <Text
+            key={line}
+            style={styles.heroLine}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.7}
+          >
             {line}
           </Text>
         ))}

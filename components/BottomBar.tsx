@@ -3,6 +3,7 @@ import { StyleSheet, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Calendar, List, Mic, Settings } from "lucide-react-native";
 import { borderRadius, colors, shadows } from "../lib/theme";
+import { t } from "../lib/i18n";
 
 export type BottomBarTab = "today" | "days" | "settings";
 
@@ -13,10 +14,11 @@ type BottomBarProps = {
     onRecord?: () => void;
 };
 
-const TABS: { key: BottomBarTab; label: string; Icon: typeof List }[] = [
-    { key: "today", label: "Reminders", Icon: List },
-    { key: "days", label: "Days", Icon: Calendar },
-    { key: "settings", label: "Settings", Icon: Settings },
+// Icon-only tabs: the label is what VoiceOver reads, so it never overflows.
+const TABS: { key: BottomBarTab; label: () => string; Icon: typeof List }[] = [
+    { key: "today", label: () => t("tabs.reminders"), Icon: List },
+    { key: "days", label: () => t("tabs.days"), Icon: Calendar },
+    { key: "settings", label: () => t("tabs.settings"), Icon: Settings },
 ];
 
 export default function BottomBar({ activeTab, onTab, onRecord }: BottomBarProps) {
@@ -36,7 +38,7 @@ export default function BottomBar({ activeTab, onTab, onRecord }: BottomBarProps
                                 onPress={() => onTab(key)}
                                 activeOpacity={0.7}
                                 accessibilityRole="tab"
-                                accessibilityLabel={label}
+                                accessibilityLabel={label()}
                                 accessibilityState={{ selected: active }}
                             >
                                 <Icon
@@ -55,7 +57,7 @@ export default function BottomBar({ activeTab, onTab, onRecord }: BottomBarProps
                         onPress={onRecord}
                         activeOpacity={0.9}
                         accessibilityRole="button"
-                        accessibilityLabel="Record a reminder"
+                        accessibilityLabel={t("tabs.record.a11y")}
                     >
                         <Mic size={24} color="white" strokeWidth={1.75} />
                     </TouchableOpacity>

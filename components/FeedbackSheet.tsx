@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Keyboard, StyleSheet, Text, View } from "react-native";
 import BottomSheet, {
@@ -94,7 +95,11 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
       });
     } catch {
       // Couldn't even save locally: rare (storage full). Tell them plainly.
-      toast.show({ title: "Couldn't save your note", message: "Please try again.", type: "error" });
+      toast.show({
+        title: t("feedback.toast.saveFailed.title"),
+        message: t("common.pleaseTryAgain"),
+        type: "error",
+      });
       setSending(false);
       return;
     }
@@ -108,12 +113,12 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
 
     if (isQueued(clientId)) {
       toast.show({
-        title: "Saved on this phone",
-        message: "Sends when Remi is open and online.",
+        title: t("feedback.toast.queued.title"),
+        message: t("feedback.toast.queued.message"),
         type: "info",
       });
     } else {
-      toast.show({ title: "Sent. Thank you.", type: "success" });
+      toast.show({ title: t("feedback.toast.sent"), type: "success" });
     }
 
     handleClose();
@@ -138,9 +143,11 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
 
   const body = (
     <>
-      <Text style={[styles.title, isFailedTake && styles.titleWithKicker]}>Send feedback</Text>
+      <Text style={[styles.title, isFailedTake && styles.titleWithKicker]}>{t("feedback.sheet.title")}</Text>
       {isFailedTake ? (
-        <Text style={[styles.kicker, heardLine ? styles.kickerWithHeard : null]}>Failed recording</Text>
+        <Text style={[styles.kicker, heardLine ? styles.kickerWithHeard : null]}>
+          {t("feedback.sheet.kicker.failedTake")}
+        </Text>
       ) : null}
       {heardLine ? (
         <Text style={styles.heard} numberOfLines={3}>
@@ -155,7 +162,7 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
           style={styles.input}
           value={text}
           onChangeText={setText}
-          placeholder="What happened? What were you trying to do?"
+          placeholder={t("feedback.sheet.placeholder")}
           placeholderTextColor={colors.textTertiary}
           multiline
           autoFocus
@@ -173,7 +180,7 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
           activeOpacity={0.7}
           disabled={sending}
         >
-          <Text style={styles.cancelText}>Cancel</Text>
+          <Text style={styles.cancelText}>{t("common.cancel")}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -182,7 +189,7 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
           activeOpacity={0.7}
           disabled={sendDisabled}
         >
-          <Text style={styles.sendText}>{sending ? "Sending…" : "Send"}</Text>
+          <Text style={styles.sendText}>{sending ? t("feedback.sheet.sending") : t("feedback.sheet.send")}</Text>
         </TouchableOpacity>
       </View>
     </>

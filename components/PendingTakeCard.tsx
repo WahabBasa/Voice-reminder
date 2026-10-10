@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
@@ -19,14 +20,14 @@ import {
   type PendingTake,
 } from "../lib/pendingTakes";
 import { pendingCardContent, type PendingCardContent } from "../lib/pendingCardContent";
-import { PICK_A_TIME_LABEL, QUICK_CHOICES, type QuickChoiceId } from "../lib/needsTime";
+import { pickATimeLabel, QUICK_CHOICES, type QuickChoiceId } from "../lib/needsTime";
 import type { ResolveTakeOutcome } from "../lib/takeReconcile";
 
 /** What the asking card says under its choices when an answer did not land. */
-const RESOLVE_NOTES: Record<Exclude<ResolveTakeOutcome, "created">, string> = {
-  invalid: "That time doesn't work. Pick another.",
-  offline: "Couldn't reach the server. Try again.",
-  unavailable: "Couldn't set that time. Try again, or record it again.",
+const RESOLVE_NOTES: Record<Exclude<ResolveTakeOutcome, "created">, () => string> = {
+  invalid: () => t("pending.timeError.invalid"),
+  offline: () => t("pending.timeError.offline"),
+  unavailable: () => t("pending.timeError.unavailable"),
 };
 
 /**
@@ -203,7 +204,7 @@ function AskingCard({
       // reminder itself, so there is nothing to flash in between.
       if (outcome === "created") return;
       setBusy(null);
-      setNote(RESOLVE_NOTES[outcome]);
+      setNote(RESOLVE_NOTES[outcome]());
     },
     [busy, onChooseTime, take.creationId]
   );
@@ -215,7 +216,7 @@ function AskingCard({
           onPress={discard}
           style={styles.discardButton}
           accessibilityRole="button"
-          accessibilityLabel="Discard this reminder"
+          accessibilityLabel={t("pending.discardReminder.a11y")}
         >
           <AppIcon name="trash-2" size={24} color="#fff" />
         </Pressable>
@@ -257,10 +258,10 @@ function AskingCard({
                   pressed && styles.choicePressed,
                 ]}
                 accessibilityRole="button"
-                accessibilityLabel={`Remind me ${choice.label.toLowerCase()}`}
+                accessibilityLabel={t("pending.quickChoice.a11y", { choice: choice.label })}
               >
                 <Text style={styles.choiceText}>
-                  {busy === choice.id ? "Setting…" : choice.label}
+                  {busy === choice.id ? t("common.setting") : choice.label}
                 </Text>
               </Pressable>
             ))}
@@ -269,10 +270,10 @@ function AskingCard({
               disabled={busy !== null || !onPickTime}
               style={({ pressed }) => [styles.choice, pressed && styles.choicePressed]}
               accessibilityRole="button"
-              accessibilityLabel="Pick a time"
+              accessibilityLabel={t("pending.pickTime.a11y")}
             >
               <AppIcon name="clock" size={14} color={colors.accentDark} />
-              <Text style={styles.choiceText}>{PICK_A_TIME_LABEL}</Text>
+              <Text style={styles.choiceText}>{pickATimeLabel()}</Text>
             </Pressable>
           </View>
 
@@ -289,10 +290,10 @@ function AskingCard({
             hitSlop={8}
             style={[styles.reportTap, styles.recordAgainTap]}
             accessibilityRole="button"
-            accessibilityLabel="Record again"
+            accessibilityLabel={t("pending.recordAgain")}
           >
             <AppIcon name="mic" size={14} color={colors.textTertiary} />
-            <Text style={styles.reportText}>Record again</Text>
+            <Text style={styles.reportText}>{t("pending.recordAgain")}</Text>
           </Pressable>
         </Animated.View>
       </GestureDetector>
@@ -348,7 +349,7 @@ function WorkingOrFailedCard({
             onPress={discard}
             style={styles.discardButton}
             accessibilityRole="button"
-            accessibilityLabel="Discard this recording"
+            accessibilityLabel={t("pending.discardRecording.a11y")}
           >
             <AppIcon name="trash-2" size={24} color="#fff" />
           </Pressable>
@@ -397,7 +398,7 @@ function WorkingOrFailedCard({
                 hitSlop={12}
                 style={styles.cancelTap}
                 accessibilityRole="button"
-                accessibilityLabel="Cancel this recording"
+                accessibilityLabel={t("pending.cancelRecording.a11y")}
               >
                 <AppIcon name="x" size={18} color={colors.textTertiary} />
               </Pressable>
@@ -412,10 +413,10 @@ function WorkingOrFailedCard({
               hitSlop={8}
               style={styles.reportTap}
               accessibilityRole="button"
-              accessibilityLabel="Report a problem with this recording"
+              accessibilityLabel={t("pending.report.a11y")}
             >
               <AppIcon name="message-square" size={14} color={colors.textTertiary} />
-              <Text style={styles.reportText}>Report a problem</Text>
+              <Text style={styles.reportText}>{t("common.reportProblem")}</Text>
             </Pressable>
           )}
         </Animated.View>

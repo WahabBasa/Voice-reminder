@@ -1,4 +1,5 @@
 import { nextGridOccurrence, normalizeClockTime, type GridSchedule } from "../convex/scheduleShape";
+import { getUiLocale, t } from "./i18n";
 
 const DAY_MAP: Record<string, number> = {
   sun: 0,
@@ -190,12 +191,44 @@ export function usesHour12Format(options: ClockFormatOptions = {}): boolean {
 export function formatClockTime(time: string, options: ClockFormatOptions = {}): string {
   const normalized = normalizeClockTime(time);
   if (!normalized) return String(time ?? "").trim();
-  if (!usesHour12Format(options)) return normalized;
-
+  const hour12 = usesHour12Format(options);
   const [hours, minutes] = normalized.split(":").map(Number);
-  const suffix = hours >= 12 ? "pm" : "am";
+
+  // Other UI languages take their own spelling from Intl ("7:15 p.m.", "19:15");
+  // English keeps the app's house style ("7:15 pm"), which Intl does not write.
+  const locale = getUiLocale();
+  if (locale !== "en") {
+    const viaIntl = intlClock(locale, hours, minutes, hour12);
+    if (viaIntl) return viaIntl;
+  }
+
+  if (!hour12) return normalized;
+  const suffix = hours >= 12 ? t("time.clock.pm") : t("time.clock.am");
   const dial = hours % 12 === 0 ? 12 : hours % 12;
   return `${dial}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+const clockFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/** A clock time through Intl for `locale`, or null when the engine can't. */
+function intlClock(locale: string, hours: number, minutes: number, hour12: boolean): string | null {
+  try {
+    const cacheKey = `${locale}|${hour12}`;
+    let formatter = clockFormatters.get(cacheKey);
+    if (!formatter) {
+      formatter = new Intl.DateTimeFormat(locale, {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12,
+        timeZone: "UTC",
+      });
+      clockFormatters.set(cacheKey, formatter);
+    }
+    const out = formatter.format(new Date(Date.UTC(2000, 0, 1, hours, minutes)));
+    return out ? out.replace(/ | /g, " ") : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The wall-clock time of a moment, formatted by {@link formatClockTime}. */
@@ -332,16 +365,16 @@ export function formatIntervalDuration(intervalMs: number): string {
   const minutes = Math.round(intervalMs / (60 * 1000));
 
   if (minutes < 60) {
-    return `Every ${minutes} minute${minutes !== 1 ? "s" : ""}`;
+    return t("time.every.minutes", { count: minutes });
   }
 
   const hours = Math.round(minutes / 60);
   if (hours < 24) {
-    return `Every ${hours} hour${hours !== 1 ? "s" : ""}`;
+    return t("time.every.hours", { count: hours });
   }
 
   const days = Math.round(hours / 24);
-  return `Every ${days} day${days !== 1 ? "s" : ""}`;
+  return t("time.every.days", { count: days });
 }
 
 /**
@@ -517,11 +550,11 @@ export function formatNextTrigger(timestamp: number): string {
 export function formatNextIn(targetMs: number, nowMs: number): string {
   const diffMs = Math.max(0, targetMs - nowMs);
   const minutes = Math.max(1, Math.ceil(diffMs / 60000));
-  if (minutes < 60) return `Next in ${minutes} min`;
+  if (minutes < 60) return t("time.nextIn.minutes", { count: minutes });
   const hours = Math.ceil(minutes / 60);
-  if (diffMs < 86_400_000) return `Next in ${hours} hour${hours !== 1 ? "s" : ""}`;
+  if (diffMs < 86_400_000) return t("time.nextIn.hours", { count: hours });
   const days = Math.ceil(hours / 24);
-  return `Next in ${days} day${days !== 1 ? "s" : ""}`;
+  return t("time.nextIn.days", { count: days });
 }
 
 // ─── Ring-state card labels (ring-state fix) ────────────────────────────────
@@ -536,20 +569,20 @@ export function formatNextIn(targetMs: number, nowMs: number): string {
 
 /** The card label while a ring is alerting. */
 export function formatRingingNow(): string {
-  return "Ringing now";
+  return t("time.ringingNow");
 }
 
 /** The neutral label for a just-passed occurrence still inside its grace window. */
 export function formatDueNow(): string {
-  return "Due now";
+  return t("time.dueNow");
 }
 
 /** "Rings again 3:57 pm" — off the real armed comeback time after a Later. */
 export function formatRingsAgain(at: number, options: ClockFormatOptions = {}): string {
-  return `Rings again ${formatClockAt(at, options)}`;
+  return t("time.ringsAgain", { time: formatClockAt(at, options) });
 }
 
 /** "Missed · 3:52 pm" — an unanswered ring; the card's only red one-off state. */
 export function formatMissedAt(at: number, options: ClockFormatOptions = {}): string {
-  return `Missed · ${formatClockAt(at, options)}`;
+  return t("time.missedAt", { time: formatClockAt(at, options) });
 }

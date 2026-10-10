@@ -1,3 +1,4 @@
+import { intlLocale, t } from "../lib/i18n";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import BottomSheet, {
@@ -37,12 +38,22 @@ type FeedbackRow = {
   fromRemi?: boolean;
 };
 
-const STATUS_LABEL: Record<DisplayStatus, string> = {
-  queued: "Waiting to send",
-  received: "Received",
-  looking: "Looking into it",
-  fixed: "Fixed",
+const STATUS_LABEL: Record<DisplayStatus, () => string> = {
+  queued: () => t("feedback.status.queued"),
+  received: () => t("feedback.status.received"),
+  looking: () => t("feedback.status.looking"),
+  fixed: () => t("feedback.status.fixed"),
 };
+
+/**
+ * The server's default line for a founder message (convex/feedback.ts
+ * DEFAULT_FOUNDER_ABOUT) is stored in English; show it in the UI language.
+ * Free text the founder typed stays as written.
+ */
+const SERVER_DEFAULT_ABOUT = "Your recording didn't go through";
+function aboutLine(text: string): string {
+  return text === SERVER_DEFAULT_ABOUT ? t("feedback.founder.defaultAbout") : text;
+}
 
 /** The outbox as React state (same shape as usePendingTakes). */
 function useFeedbackOutbox(): FeedbackOutboxItem[] {
@@ -92,7 +103,8 @@ export function mergeFeedback(
 
 function formatDate(ms: number): string {
   try {
-    return new Date(ms).toLocaleDateString(undefined, {
+    const locale = intlLocale();
+    return new Date(ms).toLocaleDateString(locale === "default" ? undefined : locale, {
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -144,10 +156,10 @@ export default function FeedbackList({ visible, items, onClose }: FeedbackListPr
       backgroundStyle={styles.sheetBackground}
     >
       <BottomSheetScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Your feedback</Text>
+        <Text style={styles.title}>{t("feedback.list.title")}</Text>
 
         {rows.length === 0 ? (
-          <Text style={styles.empty}>Nothing sent yet.</Text>
+          <Text style={styles.empty}>{t("feedback.list.empty")}</Text>
         ) : (
           rows.map((row) =>
             row.fromRemi ? (
@@ -159,12 +171,12 @@ export default function FeedbackList({ visible, items, onClose }: FeedbackListPr
                   <Text style={styles.date}>{formatDate(row.createdAt)}</Text>
                   <View style={[styles.chip, styles.chipNeutral]}>
                     <Text style={[styles.chipText, styles.chipTextNeutral]}>
-                      Message from Remi
+                      {t("feedback.list.fromRemi")}
                     </Text>
                   </View>
                 </View>
                 <Text style={styles.about} numberOfLines={2}>
-                  {row.text}
+                  {aboutLine(row.text)}
                 </Text>
                 {row.note ? <Text style={styles.text}>{row.note}</Text> : null}
               </View>
@@ -174,7 +186,7 @@ export default function FeedbackList({ visible, items, onClose }: FeedbackListPr
                   <Text style={styles.date}>{formatDate(row.createdAt)}</Text>
                   <View style={[styles.chip, chipStyleFor(row.status)]}>
                     <Text style={[styles.chipText, chipTextStyleFor(row.status)]}>
-                      {STATUS_LABEL[row.status]}
+                      {STATUS_LABEL[row.status]()}
                     </Text>
                   </View>
                 </View>

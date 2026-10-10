@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { getCapGateBlockContent } from "./usageGate";
 import { languageName } from "./languageNames";
 import { formatClockTime, type ClockFormatOptions } from "./time";
@@ -65,18 +66,20 @@ export function needsTimePrompt(
   pastTime: string | undefined,
   clock: ClockFormatOptions = {}
 ): string {
-  if (detail !== "past_time") return "When should I remind you?";
+  if (detail !== "past_time") return t("pending.ask");
   const named = pastTime ? formatClockTime(pastTime, clock) : "";
-  return `${named || "That time"} has already passed today. When should I remind you?`;
+  return t("pending.askPastTime", { time: named || t("pending.thatTime") });
 }
 
 /** "+1 more: Call mum" / "+2 more: Call mum, Buy milk". */
 export function moreRemindersLine(others: readonly PendingPlan[]): string | undefined {
   if (others.length === 0) return undefined;
-  return `+${others.length} more: ${others.map((plan) => plan.title).join(", ")}`;
+  return t("pending.moreReminders", {
+    count: others.length,
+    titles: others.map((plan) => plan.title).join(", "),
+  });
 }
 
-const SETTING_UP = "Setting up…";
 
 /** How much of the transcript the "Remi heard" line quotes before it truncates. */
 export const REMI_HEARD_MAX_CHARS = 120;
@@ -94,16 +97,16 @@ export function remiHeardLine(transcript: unknown): string | null {
     words.length > REMI_HEARD_MAX_CHARS
       ? `${words.slice(0, REMI_HEARD_MAX_CHARS - 1).trimEnd()}…`
       : words;
-  return `Remi heard: "${quoted}"`;
+  return t("pending.heard", { quote: quoted });
 }
 
-const FAILED_COPY: Record<Exclude<PendingErrorKind, "cap_unverified">, string> = {
-  network: "Couldn't reach the server — tap to retry",
-  unparseable: "Couldn't turn that into a reminder — tap to try again",
-  server: "Something went wrong — tap to retry",
+const FAILED_COPY: Record<Exclude<PendingErrorKind, "cap_unverified">, () => string> = {
+  network: () => t("pending.failed.network"),
+  unparseable: () => t("pending.failed.unparseable"),
+  server: () => t("pending.failed.server"),
   // OLD-137: the meter never rose above silence, so nothing was sent. The tap
   // opens a new recording.
-  silent: "We couldn't hear you — check your microphone and try again",
+  silent: () => t("pending.failed.silent"),
 };
 
 /**
@@ -119,16 +122,18 @@ function unparseableDetailCopy(
 ): string | null {
   switch (detail) {
     case "not_understood":
-      return "Didn't catch that — tap to record again";
+      return t("pending.detail.notUnderstood");
     case "no_time":
-      return "When should I remind you? Tap to record again with a time";
+      return t("pending.detail.noTime");
     case "unsupported_language":
-      return `Remi doesn't speak ${languageName(take.detectedLanguage) ?? "this language"} yet`;
+      return t("pending.detail.unsupportedLanguage", {
+        language: languageName(take.detectedLanguage) ?? t("pending.thisLanguage"),
+      });
     case "past_time": {
       // A one-off whose time had already gone by today ("today at 10", said at
       // 11:41). Named in the dial the rest of the app uses, then the question.
       const named = take.pastTime ? formatClockTime(take.pastTime, clock) : "";
-      return `${named || "That time"} has already passed today. When should I remind you? Tap to record again.`;
+      return t("pending.detail.pastTime", { time: named || t("pending.thatTime") });
     }
     default:
       return null;
@@ -189,7 +194,7 @@ export function pendingCardContent(
     const text =
       take.errorKind === "cap_unverified"
         ? getCapGateBlockContent("blocked_unverified", limit).statusText
-        : detailCopy ?? FAILED_COPY[take.errorKind ?? "server"];
+        : detailCopy ?? FAILED_COPY[take.errorKind ?? "server"]();
     const heard = remiHeardLine(take.transcript);
 
     return {
@@ -205,13 +210,13 @@ export function pendingCardContent(
 
   // Already cancelling: the X is spent, and offering it again would only invite
   // a second no-op tap.
-  if (take.phase === "cancelling") return working("Cancelling…", false);
+  if (take.phase === "cancelling") return working(t("pending.cancelling"), false);
 
   // The words are the progress. Nothing to show until the transcript lands, and
   // a transcribed take that somehow has none falls back to the shimmer line.
   if (take.phase === "transcribed" || take.phase === "committing") {
-    return working(take.transcript || SETTING_UP);
+    return working(take.transcript || t("pending.settingUp"));
   }
 
-  return working(SETTING_UP);
+  return working(t("pending.settingUp"));
 }

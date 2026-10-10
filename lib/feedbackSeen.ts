@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 /**
  * The "your feedback was answered" decision, kept pure so the banner has
  * nothing to reason about.
@@ -53,7 +54,7 @@ export function bannerCopy(
     (item) => typeof item.respondedAt === "number" && item.respondedAt > watermark
   );
   if (unseen.length > 0 && unseen.every((item) => item.origin === "founder")) {
-    return { title: "You have a message from Remi", message: "Tap to read" };
+    return { title: t("feedback.banner.message.title"), message: t("feedback.banner.message.body") };
   }
-  return { title: "Your feedback was updated", message: "Tap to see" };
+  return { title: t("feedback.banner.updated.title"), message: t("feedback.banner.updated.body") };
 }

@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import BottomSheet, {
@@ -139,7 +140,7 @@ export default function ComposerSheet({
                         style={styles.input}
                         value={draft}
                         onChangeText={setDraft}
-                        placeholder="Type to begin"
+                        placeholder={t("composer.placeholder")}
                         placeholderTextColor={colors.textTertiary}
                         maxLength={MAX_COMPOSER_CHARS}
                         multiline
@@ -148,14 +149,14 @@ export default function ComposerSheet({
                         returnKeyType="send"
                         blurOnSubmit={false}
                         onSubmitEditing={handleSubmit}
-                        accessibilityLabel="Type your reminder"
+                        accessibilityLabel={t("composer.input.a11y")}
                     />
 
                     <View style={styles.actions}>
                         {submitting ? (
-                            <Text style={styles.status}>Reading that...</Text>
+                            <Text style={styles.status}>{t("composer.status.reading")}</Text>
                         ) : (
-                            <Text style={styles.hint}>Say it or type it — same reminder.</Text>
+                            <Text style={styles.hint}>{t("composer.hint")}</Text>
                         )}
 
                         <TouchableOpacity
@@ -164,10 +165,12 @@ export default function ComposerSheet({
                             activeOpacity={0.85}
                             disabled={submitting}
                             accessibilityRole="button"
-                            accessibilityLabel="Speak instead"
+                            accessibilityLabel={t("composer.speak.a11y")}
                         >
                             <AudioLines size={16} color="white" strokeWidth={2} />
-                            <Text style={styles.speakText}>Speak</Text>
+                            <Text style={styles.speakText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+                                {t("composer.speak")}
+                            </Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
@@ -176,7 +179,7 @@ export default function ComposerSheet({
                             activeOpacity={0.85}
                             disabled={!canSend}
                             accessibilityRole="button"
-                            accessibilityLabel="Create reminder"
+                            accessibilityLabel={t("composer.create.a11y")}
                         >
                             {submitting ? (
                                 <ActivityIndicator size="small" color="white" />

@@ -1,3 +1,4 @@
+import { t } from "../../lib/i18n";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import type { PurchasesPackage } from "react-native-purchases";
 import { scaleFontSize } from "../../lib/theme";
@@ -28,15 +29,24 @@ function PricingCard({ kicker, plan, selected, badge, onPress }: PricingCardProp
       activeOpacity={0.85}
       accessibilityRole="radio"
       accessibilityState={{ selected }}
-      accessibilityLabel={`${kicker}, ${plan.priceString}, ${plan.billedLabel}, ${plan.trialLabel}`}
+      accessibilityLabel={t("paywall.card.a11y", {
+        kicker,
+        price: plan.priceString,
+        billed: plan.billedLabel,
+        trial: plan.trialLabel,
+      })}
     >
       {badge ? (
         <View style={styles.badge}>
-          <Text style={styles.badgeText}>{badge}</Text>
+          <Text style={styles.badgeText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+            {badge}
+          </Text>
         </View>
       ) : null}
 
-      <Text style={styles.kicker}>{kicker}</Text>
+      <Text style={styles.kicker} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+        {kicker}
+      </Text>
       <Text style={styles.price} numberOfLines={1} adjustsFontSizeToFit>
         {plan.priceString}
       </Text>
@@ -87,7 +97,7 @@ export default function PricingCards({
     <View style={styles.row}>
       {monthly ? (
         <PricingCard
-          kicker="Monthly"
+          kicker={t("paywall.card.monthly")}
           plan={monthly}
           selected={selectedIdentifier === monthly.pkg.identifier}
           onPress={() => onSelect(monthly.pkg)}
@@ -95,7 +105,7 @@ export default function PricingCards({
       ) : null}
       {annual ? (
         <PricingCard
-          kicker="Annual"
+          kicker={t("paywall.card.annual")}
           plan={annual}
           badge={PAYWALL_COPY.annualBadge}
           selected={selectedIdentifier === annual.pkg.identifier}

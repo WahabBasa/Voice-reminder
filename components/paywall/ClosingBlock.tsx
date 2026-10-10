@@ -1,3 +1,4 @@
+import { t } from "../../lib/i18n";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
 import { scaleFontSize } from "../../lib/theme";
@@ -72,7 +73,7 @@ export default function ClosingBlock({
         {isRestoring ? (
           <View style={styles.restoreRow}>
             <ActivityIndicator size="small" color={paywallColors.ink} />
-            <Text style={styles.restoreText}>Restoring…</Text>
+            <Text style={styles.restoreText}>{t("paywall.restoring")}</Text>
           </View>
         ) : (
           <Text style={styles.restoreText}>{PAYWALL_COPY.restoreLabel}</Text>

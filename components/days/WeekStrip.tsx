@@ -1,3 +1,4 @@
+import { weekdayFullLabel, weekdayNarrowLabel } from "../../lib/weekdayLabels";
 import { useEffect, useMemo, useRef } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
@@ -9,7 +10,8 @@ import { colors, scaleFontSize, spacing } from "../../lib/theme";
 import { FONT_DISPLAY } from "../../lib/fonts";
 import { addDaysISO, parseISODate } from "../../lib/dayOccurrences";
 
-const DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
+/** Monday-first, like the strip and the month grid. */
+const WEEK_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 const SLIDE_DISTANCE = 48;
 const SPRING_CONFIG = { damping: 26, stiffness: 260, mass: 1 };
 
@@ -22,7 +24,7 @@ export function weekStartISO(dateISO: string): string {
 /** The 7 ISO dates of the Monday-start week containing dateISO. */
 export function weekDatesFor(dateISO: string): string[] {
   const start = weekStartISO(dateISO);
-  return DAY_LETTERS.map((_, i) => addDaysISO(start, i));
+  return WEEK_ORDER.map((_, i) => addDaysISO(start, i));
 }
 
 interface WeekStripProps {
@@ -71,9 +73,9 @@ export default function WeekStrip({
             onPress={() => onSelectDate(dateISO)}
             accessibilityRole="button"
             accessibilityState={{ selected: isSelected }}
-            accessibilityLabel={dateISO}
+            accessibilityLabel={`${weekdayFullLabel(WEEK_ORDER[index])} ${dayNumber}`}
           >
-            <Text style={styles.dayLetter}>{DAY_LETTERS[index]}</Text>
+            <Text style={styles.dayLetter}>{weekdayNarrowLabel(WEEK_ORDER[index])}</Text>
             <Text
               style={[
                 styles.dateText,

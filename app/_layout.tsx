@@ -1,3 +1,5 @@
+import { t, useUiLocale } from "../lib/i18n";
+import { applyDeviceLanguage, hasLoadedLanguage, loadAppLanguage } from "../lib/appLanguage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, InteractionManager, LogBox, Platform } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
@@ -45,6 +47,10 @@ LogBox.ignoreLogs([
 
 // Init before first render so startup crashes are captured too.
 initSentry();
+
+// UI language: the device's, right away; the user's stored pick lands in
+// RootLayout before the first screen renders (lib/appLanguage.ts).
+applyDeviceLanguage();
 
 // The native splash stays up until AnimatedSplash has drawn its identical copy.
 // Rejects harmlessly if a fast reload gets here after the splash is already gone.
@@ -158,8 +164,8 @@ function StartupTasks() {
       const result = await syncRemindersOnStartup(reminders, history);
       if (result.permissionError) {
         toast.show({
-          title: "Alarms may not fire",
-          message: "Tap to open diagnostics",
+          title: t("layout.toast.alarmsMayNotFire.title"),
+          message: t("layout.toast.alarmsMayNotFire.message"),
           type: "warning",
           onPress: () => router.push("/diagnostics"),
         });
@@ -343,6 +349,15 @@ function RootLayout() {
   // Newsreader display font (JS-bundled asset, OTA-safe). Gate first render so
   // serif page titles never flash the system font.
   const fontsLoaded = useAppFonts();
+  // The stored language pick, read before the first screen so it never
+  // flashes the device language first.
+  const [languageReady, setLanguageReady] = useState(hasLoadedLanguage());
+  useEffect(() => {
+    void loadAppLanguage().finally(() => setLanguageReady(true));
+  }, []);
+  // Every string is read at render, so a language change re-renders the
+  // screens by remounting the Stack under the new catalog.
+  const uiLocale = useUiLocale();
   const [splashVisible, setSplashVisible] = useState(true);
   const hideSplash = useCallback(() => setSplashVisible(false), []);
 
@@ -364,7 +379,7 @@ function RootLayout() {
   return (
     <ErrorBoundary>
     <GestureHandlerRootView style={{ flex: 1 }}>
-      {fontsLoaded ? (
+      {fontsLoaded && languageReady ? (
       <PortalProvider>
         <SafeAreaProvider>
           <ConvexProvider client={convex}>
@@ -373,6 +388,7 @@ function RootLayout() {
               <PermissionPrompt />
               <StatusBar style="light" />
               <Stack
+                key={uiLocale}
                 // iOS rides the native stack defaults: real UINavigationController
                 // push/pop with the swipe-back gesture, native sheet modals. The
                 // fade overrides exist only to keep Android exactly as it was.
@@ -449,7 +465,7 @@ function RootLayout() {
       </PortalProvider>
       ) : null}
       {/* Last child, so it covers the app until its exit animation finishes. */}
-      {splashVisible ? <AnimatedSplash ready={fontsLoaded} onFinish={hideSplash} /> : null}
+      {splashVisible ? <AnimatedSplash ready={fontsLoaded && languageReady} onFinish={hideSplash} /> : null}
     </GestureHandlerRootView>
     </ErrorBoundary>
   );

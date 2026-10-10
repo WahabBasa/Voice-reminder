@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import React, { useCallback, useEffect, useState } from "react";
 import {
   AppState,
@@ -253,11 +254,8 @@ export default function PermissionPrompt() {
             <AppIcon name="bell" size={28} color={colors.accent} />
           </View>
 
-          <Text style={styles.title}>Get alerted on time</Text>
-          <Text style={styles.subtitle}>
-            Allow notifications so Remi can alert you on time, even when your phone is locked.
-            You can still create reminders without them.
-          </Text>
+          <Text style={styles.title}>{t("permission.title")}</Text>
+          <Text style={styles.subtitle}>{t("permission.subtitle")}</Text>
 
           {/* Notification permission */}
           <TouchableOpacity
@@ -282,15 +280,15 @@ export default function PermissionPrompt() {
                 />
               </View>
               <View style={styles.permTextWrap}>
-                <Text style={styles.permTitle}>Notifications</Text>
-                <Text style={styles.permDesc}>Show and play reminders</Text>
+                <Text style={styles.permTitle}>{t("permission.notifications.title")}</Text>
+                <Text style={styles.permDesc}>{t("permission.notifications.desc")}</Text>
               </View>
             </View>
             {permissions.notifications ? (
-              <Text style={styles.grantedText}>Enabled</Text>
+              <Text style={styles.grantedText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enabled")}</Text>
             ) : (
               <View style={styles.enableBtn}>
-                <Text style={styles.enableBtnText}>Enable</Text>
+                <Text style={styles.enableBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enable")}</Text>
               </View>
             )}
           </TouchableOpacity>
@@ -326,10 +324,10 @@ export default function PermissionPrompt() {
                   </View>
                 </View>
                 {permissions.alarms ? (
-                  <Text style={styles.grantedText}>Enabled</Text>
+                  <Text style={styles.grantedText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enabled")}</Text>
                 ) : (
                   <View style={styles.enableBtn}>
-                    <Text style={styles.enableBtnText}>Enable</Text>
+                    <Text style={styles.enableBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enable")}</Text>
                   </View>
                 )}
               </TouchableOpacity>
@@ -365,10 +363,10 @@ export default function PermissionPrompt() {
                 </View>
               </View>
               {permissions.battery ? (
-                <Text style={styles.grantedText}>Enabled</Text>
+                <Text style={styles.grantedText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enabled")}</Text>
               ) : (
                 <View style={styles.enableBtn}>
-                  <Text style={styles.enableBtnText}>Enable</Text>
+                  <Text style={styles.enableBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enable")}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -380,7 +378,7 @@ export default function PermissionPrompt() {
               onPress={() => setVisible(false)}
               activeOpacity={0.7}
             >
-              <Text style={styles.doneBtnText}>All set!</Text>
+              <Text style={styles.doneBtnText}>{t("permission.allSet")}</Text>
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
@@ -388,7 +386,7 @@ export default function PermissionPrompt() {
               onPress={handleDefer}
               activeOpacity={0.7}
             >
-              <Text style={styles.skipBtnText}>Not now</Text>
+              <Text style={styles.skipBtnText}>{t("aiConsent.notNow")}</Text>
             </TouchableOpacity>
           )}
         </View>

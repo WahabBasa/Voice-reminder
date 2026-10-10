@@ -1,3 +1,4 @@
+import { intlLocale, t } from "../lib/i18n";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     Alert,
@@ -158,7 +159,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         // Details come from the SAVED store row, not the in-progress inputs.
         openFeedbackComposer(
             buildReminderFeedbackContext(reminder),
-            "Includes saved reminder details. Your edits stay here."
+            t("feedback.notice.editSheet")
         );
     }, [reminder, openFeedbackComposer]);
     const [title, setTitle] = useState(initialReminder.title || "");
@@ -202,7 +203,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
 
     // Date formatting helpers
     const formatDateLabel = useCallback((date: Date | null) => {
-        if (!date) return "Select Date";
+        if (!date) return t("edit.date.select");
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
@@ -210,9 +211,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         const dateOnly = new Date(date);
         dateOnly.setHours(0, 0, 0, 0);
 
-        if (dateOnly.getTime() === today.getTime()) return "Today";
-        if (dateOnly.getTime() === tomorrow.getTime()) return "Tomorrow";
-        return date.toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" });
+        if (dateOnly.getTime() === today.getTime()) return t("edit.date.today");
+        if (dateOnly.getTime() === tomorrow.getTime()) return t("edit.date.tomorrow");
+        return date.toLocaleDateString(intlLocale(), { month: "short", day: "numeric", year: "numeric" });
     }, []);
 
     const selectedDate = useMemo(() => fromDateString(draft.date), [draft.date]);
@@ -239,7 +240,10 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const showDateRow = draft.daysMode === "date" || draft.daysMode === "everyNDays";
 
     const preReminderLabel = useMemo(
-        () => (preReminderMinutes > 0 ? `${preReminderMinutes} min before` : "None"),
+        () =>
+            preReminderMinutes > 0
+                ? t("edit.headsUp.minutesBefore", { minutes: preReminderMinutes })
+                : t("edit.headsUp.none"),
         [preReminderMinutes]
     );
 
@@ -311,7 +315,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
         // A regeneration + reschedule is already awaiting; ignore the double-tap.
         if (regeneratingVoice) return;
         if (!title.trim()) {
-            Alert.alert("Error", "Please enter a reminder title");
+            Alert.alert(t("common.error"), t("edit.alert.titleRequired"));
             return;
         }
 
@@ -532,7 +536,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             }
         } catch (error) {
             console.error("[VR] Save error:", error);
-            Alert.alert("Error", "Failed to save reminder");
+            Alert.alert(t("common.error"), t("edit.alert.saveFailed"));
         }
     }, [reminder, title, emoji, description, draft, draftMode, startedOnInterval, router, traceId, storeUpdateReminder, updateConvexReminder, regenerateReminderAudio, regeneratingVoice, toast, preReminderMinutes, persistent, volume, volumeStyle, onSave, onClose]);
 
@@ -545,7 +549,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             await storeDeleteReminder(reminderId);
         } catch (e) {
             console.log("[VR] Failed to delete reminder:", e);
-            toast.show({ title: "Error", message: "Failed to delete reminder", type: "error" });
+            toast.show({ title: t("common.error"), message: t("edit.toast.deleteFailed"), type: "error" });
             return;
         }
 
@@ -647,7 +651,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             value={title}
                             onChangeText={setTitle}
                             onFocus={expandSheet}
-                            placeholder="Reminder"
+                            placeholder={t("edit.title.placeholder")}
                             placeholderTextColor={colors.textTertiary}
                             maxLength={100}
                         />
@@ -667,13 +671,13 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     {/* Spoken line: the exact words the alarm says. Editing it
                         regenerates the voice on save (lib/voiceRegen.ts). */}
                     <View style={styles.spokenCard}>
-                        <Text style={styles.spokenLabel}>Spoken line</Text>
+                        <Text style={styles.spokenLabel}>{t("edit.spokenLine.label")}</Text>
                         <TextInput
                             style={styles.spokenInput}
                             value={description}
                             onChangeText={setDescription}
                             onFocus={expandSheet}
-                            placeholder="What should the alarm say?"
+                            placeholder={t("edit.spokenLine.placeholder")}
                             placeholderTextColor={colors.textTertiary}
                             multiline
                             maxLength={300}
@@ -686,7 +690,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     <View style={styles.rowCard}>
                         <SheetRow
                             icon="refresh-cw"
-                            label="Repeat"
+                            label={t("edit.row.repeat")}
                             value={repeatLabel}
                             onPress={() => setShowRepeatTaskModal(true)}
                         />
@@ -696,7 +700,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                 <View style={styles.separator} />
                                 <SheetRow
                                     icon="calendar"
-                                    label={draft.daysMode === "date" ? "Date" : "Starts"}
+                                    label={draft.daysMode === "date" ? t("edit.row.date") : t("edit.row.starts")}
                                     value={dateLabel}
                                     onPress={() => setShowDatePicker(true)}
                                 />
@@ -706,7 +710,11 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         <View style={styles.separator} />
                         <SheetRow
                             icon="clock"
-                            label={draft.timesMode === "clock" && draft.times.length > 1 ? "Times" : "Time"}
+                            label={
+                                draft.timesMode === "clock" && draft.times.length > 1
+                                    ? t("edit.row.times")
+                                    : t("edit.row.time")
+                            }
                             value={timesLabel}
                             onPress={() => setShowTimesEditor((v) => !v)}
                         />
@@ -728,9 +736,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             <View style={styles.rowLeftText}>
                                 <View style={styles.rowLeft}>
                                     <AppIcon name="zap" size={20} color={colors.textSecondary} />
-                                    <Text style={styles.rowLabel}>Alarm</Text>
+                                    <Text style={styles.rowLabel}>{t("edit.row.alarm")}</Text>
                                 </View>
-                                <Text style={styles.rowSubLabel}>Keeps ringing until you respond</Text>
+                                <Text style={styles.rowSubLabel}>{t("edit.row.alarm.subtitle")}</Text>
                             </View>
                             <Switch
                                 value={persistent}
@@ -741,7 +749,12 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         </View>
 
                         <View style={styles.separator} />
-                        <SheetRow icon="bell" label="Heads-up" value={preReminderLabel} onPress={cyclePreReminder} />
+                        <SheetRow
+                            icon="bell"
+                            label={t("edit.row.headsUp")}
+                            value={preReminderLabel}
+                            onPress={cyclePreReminder}
+                        />
                         </>
                         )}
                     </View>
@@ -761,11 +774,15 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                     <View style={styles.playCircle}>
                                         <AppIcon name={isPlaying ? "square" : "play"} size={16} color="#ffffff" />
                                     </View>
-                                    <Text style={styles.rowLabel}>Voice note</Text>
+                                    <Text style={styles.rowLabel}>{t("edit.row.voiceNote")}</Text>
                                 </View>
                                 <View style={styles.valuePill}>
                                     <Text style={styles.valueText}>
-                                        {!reminder.audioUrl ? "Generating…" : isPlaying ? "Playing…" : "Play"}
+                                        {!reminder.audioUrl
+                                            ? t("edit.voiceNote.generating")
+                                            : isPlaying
+                                              ? t("edit.voiceNote.playing")
+                                              : t("edit.voiceNote.play")}
                                     </Text>
                                 </View>
                             </TouchableOpacity>
@@ -806,7 +823,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         activeOpacity={0.7}
                     >
                         <AppIcon name="message-square" size={18} color={colors.textSecondary} />
-                        <Text style={styles.reportRowLabel}>Report a problem</Text>
+                        <Text style={styles.reportRowLabel}>{t("common.reportProblem")}</Text>
                     </TouchableOpacity>
                     )}
 
@@ -828,10 +845,15 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                             activeOpacity={0.7}
                             disabled={regeneratingVoice}
                         >
-                            <Text style={styles.doneButtonText}>
+                            <Text
+                                style={styles.doneButtonText}
+                                numberOfLines={1}
+                                adjustsFontSizeToFit
+                                minimumFontScale={0.75}
+                            >
                                 {draftMode
-                                    ? regeneratingVoice ? "Setting…" : draftMode.confirmLabel
-                                    : regeneratingVoice ? "Updating voice…" : "Done"}
+                                    ? regeneratingVoice ? t("common.setting") : draftMode.confirmLabel
+                                    : regeneratingVoice ? t("edit.confirm.updatingVoice") : t("common.done")}
                             </Text>
                             {!regeneratingVoice && <AppIcon name="check" size={18} color="white" />}
                         </TouchableOpacity>
@@ -850,7 +872,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             >
                 <Pressable style={styles.emojiOverlay} onPress={() => setShowEmojiPicker(false)}>
                     <Pressable style={styles.emojiSheet} onPress={() => {}}>
-                        <Text style={styles.emojiSheetTitle}>Pick an emoji</Text>
+                        <Text style={styles.emojiSheetTitle}>{t("edit.emoji.title")}</Text>
                         <View style={styles.emojiGrid}>
                             {EMOJI_CHOICES.map((choice) => {
                                 const selected = choice === emoji;
@@ -878,7 +900,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                                 }}
                                 activeOpacity={0.7}
                             >
-                                <Text style={styles.emojiRemoveText}>Remove emoji</Text>
+                                <Text style={styles.emojiRemoveText}>{t("edit.emoji.remove")}</Text>
                             </TouchableOpacity>
                         ) : null}
                     </Pressable>
@@ -888,12 +910,12 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             {/* Delete Confirmation ActionSheet */}
             <ActionSheet
                 visible={showDeleteConfirm}
-                title="Delete Reminder"
-                message={`Are you sure you want to delete "${title}"?`}
+                title={t("edit.delete.title")}
+                message={t("edit.delete.message", { title })}
                 actions={[
                     {
                         key: "delete",
-                        label: "Delete",
+                        label: t("common.delete"),
                         icon: "trash-2",
                         variant: "destructive",
                         onPress: () => {
@@ -903,7 +925,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     },
                     {
                         key: "cancel",
-                        label: "Cancel",
+                        label: t("common.cancel"),
                         variant: "cancel",
                         onPress: () => setShowDeleteConfirm(false),
                     },

@@ -1,3 +1,4 @@
+import { splitTag, t } from './i18n';
 import { requestMicrophonePermission, type PermissionStatus } from './audio';
 import { PRIVACY_POLICY_URL } from './legalLinks';
 import { useSettingsStore } from './settingsStore';
@@ -14,17 +15,34 @@ import { useSettingsStore } from './settingsStore';
  * Copy rule: never name a provider. The Privacy Policy is where processors get
  * listed; in-app strings stay generic.
  */
+const learnMore = () => splitTag(t('aiConsent.learnMore'), 'link');
+
+/** Read at render time, so every field follows the UI language. */
 export const AI_CONSENT_COPY = {
-    title: 'Before you record',
+    get title() {
+        return t('aiConsent.title');
+    },
     /** Sentence one: what happens to the recording. */
-    body: 'Your voice is processed by secure third-party AI services to create your reminder.',
-    /** Sentence two, wrapped around the link below. */
-    learnMorePrefix: 'Learn more in our ',
-    learnMoreLabel: 'Privacy Policy',
-    learnMoreSuffix: '.',
-    allowLabel: 'Allow',
-    declineLabel: 'Not now',
-} as const;
+    get body() {
+        return t('aiConsent.body');
+    },
+    /** Sentence two, wrapped around the link below (`<link>` in the catalog). */
+    get learnMorePrefix() {
+        return learnMore().before;
+    },
+    get learnMoreLabel() {
+        return learnMore().inner;
+    },
+    get learnMoreSuffix() {
+        return learnMore().after;
+    },
+    get allowLabel() {
+        return t('aiConsent.allow');
+    },
+    get declineLabel() {
+        return t('aiConsent.notNow');
+    },
+};
 
 /** "Learn more" goes to the same policy the paywall and Settings link to. */
 export const AI_CONSENT_LEARN_MORE_URL = PRIVACY_POLICY_URL;

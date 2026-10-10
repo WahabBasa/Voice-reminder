@@ -30,6 +30,8 @@ import {
   type Weekday,
 } from '../../lib/schedule';
 import { formatClockTime, usesHour12Format, type ClockFormatOptions } from '../../lib/time';
+import { intlLocale, t } from '../../lib/i18n';
+import { weekdayShortLabel } from '../../lib/weekdayLabels';
 
 export type DaysMode = 'everyday' | 'weekdays' | 'everyNDays' | 'date';
 export type TimesMode = 'clock' | 'interval';
@@ -327,9 +329,7 @@ export function saveShapeFromDraft(
 
 // ─── Labels ─────────────────────────────────────────────────────────────────
 
-const WEEKDAY_LABELS: Record<string, string> = {
-  sun: 'Sun', mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat',
-};
+const dayList = (days: string[]) => days.map(weekdayShortLabel).join(', ');
 
 // Clock times are printed by lib/time's formatClockTime — one formatter for
 // every surface, so the card, the row and the picker never disagree about
@@ -340,9 +340,9 @@ export function formatEveryMinutes(everyMinutes: number): string {
   const total = clamp(everyMinutes, MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES);
   const hours = Math.floor(total / 60);
   const minutes = total % 60;
-  if (hours === 0) return `${minutes} min`;
-  if (minutes === 0) return `${hours} hr`;
-  return `${hours} hr ${minutes} min`;
+  if (hours === 0) return t('duration.minutes', { count: minutes });
+  if (minutes === 0) return t('duration.hours', { count: hours });
+  return t('duration.hoursMinutes', { hours, minutes });
 }
 
 /** Days-axis row value: "Every day", "Mon, Wed, Fri", "Every 3 days", "Aug 20". */
@@ -350,33 +350,38 @@ export function describeDraftDays(draft: ScheduleDraft): string {
   switch (draft.daysMode) {
     case 'weekdays': {
       const picked = normalizeWeekdays(draft.weekdays);
-      return picked.length > 0 ? picked.map((day) => WEEKDAY_LABELS[day]).join(', ') : 'Pick days';
+      return picked.length > 0 ? dayList(picked) : t('schedule.pickDays');
     }
     case 'everyNDays':
-      return `Every ${clamp(draft.everyNDays, 1, EVERY_N_DAYS_MAX)} days`;
+      return t('schedule.everyNDays', { count: clamp(draft.everyNDays, 1, EVERY_N_DAYS_MAX) });
     case 'date': {
       const date = fromDateString(draft.date);
       return date
-        ? date.toLocaleDateString('default', { month: 'short', day: 'numeric' })
-        : 'Pick a date';
+        ? date.toLocaleDateString(intlLocale(), { month: 'short', day: 'numeric' })
+        : t('schedule.pickDate');
     }
     default:
-      return 'Every day';
+      return t('schedule.everyDay');
   }
 }
 
 /** Times-axis row value: "8:00 am, 9:00 pm", "8:00 am +2", "Every 2 hr". */
 export function describeDraftTimes(draft: ScheduleDraft, options: ClockFormatOptions = {}): string {
-  if (draft.timesMode === 'interval') return `Every ${formatEveryMinutes(draft.everyMinutes)}`;
+  if (draft.timesMode === 'interval') {
+    return t('schedule.everyDuration', { duration: formatEveryMinutes(draft.everyMinutes) });
+  }
   const times = normalizeClockTimes(draft.times);
-  if (times.length === 0) return 'Pick a time';
+  if (times.length === 0) return t('schedule.pickTime');
   if (times.length <= 2) return times.map((time) => formatClockTime(time, options)).join(', ');
-  return `${formatClockTime(times[0], options)} +${times.length - 1}`;
+  return t('schedule.moreTimes', { first: formatClockTime(times[0], options), count: times.length - 1 });
 }
 
 /** Interval window row value: "8:00 am – 10:00 pm". */
 export function describeDraftWindow(draft: ScheduleDraft, options: ClockFormatOptions = {}): string {
-  return `${formatClockTime(draft.windowStart, options)} – ${formatClockTime(draft.windowEnd, options)}`;
+  return t('schedule.window', {
+    start: formatClockTime(draft.windowStart, options),
+    end: formatClockTime(draft.windowEnd, options),
+  });
 }
 
 /**
@@ -387,10 +392,34 @@ export function describeGridSubtitle(
   schedule: GridSchedule,
   options: ClockFormatOptions = {}
 ): string {
+  const parts = describeGridParts(schedule, options);
+  if (parts.interval) return parts.interval;
+  return parts.days ? t('schedule.timesAndDays', { times: parts.times, days: parts.days }) : parts.times;
+}
+
+/**
+ * The pieces of a grid's subtitle, unjoined, for callers that lay them out
+ * their own way (lib/remindersMembership's pattern line). `interval` is set,
+ * whole, for an interval grid; otherwise `times` plus `days` (null for a date,
+ * which has no days part). `weekdays` is true when `days` is a list of days.
+ */
+export function describeGridParts(
+  schedule: GridSchedule,
+  options: ClockFormatOptions = {}
+): { interval: string | null; times: string; days: string | null; weekdays: boolean } {
   const times = schedule.times;
   const clock = (time: string) => formatClockTime(time, options);
   if (times.kind === 'interval') {
-    return `Every ${formatEveryMinutes(times.everyMinutes)} · ${clock(times.windowStart)}–${clock(times.windowEnd)}`;
+    return {
+      interval: t('schedule.intervalSubtitle', {
+        duration: formatEveryMinutes(times.everyMinutes),
+        start: clock(times.windowStart),
+        end: clock(times.windowEnd),
+      }),
+      times: '',
+      days: null,
+      weekdays: false,
+    };
   }
 
   // "8:00 am" is four characters wider than "08:00", so the 12-hour card lists
@@ -399,20 +428,29 @@ export function describeGridSubtitle(
   const shown =
     times.times.length <= inline
       ? times.times.map(clock).join(', ')
-      : `${times.times.slice(0, inline - 1).map(clock).join(', ')} +${times.times.length - inline + 1}`;
+      : t('schedule.moreTimes', {
+          first: times.times.slice(0, inline - 1).map(clock).join(', '),
+          count: times.times.length - inline + 1,
+        });
+  const result = (days: string | null, weekdays = false) => ({
+    interval: null,
+    times: shown,
+    days,
+    weekdays,
+  });
 
   switch (schedule.days.kind) {
     case 'weekdays':
       return schedule.days.days.length > 0
-        ? `${shown} · ${schedule.days.days.map((day) => WEEKDAY_LABELS[day]).join(', ')}`
-        : `${shown} · Daily`;
+        ? result(dayList(schedule.days.days), true)
+        : result(t('schedule.daily'));
     case 'everyNDays': {
       const interval = Math.max(1, Math.round(schedule.days.interval));
-      return `${shown} · ${interval === 1 ? 'Daily' : `Every ${interval} days`}`;
+      return result(interval === 1 ? t('schedule.daily') : t('schedule.everyNDays', { count: interval }));
     }
     case 'date':
-      return shown;
+      return result(null);
     default:
-      return `${shown} · Daily`;
+      return result(t('schedule.daily'));
   }
 }

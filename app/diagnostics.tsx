@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -11,11 +12,11 @@ import { openAlarmPermissionSettingsSafe, openNotificationSettingsSafe } from ".
 type PermissionTone = "ok" | "bad" | "muted";
 
 function permissionStatus(status: number | undefined): { label: string; tone: PermissionTone } {
-  if (status === 1) return { label: "Allowed", tone: "ok" };
-  if (status === 2) return { label: "Provisional", tone: "ok" };
-  if (status === 0) return { label: "Denied", tone: "bad" };
-  if (status === -1) return { label: "Not requested", tone: "muted" };
-  return { label: "Unknown", tone: "muted" };
+  if (status === 1) return { label: t("diagnostics.status.allowed"), tone: "ok" };
+  if (status === 2) return { label: t("diagnostics.status.provisional"), tone: "ok" };
+  if (status === 0) return { label: t("diagnostics.status.denied"), tone: "bad" };
+  if (status === -1) return { label: t("diagnostics.status.notRequested"), tone: "muted" };
+  return { label: t("diagnostics.status.unknown"), tone: "muted" };
 }
 
 function Row({
@@ -61,7 +62,7 @@ export default function DiagnosticsScreen() {
       setAndroidAlarmStatus(settings?.android?.alarm);
     } catch (e) {
       console.log("[VR] Diagnostics refresh failed:", e);
-      Alert.alert("Error", "Failed to load notification diagnostics.");
+      Alert.alert(t("common.error"), t("diagnostics.alert.loadFailed"));
     } finally {
       setIsLoading(false);
     }
@@ -81,7 +82,7 @@ export default function DiagnosticsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.headerButton} activeOpacity={0.85}>
           <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Alarms</Text>
+        <Text style={styles.headerTitle}>{t("diagnostics.title")}</Text>
         <TouchableOpacity onPress={refresh} style={styles.headerButton} activeOpacity={0.85}>
           <AppIcon
             name="refresh-cw"
@@ -93,11 +94,11 @@ export default function DiagnosticsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.sectionLabel}>Permissions</Text>
+        <Text style={styles.sectionLabel}>{t("diagnostics.section.permissions")}</Text>
         <View style={styles.card}>
           <Row
             icon="bell"
-            label="Notifications"
+            label={t("diagnostics.row.notifications")}
             right={
               <Text
                 style={[
@@ -125,15 +126,15 @@ export default function DiagnosticsScreen() {
           ) : null}
         </View>
 
-        <Text style={styles.sectionLabel}>Open system settings</Text>
+        <Text style={styles.sectionLabel}>{t("diagnostics.section.systemSettings")}</Text>
         <View style={styles.card}>
           <Row
             icon="bell"
-            label="Notification settings"
+            label={t("diagnostics.row.notificationSettings")}
             onPress={async () => {
               const opened = await openNotificationSettingsSafe();
               if (!opened) {
-                Alert.alert("Unable to open settings", "Please open your system settings manually.");
+                Alert.alert(t("diagnostics.alert.openFailed.title"), t("diagnostics.alert.openFailed.message"));
               }
             }}
             isLast={!showAndroidAlarmRow}

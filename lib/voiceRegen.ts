@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 /**
  * Regenerating a reminder's spoken line when it is edited in the sheet.
  *
@@ -62,10 +63,7 @@ export interface VoiceRegenOutcome {
     rescheduleError?: unknown;
 }
 
-const REGEN_FAILED_MESSAGE =
-    "Couldn't update the voice — it will still say the old line. Save again to retry.";
-const RESCHEDULE_FAILED_MESSAGE =
-    "Voice updated but the alarm couldn't be rescheduled — check your connection and save again";
+
 
 /**
  * Should saving this edit regenerate the voice? Yes when the spoken line
@@ -102,7 +100,11 @@ export async function regenerateVoiceOnSave(
     } catch (e) {
         // Offline / TTS error: keep the old line, mark stale, reschedule as today.
         deps.perf("voice_regen_failed", { message: String((e as any)?.message ?? e) });
-        deps.toast({ title: "Voice not updated", message: REGEN_FAILED_MESSAGE, type: "error" });
+        deps.toast({
+            title: t("voice.regenFailed.title"),
+            message: t("voice.regenFailed.message"),
+            type: "error",
+        });
 
         const patch: VoiceRegenOutcome["patch"] = { audioStale: true };
         if (currentAudioUrl) {
@@ -143,8 +145,8 @@ export async function regenerateVoiceOnSave(
             });
         } catch (rescheduleError) {
             deps.toast({
-                title: "Alarm not rescheduled",
-                message: RESCHEDULE_FAILED_MESSAGE,
+                title: t("voice.rescheduleFailed.title"),
+                message: t("voice.rescheduleFailed.message"),
                 type: "error",
             });
             // Keep it stale so the next save retries the reschedule.

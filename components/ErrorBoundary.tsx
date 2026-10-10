@@ -1,3 +1,4 @@
+import { t } from "../lib/i18n";
 import React, { Component, ErrorInfo, ReactNode } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import * as Sentry from "@sentry/react-native";
@@ -35,13 +36,13 @@ export default class ErrorBoundary extends Component<Props, State> {
       return (
         <View style={styles.container}>
           <Text style={styles.title}>
-            {this.props.fallbackTitle ?? "Something went wrong"}
+            {this.props.fallbackTitle ?? t("errorBoundary.title")}
           </Text>
           <Text style={styles.message}>
-            {this.state.error?.message || "An unexpected error occurred."}
+            {this.state.error?.message || t("errorBoundary.message")}
           </Text>
           <TouchableOpacity style={styles.button} onPress={this.handleRetry}>
-            <Text style={styles.buttonText}>Try Again</Text>
+            <Text style={styles.buttonText}>{t("errorBoundary.retry")}</Text>
           </TouchableOpacity>
         </View>
       );
