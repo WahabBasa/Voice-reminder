@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi tar opp stemmen din, så du kan opprette påminnelser ved å snakke. Opptaket forlater enheten og behandles av sikre AI-tjenester som transkriberer det og leser påminnelsene dine høyt for deg.",
+  "NSAlarmKitUsageDescription": "Remi bruker alarmer, slik at talte påminnelser ringer selv når telefonen er satt på lydløs."
+}

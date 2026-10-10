@@ -472,12 +472,15 @@ enum VRAlarmNagChain {
 #if canImport(AlarmKit)
 @available(iOS 26.0, *)
 enum VRAlarmButtons {
+    // Labels in the app's language, stored by the bridge (VRAlarmStore.setLabels).
     static var done: AlarmButton {
-        AlarmButton(text: "Done", textColor: .white, systemImageName: "checkmark.circle.fill")
+        AlarmButton(text: LocalizedStringResource(stringLiteral: VRAlarmStore.doneLabel),
+                    textColor: .white, systemImageName: "checkmark.circle.fill")
     }
 
     static var later: AlarmButton {
-        AlarmButton(text: "Later", textColor: .white, systemImageName: "clock.badge")
+        AlarmButton(text: LocalizedStringResource(stringLiteral: VRAlarmStore.laterLabel),
+                    textColor: .white, systemImageName: "clock.badge")
     }
 
     /// Must be `.custom`: only `.custom` runs VRSnoozeIntent.
@@ -564,7 +567,7 @@ struct VRSnoozeIntent: LiveActivityIntent {
         // 2) Arm the new comeback chain: comeback at now+5 (step 0) plus two nags
         //    at now+10 / now+15 (steps 1, 2) so an ignored comeback still nags
         //    twice. Comeback first — it is the ring that matters.
-        let title = alarmTitle ?? VRAlarmIntentStore.storedTitle(appKey: resolvedKey) ?? "Reminder"
+        let title = alarmTitle ?? VRAlarmIntentStore.storedTitle(appKey: resolvedKey) ?? VRAlarmStore.fallbackTitle
         let sound = soundName ?? VRAlarmIntentStore.storedSoundName(appKey: resolvedKey)
         let nag1At = comebackAt + minutes * 60_000
         let nag2At = nag1At + minutes * 60_000

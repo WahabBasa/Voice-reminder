@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi neemt je stem op zodat je herinneringen kunt aanmaken door te spreken. Je opname verlaat je apparaat en wordt verwerkt door beveiligde AI-diensten om hem uit te schrijven en je herinneringen hardop voor te lezen.",
+  "NSAlarmKitUsageDescription": "Remi gebruikt alarmen zodat gesproken herinneringen ook afgaan als je telefoon op stil staat."
+}

@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Nire-record ni Remi ang boses mo para makagawa ka ng mga paalala sa pagsasalita. Lumalabas sa device mo ang recording at pinoproseso ito ng mga secure na AI service para i-transcribe ito at sabihin pabalik sa iyo ang mga paalala mo.",
+  "NSAlarmKitUsageDescription": "Gumagamit si Remi ng mga alarm para tumunog ang mga binibigkas na paalala kahit naka-silent ang phone mo."
+}

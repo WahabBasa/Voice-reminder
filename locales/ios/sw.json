@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi hurekodi sauti yako ili uweze kuunda vikumbusho kwa kuzungumza. Rekodi yako hutoka kwenye kifaa chako na kuchakatwa na huduma salama za akili bandia (AI) ili kuinukuu na kukusomea vikumbusho vyako kwa sauti.",
+  "NSAlarmKitUsageDescription": "Remi hutumia kengele ili vikumbusho vinavyosemwa vilie hata simu yako ikiwa kwenye hali ya kimya."
+}

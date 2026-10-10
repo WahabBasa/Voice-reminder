@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi會錄下你的聲音，讓你用說的就能建立提醒。錄音會離開你的裝置，由安全的AI服務轉寫成文字，並在時間到時把提醒唸給你聽。",
+  "NSAlarmKitUsageDescription": "Remi使用鬧鐘功能，即使手機處於靜音狀態，語音提醒也會響起。"
+}

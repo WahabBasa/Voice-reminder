@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi nahrává váš hlas, takže připomínky můžete vytvářet mluvením. Nahrávka opustí vaše zařízení a zpracují ji zabezpečené služby AI, které ji přepíšou a připomínky vám pak přečtou nahlas.",
+  "NSAlarmKitUsageDescription": "Remi používá budíky, aby mluvené připomínky zazvonily, i když máte telefon ztlumený."
+}

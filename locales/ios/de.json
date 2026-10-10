@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi nimmt deine Stimme auf, damit du Erinnerungen per Sprache erstellen kannst. Deine Aufnahme verlässt dein Gerät und wird von sicheren KI-Diensten verarbeitet, um sie zu transkribieren und dir deine Erinnerungen vorzusprechen.",
+  "NSAlarmKitUsageDescription": "Remi verwendet Alarme, damit gesprochene Erinnerungen auch klingeln, wenn dein iPhone stummgeschaltet ist."
+}

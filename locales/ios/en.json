@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi records your voice so you can create reminders by speaking. Your recording leaves your device and is processed by secure AI services to transcribe it and speak your reminders back to you.",
+  "NSAlarmKitUsageDescription": "Remi uses alarms so spoken reminders ring even when your phone is silenced."
+}

@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi nauhoittaa äänesi, jotta voit luoda muistutuksia puhumalla. Nauhoitus lähtee laitteeltasi, ja suojatut tekoälypalvelut käsittelevät sen: ne litteroivat sen ja lukevat muistutuksesi sinulle ääneen.",
+  "NSAlarmKitUsageDescription": "Remi käyttää herätyksiä, jotta puhutut muistutukset soivat, vaikka puhelin olisi äänettömällä."
+}

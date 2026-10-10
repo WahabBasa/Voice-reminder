@@ -259,6 +259,27 @@ describe("bridge passthrough", () => {
     });
   });
 
+  it("sends the Later / Done labels and fallback title in the UI language", async () => {
+    await withAlarmKit({}, async (alarmKit, bridge) => {
+      await alarmKit.scheduleAlarm(opts);
+      expect(bridge!.scheduleAlarm.mock.calls[0][0]).toMatchObject({
+        laterLabel: "Later",
+        doneLabel: "Done",
+        fallbackTitle: "Reminder",
+      });
+
+      // Same isolated registry as alarmKit, so this is the i18n it reads.
+      const pt = require("../../locales/pt-BR.json");
+      require("../../lib/i18n").setUiLocale("pt-BR");
+      await alarmKit.scheduleAlarm(opts);
+      expect(bridge!.scheduleAlarm.mock.calls[1][0]).toMatchObject({
+        laterLabel: pt["alarm.button.later"],
+        doneLabel: pt["alarm.button.done"],
+        fallbackTitle: pt["alarm.fallbackTitle"],
+      });
+    });
+  });
+
   it("honours explicit occurrenceAt / chainId / chainStep / kind when the caller passes them", async () => {
     await withAlarmKit({}, async (alarmKit, bridge) => {
       await alarmKit.scheduleAlarm({

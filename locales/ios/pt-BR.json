@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "O Remi grava a sua voz para você criar lembretes falando. A gravação sai do seu aparelho e é processada por serviços de IA seguros, que transcrevem o que você disse e falam os lembretes de volta para você.",
+  "NSAlarmKitUsageDescription": "O Remi usa alarmes para que os lembretes falados toquem mesmo com o celular no silencioso."
+}

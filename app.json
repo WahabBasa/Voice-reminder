@@ -3,17 +3,52 @@
     "name": "Remi",
     "slug": "VoiceReminder",
     "scheme": "voicereminder",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "locales": {
+      "en": "./locales/ios/en.json",
+      "pt-BR": "./locales/ios/pt-BR.json",
+      "es-MX": "./locales/ios/es-MX.json",
+      "fr": "./locales/ios/fr.json",
+      "de": "./locales/ios/de.json",
+      "it": "./locales/ios/it.json",
+      "nl": "./locales/ios/nl.json",
+      "sv": "./locales/ios/sv.json",
+      "da": "./locales/ios/da.json",
+      "nb": "./locales/ios/nb.json",
+      "fi": "./locales/ios/fi.json",
+      "pl": "./locales/ios/pl.json",
+      "cs": "./locales/ios/cs.json",
+      "ru": "./locales/ios/ru.json",
+      "uk": "./locales/ios/uk.json",
+      "ro": "./locales/ios/ro.json",
+      "hu": "./locales/ios/hu.json",
+      "el": "./locales/ios/el.json",
+      "tr": "./locales/ios/tr.json",
+      "hi": "./locales/ios/hi.json",
+      "bn": "./locales/ios/bn.json",
+      "sw": "./locales/ios/sw.json",
+      "fil": "./locales/ios/fil.json",
+      "ja": "./locales/ios/ja.json",
+      "ko": "./locales/ios/ko.json",
+      "zh-Hans": "./locales/ios/zh-Hans.json",
+      "zh-Hant": "./locales/ios/zh-Hant.json",
+      "vi": "./locales/ios/vi.json",
+      "th": "./locales/ios/th.json",
+      "id": "./locales/ios/id.json",
+      "ms": "./locales/ios/ms.json"
+    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.wahabbasa.VoiceReminder",
       "buildNumber": "9",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleLocalizations": ["en", "pt-BR", "es-MX", "fr", "de", "it", "nl", "sv", "da", "nb", "fi", "pl", "cs", "ru", "uk", "ro", "hu", "el", "tr", "hi", "bn", "sw", "fil", "ja", "ko", "zh-Hans", "zh-Hant", "vi", "th", "id", "ms"]
       },
       "privacyManifests": {
         "NSPrivacyTracking": false,
@@ -136,7 +171,8 @@
           "image": "./assets/splash-icon.png",
           "imageWidth": 200
         }
-      ]
+      ],
+      "expo-localization"
     ],
     "extra": {
       "router": {},

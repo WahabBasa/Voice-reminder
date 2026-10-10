@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi registra la tua voce così puoi creare promemoria parlando. La registrazione lascia il dispositivo e viene elaborata da servizi di IA sicuri per trascriverla e leggerti i promemoria ad alta voce.",
+  "NSAlarmKitUsageDescription": "Remi usa le sveglie per far suonare i promemoria vocali anche quando il telefono è in modalità silenziosa."
+}

@@ -14,8 +14,10 @@ const { withXcodeProject, withDangerousMod, withInfoPlist, IOSConfig } = require
 const fs = require("fs");
 const path = require("path");
 
+// English base text. Translations ride expo.locales (locales/ios/*.json ->
+// <lang>.lproj/InfoPlist.strings), keyed NSAlarmKitUsageDescription.
 const ALARM_KIT_USAGE_DESCRIPTION =
-  "VoiceReminder uses alarms so spoken reminders ring even when your phone is silenced.";
+  "Remi uses alarms so spoken reminders ring even when your phone is silenced.";
 
 // AlarmKitBridge.swift content
 const ALARM_KIT_BRIDGE_SWIFT = `import Foundation
@@ -62,7 +64,12 @@ class AlarmKitBridge: NSObject {
       return
     }
 
-    let title = (opts["title"] as? String) ?? "Reminder"
+    // Button labels and the fallback title in the app's language (i18n). Stored
+    // so the Later intent's native re-schedule, which runs without JS, reuses them.
+    VRAlarmStore.setLabels(later: opts["laterLabel"] as? String,
+                           done: opts["doneLabel"] as? String,
+                           fallbackTitle: opts["fallbackTitle"] as? String)
+    let title = (opts["title"] as? String) ?? VRAlarmStore.fallbackTitle
     let soundName = opts["soundName"] as? String
     let snoozeMinutes = (opts["snoozeMinutes"] as? NSNumber)?.intValue ?? 5
     let metadata = (opts["metadata"] as? [String: String]) ?? [:]
@@ -375,6 +382,7 @@ enum VRAlarmStore {
   static let eventsKey = "vr_alarm_events"        // JSON array, drained by JS on foreground
   static let snoozeGuardPrefix = "snooze_until_"  // + appKey -> epoch ms
   static let metaKey = "vr_alarm_meta"            // appKey -> title/soundName/snoozeMinutes/metadata
+  static let labelsKey = "vr_alarm_labels"        // later/done/fallbackTitle in the app's language
 
   // Not in the PRD contract: parallel appKey -> epoch ms map so getScheduledAlarms()
   // can report fireDate without querying AlarmKit. Always written via setUUID.
@@ -432,6 +440,27 @@ enum VRAlarmStore {
     all[appKey] = record
     defaults.set(all, forKey: metaKey)
   }
+
+  // MARK: Localized labels (i18n). Written by the bridge on every schedule; read
+  // by makeAlert for every alarm, including the ones the Later intent re-arms.
+
+  static func setLabels(later: String?, done: String?, fallbackTitle: String?) {
+    var labels = (defaults.dictionary(forKey: labelsKey) as? [String: String]) ?? [:]
+    if let later = later, !later.isEmpty { labels["later"] = later }
+    if let done = done, !done.isEmpty { labels["done"] = done }
+    if let fallbackTitle = fallbackTitle, !fallbackTitle.isEmpty { labels["fallbackTitle"] = fallbackTitle }
+    defaults.set(labels, forKey: labelsKey)
+  }
+
+  static func label(_ key: String, fallback: String) -> String {
+    let labels = (defaults.dictionary(forKey: labelsKey) as? [String: String]) ?? [:]
+    if let value = labels[key], !value.isEmpty { return value }
+    return fallback
+  }
+
+  static var laterLabel: String { label("later", fallback: "Later") }
+  static var doneLabel: String { label("done", fallback: "Done") }
+  static var fallbackTitle: String { label("fallbackTitle", fallback: "Reminder") }
 
   static func clearMeta(appKey: String) {
     var all = (defaults.dictionary(forKey: metaKey) as? [String: [String: Any]]) ?? [:]
@@ -623,11 +652,14 @@ enum VRAlarmScheduler {
   /// the system supplies its own stop control, our label is ignored, and
   /// \`stopIntent\` runs from it either way. Warning at compile time is expected.
   private static func makeAlert(title: String) -> AlarmPresentation.Alert {
-    let later = AlarmButton(text: "Later", textColor: .white, systemImageName: "clock.badge")
+    let later = AlarmButton(text: LocalizedStringResource(stringLiteral: VRAlarmStore.laterLabel),
+                            textColor: .white, systemImageName: "clock.badge")
+    let done = AlarmButton(text: LocalizedStringResource(stringLiteral: VRAlarmStore.doneLabel),
+                           textColor: .white, systemImageName: "checkmark.circle.fill")
 
     return AlarmPresentation.Alert(
       title: LocalizedStringResource(stringLiteral: title),
-      stopButton: AlarmButton(text: "Done", textColor: .white, systemImageName: "checkmark.circle.fill"),
+      stopButton: done,
       secondaryButton: later,
       // .custom (not .countdown) so VRSnoozeIntent actually runs on tap.
       secondaryButtonBehavior: .custom

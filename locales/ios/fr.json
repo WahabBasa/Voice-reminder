@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi enregistre votre voix pour que vous puissiez créer des rappels en parlant. Votre enregistrement quitte votre appareil et est traité par des services d’IA sécurisés, qui le transcrivent et vous lisent vos rappels à voix haute.",
+  "NSAlarmKitUsageDescription": "Remi utilise les alarmes pour que vos rappels vocaux sonnent même lorsque votre téléphone est en mode silencieux."
+}

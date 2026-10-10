@@ -10,6 +10,7 @@
  * this side: lib/notifications.ts owns the scheduling branch, the
  * reconciliation bookkeeping and every write.
  */
+import { t } from "./i18n";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { NativeEventEmitter, NativeModules, Platform } from "react-native";
 import { vrLog } from "./vrLog";
@@ -38,6 +39,12 @@ export interface AlarmKitScheduleOptions {
   chainStep?: number;
   /** "original" (schedule grid) or "later" (a Later-armed comeback). Defaults to "original". */
   kind?: "original" | "later";
+  // ── Labels in the UI language (i18n) ──────────────────────────────────────
+  // Filled from the catalog by `scheduleAlarm`; native stores them for the
+  // Later intent's re-schedule, which runs without JS.
+  laterLabel?: string;
+  doneLabel?: string;
+  fallbackTitle?: string;
 }
 
 /**
@@ -233,6 +240,9 @@ function withOccurrenceMetadata(opts: AlarmKitScheduleOptions): AlarmKitSchedule
   const chainStep = Number.isFinite(opts.chainStep as number) ? (opts.chainStep as number) : 0;
   const kind = opts.kind ?? "original";
   return {
+    laterLabel: t("alarm.button.later"),
+    doneLabel: t("alarm.button.done"),
+    fallbackTitle: t("alarm.fallbackTitle"),
     ...opts,
     metadata: {
       ...opts.metadata,

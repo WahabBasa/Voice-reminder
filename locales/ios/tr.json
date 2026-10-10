@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi, konuşarak hatırlatıcı oluşturabilmeniz için sesinizi kaydeder. Kaydınız aygıtınızdan çıkar ve yazıya dökülmesi ile hatırlatıcılarınızın size sesli okunması için güvenli yapay zekâ servislerince işlenir.",
+  "NSAlarmKitUsageDescription": "Remi, sesli hatırlatıcıların iPhone’unuz sessizdeyken bile çalması için alarmları kullanır."
+}

@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi ghi âm giọng nói để bạn có thể tạo lời nhắc bằng cách nói. Bản ghi âm sẽ rời khỏi thiết bị và được các dịch vụ AI an toàn xử lý để chép lời và đọc lại lời nhắc cho bạn.",
+  "NSAlarmKitUsageDescription": "Remi dùng báo thức để lời nhắc bằng giọng nói vẫn reo ngay cả khi điện thoại đang tắt tiếng."
+}

@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi는 말로 리마인더를 만들 수 있도록 음성을 녹음합니다. 녹음 내용은 기기 밖으로 전송되며, 안전한 AI 서비스에서 받아쓰기와 리마인더 음성 재생을 위해 처리됩니다.",
+  "NSAlarmKitUsageDescription": "Remi는 iPhone이 무음 모드일 때에도 음성 리마인더가 울리도록 알람을 사용합니다."
+}

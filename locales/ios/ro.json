@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi vă înregistrează vocea ca să puteți crea mementouri vorbind. Înregistrarea părăsește dispozitivul și este procesată de servicii AI securizate, care o transcriu și vă rostesc mementourile cu voce tare.",
+  "NSAlarmKitUsageDescription": "Remi folosește alarme pentru ca mementourile vorbite să sune chiar și atunci când telefonul are sunetul dezactivat."
+}

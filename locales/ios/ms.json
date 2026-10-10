@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi merakam suara anda supaya anda boleh mencipta peringatan dengan bercakap. Rakaman anda keluar dari peranti anda dan diproses oleh perkhidmatan AI yang selamat untuk ditranskripsi dan untuk menyebut semula peringatan anda kepada anda.",
+  "NSAlarmKitUsageDescription": "Remi menggunakan penggera supaya peringatan bersuara tetap berbunyi walaupun telefon anda disenyapkan."
+}

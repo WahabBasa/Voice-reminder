@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi nagrywa Twój głos, aby można było tworzyć przypomnienia mówiąc. Nagranie opuszcza urządzenie i jest przetwarzane przez bezpieczne usługi AI, które je transkrybują i odczytują Ci przypomnienia na głos.",
+  "NSAlarmKitUsageDescription": "Remi używa alarmów, aby wypowiadane przypomnienia dzwoniły nawet wtedy, gdy telefon jest wyciszony."
+}

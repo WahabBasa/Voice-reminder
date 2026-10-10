@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remiは、話すだけでリマインダーを作成できるように、あなたの声を録音します。録音はデバイスの外に送信され、文字起こしとリマインダーの読み上げのために安全なAIサービスで処理されます。",
+  "NSAlarmKitUsageDescription": "Remiはアラームを使用して、iPhoneが消音モードのときでも読み上げリマインダーが鳴るようにします。"
+}

@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi graba tu voz para que puedas crear recordatorios hablando. Tu grabación sale de tu dispositivo y se procesa con servicios seguros de IA para transcribirla y decirte tus recordatorios en voz alta.",
+  "NSAlarmKitUsageDescription": "Remi usa alarmas para que tus recordatorios hablados suenen aunque tu iPhone esté en silencio."
+}

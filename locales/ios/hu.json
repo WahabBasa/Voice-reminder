@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi rögzíti a hangját, hogy kimondással hozhasson létre emlékeztetőket. A felvétel elhagyja az eszközt, és biztonságos MI-szolgáltatások dolgozzák fel: átírják, majd felolvassák Önnek az emlékeztetőit.",
+  "NSAlarmKitUsageDescription": "Remi ébresztéseket használ, hogy a kimondott emlékeztetők akkor is megszólaljanak, ha a telefon le van némítva."
+}

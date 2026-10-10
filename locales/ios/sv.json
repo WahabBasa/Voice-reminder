@@ -1,0 +1,4 @@
+{
+  "NSMicrophoneUsageDescription": "Remi spelar in din röst så att du kan skapa påminnelser genom att prata. Inspelningen lämnar enheten och bearbetas av säkra AI-tjänster som transkriberar den och läser upp dina påminnelser för dig.",
+  "NSAlarmKitUsageDescription": "Remi använder alarm så att talade påminnelser ringer även när telefonen är ljudlös."
+}
