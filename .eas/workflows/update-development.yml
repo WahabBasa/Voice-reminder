@@ -7,4 +7,4 @@ jobs:
     params:
       branch: development
       platform: ios
-      message: "main @ 3d7f6db (step 1: parse guard, cloud retry, ElevenLabs routing, first-tap fix, feedback card, founder alerts)"
+      message: "claude/push-notifications-optional-1wp4fm @ 20c61cb (Apple Ads attribution: AdServices token collection in RevenueCat)"
