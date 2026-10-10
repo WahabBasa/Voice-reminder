@@ -379,7 +379,7 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
         confirmLabel={t("common.done")}
         onConfirm={(code) => {
           setShowLanguageSheet(false);
-          void pickLanguage(code);
+          void pickLanguage(code, { returnToSettings: true });
         }}
         onDismiss={() => setShowLanguageSheet(false)}
       />

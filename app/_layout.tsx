@@ -1,5 +1,12 @@
 import { t, useUiLocale } from "../lib/i18n";
-import { applyDeviceLanguage, hasLoadedLanguage, loadAppLanguage } from "../lib/appLanguage";
+import {
+  applyDeviceLanguage,
+  hasLoadedLanguage,
+  loadAppLanguage,
+  shouldShowFirstLaunchWheel,
+  useChosenLanguage,
+} from "../lib/appLanguage";
+import FirstLaunchLanguage from "../components/FirstLaunchLanguage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, InteractionManager, LogBox, Platform } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
@@ -358,6 +365,9 @@ function RootLayout() {
   // Every string is read at render, so a language change re-renders the
   // screens by remounting the Stack under the new catalog.
   const uiLocale = useUiLocale();
+  // Read only after the stored pick has loaded, so a saved choice never sees it.
+  const chosenLanguage = useChosenLanguage();
+  const showFirstLaunchWheel = shouldShowFirstLaunchWheel(languageReady, chosenLanguage);
   const [splashVisible, setSplashVisible] = useState(true);
   const hideSplash = useCallback(() => setSplashVisible(false), []);
 
@@ -384,6 +394,12 @@ function RootLayout() {
         <SafeAreaProvider>
           <ConvexProvider client={convex}>
             <ToastProvider>
+              {/* First launch without a saved language: the wheel replaces
+                  everything else (startup work, prompts, Home) until Continue. */}
+              {showFirstLaunchWheel ? (
+                <FirstLaunchLanguage />
+              ) : (
+              <>
               <StartupTasks />
               <PermissionPrompt />
               <StatusBar style="light" />
@@ -454,6 +470,8 @@ function RootLayout() {
                   }
                 />
               </Stack>
+              </>
+              )}
               {/* Feedback composer + status list, mounted above every screen
                   and sheet so opening it from an edit leaves that edit intact. */}
               <FeedbackHost />

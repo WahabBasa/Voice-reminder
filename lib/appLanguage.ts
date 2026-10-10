@@ -283,10 +283,34 @@ export async function chooseAppLanguage(
   return true;
 }
 
+/**
+ * The first-launch wheel shows when the stored pick has been read and there is
+ * none: a fresh install, or an existing install updating from a build without
+ * the wheel. Never before the read (no flash), never once a pick is saved.
+ */
+export function shouldShowFirstLaunchWheel(isLoaded: boolean, chosen: string | null): boolean {
+  return isLoaded && chosen === null;
+}
+
+// A Settings pick remounts the screens; Home reopens on Settings once.
+let returnToSettings = false;
+
+export function markReturnToSettings(): void {
+  returnToSettings = true;
+}
+
+/** True once after `markReturnToSettings`. */
+export function consumeReturnToSettings(): boolean {
+  const value = returnToSettings;
+  returnToSettings = false;
+  return value;
+}
+
 /** Test seam. */
 export function __resetAppLanguageForTests(): void {
   chosenLanguage = null;
   loaded = false;
   loading = null;
+  returnToSettings = false;
   listeners.clear();
 }

@@ -1,8 +1,6 @@
 
-import { getUiLocale, intlLocales, t } from "../lib/i18n";
-import LanguageSheet from "../components/LanguageSheet";
-import { getChosenLanguage, loadAppLanguage } from "../lib/appLanguage";
-import { currentLanguageChoice, pickLanguage } from "../lib/pickLanguage";
+import { intlLocales, t } from "../lib/i18n";
+import { consumeReturnToSettings } from "../lib/appLanguage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -152,14 +150,6 @@ import {
 import NetInfo from "@react-native-community/netinfo";
 
 // Pager pages: 0 = Reminders, 1 = Days, 2 = Settings (see docs/ui-redesign.md gesture map).
-/**
- * Set when the first-run language step hands off to the recording the user
- * tapped for. A pick that changes the UI language remounts the screen tree
- * (app/_layout keys the Stack on it), so the NEW HomeScreen picks this up on
- * mount and carries on into the consent card, now in the chosen language.
- */
-let resumeRecordingOnMount = false;
-
 const PAGE_TODAY = 0;
 const PAGE_DAYS = 1;
 const PAGE_SETTINGS = 2;
@@ -300,12 +290,13 @@ export default function HomeScreen() {
   const [gateStatusText, setGateStatusText] = useState<string | undefined>(undefined);
   const [showUpgradeCta, setShowUpgradeCta] = useState(false);
   const [showConsentCard, setShowConsentCard] = useState(false);
-  const [showLanguageStep, setShowLanguageStep] = useState(false);
   // Typed composer (OLD-101) — opened from the header's + button (Tiimo pattern).
   const [showComposer, setShowComposer] = useState(false);
   const [composerTraceId, setComposerTraceId] = useState<string | null>(null);
   const [isComposerSubmitting, setIsComposerSubmitting] = useState(false);
-  const [page, setPage] = useState(PAGE_TODAY);
+  // A language change from Settings remounts the screens (app/_layout keys the
+  // Stack on the UI language); come back on the Settings page, not Reminders.
+  const [page, setPage] = useState(() => (consumeReturnToSettings() ? PAGE_SETTINGS : PAGE_TODAY));
   // Current page, readable from callbacks that must not re-create when it
   // changes (the stop-tap handler). Mirrors `page` on every render.
   const pageRef = useRef(page);
@@ -502,15 +493,6 @@ export default function HomeScreen() {
       await settingsState.loadSettings();
     }
     if (useSettingsStore.getState().settings.aiConsentAcceptedAt === null) {
-      // First run: the language comes first, so the transcriber hears the
-      // first recording in it and the consent card reads in it. Only for a
-      // brand-new install (no consent yet) that never picked one.
-      await loadAppLanguage();
-      if (getChosenLanguage() === null) {
-        perfLog(traceId, "ui.recording", "open_blocked_language");
-        setShowLanguageStep(true);
-        return;
-      }
       perfLog(traceId, "ui.recording", "open_blocked_consent");
       setShowConsentCard(true);
       return;
@@ -623,31 +605,6 @@ export default function HomeScreen() {
     },
     [handleOpenRecording]
   );
-
-  // The first-run language pick, then on into the recording the user tapped
-  // for. A UI-language change remounts this screen; the new one resumes.
-  const handleLanguageStepConfirm = useCallback(
-    async (code: string) => {
-      setShowLanguageStep(false);
-      const before = getUiLocale();
-      resumeRecordingOnMount = true;
-      await pickLanguage(code);
-      if (getUiLocale() === before) {
-        resumeRecordingOnMount = false;
-        void handleOpenRecording();
-      }
-    },
-    [handleOpenRecording]
-  );
-
-  // The remounted screen after a first-run pick that changed the UI language.
-  useEffect(() => {
-    if (!resumeRecordingOnMount) return;
-    resumeRecordingOnMount = false;
-    void handleOpenRecording();
-    // Mount only: this is a one-shot hand-off from the previous instance.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   /**
    * Schedule every reminder a take produced.
@@ -2183,15 +2140,6 @@ export default function HomeScreen() {
         onSubmit={(text) => void handleComposerSubmit(text)}
         onSpeak={handleComposerSpeak}
         onDismiss={handleComposerDismiss}
-      />
-
-      {/* First-run language step — before the AI disclosure, once */}
-      <LanguageSheet
-        visible={showLanguageStep}
-        initialCode={currentLanguageChoice()}
-        confirmLabel={t("language.sheet.continue")}
-        onConfirm={(code) => void handleLanguageStepConfirm(code)}
-        onDismiss={() => setShowLanguageStep(false)}
       />
 
       {/* First-run AI disclosure — gates the very first recording */}

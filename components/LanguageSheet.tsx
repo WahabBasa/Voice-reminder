@@ -11,24 +11,77 @@ import { LANGUAGE_OPTIONS, indexOfLanguage } from "../lib/appLanguage";
 const ITEM_HEIGHT = 44;
 const WHEEL_HEIGHT = ITEM_HEIGHT * 5;
 
-export type LanguageSheetProps = {
-    visible: boolean;
+export type LanguageWheelProps = {
     /** The language the wheel opens on (the pick, else the device's). */
     initialCode: string;
-    /** The button under the wheel: "Continue" on first run, "Done" in Settings. */
+    /** The button under the wheel: "Continue" on first launch, "Done" in Settings. */
     confirmLabel: string;
     onConfirm: (code: string) => void;
+};
+
+/**
+ * The language wheel itself: title, every language Remi knows in its own
+ * name, the current one preselected, and the confirm button. Shown full
+ * screen on first launch (components/FirstLaunchLanguage) and in a sheet from
+ * Settings (below). The pick sets both the UI language and the voice hint
+ * (lib/pickLanguage.ts) — the caller does that.
+ */
+export function LanguageWheel({ initialCode, confirmLabel, onConfirm }: LanguageWheelProps) {
+    const [index, setIndex] = useState(() => indexOfLanguage(initialCode));
+    useEffect(() => setIndex(indexOfLanguage(initialCode)), [initialCode]);
+
+    const names = useMemo(() => LANGUAGE_OPTIONS.map((option) => option.endonym), []);
+
+    return (
+        <View>
+            <Text style={styles.title}>{t("language.sheet.title")}</Text>
+            <Text style={styles.subtitle}>{t("language.sheet.subtitle")}</Text>
+
+            <View style={styles.wheel} testID="language-wheel">
+                <ScrollSelector
+                    dataSource={names}
+                    selectedIndex={index}
+                    onValueChange={(_, next) => setIndex(next)}
+                    itemHeight={ITEM_HEIGHT}
+                    wrapperHeight={WHEEL_HEIGHT}
+                    wrapperWidth="100%"
+                    renderItem={(item, _i, isSelected) => (
+                        <Text
+                            style={[styles.item, isSelected && styles.itemSelected]}
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.75}
+                        >
+                            {item}
+                        </Text>
+                    )}
+                />
+            </View>
+
+            <TouchableOpacity
+                style={styles.confirmButton}
+                onPress={() => onConfirm(LANGUAGE_OPTIONS[index]?.code ?? "en")}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityHint={LANGUAGE_OPTIONS[index]?.endonym}
+                testID="language-confirm"
+            >
+                <Text style={styles.confirmText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+                    {confirmLabel}
+                </Text>
+            </TouchableOpacity>
+        </View>
+    );
+}
+
+export type LanguageSheetProps = LanguageWheelProps & {
+    visible: boolean;
     /** Backdrop tap, swipe-down: nothing is saved. */
     onDismiss: () => void;
     hostName?: string;
 };
 
-/**
- * The language wheel (Settings › Language, and the first-run step before the
- * first recording). Every language Remi knows, each in its own name, with the
- * current one preselected. The pick sets both the UI language and the voice
- * hint (lib/appLanguage.ts `chooseAppLanguage`) — the caller does that.
- */
+/** Settings › Language: the wheel in a bottom sheet. */
 export default function LanguageSheet({
     visible,
     initialCode,
@@ -38,18 +91,11 @@ export default function LanguageSheet({
     hostName = "root",
 }: LanguageSheetProps) {
     const bottomSheetRef = useRef<BottomSheet>(null);
-    const [index, setIndex] = useState(() => indexOfLanguage(initialCode));
     const confirmedRef = useRef(false);
 
-    // Re-centre on the current language every time the sheet opens.
     useEffect(() => {
-        if (visible) {
-            confirmedRef.current = false;
-            setIndex(indexOfLanguage(initialCode));
-        }
-    }, [visible, initialCode]);
-
-    const names = useMemo(() => LANGUAGE_OPTIONS.map((option) => option.endonym), []);
+        if (visible) confirmedRef.current = false;
+    }, [visible]);
 
     const renderBackdrop = useCallback(
         (props: any) => (
@@ -71,11 +117,14 @@ export default function LanguageSheet({
         [onDismiss]
     );
 
-    const handleConfirm = useCallback(() => {
-        confirmedRef.current = true;
-        onConfirm(LANGUAGE_OPTIONS[index]?.code ?? "en");
-        bottomSheetRef.current?.close();
-    }, [index, onConfirm]);
+    const handleConfirm = useCallback(
+        (code: string) => {
+            confirmedRef.current = true;
+            onConfirm(code);
+            bottomSheetRef.current?.close();
+        },
+        [onConfirm]
+    );
 
     if (!visible) return null;
 
@@ -94,47 +143,7 @@ export default function LanguageSheet({
                 backgroundStyle={styles.sheetBackground}
             >
                 <BottomSheetView style={styles.content}>
-                    <Text style={styles.title}>{t("language.sheet.title")}</Text>
-                    <Text style={styles.subtitle}>{t("language.sheet.subtitle")}</Text>
-
-                    <View style={styles.wheel} testID="language-wheel">
-                        <ScrollSelector
-                            dataSource={names}
-                            selectedIndex={index}
-                            onValueChange={(_, next) => setIndex(next)}
-                            itemHeight={ITEM_HEIGHT}
-                            wrapperHeight={WHEEL_HEIGHT}
-                            wrapperWidth="100%"
-                            renderItem={(item, _i, isSelected) => (
-                                <Text
-                                    style={[styles.item, isSelected && styles.itemSelected]}
-                                    numberOfLines={1}
-                                    adjustsFontSizeToFit
-                                    minimumFontScale={0.75}
-                                >
-                                    {item}
-                                </Text>
-                            )}
-                        />
-                    </View>
-
-                    <TouchableOpacity
-                        style={styles.confirmButton}
-                        onPress={handleConfirm}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityHint={LANGUAGE_OPTIONS[index]?.endonym}
-                        testID="language-confirm"
-                    >
-                        <Text
-                            style={styles.confirmText}
-                            numberOfLines={1}
-                            adjustsFontSizeToFit
-                            minimumFontScale={0.75}
-                        >
-                            {confirmLabel}
-                        </Text>
-                    </TouchableOpacity>
+                    <LanguageWheel initialCode={initialCode} confirmLabel={confirmLabel} onConfirm={handleConfirm} />
                 </BottomSheetView>
             </BottomSheet>
         </Portal>

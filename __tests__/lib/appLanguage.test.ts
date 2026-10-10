@@ -11,6 +11,7 @@ import {
   __resetAppLanguageForTests,
   applyDeviceLanguage,
   chooseAppLanguage,
+  consumeReturnToSettings,
   defaultLanguageChoice,
   endonymFor,
   getChosenLanguage,
@@ -18,7 +19,9 @@ import {
   hasLoadedLanguage,
   indexOfLanguage,
   loadAppLanguage,
+  markReturnToSettings,
   resolveUiLocale,
+  shouldShowFirstLaunchWheel,
   subscribeChosenLanguage,
   uiLocaleFor,
 } from "../../lib/appLanguage";
@@ -248,5 +251,48 @@ describe("loading the stored pick", () => {
     jest.spyOn(AsyncStorage, "getItem").mockRejectedValueOnce(new Error("disk"));
     await expect(loadAppLanguage([])).resolves.toBeNull();
     expect(getUiLocale()).toBe("en");
+  });
+});
+
+describe("first-launch wheel", () => {
+  it("never shows before the stored pick has been read (no flash)", () => {
+    expect(shouldShowFirstLaunchWheel(false, null)).toBe(false);
+  });
+
+  it("shows on a fresh install's first launch", async () => {
+    await loadAppLanguage(["pt-BR"]);
+    expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(true);
+  });
+
+  it("shows once for an existing user updating without a saved choice, then never again", async () => {
+    // An install from before the wheel: other state on disk, no language pick.
+    await AsyncStorage.setItem("vr.spokenLang", "en");
+    await AsyncStorage.setItem("@app_settings", JSON.stringify({ aiConsentAcceptedAt: 1 }));
+    await loadAppLanguage(["en-US"]);
+    expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(true);
+
+    await chooseAppLanguage("en");
+    expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(false);
+
+    // Next launch: the saved choice suppresses it.
+    __resetAppLanguageForTests();
+    await loadAppLanguage(["en-US"]);
+    expect(getChosenLanguage()).toBe("en");
+    expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(false);
+  });
+
+  it("is suppressed by a saved choice", async () => {
+    await AsyncStorage.setItem("vr.appLanguage", "pt");
+    await loadAppLanguage([]);
+    expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(false);
+  });
+});
+
+describe("returning to Settings after a language change", () => {
+  it("is a one-shot flag", () => {
+    expect(consumeReturnToSettings()).toBe(false);
+    markReturnToSettings();
+    expect(consumeReturnToSettings()).toBe(true);
+    expect(consumeReturnToSettings()).toBe(false);
   });
 });

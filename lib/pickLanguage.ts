@@ -5,11 +5,27 @@
  */
 import { convex } from "./convexClient";
 import { getDeviceId } from "./deviceId";
-import { chooseAppLanguage, defaultLanguageChoice, getChosenLanguage, getDeviceLanguageTags } from "./appLanguage";
+import {
+  chooseAppLanguage,
+  defaultLanguageChoice,
+  getChosenLanguage,
+  getDeviceLanguageTags,
+  markReturnToSettings,
+  resolveUiLocale,
+} from "./appLanguage";
+import { getUiLocale } from "./i18n";
 import { pushSpokenLanguageChoice } from "./spokenLanguage";
 import { useSettingsStore } from "./settingsStore";
 
-export async function pickLanguage(code: string): Promise<boolean> {
+export async function pickLanguage(
+  code: string,
+  options: { returnToSettings?: boolean } = {}
+): Promise<boolean> {
+  // Marked BEFORE the switch: the remount it triggers can mount the new Home
+  // before this function resumes.
+  if (options.returnToSettings && resolveUiLocale(code, []) !== getUiLocale()) {
+    markReturnToSettings();
+  }
   const ok = await chooseAppLanguage(code, (lang) => pushSpokenLanguageChoice(convex, getDeviceId, lang));
   // A forced on-device language (Settings › Voice language: English/Arabic)
   // would override the pick for the on-device pass; "Automatic" follows it.
