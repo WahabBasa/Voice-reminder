@@ -21,6 +21,13 @@ import { api } from "../convex/_generated/api";
  */
 
 const STORAGE_KEY = "vr.spokenLang";
+/**
+ * The language the user picked themselves (Settings › Language or the first-run
+ * step). While set, it wins over whatever the server says until the server
+ * reports the same language back (devices.chooseSpokenLang landed); after that
+ * the server's learning takes over again as before.
+ */
+const CHOSEN_KEY = "vr.spokenLangChosen";
 
 /**
  * The on-device recognizer locale for a spoken language. Apple installs assets
@@ -77,6 +84,7 @@ export function onDeviceLocaleFor(lang: string): string {
 }
 
 let current: string | null = null;
+let chosen: string | null = null;
 let loading: Promise<string | null> | null = null;
 
 /** The learned language, synchronously. Null until known (or loaded). */
@@ -98,7 +106,14 @@ export function loadSpokenLanguage(): Promise<string | null> {
     loading = (async () => {
       try {
         const stored = normalizeSpokenLang(await AsyncStorage.getItem(STORAGE_KEY));
-        if (current === null && stored) current = stored;
+        const pick = normalizeSpokenLang(await AsyncStorage.getItem(CHOSEN_KEY));
+        if (pick) {
+          // The user's own choice beats anything the server said meanwhile.
+          if (chosen === null) chosen = pick;
+          current = chosen;
+        } else if (current === null && stored) {
+          current = stored;
+        }
       } catch {
         // No storage: the server's answer fills it in later.
       }
@@ -114,12 +129,71 @@ export function loadSpokenLanguage(): Promise<string | null> {
  */
 export async function rememberSpokenLanguage(value: unknown): Promise<void> {
   const lang = normalizeSpokenLang(value);
-  if (!lang || lang === current) return;
+  if (!lang) return;
+  if (chosen !== null) {
+    // A stale server value never overrides the user's pick; the pick itself
+    // coming back means the server has it, so learning resumes.
+    if (lang !== chosen) return;
+    chosen = null;
+    try {
+      await AsyncStorage.removeItem(CHOSEN_KEY);
+    } catch {
+      // Cleared in memory; the next launch re-pins until the server echoes it.
+    }
+  }
+  if (lang === current) return;
   current = lang;
   try {
     await AsyncStorage.setItem(STORAGE_KEY, lang);
   } catch {
     // Memory still has it for this launch.
+  }
+}
+
+/**
+ * The user picked the language they speak (Settings › Language, first run).
+ * It becomes the hint for the very next take and stays pinned against older
+ * server values until the server confirms it (see `rememberSpokenLanguage`).
+ */
+export async function chooseSpokenLanguage(value: unknown): Promise<void> {
+  const lang = normalizeSpokenLang(value);
+  if (!lang) return;
+  current = lang;
+  chosen = lang;
+  try {
+    await AsyncStorage.setItem(STORAGE_KEY, lang);
+    await AsyncStorage.setItem(CHOSEN_KEY, lang);
+  } catch {
+    // Memory still has it for this launch.
+  }
+}
+
+/** The one ConvexReactClient method the server push needs. */
+export type ChooseLanguageClient = {
+  mutation: (
+    ref: typeof api.devices.chooseSpokenLang,
+    args: { deviceId: string; lang: string }
+  ) => Promise<unknown>;
+};
+
+/**
+ * Tell the server the user's pick, so its `spokenLang` (and the watch that
+ * reads it back) agrees. Best effort: offline, or a server without this
+ * mutation yet, leaves the local pin in charge. Never throws.
+ */
+export async function pushSpokenLanguageChoice(
+  client: ChooseLanguageClient,
+  getDeviceId: () => Promise<string>,
+  value: unknown
+): Promise<boolean> {
+  const lang = normalizeSpokenLang(value);
+  if (!lang) return false;
+  try {
+    await client.mutation(api.devices.chooseSpokenLang, { deviceId: await getDeviceId(), lang });
+    return true;
+  } catch (e) {
+    console.log("[VR] spokenLanguage: chooseSpokenLang failed (ignored):", e);
+    return false;
   }
 }
 
@@ -180,5 +254,6 @@ export function startSpokenLanguageSync(
 /** Test seam: forget everything this module holds. */
 export function __resetSpokenLanguageForTests(): void {
   current = null;
+  chosen = null;
   loading = null;
 }

@@ -1,11 +1,15 @@
+import { getUiLocale, t } from "./i18n";
+
 /**
- * English names for language codes, for the two places the app names a
- * language: the recording overlay ("Listening in English") and the
- * unsupported-language card ("Remi doesn't speak Swedish yet", OLD-133).
+ * Names for language codes, in the UI language, for the places the app names a
+ * language: the recording overlay ("Listening in English"), the
+ * unsupported-language card ("Remi doesn't speak Swedish yet", OLD-133), and
+ * the language wheel's list of choices.
  *
- * `Intl.DisplayNames` is the first choice, but Hermes may not ship it. The
- * small table below covers the languages most likely to reach the card, so a
- * phone without it still names them. Anything else returns null, and the
+ * The catalog (`language.name.*`) is the first choice, so names follow the UI
+ * language. `Intl.DisplayNames` covers any other code, but Hermes may not ship
+ * it. The English table below is the list of languages the app knows (the
+ * language wheel offers exactly these). Anything else returns null, and the
  * caller decides what to say instead.
  */
 
@@ -47,23 +51,28 @@ const FALLBACK_NAMES: Record<string, string> = {
   zh: "Chinese",
 };
 
+/** Every language the app knows, as ISO 639-1 codes (the wheel's choices). */
+export const KNOWN_LANGUAGE_CODES: readonly string[] = Object.keys(FALLBACK_NAMES);
+
 /** "sv" → "Swedish", "en-US" → "English". Null when the code is empty or unknown. */
 export function languageName(code: string | undefined | null): string | null {
   if (typeof code !== "string") return null;
   const lang = code.trim().split(/[-_]/)[0].toLowerCase();
   if (!/^[a-z]{2,3}$/.test(lang)) return null;
 
+  if (FALLBACK_NAMES[lang]) return t(`language.name.${lang}`);
+
   try {
     const DisplayNames = (Intl as any).DisplayNames;
     if (typeof DisplayNames === "function") {
-      const name = new DisplayNames(["en"], { type: "language" }).of(lang);
+      const name = new DisplayNames([getUiLocale()], { type: "language" }).of(lang);
       // An unknown code comes back as the code itself, which is not a name.
       if (typeof name === "string" && name && name.toLowerCase() !== lang) return name;
     }
   } catch {
     // An engine that cannot answer falls through to the table.
   }
-  return FALLBACK_NAMES[lang] ?? null;
+  return null;
 }
 
 /**
@@ -73,5 +82,5 @@ export function languageName(code: string | undefined | null): string | null {
  */
 export function listeningLabel(localeId: string): string | null {
   const name = languageName(localeId);
-  return name ? `Listening in ${name}` : null;
+  return name ? t("recording.listeningIn", { language: name }) : null;
 }

@@ -218,6 +218,40 @@ export const setSpokenLang = internalMutation({
 });
 
 /**
+ * The user picked the language they speak in the app (Settings › Language, or
+ * the first-run step). Same effect as the founder's `setSpokenLang`: the
+ * install's `spokenLang` becomes that language and any half-counted switch is
+ * dropped, so the watch (`preferences`) echoes the pick back and learning from
+ * takes carries on from there.
+ *
+ * Keyed on the bearer deviceId like every public entry point. An install
+ * without a row yet (its `hello` has not landed) is a quiet no-op: the phone
+ * keeps the pick locally and sends it as the take's `languageHint` anyway.
+ */
+export const chooseSpokenLang = mutation({
+  args: { deviceId: v.string(), lang: v.string() },
+  returns: v.object({ ok: v.boolean(), spokenLang: v.optional(v.string()) }),
+  handler: async (ctx, args) => {
+    const deviceId = validDeviceId(args.deviceId);
+    if (!deviceId) throw new Error("devices.chooseSpokenLang: invalid deviceId");
+    const lang = normalizeLanguageCode(args.lang);
+    if (!lang) return { ok: false };
+    const device = await getDevice(ctx, deviceId);
+    if (!device) return { ok: false };
+    if (device.spokenLang === lang && device.spokenLangCandidate === undefined) {
+      return { ok: true, spokenLang: lang };
+    }
+    await ctx.db.patch(device._id, {
+      spokenLang: lang,
+      spokenLangAt: Date.now(),
+      spokenLangCandidate: undefined,
+      spokenLangCandidateCount: undefined,
+    });
+    return { ok: true, spokenLang: lang };
+  },
+});
+
+/**
  * The language a take was understood in, or undefined when it says nothing
  * about the speaker: a committed take's reminders, by majority; a take waiting
  * for a time (`no_time` / `past_time`), from the plans it kept. Any other

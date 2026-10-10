@@ -7,6 +7,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { api } from "../../convex/_generated/api";
 import {
   ON_DEVICE_LOCALES,
+  chooseSpokenLanguage,
+  pushSpokenLanguageChoice,
   __resetSpokenLanguageForTests,
   getSpokenLanguage,
   languageHintArg,
@@ -101,7 +103,8 @@ describe("memory and disk", () => {
     get.mockClear();
     expect(await loadSpokenLanguage()).toBe("he");
     expect(await loadSpokenLanguage()).toBe("he");
-    expect(get).toHaveBeenCalledTimes(1);
+    // Once per key: the learned language and the user's own pick.
+    expect(get).toHaveBeenCalledTimes(2);
     expect(getSpokenLanguage()).toBe("he");
   });
 
@@ -193,5 +196,81 @@ describe("startSpokenLanguageSync", () => {
     await flush();
     expect(fake.watchQuery).not.toHaveBeenCalled();
     expect(() => stop()).not.toThrow();
+  });
+});
+
+describe("the user's own pick (Settings › Language)", () => {
+  const CHOSEN = "vr.spokenLangChosen";
+
+  it("becomes the hint at once and is stored", async () => {
+    await rememberSpokenLanguage("en");
+    await chooseSpokenLanguage("pt-BR");
+    expect(getSpokenLanguage()).toBe("pt");
+    expect(languageHintArg()).toEqual({ languageHint: "pt" });
+    expect(await AsyncStorage.getItem(KEY)).toBe("pt");
+    expect(await AsyncStorage.getItem(CHOSEN)).toBe("pt");
+  });
+
+  it("ignores junk", async () => {
+    await chooseSpokenLanguage("portuguese");
+    await chooseSpokenLanguage(undefined);
+    expect(getSpokenLanguage()).toBeNull();
+  });
+
+  it("wins over a stale server value until the server echoes it, then learning resumes", async () => {
+    await chooseSpokenLanguage("es");
+    await rememberSpokenLanguage("en"); // the old learned value, still on the server
+    expect(getSpokenLanguage()).toBe("es");
+    await rememberSpokenLanguage("es"); // server confirms the pick
+    expect(await AsyncStorage.getItem(CHOSEN)).toBeNull();
+    await rememberSpokenLanguage("en"); // later learned from takes
+    expect(getSpokenLanguage()).toBe("en");
+  });
+
+  it("survives a relaunch and beats both the stored and an early server value", async () => {
+    await AsyncStorage.setItem(KEY, "en");
+    await AsyncStorage.setItem(CHOSEN, "pt");
+    await rememberSpokenLanguage("en"); // arrives before the disk read
+    expect(await loadSpokenLanguage()).toBe("pt");
+    await rememberSpokenLanguage("en");
+    expect(getSpokenLanguage()).toBe("pt");
+  });
+
+  it("keeps a pick made while the disk read was in flight", async () => {
+    await AsyncStorage.setItem(CHOSEN, "pt");
+    const load = loadSpokenLanguage();
+    await chooseSpokenLanguage("ja");
+    expect(await load).toBe("ja");
+  });
+
+  it("keeps the pick in memory when storage fails", async () => {
+    jest.spyOn(AsyncStorage, "setItem").mockRejectedValueOnce(new Error("disk full"));
+    await chooseSpokenLanguage("de");
+    expect(getSpokenLanguage()).toBe("de");
+  });
+
+  it("still clears the pin in memory when the storage delete fails", async () => {
+    await chooseSpokenLanguage("de");
+    jest.spyOn(AsyncStorage, "removeItem").mockRejectedValueOnce(new Error("disk"));
+    await rememberSpokenLanguage("de");
+    await rememberSpokenLanguage("fr");
+    expect(getSpokenLanguage()).toBe("fr");
+  });
+
+  describe("pushSpokenLanguageChoice", () => {
+    it("sends the pick for this install", async () => {
+      const mutation = jest.fn(async () => ({ ok: true }));
+      await expect(pushSpokenLanguageChoice({ mutation }, async () => "dev_1", "pt-BR")).resolves.toBe(true);
+      expect(mutation).toHaveBeenCalledWith(api.devices.chooseSpokenLang, { deviceId: "dev_1", lang: "pt" });
+    });
+
+    it("never throws, and sends nothing for junk", async () => {
+      const mutation = jest.fn(async () => {
+        throw new Error("Could not find public function");
+      });
+      await expect(pushSpokenLanguageChoice({ mutation }, async () => "dev_1", "es")).resolves.toBe(false);
+      await expect(pushSpokenLanguageChoice({ mutation }, async () => "dev_1", "??")).resolves.toBe(false);
+      expect(mutation).toHaveBeenCalledTimes(1);
+    });
   });
 });
