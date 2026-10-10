@@ -138,6 +138,17 @@ export async function initializePurchases(): Promise<void> {
     await Purchases.configure({ apiKey });
     configured = true;
 
+    // Apple Ads attribution: hands RevenueCat the AdServices token so installs,
+    // trials and revenue tie back to the campaign/keyword. No ATT prompt needed.
+    // iOS only, and a failure here must never undo a good configure.
+    if (Platform.OS === 'ios') {
+      try {
+        await Purchases.enableAdServicesAttributionTokenCollection();
+      } catch (error) {
+        console.log('[RevenueCat] enableAdServicesAttributionTokenCollection failed (silent):', error);
+      }
+    }
+
     // Registered at configure time, before the first fetch: every later change
     // the SDK learns about (renewal, expiry, a purchase on another device,
     // a refund) lands in the cache here and is pushed to subscribers by
