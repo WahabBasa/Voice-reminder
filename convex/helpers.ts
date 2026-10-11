@@ -339,8 +339,9 @@ export function buildPreReminderInstruction(): string {
 //
 // What survives is the tier itself, because it still decides something: how the
 // alarm rings while it rings (lib/notificationDecisions.ts ringCadenceMode —
-// routine speaks twice and stops, everything else loops), and `persistent` is
-// still stored and editable.
+// routine speaks twice and stops, everything else loops). `persistent` is no
+// longer the model's call: every new reminder starts with it on (see
+// planReminderFromParse in actions.ts) and the user can switch it off per reminder.
 
 export type Urgency = "urgent" | "notice" | "routine";
 
@@ -348,12 +349,6 @@ export function normalizeUrgency(value: unknown): Urgency {
   const token = String(value ?? "").toLowerCase().trim();
   if (token === "urgent" || token === "notice" || token === "routine") return token;
   return "routine";
-}
-
-export function normalizePersistent(value: unknown): boolean {
-  if (value === true) return true;
-  const token = String(value ?? "").toLowerCase().trim();
-  return token === "true" || token === "1";
 }
 
 // One fitting emoji for the reminder card chip. Keeps only the first emoji
@@ -374,22 +369,21 @@ export function normalizeEmoji(value: unknown): string | undefined {
 }
 
 /**
- * The heading the urgency/persistent block ships under. A constant because the
+ * The heading the urgency block ships under. A constant because the
  * JSON format template points at the section by name.
  */
 export const URGENCY_RULES_HEADING = "URGENCY RULES";
 
 /**
- * Instruction block for the parse prompt's two tier fields.
+ * Instruction block for the parse prompt's tier field.
  *
  * No spoken line is described here any more (OLD-108), which is why there is no
- * SPOKEN_LINE_RULE_REFERENCE in it: both fields are classifications, and the
+ * SPOKEN_LINE_RULE_REFERENCE in it: the field is a classification, and the
  * only line this reminder ever speaks is `description`.
  */
 export function buildReplayTierInstruction(): string {
-  return `${URGENCY_RULES_HEADING} (how hard the reminder pushes when it rings — it always speaks the SAME line, so these change the ring, never the wording):
-- "urgency": how hard the reminder has to push — "urgent" when the user must act right now (meeting starting, leaving the house), "notice" for advance warning of something coming up, "routine" for ordinary everyday tasks.
-- "persistent": true ONLY when missing the task would be harmful (medicine regimens, flights, picking up children). Otherwise false or omit.`;
+  return `${URGENCY_RULES_HEADING} (how hard the reminder pushes when it rings — it always speaks the SAME line, so this changes the ring, never the wording):
+- "urgency": how hard the reminder has to push — "urgent" when the user must act right now (meeting starting, leaving the house), "notice" for advance warning of something coming up, "routine" for ordinary everyday tasks.`;
 }
 
 // Upper bound keeps a mis-parsed lead time from scheduling a heads-up hours early.

@@ -16,7 +16,6 @@ import {
   SPOKEN_LINE_RULES_SECTION,
   SPOKEN_LINE_RULE_REFERENCE,
   normalizeUrgency,
-  normalizePersistent,
   normalizeEmoji,
   normalizeParsedReminders,
   MAX_REMINDERS_PER_TAKE,
@@ -810,42 +809,15 @@ describe("normalizeUrgency", () => {
   });
 });
 
-// ─── normalizePersistent ────────────────────────────────────────────────────
-
-describe("normalizePersistent", () => {
-  it("returns true for boolean true", () => {
-    expect(normalizePersistent(true)).toBe(true);
-  });
-
-  it('returns true for "true"', () => {
-    expect(normalizePersistent("true")).toBe(true);
-  });
-
-  it('returns true for "1"', () => {
-    expect(normalizePersistent("1")).toBe(true);
-  });
-
-  it("returns false for boolean false", () => {
-    expect(normalizePersistent(false)).toBe(false);
-  });
-
-  it("returns false for undefined", () => {
-    expect(normalizePersistent(undefined)).toBe(false);
-  });
-
-  it("returns false for random string", () => {
-    expect(normalizePersistent("critical")).toBe(false);
-  });
-});
-
 // ─── buildReplayTierInstruction (OLD-108) ───────────────────────────────────
 
 describe("buildReplayTierInstruction", () => {
-  it("documents the two tier fields and nothing else", () => {
+  it("documents the urgency field and nothing else", () => {
     const result = buildReplayTierInstruction();
     expect(result).toContain(URGENCY_RULES_HEADING);
     expect(result).toContain('"urgency"');
-    expect(result).toContain('"persistent"');
+    // Persistent is no longer the model's call: every new reminder starts on.
+    expect(result).not.toContain('"persistent"');
   });
 
   it("describes urgency by how hard the reminder pushes, not by opener", () => {

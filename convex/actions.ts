@@ -65,7 +65,7 @@ function legacyResembleSelected(): boolean {
   return process.env.TTS_PROVIDER?.trim().toLowerCase() === "resemble";
 }
 
-import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizePersistent, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, LANG_FIELD_LINE, OTHER_LANGUAGE_RULE, GUARD_TIME_SPOKEN_FIELD_LINE, NO_TIME_DEFAULT_INSTRUCTION, GUARD_NO_TIME_INSTRUCTION, GUARD_UNDERSTOOD_INSTRUCTION, readParseEnvelope, type Urgency } from "./helpers";
+import { clamp, normalizeReminderDescription, guardSpokenLine, normalizeDay, getCurrentTimeHM, buildDescriptionInstruction, buildPreReminderInstruction, normalizePreReminder, buildHeadsUpTtsText, buildReplayTierInstruction, normalizeUrgency, normalizeEmoji, normalizeParsedReminders, buildAlarmWav, parsePcmSampleRate, containsArabicScript, ALARM_PCM_OUTPUT_FORMAT, MULTI_REMINDER_INSTRUCTION, SPOKEN_LINE_RULES_SECTION, URGENCY_RULES_HEADING, LANG_FIELD_LINE, OTHER_LANGUAGE_RULE, GUARD_TIME_SPOKEN_FIELD_LINE, NO_TIME_DEFAULT_INSTRUCTION, GUARD_NO_TIME_INSTRUCTION, GUARD_UNDERSTOOD_INSTRUCTION, readParseEnvelope, type Urgency } from "./helpers";
 import { normalizeLanguageCode, speechifyLineLanguage } from "./languages";
 import { correctLanguageByScript } from "./scriptLanguage";
 import { buildGridSchedule, legacyFieldsFromGrid, normalizeClockTimes, zonedTimeToUtcMs, type GridSchedule } from "./scheduleShape";
@@ -474,7 +474,10 @@ export function buildReminderPlan(
   // that used to be parsed alongside it are gone, and `parsed.variants` is
   // ignored outright if an older prompt's response still carries it.
   const urgency = normalizeUrgency(parsed.urgency);
-  const persistent = normalizePersistent(parsed.persistent);
+  // Every new reminder starts as an alarm that keeps ringing until answered;
+  // the user switches it off per reminder in the edit sheet. The model no
+  // longer decides this, and a `persistent` it still returns is ignored.
+  const persistent: boolean = true;
 
   return {
     title: parsed.title as string,
@@ -623,7 +626,6 @@ Return exactly this format:
   "preReminderMinutes": number (heads-up lead time in minutes, see PRE-REMINDER RULES),
   "preDescription": "spoken advance-notice line (only when preReminderMinutes > 0)",
   "urgency": "urgent" | "notice" | "routine" (how hard the reminder has to push, see ${URGENCY_RULES_HEADING}),
-  "persistent": boolean (true only for critical tasks, see ${URGENCY_RULES_HEADING}),
   ${LANG_FIELD_LINE}
   "emoji": "ONE emoji that best fits the reminder (see EMOJI RULES)"
 }

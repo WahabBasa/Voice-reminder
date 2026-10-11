@@ -79,7 +79,8 @@ describe("planRemindersFromRawParse — envelopes", () => {
       preReminderMinutes: 10,
       preTtsText: "Your water break is coming up in ten minutes.",
       urgency: "notice",
-      persistent: false,
+      // Every new reminder starts as a keep-ringing alarm.
+      persistent: true,
     });
   });
 
@@ -195,6 +196,20 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
     expect(plans[1].anchorAt).toBeGreaterThan(0);
   });
 
+  it("starts every reminder persistent even when the model says false", () => {
+    const raw = JSON.stringify({
+      reminders: [
+        reminder({ title: "Water", persistent: false }),
+        reminder({ title: "Stretch", persistent: "false" }),
+        reminder({ title: "Pills", persistent: true }),
+      ],
+    });
+
+    const plans = planRemindersFromRawParse(raw, CONTEXT);
+
+    expect(plans.map((p) => p.persistent)).toEqual([true, true, true]);
+  });
+
   it("gives each item its own ring tier", () => {
     const raw = JSON.stringify({
       reminders: [
@@ -215,9 +230,10 @@ describe("planRemindersFromRawParse — per-item post-processing", () => {
     const plans = planRemindersFromRawParse(raw, CONTEXT);
 
     expect(plans[0].urgency).toBe("urgent");
-    expect(plans[0].persistent).toBe(true);
     expect(plans[1].urgency).toBe("routine");
-    expect(plans[1].persistent).toBe(false);
+    // Persistent is on for every new reminder, whatever the model says.
+    expect(plans[0].persistent).toBe(true);
+    expect(plans[1].persistent).toBe(true);
     for (const plan of plans) {
       expect(plan).not.toHaveProperty("variants");
     }

@@ -187,6 +187,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const [showDatePicker, setShowDatePicker] = useState(false);
 
     const [preReminderMinutes, setPreReminderMinutes] = useState<number>(initialReminder.preReminderMinutes ?? 0);
+    // New reminders arrive with an explicit `true` from the server; a reminder
+    // with no stored value predates that default and was created off.
     const [persistent, setPersistent] = useState<boolean>(initialReminder.persistent ?? false);
 
     // Volume control was cut from the sheet — values pass through unchanged.
@@ -345,7 +347,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
             days: save.days,
             schedule: save.schedule,
             preReminderMinutes: preReminderMinutes > 0 ? preReminderMinutes : undefined,
-            persistent: persistent || undefined,
+            // Explicit boolean: new reminders arrive ON, so an "off" is a choice
+            // worth storing as false rather than as an absent field.
+            persistent,
             volume,
             volumeStyle,
 
