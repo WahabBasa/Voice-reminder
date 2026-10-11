@@ -77,3 +77,4 @@ Scripts: `aa_common.py`, `aa_build.py`, `aa_verify.py` in the session scratchpad
 ## Change log
 
 - **2026-10-10 22:50 GST:** 0 impressions on all 16 wave-1 keywords after a Brazil morning, so short, higher-volume exact keywords were added early: BR lembrete $0.35, lembretes $0.35, despertador $0.40, alarme $0.35; MX recordatorio $0.35, recordatorios $0.35, alarma $0.40, despertador $0.40. Both ad groups now have 12 keywords. Budgets, Search Match off, iPhone-only, new-users-only and the Nov 3 end are unchanged.
+- **2026-10-11:** end date moved from Nov 3 to **2026-10-21 23:59 GST** on both campaigns and ad groups, which caps spend at about $50 ($4.03 spent so far + about $4/day). The remaining ~$50 of the $100 promo credit is kept for a later launch (likely the language app).
