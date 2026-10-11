@@ -73,3 +73,7 @@ The plan's `reloj` / `relógio` were added at first, then **removed on 2026-10-1
 5. Ad group names are `BR - Exact - pt` / `MX - Exact - es`, not a copy of the campaign name.
 
 Scripts: `aa_common.py`, `aa_build.py`, `aa_verify.py` in the session scratchpad. The full read-back JSON is in `aa_state.json`.
+
+## Change log
+
+- **2026-10-10 22:50 GST:** 0 impressions on all 16 wave-1 keywords after a Brazil morning, so short, higher-volume exact keywords were added early: BR lembrete $0.35, lembretes $0.35, despertador $0.40, alarme $0.35; MX recordatorio $0.35, recordatorios $0.35, alarma $0.40, despertador $0.40. Both ad groups now have 12 keywords. Budgets, Search Match off, iPhone-only, new-users-only and the Nov 3 end are unchanged.
