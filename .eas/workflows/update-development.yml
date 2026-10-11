@@ -7,4 +7,4 @@ jobs:
     params:
       branch: development
       platform: ios
-      message: "claude/push-notifications-optional-1wp4fm @ 5ccdeb1 (1.0.2: native iOS language wheel, opens on the phone language)"
+      message: "claude/push-notifications-optional-1wp4fm @ 1d1a59f (1.0.2: native language wheel + trial offer after first ring)"
