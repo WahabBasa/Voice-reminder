@@ -7,4 +7,4 @@ jobs:
     params:
       branch: development
       platform: ios
-      message: "claude/push-notifications-optional-1wp4fm @ abbc297 (1.0.2: 30-language UI, language wheel on first launch, AdServices attribution)"
+      message: "claude/push-notifications-optional-1wp4fm @ 60dc460 (1.0.2: 30-language UI, language wheel, keeps-ringing switch wired + default on)"

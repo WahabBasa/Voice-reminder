@@ -26,6 +26,9 @@ import plistlib
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1252, which dies on the first emoji in a log line.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 DEFAULT_UDID = "00008101-000258901EF0801E"
 
 
