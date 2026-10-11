@@ -46,6 +46,13 @@ export async function showPermissionPrompt(): Promise<void> {
   _showPrompt?.();
 }
 
+// Mirrors the modal's visibility so other one-off prompts (the post-first-ring
+// offer) never stack on top of it.
+let _promptVisible = false;
+export function isPermissionPromptVisible(): boolean {
+  return _promptVisible;
+}
+
 function androidApiLevel(): number {
   return typeof Platform.Version === "number" ? Platform.Version : Number(Platform.Version);
 }
@@ -119,6 +126,12 @@ export async function prepareReminderCreation(): Promise<boolean> {
 
 export default function PermissionPrompt() {
   const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    _promptVisible = visible;
+    return () => {
+      _promptVisible = false;
+    };
+  }, [visible]);
   const [permissions, setPermissions] = useState<PermissionState>({
     notifications: true,
     alarms: true,

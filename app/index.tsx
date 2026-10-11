@@ -47,7 +47,17 @@ import EditReminderSheet from "../components/EditReminderSheet";
 import { useToast } from "../components/ToastProvider";
 import AiConsentCard from "../components/AiConsentCard";
 import { resolveAiConsent, type AiConsentChoice } from "../lib/aiConsent";
-import { prepareReminderCreation, showPermissionPrompt } from "../components/PermissionPrompt";
+import {
+  isPermissionPromptVisible,
+  prepareReminderCreation,
+  showPermissionPrompt,
+} from "../components/PermissionPrompt";
+import {
+  POST_FIRST_RING_SOURCE,
+  maybeShowPostFirstRingOffer,
+  requestOfferCheck,
+  subscribeOfferCheck,
+} from "../lib/postFirstRingOffer";
 import { noticeIfNotificationsOff } from "../lib/notificationsOffNotice";
 import SwipePager from "../components/SwipePager";
 import AppIcon from "../components/AppIcon";
@@ -396,6 +406,9 @@ export default function HomeScreen() {
         setSnoozes(snapshot);
         setRingSnapshot(ring);
         setNowMs(now);
+        // Rings just reconciled (an AlarmKit answer from the system UI, say):
+        // a calm moment to offer the trial once, if this was the first.
+        requestOfferCheck(reason);
       };
       void refresh("foreground");
       const interval = setInterval(() => void refresh("tick"), 30_000);
@@ -452,6 +465,50 @@ export default function HomeScreen() {
   const openIntervalPaywall = useCallback(() => {
     router.push({ pathname: "/paywall", params: { context: "interval" } });
   }, [router]);
+
+  // What's on screen that the one-time post-first-ring offer must never cover.
+  // A ref, so the async check reads the latest render rather than a stale one.
+  const offerBlockerRef = useRef<string | null>(null);
+  offerBlockerRef.current = showRecording
+    ? "recording"
+    : showConsentCard
+      ? "consent_card"
+      : showComposer || isComposerSubmitting
+        ? "composer"
+        : editingReminder || timeDraft
+          ? "edit_sheet"
+          : null;
+
+  // The one-time trial offer after the first ring (lib/postFirstRingOffer.ts).
+  // Only listens while Home is focused; each request waits a beat so the
+  // overlay or the foreground transition has settled before the paywall opens.
+  useFocusEffect(
+    useCallback(() => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let active = true;
+      const run = (reason: string) => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = null;
+          if (!active || AppState.currentState !== "active") return;
+          void maybeShowPostFirstRingOffer({
+            reason,
+            blocker: () =>
+              offerBlockerRef.current ?? (isPermissionPromptVisible() ? "permission_prompt" : null),
+            open: () =>
+              router.push({ pathname: "/paywall", params: { source: POST_FIRST_RING_SOURCE } }),
+          });
+        }, 800);
+      };
+      const unsubscribe = subscribeOfferCheck(run);
+      run("home_focus");
+      return () => {
+        active = false;
+        if (timer) clearTimeout(timer);
+        unsubscribe();
+      };
+    }, [router])
+  );
 
   const lockRecordingForLimit = useCallback(
     (traceId: string, block: CapGateBlock, currentCount: number, limit: number) => {

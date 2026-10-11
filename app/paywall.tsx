@@ -26,6 +26,7 @@ import {
 // Schedule 2 §3.8(b): both links have to work from the purchase screen. Same
 // constants Settings and the consent card use — opened from ClosingBlock.
 import { openInAppBrowser } from "../lib/legalLinks";
+import { vrLog } from "../lib/vrLog";
 import {
     PAYWALL_COPY,
     buildCtaLabel,
@@ -59,8 +60,16 @@ export default function PaywallScreen() {
     const toast = useToast();
     // Whoever opened this says why (`?context=interval` from the premium
     // schedule gate); anything else falls back to the general hero.
-    const params = useLocalSearchParams<{ context?: string }>();
+    const params = useLocalSearchParams<{ context?: string; source?: string }>();
     const paywallContext = resolvePaywallContext(params.context);
+    // Who opened it, for the logs (`post_first_ring` = the one-time offer after
+    // the first alarm rang). Copy is unaffected.
+    const paywallSource = typeof params.source === "string" ? params.source : "default";
+    useEffect(() => {
+        vrLog("paywall", "opened", { source: paywallSource, context: paywallContext });
+        // Logged once per open.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // RevenueCat state
     const [packages, setPackages] = useState<PurchasesPackage[]>([]);

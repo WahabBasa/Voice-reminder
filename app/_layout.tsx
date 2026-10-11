@@ -25,6 +25,7 @@ import { useSettingsStore } from "../lib/settingsStore";
 import { syncRemindersOnStartup, getPendingAlarm, clearPendingAlarm, markPendingAlarmResolved, enforcePendingAlarmTimeout } from "../lib/notifications";
 import { reconcileRings } from "../lib/ringReconcile";
 import { subscribeAlarmEvents } from "../lib/alarmKit";
+import { noteRing, requestOfferCheck } from "../lib/postFirstRingOffer";
 import { api } from "../convex/_generated/api";
 import { removeReminderFully } from "../lib/reminderRemoval";
 import { shouldCleanupGhostOnceReminder } from "../lib/reminderActive";
@@ -317,6 +318,8 @@ function AlarmOverlayFallback() {
           await clearPendingAlarm();
           setActiveAlarm(null);
           vrLog('alarm_overlay_fallback', 'resolve_complete', { traceId, notificationId, action: 'dismiss' });
+          // Overlay closed: Home may now show the one-time post-first-ring offer.
+          requestOfferCheck('overlay_closed');
         },
         onSnooze: async () => {
           vrLog('alarm_overlay_fallback', 'resolve_start', { traceId, notificationId, action: 'snooze' });
@@ -324,9 +327,14 @@ function AlarmOverlayFallback() {
           await clearPendingAlarm();
           setActiveAlarm(null);
           vrLog('alarm_overlay_fallback', 'resolve_complete', { traceId, notificationId, action: 'snooze' });
+          // Overlay closed: Home may now show the one-time post-first-ring offer.
+          requestOfferCheck('overlay_closed');
         },
         shouldExitOnResolve: false, // Don't exit app in fallback mode
       };
+
+      // A reminder is ringing on screen: arms the one-time post-first-ring offer.
+      void noteRing("overlay");
 
       setActiveAlarm((prev) => {
         if (prev?.notificationId === overlayProps.notificationId) return prev;

@@ -55,6 +55,10 @@ jest.mock("../../lib/store", () => ({
   useReminderStore: { getState: () => ({ getReminderById: mockGetReminderById }) },
 }));
 jest.mock("../../lib/vrLog", () => ({ vrLog: jest.fn() }));
+const mockNoteRing = jest.fn(async (..._a: any[]) => undefined);
+jest.mock("../../lib/postFirstRingOffer", () => ({
+  noteRing: (...a: unknown[]) => mockNoteRing(...a),
+}));
 
 import { reconcileRings, __resetReconcileForTests, COMEBACK_EXHAUSTION_MS } from "../../lib/ringReconcile";
 
@@ -255,5 +259,34 @@ describe("sole-drainer ledger wiring", () => {
     ]);
     await reconcileRings("native");
     expect(mockAck).not.toHaveBeenCalled();
+  });
+});
+
+describe("post-first-ring offer (AlarmKit path)", () => {
+  it.each(["stopped", "snoozed", "alerting"])("notes a ring for a %s event", async (kind) => {
+    mockPeek.mockResolvedValueOnce([
+      { eventId: "e1", kind, reminderId: "r1", occurrenceAt: 100, at: Date.now(), snoozeUntil: Date.now() + 1000 },
+    ]);
+    await reconcileRings("foreground");
+    expect(mockNoteRing).toHaveBeenCalledWith("alarmkit");
+  });
+
+  it("notes a ring for a live alerting alarm with no queued event", async () => {
+    mockGetStates.mockResolvedValueOnce([
+      { state: "alerting", reminderId: "r1", occurrenceAt: 100, fireAt: 100 },
+    ]);
+    await reconcileRings("tick");
+    expect(mockNoteRing).toHaveBeenCalledWith("alarmkit");
+  });
+
+  it("does not note a ring for schedule bookkeeping alone", async () => {
+    mockPeek.mockResolvedValueOnce([
+      { eventId: "e1", kind: "scheduled", reminderId: "r1", occurrenceAt: 100, at: Date.now() },
+    ]);
+    mockGetStates.mockResolvedValueOnce([
+      { state: "scheduled", reminderId: "r1", occurrenceAt: 100 },
+    ]);
+    await reconcileRings("launch");
+    expect(mockNoteRing).not.toHaveBeenCalled();
   });
 });

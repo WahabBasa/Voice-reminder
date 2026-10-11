@@ -49,6 +49,7 @@ import { applyAlarmKitEvents } from "./notifications";
 import { isOneTimeReminder } from "./notificationDecisions";
 import { useReminderStore } from "./store";
 import { vrLog } from "./vrLog";
+import { noteRing } from "./postFirstRingOffer";
 
 export type ReconcileReason = "tick" | "foreground" | "native" | "launch";
 
@@ -247,6 +248,14 @@ async function runReconcilePass(reason: ReconcileReason): Promise<void> {
       }
     }
   }
+
+  // Evidence that an alarm rang on this install (an alerting event, an answer
+  // from the system alarm UI, or a live alerting alarm) arms the one-time
+  // post-first-ring offer, which Home shows at its next calm moment.
+  const rang =
+    alertingKeys.size > 0 ||
+    sorted.some((ev) => ev.kind === "alerting" || ev.kind === "stopped" || ev.kind === "snoozed");
+  if (rang) await noteRing("alarmkit");
 
   await pruneRingLifecycle(now);
 
