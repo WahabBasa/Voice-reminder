@@ -1,15 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import BottomSheet, { BottomSheetBackdrop, BottomSheetView } from "@gorhom/bottom-sheet";
 import { Portal } from "@gorhom/portal";
-import ScrollSelector from "./ScrollSelector";
+import { Picker } from "@react-native-picker/picker";
 import { borderRadius, colors, scaleFontSize } from "../lib/theme";
 import { FONT_DISPLAY } from "../lib/fonts";
 import { t } from "../lib/i18n";
-import { LANGUAGE_OPTIONS, indexOfLanguage } from "../lib/appLanguage";
+import { LANGUAGE_OPTIONS, choiceFor, endonymFor } from "../lib/appLanguage";
 
-const ITEM_HEIGHT = 44;
-const WHEEL_HEIGHT = ITEM_HEIGHT * 5;
+/** UIPickerView's own height: five rows, the middle one selected. */
+const WHEEL_HEIGHT = 216;
+
+// The app is light-only; keep the native wheel light under iOS dark mode too.
+// (A real PickerIOS prop the typings leave out.)
+const LIGHT_WHEEL = { themeVariant: "light" } as object;
+
+/** The wheel value for a code: the listed choice, else English. */
+export function wheelValueFor(code: string | null | undefined): string {
+    return choiceFor(code) ?? "en";
+}
 
 export type LanguageWheelProps = {
     /** The language the wheel opens on (the pick, else the device's). */
@@ -27,43 +36,37 @@ export type LanguageWheelProps = {
  * (lib/pickLanguage.ts) — the caller does that.
  */
 export function LanguageWheel({ initialCode, confirmLabel, onConfirm }: LanguageWheelProps) {
-    const [index, setIndex] = useState(() => indexOfLanguage(initialCode));
-    useEffect(() => setIndex(indexOfLanguage(initialCode)), [initialCode]);
-
-    const names = useMemo(() => LANGUAGE_OPTIONS.map((option) => option.endonym), []);
+    // Computed in the initializer, so the native wheel's first frame is
+    // already on the right row (no jump from the top of the list).
+    const [value, setValue] = useState(() => wheelValueFor(initialCode));
+    useEffect(() => setValue(wheelValueFor(initialCode)), [initialCode]);
 
     return (
         <View>
             <Text style={styles.title}>{t("language.sheet.title")}</Text>
             <Text style={styles.subtitle}>{t("language.sheet.subtitle")}</Text>
 
-            <View style={styles.wheel} testID="language-wheel">
-                <ScrollSelector
-                    dataSource={names}
-                    selectedIndex={index}
-                    onValueChange={(_, next) => setIndex(next)}
-                    itemHeight={ITEM_HEIGHT}
-                    wrapperHeight={WHEEL_HEIGHT}
-                    wrapperWidth="100%"
-                    renderItem={(item, _i, isSelected) => (
-                        <Text
-                            style={[styles.item, isSelected && styles.itemSelected]}
-                            numberOfLines={1}
-                            adjustsFontSizeToFit
-                            minimumFontScale={0.75}
-                        >
-                            {item}
-                        </Text>
-                    )}
-                />
+            <View style={styles.wheel}>
+                <Picker
+                    testID="language-wheel"
+                    selectedValue={value}
+                    onValueChange={(next) => setValue(String(next))}
+                    style={styles.picker}
+                    itemStyle={styles.item}
+                    {...LIGHT_WHEEL}
+                >
+                    {LANGUAGE_OPTIONS.map((option) => (
+                        <Picker.Item key={option.code} label={option.endonym} value={option.code} />
+                    ))}
+                </Picker>
             </View>
 
             <TouchableOpacity
                 style={styles.confirmButton}
-                onPress={() => onConfirm(LANGUAGE_OPTIONS[index]?.code ?? "en")}
+                onPress={() => onConfirm(value)}
                 activeOpacity={0.7}
                 accessibilityRole="button"
-                accessibilityHint={LANGUAGE_OPTIONS[index]?.endonym}
+                accessibilityHint={endonymFor(value)}
                 testID="language-confirm"
             >
                 <Text style={styles.confirmText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
@@ -179,16 +182,15 @@ const styles = StyleSheet.create({
     },
     wheel: {
         marginTop: 16,
-        alignItems: "center",
+    },
+    picker: {
+        width: "100%",
+        height: WHEEL_HEIGHT,
     },
     item: {
+        height: WHEEL_HEIGHT,
         fontSize: scaleFontSize(20),
-        color: colors.textTertiary,
-        paddingHorizontal: 12,
-    },
-    itemSelected: {
         color: colors.textPrimary,
-        fontWeight: "600",
     },
     confirmButton: {
         marginTop: 20,
