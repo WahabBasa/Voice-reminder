@@ -254,12 +254,13 @@ export function normalizeUrgencyTier(value: unknown): UrgencyTier {
 /**
  * The reminder's "Alarm: keeps ringing until you respond" switch, read from
  * wherever it travels: a boolean on the reminder, or a "true"/"false" string in
- * notification data. Absent means off — rows created before new reminders
- * defaulted it on never had it set, and they rang as off.
+ * notification data. Only an explicit false is off. Absent means on: rows from
+ * before the switch was wired stored `true` or nothing, they rang looping, and
+ * nothing in them says the user chose otherwise.
  */
 export function isPersistentRing(value: unknown): boolean {
-  if (value === true) return true;
-  return String(value ?? "").toLowerCase().trim() === "true";
+  if (value === false) return false;
+  return String(value ?? "").toLowerCase().trim() !== "false";
 }
 
 /**

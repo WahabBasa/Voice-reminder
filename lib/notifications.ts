@@ -1160,7 +1160,7 @@ function withStoredPersistent(reminder: ReminderNotification): ReminderNotificat
       return { ...reminder, persistent: stored.persistent };
     }
   } catch {
-    // Store unavailable (headless task): absent reads as off, as before.
+    // Store unavailable (headless task): absent reads as on (isPersistentRing).
   }
   return reminder;
 }
@@ -2500,7 +2500,7 @@ export async function scheduleReminder(
           // There is nothing to select between: this ring and every nag comeback
           // speak the reminder's base line (OLD-96, variants stripped OLD-108).
           urgency: reminder.urgency ?? "",
-          persistent: String(reminder.persistent ?? false),
+          persistent: String(reminder.persistent ?? true),
           // Comebacks delivered so far for this ring (OLD-96).
           nagCount: "0",
 

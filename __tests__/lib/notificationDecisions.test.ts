@@ -645,10 +645,11 @@ describe("isPersistentRing", () => {
     expect(isPersistentRing("false")).toBe(false);
   });
 
-  it("treats an absent switch as off (rows from before the default flipped)", () => {
-    expect(isPersistentRing(undefined)).toBe(false);
-    expect(isPersistentRing(null)).toBe(false);
-    expect(isPersistentRing("")).toBe(false);
+  it("treats an absent switch as on (only an explicit false is off)", () => {
+    expect(isPersistentRing(undefined)).toBe(true);
+    expect(isPersistentRing(null)).toBe(true);
+    expect(isPersistentRing("")).toBe(true);
+    expect(isPersistentRing(" FALSE ")).toBe(false);
   });
 });
 
@@ -666,8 +667,8 @@ describe("ringCadenceMode", () => {
     expect(ringCadenceMode("false", 1, true)).toBe("speak_twice");
   });
 
-  it("an absent switch rings as off", () => {
-    expect(ringCadenceMode(undefined, 1, true)).toBe("speak_twice");
+  it("an absent switch rings as on (existing reminders keep looping)", () => {
+    expect(ringCadenceMode(undefined, 1, true)).toBe("loop");
   });
 
   it("persistent OFF without one-shot support loops (older binaries)", () => {

@@ -189,7 +189,7 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
     const [preReminderMinutes, setPreReminderMinutes] = useState<number>(initialReminder.preReminderMinutes ?? 0);
     // New reminders arrive with an explicit `true` from the server; a reminder
     // with no stored value predates that default and was created off.
-    const [persistent, setPersistent] = useState<boolean>(initialReminder.persistent ?? false);
+    const [persistent, setPersistent] = useState<boolean>(initialReminder.persistent ?? true);
 
     // Volume control was cut from the sheet — values pass through unchanged.
     const volume = initialReminder.volume ?? DEFAULT_ALARM_SETTINGS.volume;

@@ -794,12 +794,25 @@ describe("AlarmKit — persistent picks loop vs speak-twice", () => {
     expect(scheduledAlarms().every((o) => o.soundName === `reminder_${ID}.wav`)).toBe(true);
   });
 
-  it("a reminder with no switch stored rings as off", async () => {
+  it("reads an explicit off from the store when the caller left it out", async () => {
+    mockStoreState.getReminderById.mockImplementation(
+      (id: string) => (id === ID ? ({ id: ID, persistent: false } as any) : undefined)
+    );
+
     await scheduleReminder(base(NOW + 60 * MIN));
 
     expect(
       scheduledAlarms().every((o) => o.soundName === `reminder_${ID}_twice.wav`)
     ).toBe(true);
+  });
+
+  it("a reminder with no switch stored rings as on (it looped before)", async () => {
+    await scheduleReminder(base(NOW + 60 * MIN));
+
+    expect(scheduledAlarms().every((o) => o.soundName === `reminder_${ID}.wav`)).toBe(true);
+    expect(mockAlarmSounds.ensureAlarmSound).toHaveBeenCalledWith(ID, "https://cdn/take.wav", {
+      persistent: true,
+    });
   });
 
   it("flipping the switch and re-scheduling re-registers the alarms with the new sound", async () => {

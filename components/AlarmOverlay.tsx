@@ -99,7 +99,7 @@ export function AlarmOverlay({
   kind,
   autoSnoozeCount,
   urgency = "",
-  persistent = "false",
+  persistent = "true",
   nagCount: nagCountStr = "0",
   onDismiss,
   onSnooze,
@@ -468,7 +468,7 @@ export function AlarmOverlay({
             // The comeback speaks the identical take — same audio, same line —
             // and carries the incremented counter so the chain stays capped.
             urgency: urgency ?? "",
-            persistent: persistent ?? "false",
+            persistent: persistent ?? "true",
             // Deliberate Later resets the ignored-ring counter (fresh chain).
             nagCount: "0",
             nagReason: "later_action",
@@ -545,7 +545,7 @@ export function AlarmOverlay({
                 kind: "reminder_occurrence",
                 // Fresh occurrence: the nag chain starts over from zero.
                 urgency: urgency ?? "",
-                persistent: persistent ?? "false",
+                persistent: persistent ?? "true",
                 nagCount: "0",
               },
             },
