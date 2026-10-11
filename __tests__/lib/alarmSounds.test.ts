@@ -3,7 +3,17 @@ jest.mock("expo-file-system/legacy", () => ({
   getInfoAsync: jest.fn(),
   downloadAsync: jest.fn(),
   deleteAsync: jest.fn(),
+  readAsStringAsync: jest.fn(),
+  writeAsStringAsync: jest.fn(),
+  EncodingType: { Base64: "base64" },
 }));
+
+import { buildAlarmWav } from "../../convex/helpers";
+import { base64ToBytes, bytesToBase64, SPEAK_TWICE_WAV_SECONDS } from "../../lib/alarmWavCadence";
+
+// A looping server wav: [3s line][2s gap] x5 at 22.05 kHz.
+const LINE = new Uint8Array(3 * 22050 * 2).map((_, i) => (i % 200) + 1);
+const SERVER_WAV_BASE64 = bytesToBase64(buildAlarmWav(LINE, 22050));
 
 const STAGING_PREFIX =
   "file:///var/mobile/Containers/Data/Application/ABC/Documents/alarm_staging_";
@@ -13,6 +23,8 @@ let fs: {
   getInfoAsync: jest.Mock;
   downloadAsync: jest.Mock;
   deleteAsync: jest.Mock;
+  readAsStringAsync: jest.Mock;
+  writeAsStringAsync: jest.Mock;
 };
 let bridge: { placeAlarmSound: jest.Mock; removeAlarmSound: jest.Mock };
 
@@ -44,6 +56,8 @@ function loadModule(opts: { platform?: "ios" | "android"; withBridge?: boolean }
   fs.getInfoAsync.mockReset().mockResolvedValue({ exists: true, size: 220_500 });
   fs.downloadAsync.mockReset().mockResolvedValue({ status: 200 });
   fs.deleteAsync.mockReset().mockResolvedValue(undefined);
+  fs.readAsStringAsync.mockReset().mockResolvedValue(SERVER_WAV_BASE64);
+  fs.writeAsStringAsync.mockReset().mockResolvedValue(undefined);
 
   alarmSounds = require("../../lib/alarmSounds");
 }
@@ -167,6 +181,69 @@ describe("ensureAlarmSound", () => {
   });
 });
 
+// ─── ensureAlarmSound: the "keeps ringing" switch ──────────────────────────
+
+describe("ensureAlarmSound with persistent", () => {
+  it("persistent ON places the server wav untouched under the base name", async () => {
+    const result = await alarmSounds.ensureAlarmSound("abc123", "https://cdn/x.wav", {
+      persistent: true,
+    });
+
+    expect(result).toBe("reminder_abc123.wav");
+    expect(fs.readAsStringAsync).not.toHaveBeenCalled();
+    expect(fs.writeAsStringAsync).not.toHaveBeenCalled();
+  });
+
+  it("persistent OFF places a speak-twice copy under its own name", async () => {
+    const result = await alarmSounds.ensureAlarmSound("abc123", "https://cdn/x.wav", {
+      persistent: false,
+    });
+
+    expect(result).toBe("reminder_abc123_twice.wav");
+    const staging = `${STAGING_PREFIX}abc123_twice.wav`;
+    expect(fs.downloadAsync).toHaveBeenCalledWith("https://cdn/x.wav", staging);
+    expect(fs.writeAsStringAsync).toHaveBeenCalledTimes(1);
+    const [path, written] = fs.writeAsStringAsync.mock.calls[0];
+    expect(path).toBe(staging);
+    const pcm = base64ToBytes(written).subarray(44);
+    expect(pcm.length).toBe(SPEAK_TWICE_WAV_SECONDS * 22050 * 2);
+    // Two passes of [3s line][2s gap], then nothing.
+    expect(pcm.subarray(0, LINE.length).every((b, i) => b === LINE[i])).toBe(true);
+    expect(pcm.subarray(10 * 22050 * 2).every((b) => b === 0)).toBe(true);
+    expect(bridge.placeAlarmSound).toHaveBeenCalledWith(staging, "reminder_abc123_twice.wav");
+  });
+
+  it("flipping the switch places the other file instead of reusing the cached one", async () => {
+    await alarmSounds.ensureAlarmSound("abc123", "https://cdn/x.wav", { persistent: true });
+    const off = await alarmSounds.ensureAlarmSound("abc123", "https://cdn/x.wav", {
+      persistent: false,
+    });
+
+    expect(off).toBe("reminder_abc123_twice.wav");
+    expect(bridge.placeAlarmSound).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the looping wav when it cannot be shaped", async () => {
+    fs.readAsStringAsync.mockResolvedValueOnce(bytesToBase64(new Uint8Array(8)));
+
+    const result = await alarmSounds.ensureAlarmSound("abc123", "https://cdn/x.wav", {
+      persistent: false,
+    });
+
+    expect(result).toBe("reminder_abc123_twice.wav");
+    expect(fs.writeAsStringAsync).not.toHaveBeenCalled();
+    expect(bridge.placeAlarmSound).toHaveBeenCalled();
+  });
+
+  it("still places a sound when reading the staged wav fails", async () => {
+    fs.readAsStringAsync.mockRejectedValueOnce(new Error("io"));
+
+    expect(
+      await alarmSounds.ensureAlarmSound("abc123", "https://cdn/x.wav", { persistent: false })
+    ).toBe("reminder_abc123_twice.wav");
+  });
+});
+
 // ─── removeAlarmSound ───────────────────────────────────────────────────────
 
 describe("removeAlarmSound", () => {
@@ -183,6 +260,7 @@ describe("removeAlarmSound", () => {
 
     expect(bridge.removeAlarmSound.mock.calls.map((c: string[]) => c[0])).toEqual([
       "reminder_abc123.wav",
+      "reminder_abc123_twice.wav",
       "reminder_abc123_v1.wav",
       "reminder_abc123_v2.wav",
       "reminder_abc123_v3.wav",

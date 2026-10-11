@@ -233,8 +233,9 @@ export function buildPreAlertBody(
 
 // ─── Group 7: Ring cadence (how the spoken lines play while ringing) ───────
 //
-// This is what an alarm does WHILE it rings — one utterance, two, or a loop.
-// What happens after it is answered or ignored is the nag in group 8.
+// This is what an alarm does WHILE it rings — two utterances or a loop, chosen
+// by the reminder's `persistent` switch. What happens after it is answered or
+// ignored is the nag in group 8, the same for both.
 
 export type UrgencyTier = "urgent" | "notice" | "routine";
 
@@ -251,10 +252,23 @@ export function normalizeUrgencyTier(value: unknown): UrgencyTier {
 }
 
 /**
- * Ring cadence while the alarm UI is alive.
- * - routine: speak twice (~20s gap) then go silent (needs one-shot playback and
- *   a playable file, else loop as today).
- * - urgent / notice / legacy: continuous loop of the one spoken line.
+ * The reminder's "Alarm: keeps ringing until you respond" switch, read from
+ * wherever it travels: a boolean on the reminder, or a "true"/"false" string in
+ * notification data. Absent means off — rows created before new reminders
+ * defaulted it on never had it set, and they rang as off.
+ */
+export function isPersistentRing(value: unknown): boolean {
+  if (value === true) return true;
+  return String(value ?? "").toLowerCase().trim() === "true";
+}
+
+/**
+ * Ring cadence while the alarm UI is alive. The `persistent` switch decides it,
+ * not the urgency tier:
+ * - persistent ON: continuous loop of the one spoken line until the user
+ *   answers (Later / Done).
+ * - persistent OFF: speak twice (~20s gap) then go silent — needs one-shot
+ *   playback and a playable file, else loop (older binaries only loop).
  *
  * There used to be a third mode, "alternate": an urgent alarm cycled through
  * the reminder's replay variants while it rang. OLD-108 removed the variants,
@@ -263,14 +277,12 @@ export function normalizeUrgencyTier(value: unknown): UrgencyTier {
  * than left permanently unreachable.
  */
 export function ringCadenceMode(
-  urgency: unknown,
+  persistent: unknown,
   playableFileCount: number,
   supportsOneShotPlayback: boolean
 ): RingCadenceMode {
-  if (normalizeUrgencyTier(urgency) === "routine") {
-    return supportsOneShotPlayback && playableFileCount >= 1 ? "speak_twice" : "loop";
-  }
-  return "loop";
+  if (isPersistentRing(persistent)) return "loop";
+  return supportsOneShotPlayback && playableFileCount >= 1 ? "speak_twice" : "loop";
 }
 
 // ─── Group 8: The snooze-nag (OLD-96) ───────────────────────────────────────

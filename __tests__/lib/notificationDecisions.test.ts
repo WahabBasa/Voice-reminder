@@ -29,6 +29,7 @@ import {
   PRE_ALERT_MIN_SLACK_MS,
   normalizeUrgencyTier,
   ringCadenceMode,
+  isPersistentRing,
   parseNagCount,
   shouldNagAgain,
   planNagChain,
@@ -632,35 +633,49 @@ describe("normalizeUrgencyTier", () => {
   });
 });
 
+describe("isPersistentRing", () => {
+  it("reads the boolean on a reminder", () => {
+    expect(isPersistentRing(true)).toBe(true);
+    expect(isPersistentRing(false)).toBe(false);
+  });
+
+  it("reads the string notification data carries", () => {
+    expect(isPersistentRing("true")).toBe(true);
+    expect(isPersistentRing(" TRUE ")).toBe(true);
+    expect(isPersistentRing("false")).toBe(false);
+  });
+
+  it("treats an absent switch as off (rows from before the default flipped)", () => {
+    expect(isPersistentRing(undefined)).toBe(false);
+    expect(isPersistentRing(null)).toBe(false);
+    expect(isPersistentRing("")).toBe(false);
+  });
+});
+
 describe("ringCadenceMode", () => {
-  // OLD-108: there is one spoken line per reminder, so urgent has nothing to
-  // alternate between and rings the same continuous loop it fell back to
-  // whenever a variant was missing. The "alternate" mode is gone entirely.
-  it("urgent loops however many files and whatever playback support it has", () => {
-    expect(ringCadenceMode("urgent", 2, true)).toBe("loop");
-    expect(ringCadenceMode("urgent", 4, true)).toBe("loop");
-    expect(ringCadenceMode("urgent", 4, false)).toBe("loop");
-    expect(ringCadenceMode("urgent", 1, true)).toBe("loop");
+  // The "keeps ringing" switch decides the cadence; the urgency tier no longer
+  // does (it is not even an input).
+  it("persistent ON loops whatever the playback support", () => {
+    expect(ringCadenceMode(true, 1, true)).toBe("loop");
+    expect(ringCadenceMode("true", 1, true)).toBe("loop");
+    expect(ringCadenceMode(true, 0, false)).toBe("loop");
   });
 
-  it("routine with one-shot support speaks twice", () => {
-    expect(ringCadenceMode("routine", 1, true)).toBe("speak_twice");
+  it("persistent OFF with one-shot support speaks twice", () => {
+    expect(ringCadenceMode(false, 1, true)).toBe("speak_twice");
+    expect(ringCadenceMode("false", 1, true)).toBe("speak_twice");
   });
 
-  it("routine without one-shot support loops", () => {
-    expect(ringCadenceMode("routine", 1, false)).toBe("loop");
+  it("an absent switch rings as off", () => {
+    expect(ringCadenceMode(undefined, 1, true)).toBe("speak_twice");
   });
 
-  it("routine with no playable files loops", () => {
-    expect(ringCadenceMode("routine", 0, true)).toBe("loop");
+  it("persistent OFF without one-shot support loops (older binaries)", () => {
+    expect(ringCadenceMode(false, 1, false)).toBe("loop");
   });
 
-  it("notice always loops", () => {
-    expect(ringCadenceMode("notice", 4, true)).toBe("loop");
-  });
-
-  it("legacy/unknown urgency loops", () => {
-    expect(ringCadenceMode(undefined, 4, true)).toBe("loop");
+  it("persistent OFF with no playable file loops", () => {
+    expect(ringCadenceMode(false, 0, true)).toBe("loop");
   });
 });
 

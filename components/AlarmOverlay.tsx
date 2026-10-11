@@ -209,14 +209,15 @@ export function AlarmOverlay({
     // comeback ring this same file — there is no per-rung playlist any more.
     const playableFileCount = fileInfo.exists && (fileInfo as any).size ? 1 : 0;
 
-    // Cadence by tier — orchestrated here because this UI stays alive while
+    // Cadence by the persistent switch — orchestrated here because this UI stays alive while
     // the alarm rings (headless JS does not; it only gets the degraded loop).
     const supportsOneShot =
       typeof alarmAudioService.supportsOneShotAlarmPlayback === "function" &&
       alarmAudioService.supportsOneShotAlarmPlayback();
-    const mode = ringCadenceMode(urgency, playableFileCount, supportsOneShot);
+    // The reminder's "keeps ringing" switch picks the cadence, not its tier.
+    const mode = ringCadenceMode(persistent, playableFileCount, supportsOneShot);
     console.log(
-      `[VR] Alarm cadence mode=${mode} files=${playableFileCount} urgency=${urgency || "(none)"} oneShot=${supportsOneShot}`
+      `[VR] Alarm cadence mode=${mode} files=${playableFileCount} persistent=${persistent} urgency=${urgency || "(none)"} oneShot=${supportsOneShot}`
     );
 
     cadenceStoppedRef.current = false;
@@ -260,7 +261,7 @@ export function AlarmOverlay({
     });
   };
 
-  // Routine tier: speak twice (~20s apart), then go silent. The notification
+  // Persistent off: speak twice (~20s apart), then go silent. The notification
   // and this UI stay; the ring timeout still drives the follow-up ladder.
   const playSpeakTwice = async (file: string, utterance: number): Promise<boolean> => {
     if (cadenceStoppedRef.current || !isMountedRef.current) return false;

@@ -3,8 +3,12 @@ import {
   deleteAsync,
   documentDirectory,
   downloadAsync,
+  EncodingType,
   getInfoAsync,
+  readAsStringAsync,
+  writeAsStringAsync,
 } from "expo-file-system/legacy";
+import { base64ToBytes, bytesToBase64, shapeSpeakTwiceWav } from "./alarmWavCadence";
 /**
  * iOS AlarmKit sound placement (AK-3).
  *
@@ -15,7 +19,9 @@ import {
  * So the wav is staged into Documents and the AlarmKitBridge native method
  * copies it into Library/Sounds via FileManager.
  *
- * There is exactly ONE alarm sound per reminder (OLD-108). The cadence ladder
+ * There is ONE spoken take per reminder (OLD-108), placed as one of two files
+ * picked by its "keeps ringing" switch: the server wav as-is (AlarmKit loops it)
+ * or a speak-twice copy (`reminder_<id>_twice.wav`). The cadence ladder
  * used to stage one wav per rung above the base — `reminder_<id>_v<k>.wav`,
  * holding replay variant k-1 — but the nag repeats the base line now, so
  * nothing places those files any longer. `removeAlarmSound` still sweeps them
@@ -39,6 +45,16 @@ export function getAlarmSoundFileName(reminderId: string): string {
 }
 
 /**
+ * Bare filename of the speak-twice copy a reminder rings with when its "keeps
+ * ringing" switch is off (lib/alarmWavCadence.ts). A separate name, so flipping
+ * the switch re-schedules onto the other file instead of overwriting a sound a
+ * registered alarm still points at.
+ */
+export function getSpeakTwiceAlarmSoundFileName(reminderId: string): string {
+  return `reminder_${sanitizeId(reminderId)}_twice.wav`;
+}
+
+/**
  * Rungs the retired cadence ladder could have staged (OLD-108). Only
  * `removeAlarmSound` reads this, to sweep files left behind by an install that
  * rang before the strip.
@@ -51,10 +67,37 @@ function legacyVariantAlarmSoundFileName(reminderId: string, rung: number): stri
 }
 
 /** Documents-scoped staging path — the only place expo-file-system may write. */
-export function getAlarmSoundStagingPath(reminderId: string): string | null {
+export function getAlarmSoundStagingPath(
+  reminderId: string,
+  variant: "loop" | "twice" = "loop"
+): string | null {
   if (Platform.OS !== "ios") return null;
   if (!documentDirectory) return null;
-  return `${documentDirectory}alarm_staging_${sanitizeId(reminderId)}.wav`;
+  const suffix = variant === "twice" ? "_twice" : "";
+  return `${documentDirectory}alarm_staging_${sanitizeId(reminderId)}${suffix}.wav`;
+}
+
+/**
+ * Rewrite a staged server wav in place as its speak-twice copy. A wav that
+ * cannot be shaped stays as it is (it loops, the way it always did) — a
+ * reminder must never lose its voice over the cadence.
+ */
+async function reshapeStagedAsSpeakTwice(stagingPath: string, label: string): Promise<void> {
+  try {
+    const original = base64ToBytes(
+      await readAsStringAsync(stagingPath, { encoding: EncodingType.Base64 })
+    );
+    const shaped = shapeSpeakTwiceWav(original);
+    if (!shaped) {
+      console.log(`[VR] Speak-twice shaping skipped for ${label}; the looping wav stays`);
+      return;
+    }
+    await writeAsStringAsync(stagingPath, bytesToBase64(shaped), {
+      encoding: EncodingType.Base64,
+    });
+  } catch (e) {
+    console.log(`[VR] Speak-twice shaping failed for ${label}; the looping wav stays:`, e);
+  }
 }
 
 // Files already copied into Library/Sounds this session — skips repeat
@@ -74,7 +117,8 @@ async function placeAlarmSoundFile(
   fileName: string,
   stagingPath: string | null,
   wavUrl: string | null | undefined,
-  label: string
+  label: string,
+  speakTwice = false
 ): Promise<string | null> {
   if (Platform.OS !== "ios") return null;
   if (!wavUrl) return null;
@@ -92,6 +136,7 @@ async function placeAlarmSoundFile(
       return null;
     }
 
+    if (speakTwice) await reshapeStagedAsSpeakTwice(stagingPath, label);
     await bridge.placeAlarmSound(stagingPath, fileName);
     placedThisSession.add(fileName);
     console.log(`[VR] Alarm sound placed: ${fileName} (${staged.size} bytes)`);
@@ -113,11 +158,26 @@ async function placeAlarmSoundFile(
  * return the bare filename for `AlarmKitBridge.scheduleAlarm({ soundName })`.
  * Returns null on Android, without a wav url, without the native bridge, or on
  * any failure — the caller then schedules with the system default alarm sound.
+ *
+ * `persistent` is the reminder's "keeps ringing" switch. On (and when the
+ * caller does not say) the server wav goes in as it is: AlarmKit loops it, so
+ * the line keeps coming until the user answers. Off places the speak-twice copy
+ * under its own name instead.
  */
 export async function ensureAlarmSound(
   reminderId: string,
-  wavUrl: string | null | undefined
+  wavUrl: string | null | undefined,
+  options?: { persistent?: boolean }
 ): Promise<string | null> {
+  if (options?.persistent === false) {
+    return placeAlarmSoundFile(
+      getSpeakTwiceAlarmSoundFileName(reminderId),
+      getAlarmSoundStagingPath(reminderId, "twice"),
+      wavUrl,
+      reminderId,
+      true
+    );
+  }
   return placeAlarmSoundFile(
     getAlarmSoundFileName(reminderId),
     getAlarmSoundStagingPath(reminderId),
@@ -127,14 +187,17 @@ export async function ensureAlarmSound(
 }
 
 /**
- * Drop a reminder's alarm sounds — its one wav, plus any retired ladder rung
+ * Drop a reminder's alarm sounds — its wav and its speak-twice copy, plus any retired ladder rung
  * wav an older build left in Library/Sounds (deletion / re-record flows).
  * No-op off iOS.
  */
 export async function removeAlarmSound(reminderId: string): Promise<void> {
   if (Platform.OS !== "ios") return;
 
-  const fileNames = [getAlarmSoundFileName(reminderId)];
+  const fileNames = [
+    getAlarmSoundFileName(reminderId),
+    getSpeakTwiceAlarmSoundFileName(reminderId),
+  ];
   for (let rung = 1; rung <= LEGACY_LADDER_RUNGS; rung++) {
     fileNames.push(legacyVariantAlarmSoundFileName(reminderId, rung));
   }

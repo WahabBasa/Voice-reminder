@@ -66,6 +66,7 @@ import {
   filterPreAlertTriggerIds,
   buildPreAlertBody,
   normalizeUrgencyTier,
+  isPersistentRing,
   parseNagCount,
   shouldNagAgain,
   planNagChain,
@@ -99,7 +100,11 @@ import {
 // like AudioService.ts guards react-native-sound: without it, native alarms
 // fall back to the system default alarm sound.
 let alarmSounds: {
-  ensureAlarmSound?: (reminderId: string, wavUrl?: string | null) => Promise<string | null>;
+  ensureAlarmSound?: (
+    reminderId: string,
+    wavUrl?: string | null,
+    options?: { persistent?: boolean }
+  ) => Promise<string | null>;
   removeAlarmSound?: (reminderId: string) => Promise<void>;
 } | null = null;
 
@@ -377,14 +382,14 @@ async function startAlarmAudioFromNotification(notification?: PendingAlarmNotifi
   const rawVolume = Number(data.volume ?? "1");
   const targetVolume = Math.max(0, Math.min(1, Number.isFinite(rawVolume) ? rawVolume : 1));
   // Headless-safe cadence only (this path can run with a limited JS lifetime):
-  // routine tier speaks the line once and goes quiet, everything else loops
-  // continuously as before. The richer cadence (speak-twice-with-gap) is
-  // orchestrated from the alarm UI surfaces, which stay alive while ringing.
-  const tier = normalizeUrgencyTier(data.urgency);
+  // a persistent ("keeps ringing") reminder loops until answered, any other
+  // speaks the line once and goes quiet. The richer cadence (speak-twice-with-
+  // gap) is orchestrated from the alarm UI surfaces, which stay alive while
+  // ringing.
   const ok = await alarmAudioService.ensurePlaying(localAudioPath, {
     volume: targetVolume,
     streamType: "alarm",
-    loop: tier !== "routine",
+    loop: isPersistentRing(data.persistent),
   });
   if (ok) {
     await markPendingAlarmRinging(notification.id);
@@ -1141,6 +1146,25 @@ function withStoredSchedule(reminder: ReminderNotification): ReminderNotificatio
   return reminder;
 }
 
+/**
+ * Fill `persistent` from the store copy when the caller left it out. It decides
+ * how the ring sounds (loop vs speak twice) on every path, and a caller that
+ * built its object without it (app/reminder/new.tsx) would otherwise schedule
+ * the stored "keeps ringing" reminder as off. The caller's value always wins.
+ */
+function withStoredPersistent(reminder: ReminderNotification): ReminderNotification {
+  if (reminder.persistent !== undefined) return reminder;
+  try {
+    const stored = useReminderStore.getState().getReminderById(reminder.id);
+    if (stored?.persistent !== undefined) {
+      return { ...reminder, persistent: stored.persistent };
+    }
+  } catch {
+    // Store unavailable (headless task): absent reads as off, as before.
+  }
+  return reminder;
+}
+
 /** The grid a notification payload carries, or null on a pre-grid payload. */
 function parseOccurrenceGrid(value: unknown): GridSchedule | null {
   if (typeof value !== "string" || !value) return null;
@@ -1482,11 +1506,19 @@ async function clearAlarmKitState(reminderId: string): Promise<void> {
 /** AK-3's hydration, absent-safe. Returns the bare Library/Sounds filename. */
 async function ensureAlarmSoundSafe(
   reminderId: string,
-  wavUrl?: string | null
+  wavUrl: string | null | undefined,
+  persistent: unknown
 ): Promise<string | null> {
   if (!alarmSounds?.ensureAlarmSound) return null;
   try {
-    return (await alarmSounds.ensureAlarmSound(reminderId, wavUrl ?? null)) ?? null;
+    // The `persistent` switch picks the sound file: the server wav loops the
+    // line for as long as AlarmKit rings; off gets a speak-twice copy of it
+    // (lib/alarmSounds.ts). AlarmKit loops whatever file it is given.
+    return (
+      (await alarmSounds.ensureAlarmSound(reminderId, wavUrl ?? null, {
+        persistent: isPersistentRing(persistent),
+      })) ?? null
+    );
   } catch (e) {
     vrLog("alarmkit", "sound_hydration_failed", { reminderId, error: String(e) });
     return null;
@@ -1613,10 +1645,17 @@ async function forgetNagOrigins(reminderId: string, appKeys: string[]): Promise<
  * wins, so schedule-time wavs behave exactly as before.
  */
 function withStoredWavUrls(reminder: ReminderNotification): ReminderNotification {
-  if (reminder.wavUrl) return reminder;
+  if (reminder.wavUrl && reminder.persistent !== undefined) return reminder;
   const stored = useReminderStore.getState().getReminderById(reminder.id);
   if (!stored) return reminder;
-  return { ...reminder, wavUrl: toReminderNotification(stored).wavUrl };
+  // `persistent` rides along for the same reason: it picks the alarm's sound
+  // file (loop vs speak twice), and a caller that built its object without it
+  // would otherwise bake the wrong one in. The caller's value always wins.
+  return {
+    ...reminder,
+    wavUrl: reminder.wavUrl || toReminderNotification(stored).wavUrl,
+    persistent: reminder.persistent ?? stored.persistent,
+  };
 }
 
 /**
@@ -1716,7 +1755,7 @@ async function scheduleAlarmKitOccurrence(
     for (const key of chainKeys) keep.add(key);
     await cancelStaleAlarmKitAlarms(reminder.id, keep);
 
-    const soundName = await ensureAlarmSoundSafe(reminder.id, hydrated.wavUrl);
+    const soundName = await ensureAlarmSoundSafe(reminder.id, hydrated.wavUrl, hydrated.persistent);
     const uuid = await scheduleNativeAlarm({
       id: appKey,
       fireDate: triggerTimestamp,
@@ -1777,7 +1816,10 @@ async function scheduleAlarmKitNagChain(
   const soundName =
     precomputed?.soundName !== undefined
       ? precomputed.soundName
-      : await ensureAlarmSoundSafe(reminder.id, withStoredWavUrls(reminder).wavUrl);
+      : await (async () => {
+          const hydrated = withStoredWavUrls(reminder);
+          return ensureAlarmSoundSafe(reminder.id, hydrated.wavUrl, hydrated.persistent);
+        })();
 
   const origins: Record<string, number> = {};
   for (const [index, fireDate] of comebacks.entries()) {
@@ -1845,7 +1887,7 @@ async function refreshAlarmKitSound(reminderId: string): Promise<void> {
   );
   if (scheduled.length === 0) return;
 
-  const soundName = await ensureAlarmSoundSafe(reminderId, reminder.wavUrl);
+  const soundName = await ensureAlarmSoundSafe(reminderId, reminder.wavUrl, reminder.persistent);
   if (!soundName) return;
 
   const state = await getAlarmKitState();
@@ -2192,7 +2234,7 @@ export async function scheduleReminder(
   input: ReminderNotification,
   _options?: { traceId?: string; occurrenceAfter?: number }
 ): Promise<{ triggerTimestamp: number; notificationId: string }> {
-  const reminder = withStoredSchedule(input);
+  const reminder = withStoredPersistent(withStoredSchedule(input));
   const hasPermission = await requestNotificationPermission();
 
   // iOS 26 only: this occurrence becomes a system alarm instead of a notifee

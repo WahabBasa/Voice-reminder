@@ -301,6 +301,10 @@ function AlarmOverlayFallback() {
         anchorAt: String(data?.anchorAt ?? ""),
         kind: String(data?.kind ?? ""),
         autoSnoozeCount: String(data?.autoSnoozeCount ?? "0"),
+        // How it rings while it rings: the "keeps ringing" switch picks loop
+        // vs speak twice (lib/notificationDecisions.ts ringCadenceMode).
+        urgency: String(data?.urgency ?? ""),
+        persistent: String(data?.persistent ?? "false"),
         // Fallback resolve behavior (pastebin Step 4.2):
         // - mark pending resolved + clear pending
         // - stop audio

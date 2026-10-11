@@ -337,11 +337,13 @@ export function buildPreReminderInstruction(): string {
 // snooze-nag, and OLD-108 made the nag repeat the SAME line — so the variants
 // are gone from the prompt, from synthesis and from playback.
 //
-// What survives is the tier itself, because it still decides something: how the
-// alarm rings while it rings (lib/notificationDecisions.ts ringCadenceMode —
-// routine speaks twice and stops, everything else loops). `persistent` is no
-// longer the model's call: every new reminder starts with it on (see
-// planReminderFromParse in actions.ts) and the user can switch it off per reminder.
+// The tier survives as a label the parse still returns; it no longer decides how
+// the alarm rings. That is the `persistent` switch ("keeps ringing until you
+// respond"), read on the device: on loops the line until the user answers, off
+// speaks it twice and goes quiet (lib/notificationDecisions.ts ringCadenceMode,
+// lib/alarmWavCadence.ts for AlarmKit). It is not the model's call: every new
+// reminder starts with it on (see planReminderFromParse in actions.ts) and the
+// user can switch it off per reminder. The server wav is the same either way.
 
 export type Urgency = "urgent" | "notice" | "routine";
 

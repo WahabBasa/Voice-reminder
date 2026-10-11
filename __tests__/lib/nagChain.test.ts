@@ -80,8 +80,13 @@ jest.mock("../../lib/reminderRemoval", () => ({
 }));
 
 jest.mock("../../lib/alarmSounds", () => ({
-  ensureAlarmSound: jest.fn(async (reminderId: string, wavUrl?: string | null) =>
-    wavUrl ? `reminder_${reminderId}.wav` : null
+  ensureAlarmSound: jest.fn(
+    async (reminderId: string, wavUrl?: string | null, options?: { persistent?: boolean }) =>
+      wavUrl
+        ? options?.persistent === false
+          ? `reminder_${reminderId}_twice.wav`
+          : `reminder_${reminderId}.wav`
+        : null
   ),
   removeAlarmSound: jest.fn(async () => undefined),
 }));
@@ -454,6 +459,7 @@ describe("AlarmKit — the comebacks are pre-scheduled, not reacted to", () => {
       frequency: "once",
       scheduleType: "once",
       onceAt,
+      persistent: true,
       wavUrl: "https://cdn/take.wav",
     } as ReminderNotification);
 
@@ -509,7 +515,7 @@ describe("AlarmKit — the comebacks are pre-scheduled, not reacted to", () => {
 
   it("re-arms the chain when the pre-scheduled comebacks went missing", async () => {
     const rang = NOW - RING_TIMEOUT_MS;
-    mockStoreState.getReminderById.mockReturnValue(storedReminder());
+    mockStoreState.getReminderById.mockReturnValue(storedReminder({ persistent: true }));
     mockAlarmKit.getScheduledAlarms.mockResolvedValue([] as any);
     mockAlarmKit.getAndClearEventLog.mockResolvedValue([
       { type: "fired", id: `reminder_${ID}_${rang}`, at: rang },
@@ -709,7 +715,7 @@ describe("AlarmKit — the comebacks are pre-scheduled, not reacted to", () => {
 
   it("re-registers the owed nag with the wav once hydration lands", async () => {
     const owed = `snooze_${ID}_${NOW + NAG_MS}`;
-    mockStoreState.getReminderById.mockReturnValue(storedReminder());
+    mockStoreState.getReminderById.mockReturnValue(storedReminder({ persistent: true }));
     mockAlarmKit.getScheduledAlarms.mockResolvedValue([
       { id: owed, uuid: "G", fireDate: NOW + NAG_MS },
       { id: `reminder_${ID}_${NOW + 60 * MIN}`, uuid: "N", fireDate: NOW + 60 * MIN },
@@ -729,3 +735,89 @@ describe("AlarmKit — the comebacks are pre-scheduled, not reacted to", () => {
     expect(scheduledAlarms().every((o) => Boolean(o.metadata.siblings))).toBe(true);
   });
 });
+
+// ─── iOS: the "keeps ringing" switch picks the alarm's sound file ───────────
+
+describe("AlarmKit — persistent picks loop vs speak-twice", () => {
+  const mockAlarmSounds = jest.requireMock("../../lib/alarmSounds");
+
+  beforeEach(() => {
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
+    mockAlarmKit.useAlarmKit.mockResolvedValue(true as any);
+    resetAlarmKitLaunchRefresh();
+  });
+
+  afterEach(() => {
+    mockStoreState.getReminderById.mockImplementation((_id: string) => undefined as any);
+  });
+
+  function base(onceAt: number, extra: Partial<ReminderNotification> = {}) {
+    return {
+      id: ID,
+      title: "Take your pills",
+      time: "08:00",
+      frequency: "once",
+      scheduleType: "once",
+      onceAt,
+      urgency: "routine",
+      wavUrl: "https://cdn/take.wav",
+      ...extra,
+    } as ReminderNotification;
+  }
+
+  it("ON rings the looping wav on the occurrence and every comeback, even for routine", async () => {
+    await scheduleReminder(base(NOW + 60 * MIN, { persistent: true }));
+
+    expect(scheduledAlarms()).toHaveLength(4);
+    expect(scheduledAlarms().every((o) => o.soundName === `reminder_${ID}.wav`)).toBe(true);
+    expect(mockAlarmSounds.ensureAlarmSound).toHaveBeenCalledWith(ID, "https://cdn/take.wav", {
+      persistent: true,
+    });
+  });
+
+  it("OFF rings the speak-twice copy, even for urgent", async () => {
+    await scheduleReminder(base(NOW + 60 * MIN, { persistent: false, urgency: "urgent" }));
+
+    expect(scheduledAlarms()).toHaveLength(4);
+    expect(
+      scheduledAlarms().every((o) => o.soundName === `reminder_${ID}_twice.wav`)
+    ).toBe(true);
+  });
+
+  it("reads the switch from the store when the caller left it out", async () => {
+    mockStoreState.getReminderById.mockImplementation(
+      (id: string) => (id === ID ? ({ id: ID, persistent: true } as any) : undefined)
+    );
+
+    await scheduleReminder(base(NOW + 60 * MIN));
+
+    expect(scheduledAlarms().every((o) => o.soundName === `reminder_${ID}.wav`)).toBe(true);
+  });
+
+  it("a reminder with no switch stored rings as off", async () => {
+    await scheduleReminder(base(NOW + 60 * MIN));
+
+    expect(
+      scheduledAlarms().every((o) => o.soundName === `reminder_${ID}_twice.wav`)
+    ).toBe(true);
+  });
+
+  it("flipping the switch and re-scheduling re-registers the alarms with the new sound", async () => {
+    const onceAt = NOW + 60 * MIN;
+    await scheduleReminder(base(onceAt, { persistent: true }));
+    expect(scheduledAlarms().every((o) => o.soundName === `reminder_${ID}.wav`)).toBe(true);
+
+    mockAlarmKit.scheduleAlarm.mockClear();
+    resetAppKeyDedupe();
+    await scheduleReminder(base(onceAt, { persistent: false }));
+
+    expect(scheduledAlarms().map((o) => o.id)).toEqual([
+      `reminder_${ID}_${onceAt}`,
+      ...[1, 2, 3].map((step) => `snooze_${ID}_${onceAt + step * NAG_MS}`),
+    ]);
+    expect(
+      scheduledAlarms().every((o) => o.soundName === `reminder_${ID}_twice.wav`)
+    ).toBe(true);
+  });
+});
+
