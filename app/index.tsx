@@ -1,6 +1,5 @@
 
 import { intlLocales, t } from "../lib/i18n";
-import { joinedScriptText } from "../lib/scriptStyle";
 import { consumeReturnToSettings } from "../lib/appLanguage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -2047,7 +2046,7 @@ export default function HomeScreen() {
           <View style={styles.header}>
             <View style={styles.headerTop}>
               <View style={styles.headerTitleWrap}>
-                <Text style={[styles.headerTitle, joinedScriptText()]}>{t("today.header.title")}</Text>
+                <Text style={styles.headerTitle}>{t("today.header.title")}</Text>
                 <Text style={styles.headerDate}>{dateLabel}</Text>
               </View>
               <View style={styles.headerActions}>
