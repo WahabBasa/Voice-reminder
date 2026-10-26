@@ -9,8 +9,10 @@
  *      zh-Hant, no → nb, fil → tl, any other language → its catalog if one is
  *      registered in locales/index.ts;
  *   3. English.
- * Right-to-left languages (ar, he, fa, ur) get the English UI for now — there is
- * no RTL layout yet — but stay selectable, because the pick also sets the voice.
+ * Right-to-left languages (ar, he, fa, ur) get their own catalog and a mirrored
+ * layout: lib/layoutDirection.ts flips the native direction and reloads when a
+ * pick (or the device language) crosses between LTR and RTL. Persian is UI-only:
+ * Remi can show it but cannot voice it yet.
  *
  * Picking a language sets both halves at once: the UI catalog and the spoken
  * hint (lib/spokenLanguage.ts), so the first recording in the new language is
@@ -25,7 +27,7 @@ import { chooseSpokenLanguage, normalizeSpokenLang } from "./spokenLanguage";
 
 const STORAGE_KEY = "vr.appLanguage";
 
-/** Shown with an English UI (no RTL layout yet), still selectable for the voice. */
+/** The right-to-left choices: their own catalog, a mirrored layout (lib/layoutDirection.ts). */
 export const RTL_LANGUAGES: readonly string[] = ["ar", "he", "fa", "ur"];
 
 /**
@@ -137,12 +139,11 @@ export function endonymFor(code: string | null | undefined): string {
 /**
  * The UI catalog for a language or locale tag, or null when none is registered.
  * An exact tag wins ("es-MX"); Chinese goes by script; otherwise any catalog of
- * the same base language ("pt-PT" → "pt-BR", "no" → "nb"). RTL → English.
+ * the same base language ("pt-PT" → "pt-BR", "no" → "nb", "ar-EG" → "ar").
  */
 export function uiLocaleFor(tag: string | null | undefined): string | null {
   const parsed = parseTag(tag);
   if (!parsed) return null;
-  if (RTL_LANGUAGES.includes(parsed.base)) return SOURCE_LOCALE;
   const tags = Object.keys(UI_CATALOGS);
   if (parsed.base === "zh") {
     const wantedScript = `zh-${parsed.script}`;
@@ -257,8 +258,10 @@ export function loadAppLanguage(
 }
 
 /**
- * The user picked a language: switch the UI (English when there is no catalog,
- * or for RTL), make it the spoken hint, persist it. `pushToServer` tells the
+ * The user picked a language: switch the UI (English when there is no catalog),
+ * make it the spoken hint, persist it. The layout direction is applied by the
+ * caller once this resolves (lib/pickLanguage.ts → lib/layoutDirection.ts), so
+ * a direction reload never races the persist. `pushToServer` tells the
  * server (lib/spokenLanguage.ts `pushSpokenLanguageChoice`); it is fired, not
  * awaited, and its failure changes nothing here.
  */

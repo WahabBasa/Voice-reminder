@@ -54,6 +54,10 @@ export const UI_CATALOGS: Readonly<Record<string, Catalog>> = {
   th: require("./th.json"),
   id: require("./id.json"),
   ms: require("./ms.json"),
+  ar: require("./ar.json"),
+  he: require("./he.json"),
+  fa: require("./fa.json"),
+  ur: require("./ur.json"),
 };
 /* eslint-enable @typescript-eslint/no-var-requires */
 

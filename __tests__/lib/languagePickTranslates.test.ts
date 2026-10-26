@@ -1,8 +1,9 @@
 /**
  * Every language on the wheel, picked on a fresh install (the first-run path:
  * no stored pick, device in English), switches what `t()` returns — except
- * English itself and the right-to-left languages, which keep the English UI on
- * purpose (lib/appLanguage.ts RTL_LANGUAGES) while still setting the voice.
+ * English itself. The right-to-left languages (lib/appLanguage.ts
+ * RTL_LANGUAGES) translate too, into their own catalog; their layout flip is
+ * pinned in layoutDirection.test.ts.
  *
  * Written while chasing "I picked a language and the app stayed English" on
  * build 10: it pins that the JS pick → catalog path is not the cause for any
@@ -50,8 +51,7 @@ describe("a first-run pick translates the UI", () => {
     expect(await chooseAppLanguage(code)).toBe(true);
     expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(false);
 
-    const english = code === "en" || RTL_LANGUAGES.includes(code);
-    if (english) {
+    if (code === "en") {
       expect(getUiLocale()).toBe("en");
       return;
     }
@@ -60,5 +60,33 @@ describe("a first-run pick translates the UI", () => {
       (key) => t(key) !== (en as Record<string, string>)[key]
     );
     expect(translated.length).toBeGreaterThan(0);
+  });
+});
+
+describe("right-to-left picks get their own catalog", () => {
+  it.each(RTL_LANGUAGES.map((code) => [code]))("%s", async (code) => {
+    await loadAppLanguage(["en-US"]);
+    expect(await chooseAppLanguage(code)).toBe(true);
+    expect(getUiLocale()).toBe(code);
+    // Every probe key reads in the new script, none falls back to English.
+    for (const key of PROBE_KEYS) {
+      expect([key, /[֐-ۿ]/.test(t(key))]).toEqual([key, true]);
+    }
+  });
+
+  it("an Arabic device with no pick opens in Arabic", async () => {
+    await loadAppLanguage(["ar-SA", "en-US"]);
+    expect(getChosenLanguage()).toBeNull();
+    expect(getUiLocale()).toBe("ar");
+  });
+
+  it("Arabic plurals use all six CLDR forms", async () => {
+    await chooseAppLanguage("ar");
+    const hours = (count: number) => t("time.every.hours", { count });
+    expect(hours(1)).toBe("كل ساعة"); // one: no number
+    expect(hours(2)).toBe("كل ساعتين"); // two: the dual
+    expect(hours(5)).toContain("ساعات"); // few (3–10): plural noun
+    expect(hours(11)).not.toContain("ساعات"); // many (11–99): singular noun
+    expect(hours(100)).not.toContain("ساعات"); // other
   });
 });

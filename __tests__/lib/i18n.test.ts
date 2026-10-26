@@ -74,6 +74,12 @@ describe("fallbackFormat (when ICU can't run)", () => {
     ).toBe("1 of 2 made");
   });
 
+  it("fills a formatted argument ({count, number}, used by the ar/fa catalogs) with its value", () => {
+    expect(fallbackFormat("Next in {count, number} min", { count: 5 })).toBe("Next in 5 min");
+    expect(fallbackFormat("{hours, number} h {minutes, number} min", { hours: 2, minutes: 30 })).toBe("2 h 30 min");
+    expect(fallbackFormat("{count, number}")).toBe("{count}");
+  });
+
   it("leaves an unknown placeholder visible and copes with no params", () => {
     expect(fallbackFormat("Hi {name}")).toBe("Hi {name}");
     expect(fallbackFormat("plain")).toBe("plain");

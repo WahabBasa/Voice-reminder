@@ -39,7 +39,11 @@
       "vi": "./locales/ios/vi.json",
       "th": "./locales/ios/th.json",
       "id": "./locales/ios/id.json",
-      "ms": "./locales/ios/ms.json"
+      "ms": "./locales/ios/ms.json",
+      "ar": "./locales/ios/ar.json",
+      "he": "./locales/ios/he.json",
+      "fa": "./locales/ios/fa.json",
+      "ur": "./locales/ios/ur.json"
     },
     "ios": {
       "supportsTablet": false,
@@ -79,7 +83,11 @@
           "vi",
           "th",
           "id",
-          "ms"
+          "ms",
+          "ar",
+          "he",
+          "fa",
+          "ur"
         ]
       },
       "privacyManifests": {

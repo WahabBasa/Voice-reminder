@@ -1,6 +1,6 @@
 /**
  * Which language Remi is in (lib/appLanguage.ts): the UI catalog and the voice
- * hint. Resolution order, fallback, RTL, the wheel's list, and the pick's
+ * hint. Resolution order, fallback, RTL catalogs, the wheel's list, and the pick's
  * wiring into the spoken-language hint.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -58,9 +58,13 @@ describe("UI catalog for a language", () => {
     expect(uiLocaleFor("en-GB")).toBe("en");
   });
 
-  it("gives RTL languages the English UI", () => {
-    for (const lang of RTL_LANGUAGES) expect(uiLocaleFor(lang)).toBe("en");
-    expect(uiLocaleFor("ar-SA")).toBe("en");
+  it("gives RTL languages their own catalog", () => {
+    for (const lang of RTL_LANGUAGES) expect(uiLocaleFor(lang)).toBe(lang);
+    expect(uiLocaleFor("ar-SA")).toBe("ar");
+    expect(uiLocaleFor("ar-EG")).toBe("ar");
+    expect(uiLocaleFor("he-IL")).toBe("he");
+    expect(uiLocaleFor("fa-IR")).toBe("fa");
+    expect(uiLocaleFor("ur-PK")).toBe("ur");
   });
 
   it("maps Chinese by script, no to nb, fil to tl, others by language", () => {
@@ -91,16 +95,21 @@ describe("resolution order: pick, then device, then English", () => {
     expect(resolveUiLocale("es", ["pt-BR"])).toBe("es-MX");
   });
 
-  it("an RTL pick shows English, not the device language", () => {
-    expect(resolveUiLocale("he", ["pt-BR"])).toBe("en");
-    expect(resolveUiLocale("ur", ["de-DE"])).toBe("en");
+  it("an RTL pick shows its own catalog, not the device language", () => {
+    expect(resolveUiLocale("he", ["pt-BR"])).toBe("he");
+    expect(resolveUiLocale("ur", ["de-DE"])).toBe("ur");
+  });
+
+  it("an RTL device language with no pick shows its catalog", () => {
+    expect(resolveUiLocale(null, ["ar-SA", "en-US"])).toBe("ar");
+    expect(resolveUiLocale(null, ["fa-IR"])).toBe("fa");
   });
 
   it("without a pick, the first device language that has a catalog", () => {
     expect(resolveUiLocale(null, ["pt-BR", "en-US"])).toBe("pt-BR");
     expect(resolveUiLocale(null, ["is-IS", "es-US"])).toBe("es-MX");
     expect(resolveUiLocale(null, ["zh-Hant-TW"])).toBe("zh-Hant");
-    expect(resolveUiLocale(undefined, ["ar-EG", "pt-BR"])).toBe("en");
+    expect(resolveUiLocale(undefined, ["ar-EG", "pt-BR"])).toBe("ar");
   });
 
   it("falls back to English", () => {
@@ -190,9 +199,9 @@ describe("picking a language", () => {
     expect(heard).toHaveBeenCalled();
   });
 
-  it("an RTL pick keeps the English UI but still sets the voice", async () => {
+  it("an RTL pick switches the UI to its catalog and sets the voice", async () => {
     await chooseAppLanguage("ar");
-    expect(getUiLocale()).toBe("en");
+    expect(getUiLocale()).toBe("ar");
     expect(getSpokenLanguage()).toBe("ar");
   });
 

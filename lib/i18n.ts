@@ -47,6 +47,10 @@ export function fallbackFormat(message: string, params: TParams = {}): string {
     if (comma < 0) {
       const name = body.trim();
       out += name in params ? String(params[name]) : `{${name}}`;
+    } else if (!/^\s*(plural|selectordinal|select)\s*(,|$)/.test(body.slice(comma + 1))) {
+      // {count, number} and other formatted arguments: the plain value.
+      const name = body.slice(0, comma).trim();
+      out += name in params ? String(params[name]) : `{${name}}`;
     } else {
       const name = body.slice(0, comma).trim();
       const value = Number(params[name]);
