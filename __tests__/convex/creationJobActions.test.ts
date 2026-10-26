@@ -542,3 +542,264 @@ describe("the guard (OLD-130)", () => {
     expect(fail.patch).not.toHaveProperty("errorDetail");
   });
 });
+
+describe("guard log level", () => {
+  const waterPlan = () =>
+    (jest.requireMock("../../convex/actions") as any).planRemindersFromRawParse()[0];
+  let errorSpy: jest.SpyInstance;
+  let logSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    mockPlanTake.mockReset();
+    errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    // An earlier suite may already have spied these; start from no calls.
+    errorSpy.mockClear();
+    logSpy.mockClear();
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  const guardLines = (spy: jest.SpyInstance) =>
+    spy.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("guard rejected"));
+
+  it("a no_time take is held, so it logs at console.log, not console.error", async () => {
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "en",
+      plans: [{ ...waterPlan(), frequency: "once", timeSpoken: false }],
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(guardLines(errorSpy)).toEqual([]);
+    expect(guardLines(logSpy)).toEqual([expect.stringContaining("no_time")]);
+  });
+
+  it("a past_time take logs at console.log too", async () => {
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "en",
+      plans: [
+        { ...waterPlan(), frequency: "once", time: "10:00", onceAt: NOW - 101 * 60_000, timeSpoken: true },
+      ],
+    });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(guardLines(errorSpy)).toEqual([]);
+    expect(guardLines(logSpy)).toEqual([expect.stringContaining("past_time")]);
+  });
+
+  it("a real rejection (not_understood) stays at console.error", async () => {
+    mockPlanTake.mockReturnValue({ understood: false, language: "en", plans: [] });
+    const ctx = makeCtx(makeJob({ clientFeatures: ["guard_v1"] }));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(guardLines(errorSpy)).toEqual([expect.stringContaining("not_understood")]);
+    expect(guardLines(logSpy)).toEqual([]);
+  });
+});
+
+describe("the locale retry", () => {
+  const waterPlan = () =>
+    (jest.requireMock("../../convex/actions") as any).planRemindersFromRawParse()[0];
+  const ITALIAN_MISS = { understood: false, language: "it", plans: [] };
+  const SPANISH_HIT = () => ({
+    understood: true,
+    language: "es",
+    plans: [{ ...waterPlan(), title: "Pastilla", lang: "es" }],
+  });
+  const newSpanishPhone = (over: Record<string, unknown> = {}) =>
+    makeJob({ clientFeatures: ["guard_v1"], deviceLocale: "es-US", ...over });
+  const isSwap = (a: any) =>
+    a.patch !== undefined && a.patch.transcript !== undefined && a.patch.status === undefined;
+  const transcriptPatchOf = (ctx: any) =>
+    ctx.runMutation.mock.calls.find(([, a]: [unknown, any]) => isSwap(a))?.[1];
+  const sttLanguages = () => mockTranscriptionCreate.mock.calls.map(([req]) => req.language);
+
+  beforeEach(() => {
+    mockPlanTake.mockReset();
+    mockTranscriptionCreate
+      .mockReset()
+      .mockResolvedValueOnce({ text: "Dolce de tomatopasilla." })
+      .mockResolvedValueOnce({ text: "Dulce, de tomar tu pastilla" });
+  });
+
+  it("re-transcribes once in the locale language and commits the retry's take", async () => {
+    mockPlanTake.mockReturnValueOnce(ITALIAN_MISS).mockReturnValueOnce(SPANISH_HIT());
+    const ctx = makeCtx(newSpanishPhone());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    // First attempt hintless, the retry hinted with the locale's language.
+    expect(sttLanguages()).toEqual([undefined, "es"]);
+    // The swap is CAS'd on "transcribed" at the same generation.
+    expect(transcriptPatchOf(ctx)).toMatchObject({
+      generation: 1,
+      expectStatus: ["transcribed"],
+      patch: { transcript: "Dulce, de tomar tu pastilla" },
+    });
+    expect(failOf(ctx)).toBeUndefined();
+    const commit = commitOf(ctx);
+    expect(commit.plans[0]).toMatchObject({ title: "Pastilla", lang: "es" });
+    expect(commit.preCommitPerf).toMatchObject({
+      sttLocaleRetry: true,
+      sttLocaleRetryLang: "es",
+      sttLocaleRetryUsed: true,
+      sttLocaleRetryMs: 0,
+      sttSource: "cloud",
+    });
+  });
+
+  it("keeps the first failure when the retry does not help either", async () => {
+    mockPlanTake
+      .mockReturnValueOnce(ITALIAN_MISS)
+      .mockReturnValueOnce({ understood: false, language: "es", plans: [] });
+    mockCompletionsCreate
+      .mockReset()
+      .mockResolvedValueOnce({ choices: [{ message: { content: "FIRST" } }], usage: PARSE_USAGE })
+      .mockResolvedValueOnce({ choices: [{ message: { content: "RETRY" } }], usage: PARSE_USAGE });
+    const ctx = makeCtx(newSpanishPhone());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(mockTranscriptionCreate).toHaveBeenCalledTimes(2);
+    expect(transcriptPatchOf(ctx)).toBeUndefined();
+    expect(commitOf(ctx)).toBeUndefined();
+    const fail = failOf(ctx);
+    expect(fail.patch).toMatchObject({ errorCode: "unparseable", errorDetail: "not_understood" });
+    expect(fail.patch.perf).toMatchObject({
+      sttLocaleRetry: true,
+      sttLocaleRetryLang: "es",
+      sttLocaleRetryUsed: false,
+    });
+    // The failed-take record describes the first attempt.
+    expect(fail.diagnostics).toEqual({ parseRaw: "FIRST" });
+  });
+
+  it("keeps the first failure when the retry's transcription fails", async () => {
+    mockPlanTake.mockReturnValueOnce(ITALIAN_MISS);
+    mockTranscriptionCreate
+      .mockReset()
+      .mockResolvedValueOnce({ text: "Dolce de tomatopasilla." })
+      .mockRejectedValue(new Error("boom"));
+    const ctx = makeCtx(newSpanishPhone());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(mockPlanTake).toHaveBeenCalledTimes(1);
+    expect(failOf(ctx).patch).toMatchObject({
+      errorCode: "unparseable",
+      errorDetail: "not_understood",
+    });
+    expect(failOf(ctx).patch.perf.sttLocaleRetryUsed).toBe(false);
+  });
+
+  it("stops without committing when a retry or cancel wins the transcript swap", async () => {
+    mockPlanTake.mockReturnValueOnce(ITALIAN_MISS).mockReturnValueOnce(SPANISH_HIT());
+    const ctx = makeCtx(newSpanishPhone());
+    const base = ctx.runMutation.getMockImplementation()!;
+    ctx.runMutation.mockImplementation(async (ref: unknown, a: any) =>
+      isSwap(a) ? { result: "stale" } : base(ref, a)
+    );
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(transcriptPatchOf(ctx)).toBeDefined();
+    expect(commitOf(ctx)).toBeUndefined();
+    expect(failOf(ctx)).toBeUndefined();
+  });
+
+  it("a retry that only lacks a time is used: the card asks when", async () => {
+    mockPlanTake.mockReturnValueOnce(ITALIAN_MISS).mockReturnValueOnce({
+      understood: true,
+      language: "es",
+      plans: [{ ...waterPlan(), lang: "es", frequency: "once", timeSpoken: false }],
+    });
+    const ctx = makeCtx(newSpanishPhone());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(transcriptPatchOf(ctx)).toBeDefined();
+    expect(failOf(ctx).patch).toMatchObject({ errorDetail: "no_time" });
+    expect(failOf(ctx).patch.pendingPlans).toHaveLength(1);
+    expect(failOf(ctx).patch.perf.sttLocaleRetryUsed).toBe(true);
+  });
+
+  it("an unvoiceable detected language also earns the retry", async () => {
+    mockPlanTake
+      .mockReturnValueOnce({ understood: true, language: "ca", plans: [{ ...waterPlan(), lang: "ca" }] })
+      .mockReturnValueOnce(SPANISH_HIT());
+    const ctx = makeCtx(newSpanishPhone());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(sttLanguages()).toEqual([undefined, "es"]);
+    expect(commitOf(ctx)).toBeDefined();
+  });
+
+  it.each([
+    ["the job had a learned languageHint", { languageHint: "en" }],
+    ["the device has no locale", { deviceLocale: undefined }],
+    ["the locale's language is the one detected", { deviceLocale: "it-IT" }],
+    ["the locale's language cannot be voiced", { deviceLocale: "zh-CN" }],
+  ])("no retry when %s", async (_label, over) => {
+    mockPlanTake.mockReturnValue(ITALIAN_MISS);
+    const ctx = makeCtx(newSpanishPhone(over));
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+
+    expect(mockTranscriptionCreate).toHaveBeenCalledTimes(1);
+    expect(mockPlanTake).toHaveBeenCalledTimes(1);
+    expect(failOf(ctx).patch.errorDetail).toBe("not_understood");
+    expect(failOf(ctx).patch.perf).not.toHaveProperty("sttLocaleRetry");
+  });
+
+  it("no retry when the parse named no language", async () => {
+    mockPlanTake.mockReturnValue({ understood: false, language: undefined, plans: [] });
+    const ctx = makeCtx(newSpanishPhone());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+    expect(mockTranscriptionCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("no retry for a take held for a time", async () => {
+    mockPlanTake.mockReturnValue({
+      understood: true,
+      language: "en",
+      plans: [{ ...waterPlan(), frequency: "once", timeSpoken: false }],
+    });
+    const ctx = makeCtx(newSpanishPhone());
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+    expect(mockTranscriptionCreate).toHaveBeenCalledTimes(1);
+    expect(failOf(ctx).patch.errorDetail).toBe("no_time");
+  });
+
+  it("no retry for a device take (there is no recording)", async () => {
+    mockPlanTake.mockReturnValue(ITALIAN_MISS);
+    const ctx = makeCtx(
+      newSpanishPhone({ sttSource: "device", audioStorageId: undefined, transcript: "dolce" })
+    );
+    await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+    expect(mockTranscriptionCreate).not.toHaveBeenCalled();
+    expect(mockPlanTake).toHaveBeenCalledTimes(1);
+  });
+
+  it("without guard_v1, a gate rejection with a foreign plan language retries too", async () => {
+    const { validateCreationPlans } = jest.requireMock("../../convex/creationValidate");
+    (validateCreationPlans as jest.Mock).mockReturnValueOnce({
+      ok: false,
+      index: 0,
+      field: "time",
+      reason: "bad",
+    });
+    const actions = jest.requireMock("../../convex/actions") as any;
+    const legacy = jest
+      .spyOn(actions, "planRemindersFromRawParse")
+      .mockReturnValueOnce([{ ...waterPlan(), lang: "it" }]);
+    try {
+      const ctx = makeCtx(makeJob({ deviceLocale: "es-US" }));
+      await handlerOf(run)(ctx, { jobId: "job_1", generation: 1 });
+      expect(sttLanguages()).toEqual([undefined, "es"]);
+      expect(commitOf(ctx)).toBeDefined();
+      expect(commitOf(ctx).preCommitPerf.sttLocaleRetryUsed).toBe(true);
+    } finally {
+      legacy.mockRestore();
+    }
+  });
+});

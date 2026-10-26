@@ -105,6 +105,17 @@ export const creationPerfValidator = v.object({
   ),
   deviceSttLocale: v.optional(v.string()),
 
+  // ── The locale retry: a cloud take with no languageHint that came back not
+  //    understood in a language other than the phone's locale language is
+  //    re-transcribed once with that language as the hint. `sttLocaleRetry`
+  //    says it ran, `Lang` which hint, `Used` whether its take replaced the
+  //    first, `Ms` its STT + parse wall time. The STT/parse fields above keep
+  //    describing the first attempt.
+  sttLocaleRetry: v.optional(v.boolean()),
+  sttLocaleRetryLang: v.optional(v.string()),
+  sttLocaleRetryUsed: v.optional(v.boolean()),
+  sttLocaleRetryMs: v.optional(v.number()),
+
   // ── Scheduling, query and checkpoint timings (spec §4).
   schedulerDelayMs: v.optional(v.number()),
   jobAgeMs: v.optional(v.number()),

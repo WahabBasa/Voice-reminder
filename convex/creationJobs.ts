@@ -160,6 +160,10 @@ const workerJobValidator = v.object({
   clientFeatures: v.optional(v.array(v.string())),
   // The phone's spoken-language hint for the cloud transcriber (OLD-140).
   languageHint: v.optional(v.string()),
+  // The install's first preferred locale ("es-US"), from its devices row
+  // (devices.hello). Only used for the one locale-hinted re-transcription of
+  // a cloud take with no languageHint that came back not understood.
+  deviceLocale: v.optional(v.string()),
   localDate: v.string(),
   localTime: v.string(),
   timezone: v.string(),
@@ -539,7 +543,12 @@ export const getJob = internalQuery({
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
     if (!job) return null;
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", job.deviceId))
+      .first();
     return {
+      deviceLocale: device?.locale,
       deviceId: job.deviceId,
       creationId: job.creationId,
       status: job.status,

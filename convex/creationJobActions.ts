@@ -35,7 +35,9 @@ import {
   guardTake,
   validateCreationPlans,
   type GuardDetail,
+  type GuardVerdict,
 } from "./creationValidate";
+import { isSupportedLineLanguage, normalizeLanguageCode } from "./languages";
 import {
   isNeedsTimeDetail,
   planNeedsTime,
@@ -76,6 +78,13 @@ type WorkerPerf = {
   deviceSttMs?: number;
   deviceSttEngine?: "dictation" | "transcriber";
   deviceSttLocale?: string;
+
+  // The locale retry (see localeRetryLanguage). The STT/parse fields above
+  // keep describing the first attempt; these describe the retry.
+  sttLocaleRetry?: boolean;
+  sttLocaleRetryLang?: string;
+  sttLocaleRetryUsed?: boolean;
+  sttLocaleRetryMs?: number;
 
   // Scheduling, query and checkpoint timings (spec §4).
   schedulerDelayMs?: number;
@@ -306,7 +315,9 @@ async function transcribeRecording(
   traceId: string,
   // The phone's spoken-language hint (OLD-140); stt.ts gives it to the
   // primary model only.
-  languageHint?: string
+  languageHint?: string,
+  // The perf line's `path`: "job", or "job_locale_retry" for the retry.
+  path = "job"
 ): Promise<StageResult<string>> {
   if (!audioStorageId) return { ok: false, code: "storage_missing" };
 
@@ -341,13 +352,13 @@ async function transcribeRecording(
     );
     Object.assign(perf, sttPerf);
     perf.whisperMs = sttPerf.sttMs;
-    logSttPerf(traceId, "job", sttPerf);
+    logSttPerf(traceId, path, sttPerf);
     return { ok: true, value: text };
   } catch (e) {
     if (e instanceof SttError) {
       Object.assign(perf, e.perf);
       perf.whisperMs = e.perf.sttMs;
-      logSttPerf(traceId, "job", e.perf);
+      logSttPerf(traceId, path, e.perf);
     }
     console.error("[VR] creation job: transcription failed");
     return { ok: false, code: "stt_failed" };
@@ -369,7 +380,8 @@ async function parseTake(
   perf: WorkerPerf,
   traceId: string,
   guard: boolean,
-  diag: ParseDiagnostics
+  diag: ParseDiagnostics,
+  path = "job"
 ): Promise<StageResult<ParsedTake>> {
   const tParse = Date.now();
   try {
@@ -420,13 +432,94 @@ async function parseTake(
     perf.parseMs = Date.now() - tParse;
     const usage = extractParseUsage((completion as { usage?: unknown }).usage);
     Object.assign(perf, usage);
-    logParsePerf(traceId, "job", perf.parseMs, usage);
+    logParsePerf(traceId, path, perf.parseMs, usage);
     return { ok: true, value: take };
   } catch (e) {
     perf.parseMs = Date.now() - tParse;
     console.error("[VR] creation job: parse failed:", e);
     return { ok: false, code: "parse_failed" };
   }
+}
+
+// ─── Judging a take ─────────────────────────────────────────────────────────
+
+type GuardRejection = Extract<GuardVerdict, { ok: false }>;
+
+/** Where one parsed take is headed, decided before anything is written. */
+export type TakeOutcome =
+  | { kind: "commit"; plans: PlannedReminder[] }
+  // A guard rejection; `no_time`/`past_time` among them are held, not failed.
+  | { kind: "guard"; verdict: GuardRejection }
+  // The strict gate turned a plan away.
+  | { kind: "gate"; index: number; field: string; reason: string };
+
+/**
+ * Steps 5b and 6 as one decision: the guard (for a guard_v1 take), then the
+ * strict gate over the capped plans. Exported for the unit tests.
+ */
+export function judgeTake(
+  take: ParsedTake,
+  guard: boolean,
+  timezone: string,
+  now: number
+): TakeOutcome {
+  if (guard) {
+    const verdict = guardTake({ ...take, now });
+    if (!verdict.ok) return { kind: "guard", verdict };
+  }
+  const plans = take.plans.map(capEveryNDays);
+  const verdict = validateCreationPlans(plans, { timezone, now });
+  if (!verdict.ok) {
+    return { kind: "gate", index: verdict.index, field: verdict.field, reason: verdict.reason };
+  }
+  return { kind: "commit", plans };
+}
+
+/** An outcome the user gets something from: a reminder, or the "when?" card. */
+function isUsable(outcome: TakeOutcome): boolean {
+  return (
+    outcome.kind === "commit" ||
+    (outcome.kind === "guard" && isNeedsTimeDetail(outcome.verdict.detail))
+  );
+}
+
+/**
+ * The language to re-transcribe a cloud take in, or undefined for no retry.
+ *
+ * The case this exists for: a brand-new install has no learned spoken language
+ * yet, so its take goes to the transcriber with no hint, the transcriber
+ * guesses wrong ("Dulce, de tomar tu pastilla" heard as Italian), and the
+ * parse cannot make a reminder of the result. When that happens, and the
+ * language the parse says it heard is not the phone's locale language, one
+ * more transcription with the locale language as the hint is worth its few
+ * seconds.
+ *
+ * Never the first attempt's hint — plenty of es-US phones belong to English
+ * speakers. A retry only when:
+ *   - the job had no languageHint (a learned language is better evidence),
+ *   - the first take is unusable: not understood, an unvoiceable language, or
+ *     turned away by the strict gate (never `no_time`/`past_time`, which the
+ *     card handles),
+ *   - the parse named a language, and it differs from the locale's,
+ *   - and the locale's language is one Remi can speak a line in.
+ *
+ * Exported for the unit tests.
+ */
+export function localeRetryLanguage(
+  take: ParsedTake,
+  outcome: TakeOutcome,
+  job: { languageHint?: string; deviceLocale?: string }
+): string | undefined {
+  if (job.languageHint) return undefined;
+  if (isUsable(outcome)) return undefined;
+  const locale = normalizeLanguageCode(job.deviceLocale);
+  if (locale === undefined || !isSupportedLineLanguage(locale)) return undefined;
+  const planLang = take.plans
+    .map((plan) => normalizeLanguageCode((plan as { lang?: unknown }).lang))
+    .find((code) => code !== undefined);
+  const detected = normalizeLanguageCode(take.language) ?? planLang;
+  if (detected === undefined || detected === locale) return undefined;
+  return locale;
 }
 
 // ─── The worker ─────────────────────────────────────────────────────────────
@@ -533,7 +626,7 @@ export const run = internalAction({
 
     // 5. Transcript → plans.
     const guard = job.clientFeatures?.includes(GUARD_V1) === true;
-    const diag: ParseDiagnostics = {};
+    let diag: ParseDiagnostics = {};
     const parsed = await parseTake(job, transcript, perf, job.creationId, guard, diag);
     if (!parsed.ok) {
       await failJob(ctx, args, parsed.code, perf, undefined, diag);
@@ -541,52 +634,105 @@ export const run = internalAction({
       return null;
     }
 
-    // 5b. The guard (OLD-130), for a client that opted in: not a reminder, a
-    //     language Remi cannot speak, a one-off with no time said, or a
-    //     one-off whose time has already passed today. Each fails as the
-    //     `unparseable` every client already handles, plus the reason a new
-    //     client can show. Content-free log: no transcript.
-    if (guard) {
-      const verdict = guardTake({ ...parsed.value, now: Date.now() });
-      if (!verdict.ok) {
-        console.error(
-          `[VR] creation job: guard rejected — ${verdict.detail}: ${verdict.reason}`
+    // 5b-6. The guard (OLD-130), for a client that opted in, then the strict
+    //    gate. All N are checked before anything is written, and one bad item
+    //    fails the whole take rather than importing half of it. The one repair
+    //    made on the way in is the every-N-days cap — see capEveryNDays; the
+    //    capped plans are what is validated AND committed.
+    let take = parsed.value;
+    let outcome = judgeTake(take, guard, job.timezone, Date.now());
+
+    // 5c. The locale retry: one re-transcription with the phone's locale
+    //     language as the hint, for a hintless cloud take whose language was
+    //     misheard (see localeRetryLanguage). Its take is used only if the
+    //     user gets something from it; otherwise the first one stands, so the
+    //     failure, its row and the founder's email all describe the first
+    //     attempt exactly as before.
+    const retryLang =
+      job.sttSource !== "device" ? localeRetryLanguage(take, outcome, job) : undefined;
+    if (retryLang !== undefined) {
+      const tRetry = Date.now();
+      perf.sttLocaleRetry = true;
+      perf.sttLocaleRetryLang = retryLang;
+      perf.sttLocaleRetryUsed = false;
+      // Its own perf object: the first attempt's timings stay as they were.
+      const retryPerf: WorkerPerf = {};
+      const retryStt = await transcribeRecording(
+        ctx,
+        job.audioStorageId,
+        retryPerf,
+        job.creationId,
+        retryLang,
+        "job_locale_retry"
+      );
+      if (retryStt.ok) {
+        const retryDiag: ParseDiagnostics = {};
+        const retryParsed = await parseTake(
+          job,
+          retryStt.value,
+          retryPerf,
+          job.creationId,
+          guard,
+          retryDiag,
+          "job_locale_retry"
         );
-        // A take that only lacks a usable time keeps what it heard, so the
-        // card can ask "When should I remind you?" instead of failing it.
-        const held = isNeedsTimeDetail(verdict.detail)
-          ? holdPlansForTime(parsed.value.plans, Date.now())
-          : undefined;
-        await failJob(ctx, args, "unparseable", perf, {
-          errorDetail: verdict.detail,
-          ...(verdict.detectedLanguage !== undefined
-            ? { detectedLanguage: verdict.detectedLanguage }
-            : {}),
-          ...(verdict.pastTime !== undefined ? { pastTime: verdict.pastTime } : {}),
-          ...(held ?? {}),
-        }, diag);
-        logCreationJobPerf(job.creationId, args.generation, "failed", perf);
-        return null;
+        if (retryParsed.ok) {
+          const retryOutcome = judgeTake(retryParsed.value, guard, job.timezone, Date.now());
+          if (isUsable(retryOutcome)) {
+            perf.sttLocaleRetryUsed = true;
+            perf.sttLocaleRetryMs = Date.now() - tRetry;
+            // The row's transcript becomes the one the reminder is made from.
+            // Same CAS as every other write: a retry or cancel that landed
+            // while this was transcribing wins, and this run stops here.
+            const swapped = await ctx.runMutation(internal.creationJobs.casPatch, {
+              jobId: args.jobId,
+              generation: args.generation,
+              expectStatus: ["transcribed"],
+              patch: { transcript: retryStt.value },
+            });
+            if (swapped.result !== "applied") return null;
+            take = retryParsed.value;
+            outcome = retryOutcome;
+            diag = retryDiag;
+          }
+        }
       }
+      perf.sttLocaleRetryMs = Date.now() - tRetry;
     }
 
-    // 6. The strict gate. All N are checked before anything is written, and one
-    //    bad item fails the whole take rather than importing half of it. The
-    //    one repair made on the way in is the every-N-days cap — see
-    //    capEveryNDays; the capped plans are what is validated AND committed.
-    const plans = parsed.value.plans.map(capEveryNDays);
-    const verdict = validateCreationPlans(plans, {
-      timezone: job.timezone,
-      now: Date.now(),
-    });
-    if (!verdict.ok) {
+    // Each rejection fails as the `unparseable` every client already handles,
+    // plus (for a guard take) the reason a new client can show. Content-free
+    // logs: no transcript.
+    if (outcome.kind === "guard") {
+      const verdict = outcome.verdict;
+      // A take that only lacks a usable time keeps what it heard, so the
+      // card can ask "When should I remind you?" instead of failing it. That
+      // is not a failure, so it is not logged as one.
+      const needsTime = isNeedsTimeDetail(verdict.detail);
+      const line = `[VR] creation job: guard rejected — ${verdict.detail}: ${verdict.reason}`;
+      if (needsTime) console.log(line);
+      else console.error(line);
+      const held = needsTime ? holdPlansForTime(take.plans, Date.now()) : undefined;
+      await failJob(ctx, args, "unparseable", perf, {
+        errorDetail: verdict.detail,
+        ...(verdict.detectedLanguage !== undefined
+          ? { detectedLanguage: verdict.detectedLanguage }
+          : {}),
+        ...(verdict.pastTime !== undefined ? { pastTime: verdict.pastTime } : {}),
+        ...(held ?? {}),
+      }, diag);
+      logCreationJobPerf(job.creationId, args.generation, "failed", perf);
+      return null;
+    }
+    if (outcome.kind === "gate") {
       console.error(
-        `[VR] creation job: plan ${verdict.index} rejected — ${verdict.field}: ${verdict.reason}`
+        `[VR] creation job: plan ${outcome.index} rejected — ${outcome.field}: ${outcome.reason}`
       );
       await failJob(ctx, args, "unparseable", perf, undefined, diag);
       logCreationJobPerf(job.creationId, args.generation, "failed", perf);
       return null;
     }
+    const plans = outcome.plans;
 
     // 7. All of it, or none of it.
     const tCommit = Date.now();
