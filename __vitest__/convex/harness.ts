@@ -30,6 +30,7 @@ const modules: Record<string, () => Promise<unknown>> = {
   "../../convex/_generated/api.js": () => import("../../convex/_generated/api"),
   "../../convex/_generated/server.js": () => import("../../convex/_generated/server"),
   "../../convex/actions.ts": () => import("../../convex/actions"),
+  "../../convex/appUpdate.ts": () => import("../../convex/appUpdate"),
   "../../convex/creationJobActions.ts": () => import("../../convex/creationJobActions"),
   "../../convex/creationJobs.ts": () => import("../../convex/creationJobs"),
   "../../convex/creationValidate.ts": () => import("../../convex/creationValidate"),

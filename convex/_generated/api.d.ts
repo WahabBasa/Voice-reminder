@@ -9,6 +9,7 @@
  */
 
 import type * as actions from "../actions.js";
+import type * as appUpdate from "../appUpdate.js";
 import type * as creationJobActions from "../creationJobActions.js";
 import type * as creationJobs from "../creationJobs.js";
 import type * as creationValidate from "../creationValidate.js";
@@ -41,6 +42,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   actions: typeof actions;
+  appUpdate: typeof appUpdate;
   creationJobActions: typeof creationJobActions;
   creationJobs: typeof creationJobs;
   creationValidate: typeof creationValidate;

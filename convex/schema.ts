@@ -551,4 +551,18 @@ export default defineSchema({
   })
     .index("by_creation", ["creationId"])
     .index("by_scheduled", ["scheduledAt"]),
+
+  /**
+   * The in-app "update available" prompt's config (convex/appUpdate.ts). One
+   * row, created on first write. `storeVersion` is learned hourly from Apple's
+   * lookup endpoint; `minSupportedVersion` (off when absent) makes the prompt
+   * blocking below it; `testDeviceTags` are installs that always see it
+   * ("1a2b3c4d", or "1a2b3c4d:required" for the blocking form).
+   */
+  appConfig: defineTable({
+    storeVersion: v.optional(v.string()),
+    storeCheckedAt: v.optional(v.number()),
+    minSupportedVersion: v.optional(v.string()),
+    testDeviceTags: v.array(v.string()),
+  }),
 });

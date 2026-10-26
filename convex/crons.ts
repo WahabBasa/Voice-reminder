@@ -67,4 +67,14 @@ crons.cron(
   {}
 );
 
+// The App Store's current version, for the in-app update prompt
+// (convex/appUpdate.ts). Hourly: a new release reaches the prompt within an
+// hour of Apple publishing it; a failed lookup keeps the last known value.
+crons.interval(
+  "refresh app store version",
+  { hours: 1 },
+  internal.appUpdate.refreshStoreVersion,
+  {}
+);
+
 export default crons;
