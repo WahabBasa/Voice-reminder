@@ -7,4 +7,4 @@ jobs:
     params:
       branch: development
       platform: ios
-      message: "claude/rtl-ui @ 4fc6c95 (1.0.3: RTL ar/he/fa/ur + native wheel, trial offer, locale log)"
+      message: "claude/rtl-ui @ 9363282 (1.0.3: header fit, phone-language default, text size cap, tall scripts, 35-language length pass, pseudo-loc)"
