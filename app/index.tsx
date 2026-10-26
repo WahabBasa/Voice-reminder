@@ -21,9 +21,7 @@ import { useRouter } from "expo-router";
 import { useAction, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { convex } from "../lib/convexClient";
-import { colors, scaleFontSize, shadows } from "../lib/theme";
-import { Plus } from "lucide-react-native";
-import { FONT_DISPLAY } from "../lib/fonts";
+import { colors, scaleFontSize } from "../lib/theme";
 import {
   copyAsync,
   deleteAsync,
@@ -61,6 +59,7 @@ import {
 import { noticeIfNotificationsOff } from "../lib/notificationsOffNotice";
 import SwipePager from "../components/SwipePager";
 import AppIcon from "../components/AppIcon";
+import HomeHeader from "../components/HomeHeader";
 import ReminderListItem, { chipColorForId } from "../components/ReminderListItem";
 import CompletedSection from "../components/CompletedSection";
 import DaysPage from "../components/days/DaysPage";
@@ -2043,42 +2042,12 @@ export default function HomeScreen() {
       >
         {/* ---- Page 0: Reminders ---- */}
         <View style={styles.page}>
-          <View style={styles.header}>
-            <View style={styles.headerTop}>
-              <View style={styles.headerTitleWrap}>
-                <Text style={styles.headerTitle}>{t("today.header.title")}</Text>
-                <Text style={styles.headerDate}>{dateLabel}</Text>
-              </View>
-              <View style={styles.headerActions}>
-                {!isPro && (
-                  <TouchableOpacity
-                    style={styles.proPill}
-                    activeOpacity={0.85}
-                    onPress={openPaywall}
-                  >
-                    <AppIcon name="crown" size={14} color="white" style={styles.proIcon} />
-                    <Text
-                      style={styles.proPillText}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.75}
-                    >
-                      {t("today.header.getPro")}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity
-                  style={styles.addButton}
-                  activeOpacity={0.85}
-                  onPress={() => void handleOpenComposer()}
-                  accessibilityRole="button"
-                  accessibilityLabel={t("today.header.addTyped.a11y")}
-                >
-                  <Plus size={20} color={colors.textHeading} strokeWidth={2} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
+          <HomeHeader
+            dateLabel={dateLabel}
+            isPro={isPro}
+            onGetPro={openPaywall}
+            onAdd={() => void handleOpenComposer()}
+          />
 
           <FlatList
             ref={remindersListRef}
@@ -2239,71 +2208,6 @@ const styles = StyleSheet.create({
   page: {
     flex: 1,
     backgroundColor: colors.background,
-  },
-  header: {
-    paddingTop: Platform.OS === "ios" ? 60 : 26,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-  },
-  headerTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  headerTitleWrap: {
-    flex: 1,
-  },
-  headerTitle: {
-    fontFamily: FONT_DISPLAY,
-    fontSize: scaleFontSize(32),
-    lineHeight: scaleFontSize(38),
-    letterSpacing: -0.3,
-    color: colors.textHeading,
-  },
-  headerDate: {
-    marginTop: 4,
-    fontSize: scaleFontSize(14),
-    lineHeight: scaleFontSize(20),
-    color: colors.textSecondary,
-  },
-  headerActions: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  proPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.accent,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-    marginRight: 10,
-    // Longer translations ("Quero o Pro") shrink the label rather than push the header.
-    maxWidth: 150,
-    flexShrink: 1,
-  },
-  proPillText: {
-    flexShrink: 1,
-    color: "white",
-    fontWeight: "600",
-    fontSize: scaleFontSize(14),
-    lineHeight: scaleFontSize(19),
-  },
-  proIcon: {
-    marginRight: 6,
-  },
-  // Tiimo-style header +: quiet white circle, top-right. The composer's only door.
-  addButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.card,
-    alignItems: "center",
-    justifyContent: "center",
-    ...shadows.card,
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
   },
   content: {
     flex: 1,
