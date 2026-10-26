@@ -16,6 +16,7 @@ import { useSyncExternalStore } from "react";
 import i18next from "i18next";
 import ICU from "i18next-icu";
 import { SOURCE_LOCALE, UI_CATALOGS } from "../locales";
+import { vrLog } from "./vrLog";
 
 export type TParams = Record<string, string | number>;
 
@@ -126,8 +127,19 @@ export function intlLocales(): string[] {
 export function setUiLocale(tag: string): void {
   const next = UI_CATALOGS[tag] ? tag : SOURCE_LOCALE;
   if (next === uiLocale) return;
+  const from = uiLocale;
   uiLocale = next;
   void instance.changeLanguage(next);
+  // Content-free: tags, i18next's own view, and one catalog string, so a
+  // device log shows whether a pick really switched what `t()` returns.
+  vrLog("i18n", "ui_locale_changed", {
+    from,
+    requested: tag,
+    to: next,
+    i18nLanguage: instance.language,
+    probe: instance.t("common.cancel") as unknown as string,
+    listeners: listeners.size,
+  });
   for (const listener of [...listeners]) listener();
 }
 
