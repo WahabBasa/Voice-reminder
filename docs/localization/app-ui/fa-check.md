@@ -51,3 +51,10 @@ Persian is not an iOS system language, so no Apple fa glossary exists. All terms
 - `paywall.closing.headline` still says «کمتر فراموش کنید.» (imperative) while the hero now says «فراموشی کمتر.». Both are natural; this is a style mismatch only.
 - Settings paths are written in Persian («تنظیمات > حساب Apple > اشتراک‌ها»), but the user's iOS will show them in English or another language. Persian readers map these easily. Revisit only if testers stumble.
 - No legal review in scope: there is no Iranian App Store, and the audience is the diaspora.
+
+## Length pass (2026-10-26)
+
+- errorBoundary.retry | دوباره امتحان کنید → تلاش دوباره | 18 > 16; noun-phrase retry button, the usual Iranian app label; sentences keep "دوباره امتحان کنید".
+- permission.allSet | همه‌چیز آماده است! → همه‌چیز آماده! | 17 > 16; drops the copula, natural for an exclamation.
+- pending.settingUp | در حال آماده‌سازی… → آماده‌سازی… | 17 > 16; the ellipsis already signals progress, "در حال" is redundant in a status line.
+- edit.confirm.updatingVoice | در حال به‌روزرسانی صدا… → به‌روزرسانی صدا… | 22 > 17; same pattern as settingUp.

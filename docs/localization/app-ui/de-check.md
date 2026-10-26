@@ -53,3 +53,25 @@ Natural du-register German. The main fixes were the systematic "sichern" → "sp
 
 - Tabs `tabs.reminders` (Erinnerungen, 12) and `tabs.settings` (Einstellungen, 13) are over the limit of about 10. These are the standard iOS terms and there is no shorter natural form; check the bottom bar on the device.
 - `paywall.legal.disclosure.priced` "pro {term}" works for 1-unit terms. A multi-unit term would read "pro 3 Monate" (it should be "alle 3 Monate"). This is structural, and only monthly and annual plans exist today.
+
+## Length pass (2026-10-26)
+
+- common.setting | Wird eingestellt … → Einstellen … | Apple de nominal progress form ("Laden …")
+- tabs.reminders | Erinnerungen → Liste | tab fits 11; matches the List icon; screen title stays "Erinnerungen"
+- tabs.settings | Einstellungen → Optionen | tab fits 11; screen title and iOS Settings app stay "Einstellungen"
+- recording.status.micFailed | Mikrofon konnte nicht gestartet werden. Tippe, um es erneut zu versuchen. → Mikrofon ließ sich nicht starten. Zum Wiederholen tippen. | style-sheet toast form "Zum Wiederholen tippen"
+- permission.title | Pünktlich benachrichtigt werden → Pünktlich erinnert werden | shorter verb, same promise
+- pending.settingUp | Wird eingerichtet … → Einrichten … | nominal progress form
+- pending.cancelling | Wird abgebrochen … → Abbruch … | nominal; "Abbrechen …" would read as the Cancel button
+- gate.unverified.status | Dein Abo kann nicht überprüft werden. Prüfe deine Internetverbindung und versuche es erneut. → Abo kann nicht überprüft werden. Prüfe deine Verbindung und versuche es erneut. | first sentence = toastTitle; "Verbindung" is clear
+- edit.confirm.updatingVoice | Stimme wird aktualisiert … → Aktualisieren … | replaces the Done button on the voice step, so "voice" is implied
+- times.addTime | + Uhrzeit hinzufügen → + Zeit hinzufügen | chip; "Zeit" is unambiguous next to the time chips
+- feedback.toast.saveFailed.title | Deine Nachricht konnte nicht gespeichert werden → Nachricht konnte nicht gespeichert werden | drop possessive
+- paywall.billed.monthly | Monatliche Abrechnung → Monatliche Zahlung | fits 20; "Wöchentliche Abrechnung" could not fit, so the set moved to Zahlung
+- paywall.billed.yearly | Jährliche Abrechnung → Jährliche Zahlung | consistency with monthly/weekly (was not over)
+- paywall.billed.weekly | Wöchentliche Abrechnung → Wöchentliche Zahlung | fits 20
+- paywall.billed.every | Abrechnung alle {term} → Zahlung alle {term} | ripple: same term as the other billed.* keys (no limit)
+- paywall.restore | Kauf wiederherstellen → Wiederherstellen | fits 20; matches paywall.legal.restore; settings row keeps "Käufe wiederherstellen"
+- paywall.error.alreadyOwned | …tippe auf „Kauf wiederherstellen“. → …tippe auf „Wiederherstellen“. | ripple: quotes the renamed paywall button
+- paywall.restoring | Wird wiederhergestellt … → Wiederherstellen … | nominal progress form
+- diagnostics.section.systemSettings | Systemeinstellungen öffnen → Einstellungen öffnen | iOS app is "Einstellungen"; "Systemeinstellungen" is the macOS name

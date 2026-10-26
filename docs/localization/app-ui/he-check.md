@@ -49,3 +49,7 @@ Clean, natural Apple-style Hebrew: verbal nouns on buttons, "יש ל…" for ins
 - `paywall.cta.trial` "ניסיון חינם של {length}" drops "Start" to stay in about 24 characters. It still reads as the action on a button.
 - The paywall disclosures match Apple's standard meaning. Israeli consumer law (immediate cancellation with a pro-rated refund) has not been reviewed by a lawyer.
 - `he-notes.md` still says the Info.plist strings use feminine "האפליקציה Remi"; that note is now outdated.
+
+## Length pass (2026-10-26)
+
+- times.picker.am | לפנה״צ → unchanged | 6 > 5 allowed, but there is no shorter standard Hebrew AM (CLDR abbreviated and narrow are both לפנה״צ; "בוקר" is wrong for 00:00-05:59). Needs a limit bump for he (pickerAmPm 4 → 5) rather than a rewrite.

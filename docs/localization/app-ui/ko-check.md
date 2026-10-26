@@ -25,3 +25,7 @@ Consistent 해요체 in the UI and 합니다체 in the legal text and permission
 ## Length and open notes
 
 - No string is over its inventory limit.
+
+## Length pass (2026-10-26)
+
+Strict limits test clean; no rewrites.

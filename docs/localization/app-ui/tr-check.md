@@ -60,3 +60,15 @@ Reviewed 2026-10-10 against `strings-en.json` and `strings-inventory.md`. Every 
 ## Verdict
 
 **SHIP**
+
+## Length pass (2026-10-26)
+
+- `edit.confirm.updatingVoice` | Ses güncelleniyor… → Ses yenileniyor… | 18→16
+- `feedback.status.queued` | Gönderilmeyi bekliyor → Gönderim bekliyor | status chip, 21→17
+- `paywall.hero.default.line1` | Daha az unutun. → Unutmayın. | siz form, flows into "Zamanında hatırlayın.", 15→10
+- `paywall.billed.monthly` | Aylık faturalandırılır → Aylık faturalanır | shorter standard verb, 22→17
+- `paywall.billed.yearly` | Yıllık faturalandırılır → Yıllık faturalanır | 23→18
+- `paywall.billed.weekly` | Haftalık faturalandırılır → Haftalık faturalanır | 25→20
+- `paywall.restore` | Satın Alınanları Geri Yükle → Alımları Geri Yükle | close to Apple's "Satın Alımları Geri Yükle", 27→19
+- NOT changed: `tabs.reminders` "Hatırlatıcılar" (14, allowed 11). This is the agreed product term (see above) and there is no shorter synonym. Check it on the device.
+- NOT changed: `paywall.table.col.free` "ÜCRETSİZ" (8, allowed 7). "BEDAVA" (6) is too slangy for the paywall, and "TEMEL" drops "free". Check it on the device.

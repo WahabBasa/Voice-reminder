@@ -39,3 +39,19 @@ Independent review of `fi.json` against `strings-en.json` and `strings-inventory
 - `time.dueNow` = "Nyt" drops "due"; kept, as in pt-BR/es-MX.
 - Settings path uses "[nimesi]", the form Apple fi support uses.
 - Length: all limited keys fit ("Valitse aika…" 13, "Huomenna aamulla" 16, "Hanki Pro" 9).
+
+## Length pass (2026-10-26)
+
+- tabs.reminders | Muistutukset → Lista | tab fits 11; matches the List icon; screen title unchanged
+- permission.enable | Laita päälle → Salli | Apple's permission verb; the subtitle already says "Salli ilmoitukset"
+- pending.recordAgain | Nauhoita uudelleen → Nauhoita taas | shorter adverb
+- edit.confirm.updatingVoice | Päivitetään ääntä… → Päivitetään… | replaces Done on the voice step; voice implied
+- paywall.hero.default.line1 | Unohda vähemmän. → Ei unohduksia. | fits 14; slightly stronger claim (no → less), tagline only
+- paywall.table.col.free | ILMAINEN → PERUS | column fits 7; "perusversio" is the usual name of a free tier
+- paywall.table.row.schedules | Valitut viikonpäivät, … → Viikonpäivät, … | drop "valitut"
+- paywall.table.row.interval | …valitsemiesi tuntien aikana → …valituilla tunneilla | shorter case form, same meaning
+- paywall.billed.monthly | Laskutetaan kuukausittain → Kuukausilaskutus | compound
+- paywall.billed.yearly | Laskutetaan vuosittain → Vuosilaskutus | compound
+- paywall.billed.weekly | Laskutetaan viikoittain → Viikkolaskutus | compound
+- paywall.cta.trial | Aloita {length} ilmainen kokeilu → {length} ilmainen kokeilu | noun-phrase CTA, same as caption.trial; genitive {length} still works
+- diagnostics.section.systemSettings | Avaa järjestelmäasetukset → Avaa Asetukset | iOS app name

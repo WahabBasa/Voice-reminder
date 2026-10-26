@@ -25,3 +25,7 @@ Reads as Taiwan Traditional Chinese: 網路, 帳號, 訂閱項目, 點一下, �
 ## Length and open notes
 
 - No string is over its inventory limit.
+
+## Length pass (2026-10-26)
+
+Strict limits test clean; no rewrites.

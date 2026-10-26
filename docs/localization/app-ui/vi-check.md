@@ -66,3 +66,13 @@ Natural Vietnamese with Apple's terms (Cài đặt, Tài khoản Apple, Thời g
 ## Length and open notes
 
 - No string is over its inventory limit.
+
+## Length pass (2026-10-26)
+
+- `gate.limit.toastTitle` | Bạn đã đạt giới hạn # lời nhắc đang hoạt động → Đã đạt tối đa # lời nhắc đang hoạt động | drop the pronoun, "tối đa" says "limit" in fewer letters (47 → 41)
+- `edit.confirm.updatingVoice` | Đang cập nhật giọng… → Đang đổi giọng… | "đổi" is the everyday verb for the voice being swapped (20 → 15)
+- `paywall.table.col.free` | MIỄN PHÍ → FREE | column header next to "PRO"; the loanword is widely read in Vietnamese apps, as the earlier note proposed (8 → 4)
+- `paywall.table.cell.unlimited` | Không giới hạn → Vô hạn | standard short form in plan tables (14 → 6)
+- `paywall.billed.monthly` | Thanh toán hằng tháng → Thanh toán mỗi tháng | one letter shorter, matches `paywall.billed.every` "Thanh toán mỗi {term}" (21 → 20)
+- `paywall.billed.weekly` / `paywall.billed.yearly` | hằng tuần / hằng năm → mỗi tuần / mỗi năm | ripple only, keeps the three billing lines parallel (not over)
+- `paywall.legal.privacy` | Chính sách quyền riêng tư → Chính sách bảo mật | the usual Vietnamese name for a privacy policy page (25 → 18)

@@ -24,3 +24,8 @@ Natural Thai with Apple's terms (การตั้งค่า, สมัคร
 ## Length and open notes
 
 - `tabs.reminders` เตือนความจำ is 11 code points against a ~10 limit, but 3 of them are stacked vowel or tone marks, so it renders about 8 columns wide. It is also Apple's own Thai name for Reminders. Kept; check it on the device.
+
+## Length pass (2026-10-26)
+
+- `times.picker.am` / `times.picker.pm` | ก่อนเที่ยง / หลังเที่ยง → AM / PM | the wheel column fits 4; no Thai abbreviation of ก่อนเที่ยง is in common use, and Thai users read AM/PM in Latin on clocks and apps (7 → 2)
+- `time.clock.am` / `time.clock.pm` | ก่อนเที่ยง / หลังเที่ยง → AM / PM | same, kept consistent with the picker; only a fallback, Intl formats Thai times first (7 → 2)

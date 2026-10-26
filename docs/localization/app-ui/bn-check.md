@@ -20,3 +20,7 @@ Validator: `[bn] PASS: 426 keys (en 426), 0 errors, 17 warnings` (all pre-existi
 ## Verdict
 
 **SHIP.** Confidence: medium. The grammar and register are solid. Apple's Bangla iOS terms couldn't be verified, so a native skim is still recommended.
+
+## Length pass (2026-10-26)
+
+Strict limits test clean; no rewrites.

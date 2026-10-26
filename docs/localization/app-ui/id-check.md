@@ -31,3 +31,10 @@ Natural Indonesian with Apple's terms (Pengaturan, Durasi Layar, Akun Apple, Ket
 ## Length and open notes
 
 - `today.header.getPro` was shortened to fit. Nothing else is over a limit.
+
+## Length pass (2026-10-26)
+
+- `permission.title` | Dapatkan peringatan tepat waktu → Diingatkan tepat waktu | passive "be reminded" is the natural short headline (31 → 22)
+- `gate.unverified.status` | Langganan Anda tidak dapat diverifikasi. Periksa koneksi internet Anda, lalu coba lagi. → Langganan tidak dapat diverifikasi. Periksa koneksi internet, lalu coba lagi. | drop the two redundant "Anda" (87 → 77)
+- `edit.confirm.updatingVoice` | Memperbarui suara… → Mengubah suara… | shorter verb, same meaning on the button (18 → 15)
+- `paywall.table.row.interval` | Ulangi setiap beberapa menit, dalam jam yang Anda pilih → Ulangi tiap beberapa menit, di jam yang Anda pilih | tiap/di are the tighter everyday forms (55 → 50)

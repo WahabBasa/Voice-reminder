@@ -29,3 +29,16 @@ Independent review of `hu.json` against `strings-en.json` and `strings-inventory
 - `aiConsent.allow` "Engedélyezés" (12) and `permission.enabled` "Bekapcsolva" (11) run 1-2 chars over the ~10 guide; both are Apple's own words with no shorter natural form. Check on device.
 - `paywall.cta.trial` "{length} ingyenes próba" ("7 napos ingyenes próba", 22) has no verb; adding "indítása" would exceed ~24.
 - Upgrade is rendered as "előfizetés" (subscribe) throughout; consistent and natural in Hungarian.
+
+## Length pass (2026-10-26)
+
+- tabs.reminders | Emlékeztetők → Lista | tab fits 11; matches the List icon; screen title unchanged
+- recording.status.micFailed | Nem sikerült elindítani a mikrofont. … → A mikrofon nem indult el. … | shorter first sentence
+- aiConsent.allow | Engedélyezés → Elfogadom | consent button; first person like composer.speak.a11y
+- gate.unverified.status | …Ellenőrizze az internetkapcsolatot… → …Ellenőrizze a kapcsolatot… | "kapcsolatot"
+- edit.emoji.remove | Emoji eltávolítása → Emoji törlése | shorter verb
+- paywall.restore | Vásárlás visszaállítása → Visszaállítás | matches paywall.legal.restore; settings row unchanged
+- paywall.error.alreadyOwned | …a Vásárlás visszaállítása lehetőségre. → …a Visszaállítás lehetőségre. | ripple: names the renamed paywall button
+- paywall.legal.terms | Felhasználási feltételek → Feltételek | footer link; settings row keeps the full name
+- paywall.legal.privacy | Adatvédelmi irányelvek → Adatvédelem | footer link; settings row and aiConsent link keep the full name
+- diagnostics.section.systemSettings | Rendszerbeállítások megnyitása → Beállítások megnyitása | iOS app name

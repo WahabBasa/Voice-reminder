@@ -23,3 +23,15 @@ Reviewed 2026-10-10 against `strings-en.json` and `strings-inventory.md`. Every 
 ## Verdict
 
 **SHIP**
+
+## Length pass (2026-10-26)
+
+- `today.header.getPro` | Obțineți Pro → Alegeți Pro | formal, 12→11
+- `recording.gate.upgrade` | Treceți la Pro → Alegeți Pro | same as getPro, 14→11
+- `schedule.everyNDays` | La fiecare # (de) zile → Tot la # (de) zile | idiomatic "tot la două zile"; 100-sample 22→18; one branch kept
+- `pending.recordAgain` | Înregistrați din nou → Reînregistrați | 20→14
+- `edit.confirm.updatingVoice` | Se actualizează vocea… → Actualizare voce… | busy button, nominal, 22→17
+- `edit.emoji.remove` | Eliminați emojiul → Ștergeți emojiul | 17→16
+- `paywall.hero.default.line1` | Uitați mai puțin. → Nu mai uitați. | reads naturally before "Amintiți-vă la timp.", 17→14
+- `paywall.legal.privacy` | Politica de confidențialitate → Confidențialitate | short link label, 29→17
+- `diagnostics.section.systemSettings` | Deschideți configurările de sistem → Deschideți Configurări | Apple's app name, 34→22

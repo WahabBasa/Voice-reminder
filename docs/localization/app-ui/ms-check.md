@@ -28,3 +28,9 @@ Natural Malaysian Malay with Apple's terms (Seting, Masa Skrin, Akaun Apple, Ket
 ## Length and open notes
 
 - `today.header.getPro` was shortened to fit. Nothing else is over a limit.
+
+## Length pass (2026-10-26)
+
+- `permission.title` | Dapatkan amaran tepat pada masa → Dapatkan amaran tepat masa | "tepat masa" is the common Malaysian form (31 → 26)
+- `edit.confirm.updatingVoice` | Mengemas kini suara… → Menukar suara… | shorter verb for the voice being swapped (20 → 14)
+- `paywall.table.row.interval` | Ulang setiap beberapa minit, dalam waktu yang anda pilih → Ulang setiap beberapa minit, pada waktu pilihan anda | "waktu pilihan anda" is tighter (56 → 52)

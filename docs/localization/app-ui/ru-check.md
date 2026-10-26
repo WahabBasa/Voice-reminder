@@ -55,3 +55,10 @@ Reviewed 2026-10-10 against `strings-en.json` and `strings-inventory.md`. Every 
 ## Verdict
 
 **SHIP**
+
+## Length pass (2026-10-26)
+
+- edit.confirm.updatingVoice | Обновление голоса… → Обновление… | replaces Done on the voice step; voice implied
+- paywall.legal.terms | Условия использования → Условия | footer link; settings row keeps the full name
+- paywall.legal.privacy | Политика конфиденциальности → Конфиденциальность | footer link; settings row keeps the full name
+- diagnostics.section.systemSettings | Открыть системные настройки → Открыть Настройки | iOS wording (SpringBoard "Открыть Настройки")

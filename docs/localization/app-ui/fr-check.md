@@ -40,3 +40,15 @@ Solid, natural vous-register French throughout. The fixes were calques ("toutes 
 - `paywall.card.badge` is 13 chars against a limit of about 12 ("MEILLEUR PRIX"). No natural shorter form; check it on the device.
 - `today.timeDraft.confirm` "Me le rappeler" is 14, which fits the limit of 14.
 - `paywall.legal.disclosure.priced` "par {term}": fine for 1-unit terms (par mois / par an). A 3-month plan would read "par 3 mois", which is understandable but stiff. The fix is structural (a term-aware phrase in code). Only monthly and annual plans exist today.
+
+## Length pass (2026-10-26)
+
+- `permission.title` | Recevez vos alertes à l’heure → Des alertes pile à l’heure | 29→26, no gendered "alerté(e)"
+- `gate.unverified.status` | …votre connexion Internet et réessayez → …votre connexion et réessayez | "Internet" is implied, 88→79
+- `edit.confirm.updatingVoice` | Mise à jour de la voix… → MAJ de la voix… | busy button; MAJ is the common app abbreviation, 23→15
+- `times.addTime` | + Ajouter une heure → + Nouvelle heure | chip, 19→16
+- `paywall.table.row.interval` | Répéter à quelques minutes d’intervalle, dans la plage choisie → Répéter à quelques min d’écart, aux heures choisies | "min" is standard French, closer to EN "hours you pick", 62→51
+- `paywall.billed.weekly` | Facturé chaque semaine → Facturé par semaine | 22→19 (monthly/yearly still fit, left as is)
+- `paywall.legal.terms` | Conditions d’utilisation → Conditions d’usage | same meaning, 24→18
+- `paywall.legal.privacy` | Politique de confidentialité → Confidentialité | the usual short paywall link label, 28→15
+- `diagnostics.section.systemSettings` | Ouvrir les réglages système → Ouvrir Réglages | Apple's app name "Réglages", 27→15

@@ -56,3 +56,10 @@ Reviewed 2026-10-10 against `strings-en.json` and `strings-inventory.md`. Every 
 ## Verdict
 
 **SHIP**
+
+## Length pass (2026-10-26)
+
+- today.header.getPro | Отримати Pro → Купити Pro | fits 11
+- paywall.hero.default.line1 | Забувайте менше. → Не забувайте. | fits 14; tagline, less → don't
+- paywall.table.col.free | БЕЗКОШТ. → БАЗОВИЙ | column fits 7, no abbreviation
+- paywall.legal.privacy | Політика конфіденційності → Конфіденційність | footer link; settings row keeps the full name

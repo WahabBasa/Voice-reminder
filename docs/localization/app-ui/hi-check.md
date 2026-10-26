@@ -22,3 +22,7 @@ Validator: `[hi] PASS: 426 keys (en 426), 0 errors, 17 warnings` (all warnings p
 ## Verdict
 
 **SHIP.** Confidence: medium-high. No native-speaker read yet. A device check of `paywall.card.badge` (सबसे फ़ायदेमंद, ~12-char pill) is still worth doing.
+
+## Length pass (2026-10-26)
+
+Strict limits test clean; no rewrites.

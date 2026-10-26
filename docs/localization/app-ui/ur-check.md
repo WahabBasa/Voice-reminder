@@ -39,3 +39,10 @@ Natural, polite آپ-register Urdu with correct Urdu letters (ی ک ہ ے, no Ar
 - `paywall.term.week` one = ہفتے (oblique) reads right after ہر but odd after "/". No weekly plan ships today.
 - `paywall.toast.activated.title` adds مبارک ہو! (Congratulations!) so the line opens in Urdu. A harmless addition, kept.
 - Nastaliq line height: chips, single-line rows and the tab bar need a visual check for clipping.
+
+## Length pass (2026-10-26)
+
+- pending.recordAgain | دوبارہ ریکارڈ کریں → دوبارہ ریکارڈ | 18 > 16; button label without the imperative "کریں" reads naturally on a button.
+- gate.unverified.status | …اپنا انٹرنیٹ کنکشن چیک کریں… → …اپنا انٹرنیٹ چیک کریں… | 86 > 85; drops "کنکشن", same wording as paywall.error.network / settings.alert.restoreFailed.offline.
+- edit.confirm.updatingVoice | آواز اپ ڈیٹ ہو رہی ہے… → آواز اپ ڈیٹ جاری… | 22 > 17; "جاری" (in progress) is the common short progress form.
+- feedback.status.looking | جائزہ لیا جا رہا ہے → زیرِ جائزہ | 19 > 18; "زیرِ جائزہ" (under review) is the standard status-chip phrase.

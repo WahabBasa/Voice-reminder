@@ -49,3 +49,21 @@ Natural je-register Dutch. The fixes were "bewaren" → "opslaan", "Gereed" → 
 
 - `tabs.reminders` "Herinneringen" (13) and `tabs.settings` "Instellingen" (12) are over the limit of about 10. Standard terms; check the bottom bar on the device.
 - `paywall.cta.unavailable` "Geen abonnementen" is a slightly loose rendering of "Plans unavailable". It was kept because the literal form is over the limit of about 24.
+
+## Length pass (2026-10-26)
+
+- tabs.reminders | Herinneringen → Lijst | tab fits 11; matches the List icon; screen title unchanged
+- tabs.settings | Instellingen → Opties | tab fits 11; screen title and iOS Instellingen-app unchanged
+- pending.settingUp | Bezig met instellen… → Instellen… | same as common.setting
+- pending.cancelling | Bezig met annuleren… → Annuleren… | short progress form
+- gate.unverified.status | Je abonnement kan niet worden gecontroleerd. Controleer je internetverbinding en probeer het opnieuw. → Kan abonnement niet controleren. Controleer je verbinding en probeer het opnieuw. | style-sheet error pattern "Kan … niet …"
+- gate.unverified.toastTitle | Abonnement kan niet worden gecontroleerd → Kan abonnement niet controleren | ripple: matches the status sentence (was not over)
+- feedback.status.queued | Wacht op verzending → In wachtrij | status chip
+- paywall.table.row.interval | …binnen de uren die jij kiest → …in de uren die jij kiest | binnen → in
+- paywall.billed.monthly | Maandelijks gefactureerd → Betaling per maand | fits 20
+- paywall.billed.yearly | Jaarlijks gefactureerd → Betaling per jaar | fits 20
+- paywall.billed.weekly | Wekelijks gefactureerd → Betaling per week | fits 20
+- paywall.billed.every | Elke {term} gefactureerd → Betaling elke {term} | ripple: same pattern as billed.* (no limit)
+- paywall.restoring | Bezig met herstellen… → Herstellen… | short progress form
+- settings.row.restore.restoring | Bezig met herstellen… → Herstellen… | ripple: same state as paywall.restoring
+- diagnostics.section.systemSettings | Open systeeminstellingen → Open Instellingen | points at the iOS Instellingen-app

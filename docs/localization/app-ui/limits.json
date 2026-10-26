@@ -1,5 +1,5 @@
 {
-  "_about": "Max length in graphemes per space-constrained key (scripts/i18n-limits.js). Overflow = more than limit + max(1, ceil(10%)). Placeholders filled with English samples, every plural branch measured.",
+  "_about": "Max length in graphemes per space-constrained key (scripts/i18n-limits.js). Overflow = more than limit + max(1, ceil(10%)). Placeholders filled with English samples, every plural branch measured. localeLimits = a per-language override where the standard form is longer. VoiceOver-only labels (tab names) have no limit.",
   "common.cancel": {
     "limit": 10,
     "role": "button",
@@ -29,21 +29,6 @@
     "limit": 14,
     "role": "busyButton",
     "en": "Setting…"
-  },
-  "tabs.reminders": {
-    "limit": 10,
-    "role": "tab",
-    "en": "Reminders"
-  },
-  "tabs.days": {
-    "limit": 10,
-    "role": "tab",
-    "en": "Days"
-  },
-  "tabs.settings": {
-    "limit": 10,
-    "role": "tab",
-    "en": "Settings"
   },
   "layout.toast.alarmsMayNotFire.title": {
     "limit": 40,
@@ -608,12 +593,18 @@
   "times.picker.am": {
     "limit": 4,
     "role": "pickerAmPm",
-    "en": "AM"
+    "en": "AM",
+    "localeLimits": {
+      "he": 6
+    }
   },
   "times.picker.pm": {
     "limit": 4,
     "role": "pickerAmPm",
-    "en": "PM"
+    "en": "PM",
+    "localeLimits": {
+      "he": 6
+    }
   },
   "feedback.sheet.title": {
     "limit": 24,

@@ -38,3 +38,12 @@ Independent review of `nb.json` against `strings-en.json` and `strings-inventory
 - Settings path uses "[navnet ditt]", same convention as the reviewed pt-BR.
 - `infoPlist.NSAlarmKitUsageDescription` says "Remi", consistent with pt-BR.
 - Length: all limited keys fit ("Avbryt", "Oppgrader" 9, "Minn meg på" 11, "I morgen tidlig" 15, "Velg tidspunkt …" 16).
+
+## Length pass (2026-10-26)
+
+- tabs.settings | Innstillinger → Oppsett | tab fits 11; screen title and iOS app name unchanged
+- edit.confirm.updatingVoice | Oppdaterer stemmen … → Oppdaterer … | replaces Done on the voice step; voice implied
+- times.addTime | + Legg til tidspunkt → + Nytt tidspunkt | chip
+- feedback.status.queued | Venter på å bli sendt → I kø | status chip
+- paywall.table.row.interval | Gjenta med noen få minutters mellomrom, i timene du velger → Gjenta hvert par minutter i timene du velger | "hvert par minutter"
+- diagnostics.section.systemSettings | Åpne systeminnstillinger → Åpne Innstillinger | iOS app name

@@ -29,3 +29,15 @@ Validator: `[tl] PASS: 426 keys (en 426), 0 errors, 45 warnings`. The warnings a
 ## Verdict
 
 **SHIP.** Confidence: medium-high. The Taglish register matches what Filipino apps show. A native skim of the hero lines on the device is still nice to have.
+
+## Length pass (2026-10-26)
+
+- `gate.unverified.status` | …Tingnan ang internet connection mo… → …Tingnan ang internet mo… | "internet mo" is how Filipinos say it (88 → 77)
+- `edit.confirm.updatingVoice` | Ina-update ang boses… → Ina-update… | button on the edit sheet; the draft path already shows a bare "Setting…" here, and every Tagalog form with "boses" runs 18+ (21 → 11)
+- `times.addTime` | + Magdagdag ng oras → + Bagong oras | "new time" chip, natural and short (19 → 13)
+- `feedback.status.queued` | Naghihintay maipadala → Ipapadala pa | "still to be sent" status chip (21 → 12)
+- `paywall.table.cell.unlimited` | Walang limit → Unlimited | the loanword ("unli") is what PH users read on every plan (12 → 9)
+- `paywall.billed.monthly` / `paywall.billed.weekly` | Sinisingil buwan-buwan / linggo-linggo → Buwanang singil / Lingguhang singil | noun form, shorter (22/24 → 15/17)
+- `paywall.billed.yearly` | Sinisingil taon-taon → Taunang singil | ripple only, keeps the three billing lines parallel (not over)
+- `paywall.legal.terms` | Mga Tuntunin ng Paggamit → Tuntunin ng Paggamit | drop the plural marker, common in link labels (24 → 20)
+- `diagnostics.section.systemSettings` | Buksan ang mga setting ng system → Buksan ang Settings | it opens the iOS Settings app, whose label stays English per §1 (32 → 19)

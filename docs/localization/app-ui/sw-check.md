@@ -20,3 +20,11 @@ Validator: `[sw] PASS: 426 keys (en 426), 0 errors, 16 warnings` (all pre-existi
 ## Verdict
 
 **SHIP.** Confidence: medium-high. The everyday register is natural (Google/Android terms). Before release, confirm that iOS offers Swahili in Remi's per-app language list, or that Remi's own picker covers it.
+
+## Length pass (2026-10-26)
+
+- `permission.allSet` | Kila kitu tayari! → Tayari kabisa! | "fully ready", same cheer (17 → 14)
+- `gate.unverified.status` | …Angalia muunganisho wako wa intaneti… → …Angalia intaneti yako… | everyday phrasing (94 → 79)
+- `gate.limit.toastTitle` | Umefikia kikomo cha vikumbusho # vinavyotumika → Umefikia vikumbusho # vinavyotumika (one: kikumbusho # kinachotumika) | mirrors English "You've reached # active reminders"; both plural branches and agreement kept (48 → 37)
+- `paywall.table.row.interval` | Rudia kila baada ya dakika chache, ndani ya saa unazochagua → Rudia kila dakika chache, katika saa unazochagua | tighter, same meaning (59 → 48)
+- `diagnostics.section.systemSettings` | Fungua mipangilio ya mfumo → Fungua Settings | opens the iOS Settings app; iOS labels stay English per §1 (26 → 15)

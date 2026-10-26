@@ -42,3 +42,11 @@ Good tu-register Italian. Two wrong-meaning words were fixed ("suoneria" = ringt
 
 - `paywall.card.badge` "PIÙ CONVENIENTE" is 15 against a limit of about 12. No natural shorter form (MIGLIOR PREZZO is 14); check it on the device.
 - `tabs.settings` "Impostazioni" is 12 against a limit of about 10. Standard iOS term; check it on the device.
+
+## Length pass (2026-10-26)
+
+- `pending.recordAgain` | Registra di nuovo → Registra ancora | 17→15
+- `paywall.card.badge` | PIÙ CONVENIENTE → MIGLIOR PREZZO | standard badge, 15→14
+- `paywall.legal.privacy` | Informativa sulla privacy → Informativa privacy | common short legal label, 25→19
+- `diagnostics.section.systemSettings` | Apri impostazioni di sistema → Apri Impostazioni | Apple's app name, 28→17
+- NOT changed: `tabs.settings` "Impostazioni" (12, allowed 11). This is Apple's term, matches `settings.title`, and Italian iOS apps use it in tab bars. Best short candidate: "Opzioni" (7), but it breaks the term. Check it on the device.

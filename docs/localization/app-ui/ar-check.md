@@ -48,3 +48,9 @@ Clean, natural Modern Standard Arabic with no dialect words. Terms are consisten
 - `components/ReminderCard.tsx:130` hard-codes the English `{n} min early` tag. It is not in the catalog, so Arabic users see English there.
 - Native-speaker copy check still worth it for the paywall hero lines ("انسَ أقل. / وتذكّر / في وقته."). They read fine but are marketing rewrites.
 - `diagnostics.status.provisional` "مؤقت" (temporary) is a fair literal rendering of iOS provisional authorization. Inferred; no Apple string verified.
+
+## Length pass (2026-10-26)
+
+- today.header.getPro | احصل على Pro → ترقية Pro | 12 > 11 allowed; "ترقية" is the upgrade CTA verb already used in proCard.free.title (الترقية إلى Pro).
+- edit.emoji.remove | إزالة الرمز التعبيري → إزالة الإيموجي | 20 > 16; iOS Arabic calls it "إيموجي" (keyboard name), shorter and familiar.
+- edit.emoji.title | اختر رمزًا تعبيريًا → اختر إيموجي | not overflowing; changed so the emoji sheet uses one term (إيموجي) in title and button.

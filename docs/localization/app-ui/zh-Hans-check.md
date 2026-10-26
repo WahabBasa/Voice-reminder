@@ -24,3 +24,7 @@ Clean mainland Simplified Chinese with Apple's terms (轻点, 设置, Apple账�
 ## Length and open notes
 
 - No string is over its inventory limit. Not changed: 存储 (Apple's Save button word) and 保存 (in messages) both appear, as in Apple's own zh-CN UI.
+
+## Length pass (2026-10-26)
+
+Strict limits test clean; no rewrites.

@@ -61,3 +61,12 @@ Natural Swedish, but it was not shippable before this pass. It used "abonnemang"
 
 - `tabs.reminders` "Påminnelser" (11) and `tabs.settings` "Inställningar" (13) are over the limit of about 10. Standard terms; check the bottom bar on the device.
 - `time.every.*` uses "Var # minut" (colloquial). The normative written form "var 5:e minut" needs an ordinal suffix that ICU `#` can't produce.
+
+## Length pass (2026-10-26)
+
+- tabs.settings | Inställningar → Alternativ | tab fits 11; screen title and iOS app name unchanged
+- gate.unverified.status | …verifiera din prenumeration. Kontrollera internetanslutningen… → …verifiera prenumerationen. Kontrollera anslutningen… | definite form, "anslutningen"
+- edit.confirm.updatingVoice | Uppdaterar rösten … → Uppdaterar … | replaces Done on the voice step; voice implied
+- feedback.status.queued | Väntar på att skickas → I kö | status chip
+- paywall.table.row.interval | Upprepa med några minuters mellanrum, under timmarna du väljer → Upprepa med få minuters mellanrum under valda timmar | "valda timmar" = the hours you pick
+- diagnostics.section.systemSettings | Öppna systeminställningar → Öppna Inställningar | iOS app name

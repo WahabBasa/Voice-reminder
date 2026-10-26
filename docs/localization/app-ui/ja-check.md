@@ -26,3 +26,7 @@ Natural, polite です/ます Japanese throughout, close to Apple's own wording 
 ## Length and open notes
 
 - No string is over its inventory limit.
+
+## Length pass (2026-10-26)
+
+Strict limits test clean; no rewrites.

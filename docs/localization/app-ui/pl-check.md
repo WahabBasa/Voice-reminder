@@ -56,3 +56,11 @@ Reviewed 2026-10-10 against `strings-en.json` and `strings-inventory.md`. Every 
 ## Verdict
 
 **SHIP**
+
+## Length pass (2026-10-26)
+
+- tabs.reminders | Przypomnienia → Lista | tab fits 11; matches the List icon; screen title unchanged
+- gate.unverified.status | …Sprawdź połączenie z internetem… → …Sprawdź połączenie… | drop "z internetem"
+- edit.confirm.updatingVoice | Aktualizowanie głosu… → Aktualizowanie… | replaces Done on the voice step; voice implied
+- paywall.hero.default.line1 | Mniej zapominaj. → Nie zapominaj. | fits 14; tagline, less → don't
+- diagnostics.section.systemSettings | Otwórz ustawienia systemowe → Otwórz Ustawienia | iOS app name

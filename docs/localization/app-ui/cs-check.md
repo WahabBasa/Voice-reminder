@@ -53,3 +53,9 @@ Reviewed 2026-10-10 against `strings-en.json` and `strings-inventory.md`. Every 
 ## Verdict
 
 **SHIP**
+
+## Length pass (2026-10-26)
+
+- gate.unverified.status | …Zkontrolujte připojení k internetu… → …Zkontrolujte připojení… | drop "k internetu"
+- paywall.legal.privacy | Zásady ochrany osobních údajů → Ochrana soukromí | footer link; settings row keeps the full name
+- diagnostics.section.systemSettings | Otevřít nastavení systému → Otevřít Nastavení | iOS app name

@@ -40,3 +40,12 @@ Independent review of `da.json` against `strings-en.json` and `strings-inventory
 - Settings path uses "[dit navn]", same convention as the reviewed pt-BR ("[seu nome]").
 - `infoPlist.NSAlarmKitUsageDescription` says "Remi" (English source still says "VoiceReminder"), consistent with pt-BR.
 - Length: every key with an inventory limit fits ("Annuller" 8, "Opgrader" 8, "Påmind mig" 10, "I morgen tidlig" 15).
+
+## Length pass (2026-10-26)
+
+- tabs.settings | Indstillinger → Opsætning | tab fits 11; screen title and iOS app name unchanged
+- edit.confirm.updatingVoice | Opdaterer stemme … → Opdaterer … | replaces Done on the voice step; voice implied
+- feedback.status.queued | Venter på at blive sendt → I kø | status chip
+- paywall.table.row.interval | Gentag med få minutters mellemrum, i de timer du vælger → Gentag hvert par minutter i de timer, du vælger | "hvert par minutter"; comma per style sheet
+- diagnostics.section.systemSettings | Åbn systemindstillinger → Åbn Indstillinger | iOS app name
+- diagnostics.row.notificationSettings | Indstillinger for notifikationer → Notifikationsindstillinger | compound

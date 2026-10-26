@@ -74,3 +74,16 @@ Independent review of `el.json` against `strings-en.json` and `strings-inventory
 - `pending.thatTime` «αυτή» only works inside «Η ώρα {time} πέρασε…»; that is its only use (lib/pendingCardContent.ts), so kept.
 - Over-length vs inventory, no natural shorter form: `tabs.reminders` «Υπενθυμίσεις» 12/~10, `today.header.getPro` «Απόκτηση Pro» 12/~10, `permission.enable` «Ενεργοποίηση» 12/~10, `paywall.card.badge` «ΚΑΛΥΤΕΡΗ ΤΙΜΗ» 13/~12, `paywall.cta.trial` with 7 days 25/~24. Verify on device.
 - `aiConsent.allow` «Αποδοχή» instead of Apple's longer «Να επιτρέπεται»: kept for the ~10 limit.
+
+## Length pass (2026-10-26)
+
+- tabs.reminders | Υπενθυμίσεις → Λίστα | tab fits 11; matches the List icon; screen title unchanged
+- today.header.getPro | Απόκτηση Pro → Αγορά Pro | nominal button form, fits 11
+- reminders.next.none | Δεν έχει προγραμματιστεί επόμενη ειδοποίηση → Καμία επόμενη ειδοποίηση | short status
+- permission.enable | Ενεργοποίηση → Συνέχεια | the button leads to the iOS permission prompt; same word as language.sheet.continue
+- gate.unverified.status | …η επαλήθευση της συνδρομής σας. Ελέγξτε τη σύνδεσή σας στο διαδίκτυο… → …η επαλήθευση συνδρομής. Ελέγξτε τη σύνδεση… | drop article/possessives
+- gate.unverified.toastTitle | Δεν είναι δυνατή η επαλήθευση της συνδρομής σας → Δεν είναι δυνατή η επαλήθευση συνδρομής | fits 44; same wording as status
+- feedback.status.queued | Σε αναμονή αποστολής → Σε αναμονή | status chip
+- settings.row.notifications | Γνωστοποιήσεις και ειδοποιήσεις → Γνωστοποιήσεις & ειδοποιήσεις | ampersand as in English
+- paywall.table.cell.unlimited | Απεριόριστες → Χωρίς όριο | fits 11, no gender agreement needed
+- diagnostics.section.systemSettings | Άνοιγμα ρυθμίσεων συστήματος → Άνοιγμα Ρυθμίσεων | iOS app name

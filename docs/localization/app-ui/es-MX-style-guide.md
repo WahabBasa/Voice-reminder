@@ -42,7 +42,7 @@ Research only, for whoever translates the Remi UI into Spanish (Mexico). The App
 | "despertador" (keyword) | **alarma** | Apple's Clock UI says alarma; despertador = wake-up only [ASO] |
 | "celular" everywhere | **iPhone** in permission and settings instructions; celular in casual copy | Matches Apple's system text |
 | "se me pasó", "que no se te pase" | OK in Remi's voice lines and marketing cards; **not** in buttons, titles or errors | Colloquial register |
-| "Términos de uso / Política de privacidad" | same | Apple StoreKit uses "Política de privacidad" [AL] |
+| "Términos de uso / Aviso de privacidad" | same | Paywall footer says "Aviso de privacidad" (Mexican legal name, shorter); Settings keeps "Política de privacidad" like Apple StoreKit [AL] |
 
 ---
 
@@ -120,8 +120,8 @@ Research only, for whoever translates the Remi UI into Spanish (Mexico). The App
 | 68 | Free trial (CTA) | Prueba gratis | [AL] StoreKit `ACTION_FREE_TRIAL` |
 | 69 | 7-day free trial | 7 días gratis / Prueba gratis de 7 días | [AL] "%@ gratis"; Spain says "periodo de prueba" [ASO] |
 | 70 | 7 days free, then $X/year | 7 días gratis, luego {price}/año | [AL] "%@ gratis, luego %@/%@" |
-| 71 | Get Pro | Obtener Remi Pro | Infinitive rule [MS]; Pro stays English [ASO] |
-| 72 | Upgrade | Mejorar a Pro | [J] |
+| 71 | Get Pro | Obtener Pro | Infinitive rule [MS]; Pro stays English [ASO]; "Remi" dropped to fit the header pill (length pass 2026-10-26) |
+| 72 | Upgrade (short buttons: header pill, recording gate) | Obtener Pro; "Mejorar a Pro" only where there is room (Pro card title) | [J]; length pass 2026-10-26: "Obtener Pro" fits the ~10-char pill/button limit (limits.json) |
 | 73 | Monthly / Annual | Mensual / Anual (Pro mensual / Pro anual) | [ASO], Apple "plan mensual, anual" |
 | 74 | per month / per year | al mes / al año (or /mes, /año) | [AL] uses "%@/%@" |
 | 75 | Best value | Mejor precio | [J] |
@@ -132,7 +132,7 @@ Research only, for whoever translates the Remi UI into Spanish (Mexico). The App
 | 80 | Manage subscription | Administrar suscripción | [AS-US] "Administrar tus suscripciones" |
 | 81 | Cancel subscription | Cancelar suscripción | [AS-MX] 118428 |
 | 82 | Terms of Use | Términos de uso | [ASO] description |
-| 83 | Privacy Policy | Política de privacidad | [AL] StoreKit `PRIVACY_POLICY_LABEL` |
+| 83 | Privacy Policy | Aviso de privacidad (paywall footer link); Política de privacidad (Settings row) | [AL] StoreKit `PRIVACY_POLICY_LABEL` is "Política de privacidad"; length pass 2026-10-26: the footer link uses "Aviso de privacidad", the usual Mexican legal name (LFPDPPP), to fit its limit |
 | 84 | Apple Account | Cuenta de Apple | apple.com/mx "Administra tu Cuenta de Apple" |
 | 85 | Feedback | Comentarios | [AS-MX] "Gracias por tus comentarios" |
 | 86 | Send feedback | Enviar comentarios | [AS-MX] |
@@ -210,7 +210,7 @@ Built from Apple's own es_419 StoreKit phrasing ("El plan se renueva automática
 **Full disclosure (small print):**
 > El pago se cargará a tu Cuenta de Apple al confirmar la compra. Si empiezas con la prueba gratis de 7 días, se te cobrará {precio} por {periodo} al terminar la prueba, a menos que la canceles al menos 24 horas antes de que termine. La suscripción se renueva automáticamente por el mismo precio y periodo, a menos que la canceles al menos 24 horas antes de que termine el periodo actual. El cargo de la renovación se hará dentro de las 24 horas previas al final del periodo. Puedes administrar o cancelar tu suscripción en Configuración > [tu nombre] > Suscripciones.
 >
-> [Términos de uso] · [Política de privacidad] · [Restaurar compras]
+> [Términos de uso] · [Aviso de privacidad] · [Restaurar compras]
 
 Notes:
 - "Cuenta de Apple" replaces the old "ID de Apple" (apple.com/mx uses "Administra tu Cuenta de Apple"). Older third-party text still says "cuenta de iTunes" or "ID de Apple" (e.g. Foto ID and finviz listings); don't copy that.
