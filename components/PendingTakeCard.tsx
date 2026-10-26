@@ -12,6 +12,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { borderRadius, colors, shadows, spacing } from "../lib/theme";
+import { directionSign } from "../lib/layoutDirection";
 import AppIcon from "./AppIcon";
 import {
   getPendingTakesSnapshot,
@@ -110,24 +111,30 @@ function PendingTakeCardView({
   );
 }
 
-/** Swipe left to reveal the discard button — shared by the failed and asking cards. */
+/**
+ * Swipe toward the line's start (left; right in RTL, where the discard button
+ * sits on the left) to reveal the discard button — shared by the failed and
+ * asking cards. translateX is logical; `sign` mirrors finger and offset.
+ */
 function useSwipeToDiscard(enabled: boolean, onDiscard: () => void) {
   const translateX = useSharedValue(0);
+  const sign = directionSign();
   const fade = useSharedValue(1);
   const [leaving, setLeaving] = useState(false);
   const panGesture = Gesture.Pan()
     .enabled(enabled && !leaving)
     .activeOffsetX([-10, 10])
     .onUpdate((event) => {
-      if (event.translationX < 0) {
-        translateX.value = Math.max(event.translationX, -120);
+      const dx = sign * event.translationX;
+      if (dx < 0) {
+        translateX.value = Math.max(dx, -120);
       }
     })
     .onEnd((event) => {
-      translateX.value = withSpring(event.translationX < DISCARD_THRESHOLD ? -120 : 0);
+      translateX.value = withSpring(sign * event.translationX < DISCARD_THRESHOLD ? -120 : 0);
     });
   const cardStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }],
+    transform: [{ translateX: sign * translateX.value }],
   }));
   const discardStyle = useAnimatedStyle(() => ({
     opacity: Math.min(1, Math.abs(translateX.value) / 80),

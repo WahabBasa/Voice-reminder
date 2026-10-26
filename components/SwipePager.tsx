@@ -9,6 +9,7 @@ import Animated, {
     useSharedValue,
     withSpring,
 } from "react-native-reanimated";
+import { directionSign } from "../lib/layoutDirection";
 
 interface SwipePagerProps {
     /** Controlled page index. Changing it (e.g. via tab tap) animates the pager. */
@@ -46,6 +47,9 @@ export default function SwipePager({
     const translateX = useSharedValue(-page * width);
     const startX = useSharedValue(0);
     const currentPage = useSharedValue(page);
+    // translateX is logical (page p sits at -p × width); RTL lays the track out
+    // from the right, so the physical offset and the finger are mirrored.
+    const sign = directionSign();
 
     useEffect(() => {
         const widthChanged = widthRef.current !== width;
@@ -87,7 +91,7 @@ export default function SwipePager({
         })
         .onUpdate((event) => {
             const min = -(pageCount - 1) * width;
-            const raw = startX.value + event.translationX;
+            const raw = startX.value + sign * event.translationX;
             if (raw > 0) {
                 translateX.value = raw * RUBBER_BAND;
             } else if (raw < min) {
@@ -100,9 +104,10 @@ export default function SwipePager({
             const current = currentPage.value;
             const delta = (width > 0 ? -translateX.value / width : 0) - current;
             let target = current;
-            if (event.velocityX <= -FLICK_VELOCITY && delta > 0) {
+            const velocity = sign * event.velocityX;
+            if (velocity <= -FLICK_VELOCITY && delta > 0) {
                 target = current + 1;
-            } else if (event.velocityX >= FLICK_VELOCITY && delta < 0) {
+            } else if (velocity >= FLICK_VELOCITY && delta < 0) {
                 target = current - 1;
             } else if (delta >= SNAP_FRACTION) {
                 target = current + 1;
@@ -113,7 +118,7 @@ export default function SwipePager({
             currentPage.value = target;
             translateX.value = withSpring(-target * width, {
                 ...SPRING_CONFIG,
-                velocity: event.velocityX,
+                velocity,
             });
             if (target !== current) {
                 runOnJS(onPageChange)(target);
@@ -121,7 +126,7 @@ export default function SwipePager({
         });
 
     const trackStyle = useAnimatedStyle(() => ({
-        transform: [{ translateX: translateX.value }],
+        transform: [{ translateX: sign * translateX.value }],
     }));
 
     return (

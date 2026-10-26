@@ -14,6 +14,7 @@ import {
   resolveUiLocale,
 } from "./appLanguage";
 import { getUiLocale } from "./i18n";
+import { syncLayoutDirection } from "./layoutDirection";
 import { pushSpokenLanguageChoice } from "./spokenLanguage";
 import { useSettingsStore } from "./settingsStore";
 
@@ -32,6 +33,10 @@ export async function pickLanguage(
   if (ok && useSettingsStore.getState().settings.voiceLanguage !== "auto") {
     await useSettingsStore.getState().setVoiceLanguage("auto").catch(() => {});
   }
+  // A pick across LTR/RTL (English → العربية, or back) flips the native
+  // direction and reloads the bundle: the pick is persisted by now, so the
+  // reloaded app opens in the new language, mirrored.
+  if (ok) await syncLayoutDirection(getUiLocale());
   return ok;
 }
 

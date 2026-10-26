@@ -291,7 +291,9 @@ export default function TimesEditor({
               `${String(hour24).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`
             );
           }}
-          styles={{ theme: "light" }}
+          // Hours, minutes, AM/PM read left to right in every language (a time
+          // is written "10:30" in RTL too), so the wheels never mirror.
+          styles={{ theme: "light", pickerContainer: { direction: "ltr" } }}
           // Follows the device's 12/24-hour setting, like every printed time.
           useAmPmWheel={hour12}
           use12HourPicker={hour12}

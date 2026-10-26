@@ -1,4 +1,5 @@
 import { t } from "../lib/i18n";
+import { joinedScriptText } from "../lib/scriptStyle";
 import { endonymFor, useChosenLanguage } from "../lib/appLanguage";
 import { currentLanguageChoice, pickLanguage } from "../lib/pickLanguage";
 import LanguageSheet from "../components/LanguageSheet";
@@ -255,7 +256,7 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
             <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
           </TouchableOpacity>
         ) : null}
-        <Text style={styles.headerTitle}>{t("settings.title")}</Text>
+        <Text style={[styles.headerTitle, joinedScriptText()]}>{t("settings.title")}</Text>
       </View>
 
       {/* Pro card: the upgrade pitch for a confirmed free user, the
@@ -285,7 +286,7 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
       </TouchableOpacity>
 
       {/* General: the ONE notifications entry point */}
-      <Text style={styles.sectionLabel}>{t("settings.section.general")}</Text>
+      <Text style={[styles.sectionLabel, joinedScriptText()]}>{t("settings.section.general")}</Text>
       <View style={styles.card}>
         <SettingsRow
           icon="globe"
@@ -310,7 +311,7 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
       </View>
 
       {/* Voice: how recordings get transcribed on this device */}
-      <Text style={styles.sectionLabel}>{t("settings.section.voice")}</Text>
+      <Text style={[styles.sectionLabel, joinedScriptText()]}>{t("settings.section.voice")}</Text>
       <View style={styles.card}>
         <SettingsRow
           icon="mic"
@@ -334,7 +335,7 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
       </View>
 
       {/* Feedback: a direct line to the developer, and where past notes stand */}
-      <Text style={styles.sectionLabel}>{t("settings.section.feedback")}</Text>
+      <Text style={[styles.sectionLabel, joinedScriptText()]}>{t("settings.section.feedback")}</Text>
       <View style={styles.card}>
         <SettingsRow
           icon="message-square"
@@ -353,7 +354,7 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
 
       {/* About: the two legal documents, reachable without leaving the app
           (Guideline 5.1.1(i) wants the policy in-app and easy to find) */}
-      <Text style={styles.sectionLabel}>{t("settings.section.about")}</Text>
+      <Text style={[styles.sectionLabel, joinedScriptText()]}>{t("settings.section.about")}</Text>
       <View style={styles.card}>
         <SettingsRow
           icon="shield"

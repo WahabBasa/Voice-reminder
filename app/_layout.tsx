@@ -1,4 +1,5 @@
-import { t, useUiLocale } from "../lib/i18n";
+import { getUiLocale, t, useUiLocale } from "../lib/i18n";
+import { syncLayoutDirection } from "../lib/layoutDirection";
 import {
   applyDeviceLanguage,
   hasLoadedLanguage,
@@ -372,7 +373,11 @@ function RootLayout() {
   // flashes the device language first.
   const [languageReady, setLanguageReady] = useState(hasLoadedLanguage());
   useEffect(() => {
-    void loadAppLanguage().finally(() => setLanguageReady(true));
+    void loadAppLanguage()
+      // RTL vs LTR follows the UI language, not the device: one reload when this
+      // launch came up the other way (lib/layoutDirection.ts).
+      .then(() => syncLayoutDirection(getUiLocale()))
+      .finally(() => setLanguageReady(true));
   }, []);
   // Every string is read at render, so a language change re-renders the
   // screens by remounting the Stack under the new catalog.

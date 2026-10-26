@@ -1,4 +1,5 @@
 import { t } from "../lib/i18n";
+import { joinedScriptText } from "../lib/scriptStyle";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -82,7 +83,7 @@ export default function DiagnosticsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.headerButton} activeOpacity={0.85}>
           <AppIcon name="chevron-left" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t("diagnostics.title")}</Text>
+        <Text style={[styles.headerTitle, joinedScriptText()]}>{t("diagnostics.title")}</Text>
         <TouchableOpacity onPress={refresh} style={styles.headerButton} activeOpacity={0.85}>
           <AppIcon
             name="refresh-cw"
@@ -94,7 +95,7 @@ export default function DiagnosticsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.sectionLabel}>{t("diagnostics.section.permissions")}</Text>
+        <Text style={[styles.sectionLabel, joinedScriptText()]}>{t("diagnostics.section.permissions")}</Text>
         <View style={styles.card}>
           <Row
             icon="bell"
@@ -126,7 +127,7 @@ export default function DiagnosticsScreen() {
           ) : null}
         </View>
 
-        <Text style={styles.sectionLabel}>{t("diagnostics.section.systemSettings")}</Text>
+        <Text style={[styles.sectionLabel, joinedScriptText()]}>{t("diagnostics.section.systemSettings")}</Text>
         <View style={styles.card}>
           <Row
             icon="bell"

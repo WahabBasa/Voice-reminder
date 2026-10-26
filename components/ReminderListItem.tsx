@@ -7,6 +7,7 @@ import Animated, {
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { colors, spacing, borderRadius, shadows, chipColors } from "../lib/theme";
 import AppIcon from "./AppIcon";
+import { directionSign } from "../lib/layoutDirection";
 
 export interface ReminderListItemProps {
   id: string;
@@ -58,18 +59,23 @@ export default function ReminderListItem({
   onToggleComplete,
   onDelete,
 }: ReminderListItemProps) {
+  // Logical offset: negative = toward the line's start, where the delete button
+  // is revealed (right edge in LTR, left in RTL — `right: 0` swaps). `sign`
+  // mirrors finger and transform under RTL.
   const translateX = useSharedValue(0);
+  const sign = directionSign();
 
   const panGesture = Gesture.Pan()
     .enabled(!!onDelete)
     .activeOffsetX([-10, 10])
     .onUpdate((event) => {
-      if (event.translationX < 0) {
-        translateX.value = Math.max(event.translationX, -120);
+      const dx = sign * event.translationX;
+      if (dx < 0) {
+        translateX.value = Math.max(dx, -120);
       }
     })
     .onEnd((event) => {
-      if (event.translationX < DELETE_THRESHOLD) {
+      if (sign * event.translationX < DELETE_THRESHOLD) {
         translateX.value = withSpring(-120);
       } else {
         translateX.value = withSpring(0);
@@ -77,7 +83,7 @@ export default function ReminderListItem({
     });
 
   const cardStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }],
+    transform: [{ translateX: sign * translateX.value }],
   }));
 
   const deleteStyle = useAnimatedStyle(() => ({

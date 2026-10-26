@@ -8,6 +8,7 @@ import Animated, {
   withSpring,
 } from "react-native-reanimated";
 import { addDaysISO } from "../../lib/dayOccurrences";
+import { directionSign } from "../../lib/layoutDirection";
 
 const SPRING_CONFIG = { damping: 30, stiffness: 250, mass: 1 };
 const FLICK_VELOCITY = 500;
@@ -33,6 +34,10 @@ export default function DayPager({ dateISO, onFlip, renderDay }: DayPagerProps) 
 
   const translateX = useSharedValue(0);
   const startX = useSharedValue(0);
+  // translateX is logical (next day at +width). Under RTL the track runs from
+  // the right, so the next day sits on the left: physical offset and finger
+  // are mirrored, and "swipe toward the start of the line" still means next.
+  const sign = directionSign();
 
   // Set when a flip was reported and the compensating shift is still pending.
   const pendingFlipRef = useRef<1 | -1 | null>(null);
@@ -77,14 +82,15 @@ export default function DayPager({ dateISO, onFlip, renderDay }: DayPagerProps) 
       startX.value = translateX.value;
     })
     .onUpdate((event) => {
-      translateX.value = startX.value + event.translationX;
+      translateX.value = startX.value + sign * event.translationX;
     })
     .onEnd((event) => {
       const fraction = width > 0 ? -translateX.value / width : 0;
+      const velocity = sign * event.velocityX;
       let target = 0;
-      if (event.velocityX <= -FLICK_VELOCITY && fraction > 0) {
+      if (velocity <= -FLICK_VELOCITY && fraction > 0) {
         target = 1;
-      } else if (event.velocityX >= FLICK_VELOCITY && fraction < 0) {
+      } else if (velocity >= FLICK_VELOCITY && fraction < 0) {
         target = -1;
       } else if (fraction >= SNAP_FRACTION) {
         target = 1;
@@ -93,7 +99,7 @@ export default function DayPager({ dateISO, onFlip, renderDay }: DayPagerProps) 
       }
 
       if (target === 0) {
-        translateX.value = withSpring(0, { ...SPRING_CONFIG, velocity: event.velocityX });
+        translateX.value = withSpring(0, { ...SPRING_CONFIG, velocity });
       } else {
         // Report immediately; the settle spring runs after the recenter shift.
         runOnJS(requestFlip)(target as 1 | -1);
@@ -101,7 +107,7 @@ export default function DayPager({ dateISO, onFlip, renderDay }: DayPagerProps) 
     });
 
   const trackStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }],
+    transform: [{ translateX: sign * translateX.value }],
   }));
 
   const prevDate = addDaysISO(dateISO, -1);

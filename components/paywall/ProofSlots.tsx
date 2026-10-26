@@ -7,6 +7,7 @@
  */
 
 import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { joinedScriptText } from "../../lib/scriptStyle";
 import Svg, { Path } from "react-native-svg";
 import { scaleFontSize } from "../../lib/theme";
 import { FONT_DISPLAY_REGULAR } from "../../lib/fonts";
@@ -45,7 +46,7 @@ export function ProofCarousel() {
         <View key={card.headline} style={styles.proofCard}>
           <Text style={styles.proofHeadline}>{card.headline}</Text>
           <Text style={styles.proofBody}>{card.body}</Text>
-          <Text style={styles.proofSource}>{card.source}</Text>
+          <Text style={[styles.proofSource, joinedScriptText()]}>{card.source}</Text>
         </View>
       ))}
     </ScrollView>
@@ -174,6 +175,9 @@ const styles = StyleSheet.create({
     gap: 18,
   },
   badge: {
+    // The two laurels are drawn as a facing pair (one scaleX-flipped); an RTL
+    // row would swap them so both faced outward. The centred copy is unaffected.
+    direction: "ltr",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",

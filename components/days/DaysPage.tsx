@@ -1,4 +1,5 @@
 import { intlLocales, t } from "../../lib/i18n";
+import { joinedScriptText } from "../../lib/scriptStyle";
 import { weekdayShortLabel } from "../../lib/weekdayLabels";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -252,14 +253,14 @@ export default function DaysPage({
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.weekdayTitle}>{weekdayName}</Text>
+        <Text style={[styles.weekdayTitle, joinedScriptText()]}>{weekdayName}</Text>
         <Pressable
           style={styles.monthButton}
           onPress={() => setMonthSheetVisible(true)}
           accessibilityRole="button"
           accessibilityLabel={t("days.monthPicker.a11y")}
         >
-          <Text style={styles.monthButtonText}>{monthLabel}</Text>
+          <Text style={[styles.monthButtonText, joinedScriptText()]}>{monthLabel}</Text>
           <AppIcon name="chevron-right" size={16} color={colors.textSecondary} />
         </Pressable>
       </View>

@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from "react-native";
+import { joinedScriptText } from "../../lib/scriptStyle";
 import { LinearGradient } from "expo-linear-gradient";
 import { scaleFontSize } from "../../lib/theme";
 import { FONT_DISPLAY } from "../../lib/fonts";
@@ -38,7 +39,7 @@ export default function PaywallHero({
         {hero.lines.map((line) => (
           <Text
             key={line}
-            style={styles.heroLine}
+            style={[styles.heroLine, joinedScriptText()]}
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.7}

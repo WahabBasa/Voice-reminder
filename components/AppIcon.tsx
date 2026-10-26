@@ -33,6 +33,7 @@ import {
   Crown,
 } from "lucide-react-native";
 import { colors } from "../lib/theme";
+import { isLayoutRTL } from "../lib/layoutDirection";
 
 type BaseIconProps = {
   color?: string;
@@ -108,6 +109,14 @@ const iconByName: Record<AppIconName, ComponentType<BaseIconProps>> = {
   crown: Crown,
 };
 
+/** Icons that point along the line: drawn mirrored under an RTL layout. */
+export const MIRRORED_IN_RTL: ReadonlySet<AppIconName> = new Set<AppIconName>([
+  "arrow-left",
+  "chevron-left",
+  "chevron-right",
+]);
+const MIRROR = { transform: [{ scaleX: -1 }] };
+
 type AppIconProps = {
   name: AppIconName;
   color?: string;
@@ -124,5 +133,15 @@ export default function AppIcon({
   style,
 }: AppIconProps) {
   const Icon = iconByName[name];
-  return <Icon size={size} color={color} strokeWidth={strokeWidth} style={style} />;
+  // Arrows and chevrons point along the reading direction (back, forward,
+  // disclosure, previous/next month), so RTL mirrors them. Play and the rest stay.
+  const mirrored = MIRRORED_IN_RTL.has(name) && isLayoutRTL();
+  return (
+    <Icon
+      size={size}
+      color={color}
+      strokeWidth={strokeWidth}
+      style={mirrored ? [style, MIRROR] : style}
+    />
+  );
 }

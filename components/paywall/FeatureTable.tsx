@@ -1,4 +1,5 @@
 import { t } from "../../lib/i18n";
+import { joinedScriptText } from "../../lib/scriptStyle";
 import { StyleSheet, Text, View } from "react-native";
 import { scaleFontSize } from "../../lib/theme";
 import { FONT_DISPLAY } from "../../lib/fonts";
@@ -39,13 +40,13 @@ export default function FeatureTable() {
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.heading}>{PAYWALL_COPY.featureHeading}</Text>
+      <Text style={[styles.heading, joinedScriptText()]}>{PAYWALL_COPY.featureHeading}</Text>
 
       <View style={styles.container}>
         <View style={styles.headRow}>
           <View style={styles.featureCol} />
-          <Text style={styles.colHead}>{t("paywall.table.col.pro")}</Text>
-          <Text style={styles.colHead} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+          <Text style={[styles.colHead, joinedScriptText()]}>{t("paywall.table.col.pro")}</Text>
+          <Text style={[styles.colHead, joinedScriptText()]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
             {t("paywall.table.col.free")}
           </Text>
         </View>

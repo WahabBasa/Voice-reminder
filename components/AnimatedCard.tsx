@@ -1,5 +1,6 @@
 import React, { useCallback, useImperativeHandle, forwardRef } from "react";
 import { ViewStyle } from "react-native";
+import { directionSign } from "../lib/layoutDirection";
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -27,6 +28,8 @@ const AnimatedCard = forwardRef<AnimatedCardRef, AnimatedCardProps>(
     ({ children, style }, ref) => {
         const opacity = useSharedValue(1);
         const translateX = useSharedValue(0);
+        // Exits toward the line's start: left, or right under RTL.
+        const sign = directionSign();
         const height = useSharedValue<number | undefined>(undefined);
 
         const animateOut = useCallback((callback: () => void) => {
@@ -57,7 +60,7 @@ const AnimatedCard = forwardRef<AnimatedCardRef, AnimatedCardProps>(
 
         const animatedStyle = useAnimatedStyle(() => ({
             opacity: opacity.value,
-            transform: [{ translateX: translateX.value }],
+            transform: [{ translateX: sign * translateX.value }],
         }));
 
         return (

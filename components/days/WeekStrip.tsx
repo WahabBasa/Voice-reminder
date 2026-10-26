@@ -1,4 +1,5 @@
 import { weekdayFullLabel, weekdayNarrowLabel } from "../../lib/weekdayLabels";
+import { joinedScriptText } from "../../lib/scriptStyle";
 import { useEffect, useMemo, useRef } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
@@ -9,6 +10,7 @@ import Animated, {
 import { colors, scaleFontSize, spacing } from "../../lib/theme";
 import { FONT_DISPLAY } from "../../lib/fonts";
 import { addDaysISO, parseISODate } from "../../lib/dayOccurrences";
+import { directionSign } from "../../lib/layoutDirection";
 
 /** Monday-first, like the strip and the month grid. */
 const WEEK_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
@@ -45,15 +47,17 @@ export default function WeekStrip({
 
   // Slide the strip in from the flip direction when the week changes.
   const slideX = useSharedValue(0);
+  // A later week comes in from the end of the line: the right, or the left in RTL.
+  const sign = directionSign();
   const prevWeekRef = useRef(weekKey);
   useEffect(() => {
     const prev = prevWeekRef.current;
     if (prev !== weekKey) {
       prevWeekRef.current = weekKey;
-      slideX.value = weekKey > prev ? SLIDE_DISTANCE : -SLIDE_DISTANCE;
+      slideX.value = sign * (weekKey > prev ? SLIDE_DISTANCE : -SLIDE_DISTANCE);
       slideX.value = withSpring(0, SPRING_CONFIG);
     }
-  }, [weekKey, slideX]);
+  }, [weekKey, slideX, sign]);
 
   const slideStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: slideX.value }],
@@ -75,7 +79,7 @@ export default function WeekStrip({
             accessibilityState={{ selected: isSelected }}
             accessibilityLabel={`${weekdayFullLabel(WEEK_ORDER[index])} ${dayNumber}`}
           >
-            <Text style={styles.dayLetter}>{weekdayNarrowLabel(WEEK_ORDER[index])}</Text>
+            <Text style={[styles.dayLetter, joinedScriptText()]}>{weekdayNarrowLabel(WEEK_ORDER[index])}</Text>
             <Text
               style={[
                 styles.dateText,

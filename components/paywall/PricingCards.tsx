@@ -1,4 +1,5 @@
 import { t } from "../../lib/i18n";
+import { joinedScriptText } from "../../lib/scriptStyle";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import type { PurchasesPackage } from "react-native-purchases";
 import { scaleFontSize } from "../../lib/theme";
@@ -38,7 +39,7 @@ function PricingCard({ kicker, plan, selected, badge, onPress }: PricingCardProp
     >
       {badge ? (
         <View style={styles.badge}>
-          <Text style={styles.badgeText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+          <Text style={[styles.badgeText, joinedScriptText()]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
             {badge}
           </Text>
         </View>
@@ -47,7 +48,7 @@ function PricingCard({ kicker, plan, selected, badge, onPress }: PricingCardProp
       <Text style={styles.kicker} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
         {kicker}
       </Text>
-      <Text style={styles.price} numberOfLines={1} adjustsFontSizeToFit>
+      <Text style={[styles.price, joinedScriptText()]} numberOfLines={1} adjustsFontSizeToFit>
         {plan.priceString}
       </Text>
       <Text style={styles.billed}>{plan.billedLabel}</Text>

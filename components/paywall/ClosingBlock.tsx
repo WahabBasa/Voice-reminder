@@ -1,4 +1,5 @@
 import { t } from "../../lib/i18n";
+import { joinedScriptText } from "../../lib/scriptStyle";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
 import { scaleFontSize } from "../../lib/theme";
@@ -57,7 +58,7 @@ export default function ClosingBlock({
 }: ClosingBlockProps) {
   return (
     <View style={styles.wrap}>
-      <Text style={styles.headline}>{PAYWALL_COPY.closingHeadline}</Text>
+      <Text style={[styles.headline, joinedScriptText()]}>{PAYWALL_COPY.closingHeadline}</Text>
 
       <View style={styles.illustration}>
         <SpokenCrescent />

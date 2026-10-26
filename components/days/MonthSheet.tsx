@@ -1,4 +1,5 @@
 import { intlLocales, t } from "../../lib/i18n";
+import { joinedScriptText } from "../../lib/scriptStyle";
 import { weekdayFullLabel, weekdayNarrowLabel } from "../../lib/weekdayLabels";
 import { useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
@@ -97,7 +98,7 @@ export default function MonthSheet({
 
         <View style={styles.letterRow}>
           {WEEK_ORDER.map((day) => (
-            <Text key={day} style={styles.letter} accessibilityLabel={weekdayFullLabel(day)}>
+            <Text key={day} style={[styles.letter, joinedScriptText()]} accessibilityLabel={weekdayFullLabel(day)}>
               {weekdayNarrowLabel(day)}
             </Text>
           ))}
