@@ -1,0 +1,1354 @@
+{
+  "_newKeys": [],
+  "ar": [
+    {
+      "key": "today.header.getPro",
+      "en": "Get Pro",
+      "current": "احصل على Pro",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "edit.emoji.remove",
+      "en": "Remove emoji",
+      "current": "إزالة الرمز التعبيري",
+      "limit": 14,
+      "graphemes": 20
+    }
+  ],
+  "bn": [],
+  "cs": [
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Předplatné se nepodařilo ověřit. Zkontrolujte připojení k internetu a zkuste to znovu.",
+      "limit": 77,
+      "graphemes": 86
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Zásady ochrany osobních údajů",
+      "limit": 18,
+      "graphemes": 29
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Otevřít nastavení systému",
+      "limit": 20,
+      "graphemes": 25
+    }
+  ],
+  "da": [
+    {
+      "key": "tabs.settings",
+      "en": "Settings",
+      "current": "Indstillinger",
+      "limit": 10,
+      "graphemes": 13
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Opdaterer stemme …",
+      "limit": 15,
+      "graphemes": 18
+    },
+    {
+      "key": "feedback.status.queued",
+      "en": "Waiting to send",
+      "current": "Venter på at blive sendt",
+      "limit": 16,
+      "graphemes": 24
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Gentag med få minutters mellemrum, i de timer du vælger",
+      "limit": 48,
+      "graphemes": 55
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Åbn systemindstillinger",
+      "limit": 20,
+      "graphemes": 23
+    },
+    {
+      "key": "diagnostics.row.notificationSettings",
+      "en": "Notification settings",
+      "current": "Indstillinger for notifikationer",
+      "limit": 26,
+      "graphemes": 32
+    }
+  ],
+  "de": [
+    {
+      "key": "common.setting",
+      "en": "Setting…",
+      "current": "Wird eingestellt …",
+      "limit": 14,
+      "graphemes": 18
+    },
+    {
+      "key": "tabs.reminders",
+      "en": "Reminders",
+      "current": "Erinnerungen",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "tabs.settings",
+      "en": "Settings",
+      "current": "Einstellungen",
+      "limit": 10,
+      "graphemes": 13
+    },
+    {
+      "key": "recording.status.micFailed",
+      "en": "Couldn't start the microphone. Tap to try again.",
+      "current": "Mikrofon konnte nicht gestartet werden. Tippe, um es erneut zu versuchen.",
+      "limit": 60,
+      "graphemes": 73
+    },
+    {
+      "key": "permission.title",
+      "en": "Get alerted on time",
+      "current": "Pünktlich benachrichtigt werden",
+      "limit": 24,
+      "graphemes": 31
+    },
+    {
+      "key": "pending.settingUp",
+      "en": "Setting up…",
+      "current": "Wird eingerichtet …",
+      "limit": 14,
+      "graphemes": 19
+    },
+    {
+      "key": "pending.cancelling",
+      "en": "Cancelling…",
+      "current": "Wird abgebrochen …",
+      "limit": 14,
+      "graphemes": 18
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Dein Abo kann nicht überprüft werden. Prüfe deine Internetverbindung und versuche es erneut.",
+      "limit": 77,
+      "graphemes": 92
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Stimme wird aktualisiert …",
+      "limit": 15,
+      "graphemes": 26
+    },
+    {
+      "key": "times.addTime",
+      "en": "+ Add time",
+      "current": "+ Uhrzeit hinzufügen",
+      "limit": 16,
+      "graphemes": 20
+    },
+    {
+      "key": "feedback.toast.saveFailed.title",
+      "en": "Couldn't save your note",
+      "current": "Deine Nachricht konnte nicht gespeichert werden",
+      "limit": 40,
+      "graphemes": 47
+    },
+    {
+      "key": "paywall.billed.monthly",
+      "en": "Billed monthly",
+      "current": "Monatliche Abrechnung",
+      "limit": 18,
+      "graphemes": 21
+    },
+    {
+      "key": "paywall.billed.weekly",
+      "en": "Billed weekly",
+      "current": "Wöchentliche Abrechnung",
+      "limit": 18,
+      "graphemes": 23
+    },
+    {
+      "key": "paywall.restore",
+      "en": "Restore purchase",
+      "current": "Kauf wiederherstellen",
+      "limit": 18,
+      "graphemes": 21
+    },
+    {
+      "key": "paywall.restoring",
+      "en": "Restoring…",
+      "current": "Wird wiederhergestellt …",
+      "limit": 18,
+      "graphemes": 24
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Systemeinstellungen öffnen",
+      "limit": 20,
+      "graphemes": 26
+    }
+  ],
+  "el": [
+    {
+      "key": "tabs.reminders",
+      "en": "Reminders",
+      "current": "Υπενθυμίσεις",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "today.header.getPro",
+      "en": "Get Pro",
+      "current": "Απόκτηση Pro",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "reminders.next.none",
+      "en": "No next ring scheduled",
+      "current": "Δεν έχει προγραμματιστεί επόμενη ειδοποίηση",
+      "limit": 32,
+      "graphemes": 43
+    },
+    {
+      "key": "permission.enable",
+      "en": "Enable",
+      "current": "Ενεργοποίηση",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Δεν είναι δυνατή η επαλήθευση της συνδρομής σας. Ελέγξτε τη σύνδεσή σας στο διαδίκτυο και προσπαθήστε ξανά.",
+      "limit": 77,
+      "graphemes": 107
+    },
+    {
+      "key": "gate.unverified.toastTitle",
+      "en": "Can't verify your subscription",
+      "current": "Δεν είναι δυνατή η επαλήθευση της συνδρομής σας",
+      "limit": 40,
+      "graphemes": 47
+    },
+    {
+      "key": "feedback.status.queued",
+      "en": "Waiting to send",
+      "current": "Σε αναμονή αποστολής",
+      "limit": 16,
+      "graphemes": 20
+    },
+    {
+      "key": "settings.row.notifications",
+      "en": "Notifications & alarms",
+      "current": "Γνωστοποιήσεις και ειδοποιήσεις",
+      "limit": 26,
+      "graphemes": 31
+    },
+    {
+      "key": "paywall.table.cell.unlimited",
+      "en": "Unlimited",
+      "current": "Απεριόριστες",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Άνοιγμα ρυθμίσεων συστήματος",
+      "limit": 20,
+      "graphemes": 28
+    }
+  ],
+  "en": [],
+  "es-MX": [
+    {
+      "key": "tabs.reminders",
+      "en": "Reminders",
+      "current": "Recordatorios",
+      "limit": 10,
+      "graphemes": 13
+    },
+    {
+      "key": "tabs.settings",
+      "en": "Settings",
+      "current": "Configuración",
+      "limit": 10,
+      "graphemes": 13
+    },
+    {
+      "key": "errorBoundary.retry",
+      "en": "Try Again",
+      "current": "Volver a intentar",
+      "limit": 14,
+      "graphemes": 17
+    },
+    {
+      "key": "recording.gate.upgrade",
+      "en": "Upgrade",
+      "current": "Mejorar a Pro",
+      "limit": 10,
+      "graphemes": 13
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "No se puede verificar tu suscripción. Revisa tu conexión a internet y vuelve a intentarlo.",
+      "limit": 77,
+      "graphemes": 90
+    },
+    {
+      "key": "gate.limit.toastTitle",
+      "en": "{limit, plural, one {You've reached # active reminder} other {You've reached # active reminders}}",
+      "current": "{limit, plural, one {Llegaste al límite de # recordatorio activo} other {Llegaste al límite de # recordatorios activos}}",
+      "limit": 40,
+      "graphemes": 47
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Política de privacidad",
+      "limit": 18,
+      "graphemes": 22
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Abrir configuración del sistema",
+      "limit": 20,
+      "graphemes": 31
+    },
+    {
+      "key": "diagnostics.row.notificationSettings",
+      "en": "Notification settings",
+      "current": "Configuración de notificaciones",
+      "limit": 26,
+      "graphemes": 31
+    }
+  ],
+  "fa": [
+    {
+      "key": "errorBoundary.retry",
+      "en": "Try Again",
+      "current": "دوباره امتحان کنید",
+      "limit": 14,
+      "graphemes": 18
+    },
+    {
+      "key": "permission.allSet",
+      "en": "All set!",
+      "current": "همه‌چیز آماده است!",
+      "limit": 14,
+      "graphemes": 17
+    },
+    {
+      "key": "pending.settingUp",
+      "en": "Setting up…",
+      "current": "در حال آماده‌سازی…",
+      "limit": 14,
+      "graphemes": 17
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "در حال به‌روزرسانی صدا…",
+      "limit": 15,
+      "graphemes": 22
+    }
+  ],
+  "fi": [
+    {
+      "key": "tabs.reminders",
+      "en": "Reminders",
+      "current": "Muistutukset",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "permission.enable",
+      "en": "Enable",
+      "current": "Laita päälle",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "pending.recordAgain",
+      "en": "Record again",
+      "current": "Nauhoita uudelleen",
+      "limit": 14,
+      "graphemes": 18
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Päivitetään ääntä…",
+      "limit": 15,
+      "graphemes": 18
+    },
+    {
+      "key": "paywall.hero.default.line1",
+      "en": "Forget less.",
+      "current": "Unohda vähemmän.",
+      "limit": 12,
+      "graphemes": 16
+    },
+    {
+      "key": "paywall.table.col.free",
+      "en": "FREE",
+      "current": "ILMAINEN",
+      "limit": 6,
+      "graphemes": 8
+    },
+    {
+      "key": "paywall.table.row.schedules",
+      "en": "Weekdays, dates, every few days",
+      "current": "Valitut viikonpäivät, päivämäärät, muutaman päivän välein",
+      "limit": 48,
+      "graphemes": 57
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Toisto muutaman minuutin välein valitsemiesi tuntien aikana",
+      "limit": 48,
+      "graphemes": 59
+    },
+    {
+      "key": "paywall.billed.monthly",
+      "en": "Billed monthly",
+      "current": "Laskutetaan kuukausittain",
+      "limit": 18,
+      "graphemes": 25
+    },
+    {
+      "key": "paywall.billed.yearly",
+      "en": "Billed yearly",
+      "current": "Laskutetaan vuosittain",
+      "limit": 18,
+      "graphemes": 22
+    },
+    {
+      "key": "paywall.billed.weekly",
+      "en": "Billed weekly",
+      "current": "Laskutetaan viikoittain",
+      "limit": 18,
+      "graphemes": 23
+    },
+    {
+      "key": "paywall.cta.trial",
+      "en": "Start {length} free trial",
+      "current": "Aloita {length} ilmainen kokeilu",
+      "limit": 24,
+      "graphemes": 30
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Avaa järjestelmäasetukset",
+      "limit": 20,
+      "graphemes": 25
+    }
+  ],
+  "fr": [
+    {
+      "key": "permission.title",
+      "en": "Get alerted on time",
+      "current": "Recevez vos alertes à l’heure",
+      "limit": 24,
+      "graphemes": 29
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Impossible de vérifier votre abonnement. Vérifiez votre connexion Internet et réessayez.",
+      "limit": 77,
+      "graphemes": 88
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Mise à jour de la voix…",
+      "limit": 15,
+      "graphemes": 23
+    },
+    {
+      "key": "times.addTime",
+      "en": "+ Add time",
+      "current": "+ Ajouter une heure",
+      "limit": 16,
+      "graphemes": 19
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Répéter à quelques minutes d’intervalle, dans la plage choisie",
+      "limit": 48,
+      "graphemes": 62
+    },
+    {
+      "key": "paywall.billed.weekly",
+      "en": "Billed weekly",
+      "current": "Facturé chaque semaine",
+      "limit": 18,
+      "graphemes": 22
+    },
+    {
+      "key": "paywall.legal.terms",
+      "en": "Terms of Use",
+      "current": "Conditions d’utilisation",
+      "limit": 18,
+      "graphemes": 24
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Politique de confidentialité",
+      "limit": 18,
+      "graphemes": 28
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Ouvrir les réglages système",
+      "limit": 20,
+      "graphemes": 27
+    }
+  ],
+  "he": [
+    {
+      "key": "times.picker.am",
+      "en": "AM",
+      "current": "לפנה״צ",
+      "limit": 4,
+      "graphemes": 6
+    }
+  ],
+  "hi": [],
+  "hu": [
+    {
+      "key": "tabs.reminders",
+      "en": "Reminders",
+      "current": "Emlékeztetők",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "recording.status.micFailed",
+      "en": "Couldn't start the microphone. Tap to try again.",
+      "current": "Nem sikerült elindítani a mikrofont. Koppintson az újrapróbáláshoz.",
+      "limit": 60,
+      "graphemes": 67
+    },
+    {
+      "key": "aiConsent.allow",
+      "en": "Allow",
+      "current": "Engedélyezés",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Az előfizetés nem ellenőrizhető. Ellenőrizze az internetkapcsolatot, és próbálja újra.",
+      "limit": 77,
+      "graphemes": 86
+    },
+    {
+      "key": "edit.emoji.remove",
+      "en": "Remove emoji",
+      "current": "Emoji eltávolítása",
+      "limit": 14,
+      "graphemes": 18
+    },
+    {
+      "key": "paywall.restore",
+      "en": "Restore purchase",
+      "current": "Vásárlás visszaállítása",
+      "limit": 18,
+      "graphemes": 23
+    },
+    {
+      "key": "paywall.legal.terms",
+      "en": "Terms of Use",
+      "current": "Felhasználási feltételek",
+      "limit": 18,
+      "graphemes": 24
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Adatvédelmi irányelvek",
+      "limit": 18,
+      "graphemes": 22
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Rendszerbeállítások megnyitása",
+      "limit": 20,
+      "graphemes": 30
+    }
+  ],
+  "id": [
+    {
+      "key": "permission.title",
+      "en": "Get alerted on time",
+      "current": "Dapatkan peringatan tepat waktu",
+      "limit": 24,
+      "graphemes": 31
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Langganan Anda tidak dapat diverifikasi. Periksa koneksi internet Anda, lalu coba lagi.",
+      "limit": 77,
+      "graphemes": 87
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Memperbarui suara…",
+      "limit": 15,
+      "graphemes": 18
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Ulangi setiap beberapa menit, dalam jam yang Anda pilih",
+      "limit": 48,
+      "graphemes": 55
+    }
+  ],
+  "it": [
+    {
+      "key": "tabs.settings",
+      "en": "Settings",
+      "current": "Impostazioni",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "pending.recordAgain",
+      "en": "Record again",
+      "current": "Registra di nuovo",
+      "limit": 14,
+      "graphemes": 17
+    },
+    {
+      "key": "paywall.card.badge",
+      "en": "BEST VALUE",
+      "current": "PIÙ CONVENIENTE",
+      "limit": 12,
+      "graphemes": 15
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Informativa sulla privacy",
+      "limit": 18,
+      "graphemes": 25
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Apri impostazioni di sistema",
+      "limit": 20,
+      "graphemes": 28
+    }
+  ],
+  "ja": [],
+  "ko": [],
+  "ms": [
+    {
+      "key": "permission.title",
+      "en": "Get alerted on time",
+      "current": "Dapatkan amaran tepat pada masa",
+      "limit": 24,
+      "graphemes": 31
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Mengemas kini suara…",
+      "limit": 15,
+      "graphemes": 20
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Ulang setiap beberapa minit, dalam waktu yang anda pilih",
+      "limit": 48,
+      "graphemes": 56
+    }
+  ],
+  "nb": [
+    {
+      "key": "tabs.settings",
+      "en": "Settings",
+      "current": "Innstillinger",
+      "limit": 10,
+      "graphemes": 13
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Oppdaterer stemmen …",
+      "limit": 15,
+      "graphemes": 20
+    },
+    {
+      "key": "times.addTime",
+      "en": "+ Add time",
+      "current": "+ Legg til tidspunkt",
+      "limit": 16,
+      "graphemes": 20
+    },
+    {
+      "key": "feedback.status.queued",
+      "en": "Waiting to send",
+      "current": "Venter på å bli sendt",
+      "limit": 16,
+      "graphemes": 21
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Gjenta med noen få minutters mellomrom, i timene du velger",
+      "limit": 48,
+      "graphemes": 58
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Åpne systeminnstillinger",
+      "limit": 20,
+      "graphemes": 24
+    }
+  ],
+  "nl": [
+    {
+      "key": "tabs.reminders",
+      "en": "Reminders",
+      "current": "Herinneringen",
+      "limit": 10,
+      "graphemes": 13
+    },
+    {
+      "key": "tabs.settings",
+      "en": "Settings",
+      "current": "Instellingen",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "pending.settingUp",
+      "en": "Setting up…",
+      "current": "Bezig met instellen…",
+      "limit": 14,
+      "graphemes": 20
+    },
+    {
+      "key": "pending.cancelling",
+      "en": "Cancelling…",
+      "current": "Bezig met annuleren…",
+      "limit": 14,
+      "graphemes": 20
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Je abonnement kan niet worden gecontroleerd. Controleer je internetverbinding en probeer het opnieuw.",
+      "limit": 77,
+      "graphemes": 101
+    },
+    {
+      "key": "feedback.status.queued",
+      "en": "Waiting to send",
+      "current": "Wacht op verzending",
+      "limit": 16,
+      "graphemes": 19
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Herhaal om de paar minuten, binnen de uren die jij kiest",
+      "limit": 48,
+      "graphemes": 56
+    },
+    {
+      "key": "paywall.billed.monthly",
+      "en": "Billed monthly",
+      "current": "Maandelijks gefactureerd",
+      "limit": 18,
+      "graphemes": 24
+    },
+    {
+      "key": "paywall.billed.yearly",
+      "en": "Billed yearly",
+      "current": "Jaarlijks gefactureerd",
+      "limit": 18,
+      "graphemes": 22
+    },
+    {
+      "key": "paywall.billed.weekly",
+      "en": "Billed weekly",
+      "current": "Wekelijks gefactureerd",
+      "limit": 18,
+      "graphemes": 22
+    },
+    {
+      "key": "paywall.restoring",
+      "en": "Restoring…",
+      "current": "Bezig met herstellen…",
+      "limit": 18,
+      "graphemes": 21
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Open systeeminstellingen",
+      "limit": 20,
+      "graphemes": 24
+    }
+  ],
+  "pl": [
+    {
+      "key": "tabs.reminders",
+      "en": "Reminders",
+      "current": "Przypomnienia",
+      "limit": 10,
+      "graphemes": 13
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Nie można zweryfikować subskrypcji. Sprawdź połączenie z internetem i spróbuj ponownie.",
+      "limit": 77,
+      "graphemes": 87
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Aktualizowanie głosu…",
+      "limit": 15,
+      "graphemes": 21
+    },
+    {
+      "key": "paywall.hero.default.line1",
+      "en": "Forget less.",
+      "current": "Mniej zapominaj.",
+      "limit": 12,
+      "graphemes": 16
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Otwórz ustawienia systemowe",
+      "limit": 20,
+      "graphemes": 27
+    }
+  ],
+  "pt-BR": [
+    {
+      "key": "permission.title",
+      "en": "Get alerted on time",
+      "current": "Receba os alertas na hora certa",
+      "limit": 24,
+      "graphemes": 31
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Não foi possível verificar a sua assinatura. Confira a conexão com a internet e tente de novo.",
+      "limit": 77,
+      "graphemes": 94
+    },
+    {
+      "key": "gate.limit.toastTitle",
+      "en": "{limit, plural, one {You've reached # active reminder} other {You've reached # active reminders}}",
+      "current": "{limit, plural, one {Você atingiu o limite de # lembrete ativo} other {Você atingiu o limite de # lembretes ativos}}",
+      "limit": 40,
+      "graphemes": 45
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Atualizando a voz…",
+      "limit": 15,
+      "graphemes": 18
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Repetir a cada poucos minutos, nos horários que você escolher",
+      "limit": 48,
+      "graphemes": 61
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Política de Privacidade",
+      "limit": 18,
+      "graphemes": 23
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Abrir ajustes do sistema",
+      "limit": 20,
+      "graphemes": 24
+    }
+  ],
+  "ro": [
+    {
+      "key": "today.header.getPro",
+      "en": "Get Pro",
+      "current": "Obțineți Pro",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "schedule.everyNDays",
+      "en": "{count, plural, one {Every # day} other {Every # days}}",
+      "current": "{count, plural, one {În fiecare zi} few {La fiecare # zile} other {La fiecare # de zile}}",
+      "limit": 18,
+      "graphemes": 22
+    },
+    {
+      "key": "recording.gate.upgrade",
+      "en": "Upgrade",
+      "current": "Treceți la Pro",
+      "limit": 10,
+      "graphemes": 14
+    },
+    {
+      "key": "pending.recordAgain",
+      "en": "Record again",
+      "current": "Înregistrați din nou",
+      "limit": 14,
+      "graphemes": 20
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Se actualizează vocea…",
+      "limit": 15,
+      "graphemes": 22
+    },
+    {
+      "key": "edit.emoji.remove",
+      "en": "Remove emoji",
+      "current": "Eliminați emojiul",
+      "limit": 14,
+      "graphemes": 17
+    },
+    {
+      "key": "paywall.hero.default.line1",
+      "en": "Forget less.",
+      "current": "Uitați mai puțin.",
+      "limit": 12,
+      "graphemes": 17
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Politica de confidențialitate",
+      "limit": 18,
+      "graphemes": 29
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Deschideți configurările de sistem",
+      "limit": 20,
+      "graphemes": 34
+    }
+  ],
+  "ru": [
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Обновление голоса…",
+      "limit": 15,
+      "graphemes": 18
+    },
+    {
+      "key": "paywall.legal.terms",
+      "en": "Terms of Use",
+      "current": "Условия использования",
+      "limit": 18,
+      "graphemes": 21
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Политика конфиденциальности",
+      "limit": 18,
+      "graphemes": 27
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Открыть системные настройки",
+      "limit": 20,
+      "graphemes": 27
+    }
+  ],
+  "sv": [
+    {
+      "key": "tabs.settings",
+      "en": "Settings",
+      "current": "Inställningar",
+      "limit": 10,
+      "graphemes": 13
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Det går inte att verifiera din prenumeration. Kontrollera internetanslutningen och försök igen.",
+      "limit": 77,
+      "graphemes": 95
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Uppdaterar rösten …",
+      "limit": 15,
+      "graphemes": 19
+    },
+    {
+      "key": "feedback.status.queued",
+      "en": "Waiting to send",
+      "current": "Väntar på att skickas",
+      "limit": 16,
+      "graphemes": 21
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Upprepa med några minuters mellanrum, under timmarna du väljer",
+      "limit": 48,
+      "graphemes": 62
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Öppna systeminställningar",
+      "limit": 20,
+      "graphemes": 25
+    }
+  ],
+  "sw": [
+    {
+      "key": "permission.allSet",
+      "en": "All set!",
+      "current": "Kila kitu tayari!",
+      "limit": 14,
+      "graphemes": 17
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Imeshindwa kuthibitisha usajili wako. Angalia muunganisho wako wa intaneti kisha ujaribu tena.",
+      "limit": 77,
+      "graphemes": 94
+    },
+    {
+      "key": "gate.limit.toastTitle",
+      "en": "{limit, plural, one {You've reached # active reminder} other {You've reached # active reminders}}",
+      "current": "{limit, plural, one {Umefikia kikomo cha kikumbusho # kinachotumika} other {Umefikia kikomo cha vikumbusho # vinavyotumika}}",
+      "limit": 40,
+      "graphemes": 48
+    },
+    {
+      "key": "paywall.table.row.interval",
+      "en": "Repeat every few minutes, in the hours you pick",
+      "current": "Rudia kila baada ya dakika chache, ndani ya saa unazochagua",
+      "limit": 48,
+      "graphemes": 59
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Fungua mipangilio ya mfumo",
+      "limit": 20,
+      "graphemes": 26
+    }
+  ],
+  "th": [
+    {
+      "key": "time.clock.am",
+      "en": "am",
+      "current": "ก่อนเที่ยง",
+      "limit": 5,
+      "graphemes": 7
+    },
+    {
+      "key": "time.clock.pm",
+      "en": "pm",
+      "current": "หลังเที่ยง",
+      "limit": 5,
+      "graphemes": 7
+    },
+    {
+      "key": "times.picker.am",
+      "en": "AM",
+      "current": "ก่อนเที่ยง",
+      "limit": 4,
+      "graphemes": 7
+    },
+    {
+      "key": "times.picker.pm",
+      "en": "PM",
+      "current": "หลังเที่ยง",
+      "limit": 4,
+      "graphemes": 7
+    }
+  ],
+  "tl": [
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "Hindi ma-verify ang subscription mo. Tingnan ang internet connection mo at subukan ulit.",
+      "limit": 77,
+      "graphemes": 88
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Ina-update ang boses…",
+      "limit": 15,
+      "graphemes": 21
+    },
+    {
+      "key": "times.addTime",
+      "en": "+ Add time",
+      "current": "+ Magdagdag ng oras",
+      "limit": 16,
+      "graphemes": 19
+    },
+    {
+      "key": "feedback.status.queued",
+      "en": "Waiting to send",
+      "current": "Naghihintay maipadala",
+      "limit": 16,
+      "graphemes": 21
+    },
+    {
+      "key": "paywall.table.cell.unlimited",
+      "en": "Unlimited",
+      "current": "Walang limit",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "paywall.billed.monthly",
+      "en": "Billed monthly",
+      "current": "Sinisingil buwan-buwan",
+      "limit": 18,
+      "graphemes": 22
+    },
+    {
+      "key": "paywall.billed.weekly",
+      "en": "Billed weekly",
+      "current": "Sinisingil linggo-linggo",
+      "limit": 18,
+      "graphemes": 24
+    },
+    {
+      "key": "paywall.legal.terms",
+      "en": "Terms of Use",
+      "current": "Mga Tuntunin ng Paggamit",
+      "limit": 18,
+      "graphemes": 24
+    },
+    {
+      "key": "diagnostics.section.systemSettings",
+      "en": "Open system settings",
+      "current": "Buksan ang mga setting ng system",
+      "limit": 20,
+      "graphemes": 32
+    }
+  ],
+  "tr": [
+    {
+      "key": "tabs.reminders",
+      "en": "Reminders",
+      "current": "Hatırlatıcılar",
+      "limit": 10,
+      "graphemes": 14
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Ses güncelleniyor…",
+      "limit": 15,
+      "graphemes": 18
+    },
+    {
+      "key": "feedback.status.queued",
+      "en": "Waiting to send",
+      "current": "Gönderilmeyi bekliyor",
+      "limit": 16,
+      "graphemes": 21
+    },
+    {
+      "key": "paywall.hero.default.line1",
+      "en": "Forget less.",
+      "current": "Daha az unutun.",
+      "limit": 12,
+      "graphemes": 15
+    },
+    {
+      "key": "paywall.table.col.free",
+      "en": "FREE",
+      "current": "ÜCRETSİZ",
+      "limit": 6,
+      "graphemes": 8
+    },
+    {
+      "key": "paywall.billed.monthly",
+      "en": "Billed monthly",
+      "current": "Aylık faturalandırılır",
+      "limit": 18,
+      "graphemes": 22
+    },
+    {
+      "key": "paywall.billed.yearly",
+      "en": "Billed yearly",
+      "current": "Yıllık faturalandırılır",
+      "limit": 18,
+      "graphemes": 23
+    },
+    {
+      "key": "paywall.billed.weekly",
+      "en": "Billed weekly",
+      "current": "Haftalık faturalandırılır",
+      "limit": 18,
+      "graphemes": 25
+    },
+    {
+      "key": "paywall.restore",
+      "en": "Restore purchase",
+      "current": "Satın Alınanları Geri Yükle",
+      "limit": 18,
+      "graphemes": 27
+    }
+  ],
+  "uk": [
+    {
+      "key": "today.header.getPro",
+      "en": "Get Pro",
+      "current": "Отримати Pro",
+      "limit": 10,
+      "graphemes": 12
+    },
+    {
+      "key": "paywall.hero.default.line1",
+      "en": "Forget less.",
+      "current": "Забувайте менше.",
+      "limit": 12,
+      "graphemes": 16
+    },
+    {
+      "key": "paywall.table.col.free",
+      "en": "FREE",
+      "current": "БЕЗКОШТ.",
+      "limit": 6,
+      "graphemes": 8
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Політика конфіденційності",
+      "limit": 18,
+      "graphemes": 25
+    }
+  ],
+  "ur": [
+    {
+      "key": "pending.recordAgain",
+      "en": "Record again",
+      "current": "دوبارہ ریکارڈ کریں",
+      "limit": 14,
+      "graphemes": 18
+    },
+    {
+      "key": "gate.unverified.status",
+      "en": "Can't verify your subscription. Check your internet connection and try again.",
+      "current": "آپ کی سبسکرپشن کی تصدیق نہیں ہو سکی۔ اپنا انٹرنیٹ کنکشن چیک کریں اور دوبارہ کوشش کریں۔",
+      "limit": 77,
+      "graphemes": 86
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "آواز اپ ڈیٹ ہو رہی ہے…",
+      "limit": 15,
+      "graphemes": 22
+    },
+    {
+      "key": "feedback.status.looking",
+      "en": "Looking into it",
+      "current": "جائزہ لیا جا رہا ہے",
+      "limit": 16,
+      "graphemes": 19
+    }
+  ],
+  "vi": [
+    {
+      "key": "gate.limit.toastTitle",
+      "en": "{limit, plural, one {You've reached # active reminder} other {You've reached # active reminders}}",
+      "current": "{limit, plural, other {Bạn đã đạt giới hạn # lời nhắc đang hoạt động}}",
+      "limit": 40,
+      "graphemes": 47
+    },
+    {
+      "key": "edit.confirm.updatingVoice",
+      "en": "Updating voice…",
+      "current": "Đang cập nhật giọng…",
+      "limit": 15,
+      "graphemes": 20
+    },
+    {
+      "key": "paywall.table.col.free",
+      "en": "FREE",
+      "current": "MIỄN PHÍ",
+      "limit": 6,
+      "graphemes": 8
+    },
+    {
+      "key": "paywall.table.cell.unlimited",
+      "en": "Unlimited",
+      "current": "Không giới hạn",
+      "limit": 10,
+      "graphemes": 14
+    },
+    {
+      "key": "paywall.billed.monthly",
+      "en": "Billed monthly",
+      "current": "Thanh toán hằng tháng",
+      "limit": 18,
+      "graphemes": 21
+    },
+    {
+      "key": "paywall.legal.privacy",
+      "en": "Privacy Policy",
+      "current": "Chính sách quyền riêng tư",
+      "limit": 18,
+      "graphemes": 25
+    }
+  ],
+  "zh-Hans": [],
+  "zh-Hant": []
+}

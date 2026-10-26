@@ -1,0 +1,1013 @@
+{
+  "_about": "Max length in graphemes per space-constrained key (scripts/i18n-limits.js). Overflow = more than limit + max(1, ceil(10%)). Placeholders filled with English samples, every plural branch measured.",
+  "common.cancel": {
+    "limit": 10,
+    "role": "button",
+    "en": "Cancel"
+  },
+  "common.done": {
+    "limit": 10,
+    "role": "button",
+    "en": "Done"
+  },
+  "common.delete": {
+    "limit": 14,
+    "role": "button",
+    "en": "Delete"
+  },
+  "common.error": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Error"
+  },
+  "common.reportProblem": {
+    "limit": 24,
+    "role": "linkRow",
+    "en": "Report a problem"
+  },
+  "common.setting": {
+    "limit": 14,
+    "role": "busyButton",
+    "en": "Setting…"
+  },
+  "tabs.reminders": {
+    "limit": 10,
+    "role": "tab",
+    "en": "Reminders"
+  },
+  "tabs.days": {
+    "limit": 10,
+    "role": "tab",
+    "en": "Days"
+  },
+  "tabs.settings": {
+    "limit": 10,
+    "role": "tab",
+    "en": "Settings"
+  },
+  "layout.toast.alarmsMayNotFire.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Alarms may not fire"
+  },
+  "errorBoundary.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Something went wrong"
+  },
+  "errorBoundary.retry": {
+    "limit": 14,
+    "role": "button",
+    "en": "Try Again"
+  },
+  "today.header.title": {
+    "limit": 16,
+    "role": "screenTitle",
+    "en": "Reminders"
+  },
+  "today.header.getPro": {
+    "limit": 10,
+    "role": "headerPill",
+    "en": "Get Pro"
+  },
+  "today.offline.banner": {
+    "limit": 40,
+    "role": "banner",
+    "en": "No internet connection"
+  },
+  "today.gate.loading": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Loading reminders..."
+  },
+  "today.toast.timeInvalid.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "That time doesn't work"
+  },
+  "today.toast.timeFailed.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Couldn't set that time"
+  },
+  "today.timeDraft.confirm": {
+    "limit": 14,
+    "role": "button",
+    "en": "Remind me"
+  },
+  "today.completed.header": {
+    "limit": 20,
+    "role": "sectionLabel",
+    "en": "COMPLETE ({count})"
+  },
+  "time.clock.am": {
+    "limit": 5,
+    "role": "clockSuffix",
+    "en": "am"
+  },
+  "time.clock.pm": {
+    "limit": 5,
+    "role": "clockSuffix",
+    "en": "pm"
+  },
+  "time.ringingNow": {
+    "limit": 32,
+    "role": "rowSubtitle",
+    "en": "Ringing now"
+  },
+  "time.dueNow": {
+    "limit": 32,
+    "role": "rowSubtitle",
+    "en": "Due now"
+  },
+  "time.ringsAgain": {
+    "limit": 32,
+    "role": "rowSubtitle",
+    "en": "Rings again {time}"
+  },
+  "time.missedAt": {
+    "limit": 32,
+    "role": "rowSubtitle",
+    "en": "Missed · {time}"
+  },
+  "time.nextIn.minutes": {
+    "limit": 32,
+    "role": "rowSubtitle",
+    "en": "Next in {count} min"
+  },
+  "reminders.next.none": {
+    "limit": 32,
+    "role": "rowSubtitle",
+    "en": "No next ring scheduled"
+  },
+  "reminders.next.overdue": {
+    "limit": 32,
+    "role": "rowSubtitle",
+    "en": "Overdue · {when}"
+  },
+  "reminders.next.tomorrow": {
+    "limit": 32,
+    "role": "rowSubtitle",
+    "en": "Tomorrow · {time}"
+  },
+  "schedule.daily": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Daily"
+  },
+  "schedule.weekly": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Weekly"
+  },
+  "schedule.everyDay": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Every day"
+  },
+  "schedule.everyNDays": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "{count, plural, one {Every # day} other {Every # days}}"
+  },
+  "schedule.pickDays": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Pick days"
+  },
+  "schedule.pickDate": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Pick a date"
+  },
+  "schedule.pickTime": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Pick a time"
+  },
+  "weekday.short.sun": {
+    "limit": 8,
+    "role": "weekdayShort",
+    "en": "Sun"
+  },
+  "weekday.short.mon": {
+    "limit": 8,
+    "role": "weekdayShort",
+    "en": "Mon"
+  },
+  "weekday.short.tue": {
+    "limit": 8,
+    "role": "weekdayShort",
+    "en": "Tue"
+  },
+  "weekday.short.wed": {
+    "limit": 8,
+    "role": "weekdayShort",
+    "en": "Wed"
+  },
+  "weekday.short.thu": {
+    "limit": 8,
+    "role": "weekdayShort",
+    "en": "Thu"
+  },
+  "weekday.short.fri": {
+    "limit": 8,
+    "role": "weekdayShort",
+    "en": "Fri"
+  },
+  "weekday.short.sat": {
+    "limit": 8,
+    "role": "weekdayShort",
+    "en": "Sat"
+  },
+  "weekday.narrow.mon": {
+    "limit": 2,
+    "role": "weekdayNarrow",
+    "en": "M"
+  },
+  "weekday.narrow.tue": {
+    "limit": 2,
+    "role": "weekdayNarrow",
+    "en": "T"
+  },
+  "weekday.narrow.wed": {
+    "limit": 2,
+    "role": "weekdayNarrow",
+    "en": "W"
+  },
+  "weekday.narrow.thu": {
+    "limit": 2,
+    "role": "weekdayNarrow",
+    "en": "T"
+  },
+  "weekday.narrow.fri": {
+    "limit": 2,
+    "role": "weekdayNarrow",
+    "en": "F"
+  },
+  "weekday.narrow.sat": {
+    "limit": 2,
+    "role": "weekdayNarrow",
+    "en": "S"
+  },
+  "weekday.narrow.sun": {
+    "limit": 2,
+    "role": "weekdayNarrow",
+    "en": "S"
+  },
+  "recording.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "New Recording"
+  },
+  "recording.status.micFailed": {
+    "limit": 60,
+    "role": "statusLine2",
+    "en": "Couldn't start the microphone. Tap to try again."
+  },
+  "recording.status.micDenied": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Microphone access required"
+  },
+  "recording.status.processing": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Creating your reminder..."
+  },
+  "recording.status.paused": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Paused"
+  },
+  "recording.status.listening": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Listening..."
+  },
+  "recording.status.upgradeToContinue": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Upgrade to continue"
+  },
+  "recording.status.gettingReady": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Getting ready..."
+  },
+  "recording.status.tapToStart": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Tap the mic to start"
+  },
+  "recording.gate.freeLimit": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Free limit reached"
+  },
+  "recording.gate.upgrade": {
+    "limit": 10,
+    "role": "smallButton",
+    "en": "Upgrade"
+  },
+  "composer.speak": {
+    "limit": 8,
+    "role": "smallButton",
+    "en": "Speak"
+  },
+  "aiConsent.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Before you record"
+  },
+  "aiConsent.allow": {
+    "limit": 10,
+    "role": "button",
+    "en": "Allow"
+  },
+  "aiConsent.notNow": {
+    "limit": 14,
+    "role": "button",
+    "en": "Not now"
+  },
+  "permission.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Get alerted on time"
+  },
+  "permission.enabled": {
+    "limit": 10,
+    "role": "pill",
+    "en": "Enabled"
+  },
+  "permission.enable": {
+    "limit": 10,
+    "role": "button",
+    "en": "Enable"
+  },
+  "permission.allSet": {
+    "limit": 14,
+    "role": "button",
+    "en": "All set!"
+  },
+  "pending.recordAgain": {
+    "limit": 14,
+    "role": "button",
+    "en": "Record again"
+  },
+  "pending.settingUp": {
+    "limit": 14,
+    "role": "busyButton",
+    "en": "Setting up…"
+  },
+  "pending.cancelling": {
+    "limit": 14,
+    "role": "busyButton",
+    "en": "Cancelling…"
+  },
+  "quickChoice.in1Hour": {
+    "limit": 16,
+    "role": "chip",
+    "en": "In 1 hour"
+  },
+  "quickChoice.thisEvening": {
+    "limit": 16,
+    "role": "chip",
+    "en": "This evening"
+  },
+  "quickChoice.tomorrowMorning": {
+    "limit": 18,
+    "role": "chip",
+    "en": "Tomorrow morning"
+  },
+  "quickChoice.pickTime": {
+    "limit": 16,
+    "role": "chip",
+    "en": "Pick a time…"
+  },
+  "gate.unverified.status": {
+    "limit": 77,
+    "role": "statusLine",
+    "en": "Can't verify your subscription. Check your internet connection and try again."
+  },
+  "gate.unverified.toastTitle": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Can't verify your subscription"
+  },
+  "gate.limit.toastTitle": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "{limit, plural, one {You've reached # active reminder} other {You've reached # active reminders}}"
+  },
+  "take.partial.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "{created} of {total, plural, one {# reminder created} other {# reminders created}}"
+  },
+  "take.multiCreated": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "{count, plural, other {# reminders created}}"
+  },
+  "take.created.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Reminder created"
+  },
+  "take.created.action": {
+    "limit": 12,
+    "role": "toastAction",
+    "en": "Not right?"
+  },
+  "voice.regenFailed.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Voice not updated"
+  },
+  "voice.rescheduleFailed.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Alarm not rescheduled"
+  },
+  "edit.spokenLine.label": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Spoken line"
+  },
+  "edit.row.repeat": {
+    "limit": 12,
+    "role": "rowLabel",
+    "en": "Repeat"
+  },
+  "edit.row.date": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Date"
+  },
+  "edit.row.starts": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Starts"
+  },
+  "edit.row.times": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Times"
+  },
+  "edit.row.time": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Time"
+  },
+  "edit.row.alarm": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Alarm"
+  },
+  "edit.row.headsUp": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Heads-up"
+  },
+  "edit.headsUp.minutesBefore": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "{minutes} min before"
+  },
+  "edit.headsUp.none": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "None"
+  },
+  "edit.date.select": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Select Date"
+  },
+  "edit.date.today": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Today"
+  },
+  "edit.date.tomorrow": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Tomorrow"
+  },
+  "edit.row.voiceNote": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Voice note"
+  },
+  "edit.voiceNote.generating": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Generating…"
+  },
+  "edit.voiceNote.playing": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Playing…"
+  },
+  "edit.voiceNote.play": {
+    "limit": 18,
+    "role": "rowValue",
+    "en": "Play"
+  },
+  "edit.confirm.updatingVoice": {
+    "limit": 15,
+    "role": "button",
+    "en": "Updating voice…"
+  },
+  "edit.emoji.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Pick an emoji"
+  },
+  "edit.emoji.remove": {
+    "limit": 14,
+    "role": "button",
+    "en": "Remove emoji"
+  },
+  "repeat.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Repeat"
+  },
+  "repeat.mode.everyDay": {
+    "limit": 12,
+    "role": "chip",
+    "en": "Every day"
+  },
+  "repeat.mode.weekly": {
+    "limit": 16,
+    "role": "chip",
+    "en": "Weekly"
+  },
+  "repeat.mode.everyNDays": {
+    "limit": 16,
+    "role": "chip",
+    "en": "Every N days"
+  },
+  "repeat.mode.date": {
+    "limit": 16,
+    "role": "chip",
+    "en": "On a date"
+  },
+  "repeat.section.repeatOn": {
+    "limit": 20,
+    "role": "sectionLabel",
+    "en": "Repeat on"
+  },
+  "repeat.section.repeatEvery": {
+    "limit": 20,
+    "role": "sectionLabel",
+    "en": "Repeat every"
+  },
+  "repeat.cancel": {
+    "limit": 14,
+    "role": "button",
+    "en": "CANCEL"
+  },
+  "repeat.done": {
+    "limit": 14,
+    "role": "button",
+    "en": "DONE"
+  },
+  "times.mode.setTimes": {
+    "limit": 16,
+    "role": "chip",
+    "en": "Set times"
+  },
+  "times.mode.interval": {
+    "limit": 16,
+    "role": "chip",
+    "en": "Interval"
+  },
+  "times.addTime": {
+    "limit": 16,
+    "role": "chip",
+    "en": "+ Add time"
+  },
+  "times.every": {
+    "limit": 12,
+    "role": "inlineLabel",
+    "en": "Every"
+  },
+  "times.between": {
+    "limit": 12,
+    "role": "inlineLabel",
+    "en": "Between"
+  },
+  "times.picker.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Select time"
+  },
+  "times.picker.am": {
+    "limit": 4,
+    "role": "pickerAmPm",
+    "en": "AM"
+  },
+  "times.picker.pm": {
+    "limit": 4,
+    "role": "pickerAmPm",
+    "en": "PM"
+  },
+  "feedback.sheet.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Send feedback"
+  },
+  "feedback.sheet.kicker.failedTake": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Failed recording"
+  },
+  "feedback.sheet.send": {
+    "limit": 10,
+    "role": "button",
+    "en": "Send"
+  },
+  "feedback.sheet.sending": {
+    "limit": 14,
+    "role": "busyButton",
+    "en": "Sending…"
+  },
+  "feedback.toast.saveFailed.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Couldn't save your note"
+  },
+  "feedback.toast.queued.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Saved on this phone"
+  },
+  "feedback.toast.sent": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Sent. Thank you."
+  },
+  "feedback.list.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Your feedback"
+  },
+  "feedback.list.fromRemi": {
+    "limit": 20,
+    "role": "chip",
+    "en": "Message from Remi"
+  },
+  "feedback.status.queued": {
+    "limit": 16,
+    "role": "statusChip",
+    "en": "Waiting to send"
+  },
+  "feedback.status.received": {
+    "limit": 16,
+    "role": "statusChip",
+    "en": "Received"
+  },
+  "feedback.status.looking": {
+    "limit": 16,
+    "role": "statusChip",
+    "en": "Looking into it"
+  },
+  "feedback.status.fixed": {
+    "limit": 16,
+    "role": "statusChip",
+    "en": "Fixed"
+  },
+  "settings.title": {
+    "limit": 16,
+    "role": "screenTitle",
+    "en": "Settings"
+  },
+  "settings.section.general": {
+    "limit": 20,
+    "role": "sectionLabel",
+    "en": "General"
+  },
+  "settings.section.voice": {
+    "limit": 20,
+    "role": "sectionLabel",
+    "en": "Voice"
+  },
+  "settings.section.feedback": {
+    "limit": 20,
+    "role": "sectionLabel",
+    "en": "Feedback"
+  },
+  "settings.section.about": {
+    "limit": 20,
+    "role": "sectionLabel",
+    "en": "About"
+  },
+  "settings.row.notifications": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Notifications & alarms"
+  },
+  "settings.row.restore": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Restore purchases"
+  },
+  "settings.row.voiceLanguage": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Voice language"
+  },
+  "settings.row.language": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Language"
+  },
+  "language.sheet.title": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "Choose your language"
+  },
+  "language.sheet.continue": {
+    "limit": 14,
+    "role": "button",
+    "en": "Continue"
+  },
+  "settings.row.sendFeedback": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Send feedback"
+  },
+  "settings.row.yourFeedback": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Your feedback"
+  },
+  "settings.row.privacy": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Privacy Policy"
+  },
+  "settings.row.terms": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Terms of Use"
+  },
+  "proCard.unknown.title": {
+    "limit": 24,
+    "role": "cardTitle",
+    "en": "Subscription"
+  },
+  "proCard.free.title": {
+    "limit": 24,
+    "role": "cardTitle",
+    "en": "Upgrade to Pro"
+  },
+  "paywall.hero.default.line1": {
+    "limit": 12,
+    "role": "heroLine",
+    "en": "Forget less."
+  },
+  "paywall.hero.default.line2": {
+    "limit": 12,
+    "role": "heroLine",
+    "en": "Remember"
+  },
+  "paywall.hero.default.line3": {
+    "limit": 12,
+    "role": "heroLine",
+    "en": "on time."
+  },
+  "paywall.hero.interval.line1": {
+    "limit": 12,
+    "role": "heroLine",
+    "en": "Repeat it"
+  },
+  "paywall.hero.interval.line2": {
+    "limit": 12,
+    "role": "heroLine",
+    "en": "until it's"
+  },
+  "paywall.hero.interval.line3": {
+    "limit": 12,
+    "role": "heroLine",
+    "en": "done."
+  },
+  "paywall.table.heading": {
+    "limit": 24,
+    "role": "sheetTitle",
+    "en": "What Pro adds"
+  },
+  "paywall.table.col.pro": {
+    "limit": 5,
+    "role": "columnHead",
+    "en": "PRO"
+  },
+  "paywall.table.col.free": {
+    "limit": 6,
+    "role": "columnHead",
+    "en": "FREE"
+  },
+  "paywall.table.row.voice": {
+    "limit": 48,
+    "role": "featureRow",
+    "en": "Set a reminder just by saying it"
+  },
+  "paywall.table.row.spokenAlarms": {
+    "limit": 48,
+    "role": "featureRow",
+    "en": "Alarms that say what they're for"
+  },
+  "paywall.table.row.severalTimes": {
+    "limit": 48,
+    "role": "featureRow",
+    "en": "One reminder, several times a day"
+  },
+  "paywall.table.row.schedules": {
+    "limit": 48,
+    "role": "featureRow",
+    "en": "Weekdays, dates, every few days"
+  },
+  "paywall.table.row.activeCount": {
+    "limit": 48,
+    "role": "featureRow",
+    "en": "Reminders running at once"
+  },
+  "paywall.table.row.interval": {
+    "limit": 48,
+    "role": "featureRow",
+    "en": "Repeat every few minutes, in the hours you pick"
+  },
+  "paywall.table.cell.unlimited": {
+    "limit": 10,
+    "role": "tableCell",
+    "en": "Unlimited"
+  },
+  "paywall.card.monthly": {
+    "limit": 14,
+    "role": "planKicker",
+    "en": "Monthly"
+  },
+  "paywall.card.annual": {
+    "limit": 14,
+    "role": "planKicker",
+    "en": "Annual"
+  },
+  "paywall.card.badge": {
+    "limit": 12,
+    "role": "badge",
+    "en": "BEST VALUE"
+  },
+  "paywall.billed.monthly": {
+    "limit": 18,
+    "role": "planLine",
+    "en": "Billed monthly"
+  },
+  "paywall.billed.yearly": {
+    "limit": 18,
+    "role": "planLine",
+    "en": "Billed yearly"
+  },
+  "paywall.billed.weekly": {
+    "limit": 18,
+    "role": "planLine",
+    "en": "Billed weekly"
+  },
+  "paywall.termShort.month": {
+    "limit": 5,
+    "role": "priceSuffix",
+    "en": "mo"
+  },
+  "paywall.termShort.year": {
+    "limit": 5,
+    "role": "priceSuffix",
+    "en": "yr"
+  },
+  "paywall.termShort.week": {
+    "limit": 5,
+    "role": "priceSuffix",
+    "en": "wk"
+  },
+  "paywall.termShort.day": {
+    "limit": 5,
+    "role": "priceSuffix",
+    "en": "day"
+  },
+  "paywall.cta.unavailable": {
+    "limit": 24,
+    "role": "cta",
+    "en": "Plans unavailable"
+  },
+  "paywall.cta.trial": {
+    "limit": 24,
+    "role": "cta",
+    "en": "Start {length} free trial"
+  },
+  "paywall.cta.subscribe": {
+    "limit": 27,
+    "role": "cta",
+    "en": "Subscribe for {price} / {term}"
+  },
+  "paywall.restore": {
+    "limit": 18,
+    "role": "footerLink",
+    "en": "Restore purchase"
+  },
+  "paywall.restoring": {
+    "limit": 18,
+    "role": "footerLink",
+    "en": "Restoring…"
+  },
+  "paywall.legal.terms": {
+    "limit": 18,
+    "role": "footerLink",
+    "en": "Terms of Use"
+  },
+  "paywall.legal.privacy": {
+    "limit": 18,
+    "role": "footerLink",
+    "en": "Privacy Policy"
+  },
+  "paywall.legal.restore": {
+    "limit": 18,
+    "role": "footerLink",
+    "en": "Restore"
+  },
+  "paywall.toast.activated.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Pro Activated! 🎉"
+  },
+  "paywall.toast.activated.message": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Welcome to {product}!"
+  },
+  "paywall.toast.complete.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Purchase Complete"
+  },
+  "paywall.toast.restored.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Purchases Restored"
+  },
+  "paywall.toast.expired.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Subscription Expired"
+  },
+  "paywall.toast.nothing.title": {
+    "limit": 40,
+    "role": "toastTitle",
+    "en": "Nothing to Restore"
+  },
+  "alarmOverlay.playing": {
+    "limit": 40,
+    "role": "statusLine",
+    "en": "Playing..."
+  },
+  "alarmOverlay.later": {
+    "limit": 10,
+    "role": "button",
+    "en": "Later"
+  },
+  "alarmOverlay.done": {
+    "limit": 10,
+    "role": "button",
+    "en": "Done"
+  },
+  "diagnostics.title": {
+    "limit": 16,
+    "role": "screenTitle",
+    "en": "Alarms"
+  },
+  "diagnostics.section.permissions": {
+    "limit": 20,
+    "role": "sectionLabel",
+    "en": "Permissions"
+  },
+  "diagnostics.row.notifications": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Notifications"
+  },
+  "diagnostics.status.allowed": {
+    "limit": 16,
+    "role": "statusChip",
+    "en": "Allowed"
+  },
+  "diagnostics.section.systemSettings": {
+    "limit": 20,
+    "role": "sectionLabel",
+    "en": "Open system settings"
+  },
+  "diagnostics.row.notificationSettings": {
+    "limit": 26,
+    "role": "rowLabel",
+    "en": "Notification settings"
+  }
+}
