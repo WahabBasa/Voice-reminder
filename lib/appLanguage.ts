@@ -202,6 +202,26 @@ export function getDeviceLanguageTags(): string[] {
 
 let chosenLanguage: string | null = null;
 let loaded = false;
+let existingInstall = false;
+
+/**
+ * Storage that every install from before the language wheel already has, and
+ * that a fresh install can't have yet when the wheel decision is made (nothing
+ * writes these until the first screen is past the wheel):
+ *   - "@device_id": minted on the first server call of any launch since 08-13
+ *     (scoped reminders) — the most reliable one: every user who ever opened
+ *     the list or recorded has it, even with no reminders and no consent;
+ *   - "@reminders": the local reminder list;
+ *   - "@app_settings": AI consent, voice language, any toggled setting.
+ * Any of them present ⇒ an existing install: no first-run wheel, the UI
+ * follows the iPhone's language until the user picks one in Settings.
+ */
+const PRE_WHEEL_KEYS: readonly string[] = ["@device_id", "@reminders", "@app_settings"];
+
+async function hasPreWheelState(): Promise<boolean> {
+  const values = await Promise.all(PRE_WHEEL_KEYS.map((key) => AsyncStorage.getItem(key)));
+  return values.some((value) => value != null);
+}
 let loading: Promise<string | null> | null = null;
 const listeners = new Set<() => void>();
 
@@ -245,6 +265,7 @@ export function loadAppLanguage(
       try {
         const stored = choiceFor(await AsyncStorage.getItem(STORAGE_KEY));
         if (chosenLanguage === null && stored) chosenLanguage = stored;
+        if (!stored) existingInstall = await hasPreWheelState();
       } catch {
         // No storage: the device language stands.
       }
@@ -286,13 +307,24 @@ export async function chooseAppLanguage(
   return true;
 }
 
+/** Whether this install was in use before it ever saw the wheel (see PRE_WHEEL_KEYS). */
+export function isExistingInstall(): boolean {
+  return existingInstall;
+}
+
 /**
- * The first-launch wheel shows when the stored pick has been read and there is
- * none: a fresh install, or an existing install updating from a build without
- * the wheel. Never before the read (no flash), never once a pick is saved.
+ * The first-launch wheel shows only on a genuinely fresh install: the stored
+ * pick has been read, there is none, and the install has no state from before
+ * the wheel. An existing install updating from a build without the wheel skips
+ * it and simply follows the iPhone's language (Settings › Language changes it).
+ * Never before the read (no flash), never once a pick is saved.
  */
-export function shouldShowFirstLaunchWheel(isLoaded: boolean, chosen: string | null): boolean {
-  return isLoaded && chosen === null;
+export function shouldShowFirstLaunchWheel(
+  isLoaded: boolean,
+  chosen: string | null,
+  existing: boolean = existingInstall
+): boolean {
+  return isLoaded && chosen === null && !existing;
 }
 
 // A Settings pick remounts the screens; Home reopens on Settings once.
@@ -313,6 +345,7 @@ export function consumeReturnToSettings(): boolean {
 export function __resetAppLanguageForTests(): void {
   chosenLanguage = null;
   loaded = false;
+  existingInstall = false;
   loading = null;
   returnToSettings = false;
   listeners.clear();

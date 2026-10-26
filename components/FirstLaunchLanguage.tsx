@@ -7,8 +7,9 @@ import { t } from "../lib/i18n";
 import { currentLanguageChoice, pickLanguage } from "../lib/pickLanguage";
 
 /**
- * The first screen of a launch with no saved language (a fresh install, or an
- * install updating from a build without the wheel). It replaces the screens
+ * The first screen of a genuinely fresh install with no saved language (an
+ * install from before the wheel skips it and follows the iPhone's language,
+ * lib/appLanguage.ts PRE_WHEEL_KEYS). It replaces the screens
  * until Continue: app/_layout renders it instead of the Stack, after the stored
  * pick has been read, so it never flashes for someone who already chose.
  * Continue saves and applies the pick (UI + voice hint + server); the layout

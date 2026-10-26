@@ -273,19 +273,19 @@ describe("first-launch wheel", () => {
     expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(true);
   });
 
-  it("shows once for an existing user updating without a saved choice, then never again", async () => {
+  it("never shows for an existing user updating without a saved choice: the phone language stands", async () => {
     // An install from before the wheel: other state on disk, no language pick.
     await AsyncStorage.setItem("vr.spokenLang", "en");
     await AsyncStorage.setItem("@app_settings", JSON.stringify({ aiConsentAcceptedAt: 1 }));
-    await loadAppLanguage(["en-US"]);
-    expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(true);
-
-    await chooseAppLanguage("en");
+    await loadAppLanguage(["pt-BR", "en-US"]);
     expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(false);
+    expect(getChosenLanguage()).toBeNull();
+    expect(getUiLocale()).toBe("pt-BR");
 
-    // Next launch: the saved choice suppresses it.
+    // A later Settings pick is saved and wins from then on.
+    await chooseAppLanguage("en");
     __resetAppLanguageForTests();
-    await loadAppLanguage(["en-US"]);
+    await loadAppLanguage(["pt-BR"]);
     expect(getChosenLanguage()).toBe("en");
     expect(shouldShowFirstLaunchWheel(hasLoadedLanguage(), getChosenLanguage())).toBe(false);
   });
