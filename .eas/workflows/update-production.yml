@@ -7,4 +7,4 @@ jobs:
     params:
       branch: production
       platform: ios
-      message: "main @ 81cbaa5 (messages from Remi; instant swipe-to-discard)"
+      message: "claude/rtl-ui @ 9779388 (1.0.3: in-app update prompt)"
