@@ -231,7 +231,29 @@ function inventoryRoles() {
   return out;
 }
 
-/** Build { key: { limit, role, en } } for every constrained key. */
+/**
+ * Keys the inventory lists as labels but the UI only reads to VoiceOver
+ * (BottomBar is icon-only): no visible text, so no length limit.
+ */
+const VOICEOVER_ONLY = new Set(["tabs.reminders", "tabs.days", "tabs.settings"]);
+
+/**
+ * Per-language limits where the language's standard form is longer and no
+ * shorter one exists. Each needs a reason.
+ *   he times.picker.am/pm: CLDR "לפנה״צ" / "אחה״צ" (6 / 5); Hebrew has no
+ *   shorter day-period form.
+ */
+const LOCALE_LIMITS = {
+  "times.picker.am": { he: 6 },
+  "times.picker.pm": { he: 6 },
+};
+
+/** The limit for `key` in `tag`: the per-language override, else the shared one. */
+function limitFor(entry, tag) {
+  return entry.localeLimits?.[tag] ?? entry.limit;
+}
+
+/** Build { key: { limit, role, en, localeLimits? } } for every constrained key. */
 function buildLimits() {
   const en = readJson(path.join(LOCALES, "en.json"));
   const contexts = inventoryRoles();
@@ -247,11 +269,12 @@ function buildLimits() {
       const hit = ROLES.find(([re]) => re.test(context));
       if (hit) [, role, limit] = hit;
     }
-    if (!role) continue;
+    if (!role || VOICEOVER_ONLY.has(key)) continue;
     const explicit = /max ~?(\d+)|~(\d+) chars/i.exec(context || "");
     if (explicit) limit = Number(explicit[1] || explicit[2]);
     const enLength = graphemes(longestRendering(en[key]));
     limits[key] = { limit: Math.max(limit, enLength), role, en: en[key] };
+    if (LOCALE_LIMITS[key]) limits[key].localeLimits = LOCALE_LIMITS[key];
   }
   return limits;
 }
@@ -264,18 +287,19 @@ function overflowReport(limits) {
     const tag = file.replace(/\.json$/, "");
     const catalog = readJson(path.join(LOCALES, file));
     const rows = [];
-    for (const [key, { limit, en }] of Object.entries(limits)) {
+    for (const [key, entry] of Object.entries(limits)) {
       const current = catalog[key];
       if (typeof current !== "string") continue;
+      const limit = limitFor(entry, tag);
       const count = graphemes(longestRendering(current));
-      if (count > allowedFor(limit)) rows.push({ key, en, current, limit, graphemes: count });
+      if (count > allowedFor(limit)) rows.push({ key, en: entry.en, current, limit, graphemes: count });
     }
     report[tag] = rows;
   }
   return report;
 }
 
-module.exports = { allowedFor, buildLimits, graphemes, longestRendering, overflowReport, DOCS };
+module.exports = { allowedFor, buildLimits, graphemes, limitFor, longestRendering, overflowReport, DOCS };
 
 if (require.main === module) {
   const limits = buildLimits();
@@ -284,7 +308,7 @@ if (require.main === module) {
     fs.writeFileSync(path.join(DOCS, name), JSON.stringify(value, null, 2) + "\n", "utf8");
   write("limits.json", {
     _about:
-      "Max length in graphemes per space-constrained key (scripts/i18n-limits.js). Overflow = more than limit + max(1, ceil(10%)). Placeholders filled with English samples, every plural branch measured.",
+      "Max length in graphemes per space-constrained key (scripts/i18n-limits.js). Overflow = more than limit + max(1, ceil(10%)). Placeholders filled with English samples, every plural branch measured. localeLimits = a per-language override where the standard form is longer. VoiceOver-only labels (tab names) have no limit.",
     ...limits,
   });
   write("overflow-report.json", { _newKeys: [], ...report });

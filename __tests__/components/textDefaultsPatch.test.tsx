@@ -5,18 +5,21 @@
  * global, or with Latin LTR defaults, Text renders exactly as before.
  */
 import React from "react";
-import TestRenderer, { act } from "react-test-renderer";
+// No @types for react-test-renderer in this repo: typed loosely on purpose.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const TestRenderer: any = require("react-test-renderer");
+const { act } = TestRenderer;
 import { StyleSheet } from "react-native";
 import { textDefaultsFor } from "../../lib/textDefaults";
 
 const RealText = jest.requireActual("react-native/Libraries/Text/Text").default;
 
 function hostProps(element: React.ReactElement) {
-  let root: TestRenderer.ReactTestRenderer;
+  let root: any;
   act(() => {
     root = TestRenderer.create(element);
   });
-  const host = root!.root.findAll((node) => typeof node.type === "string")[0];
+  const host = root.root.findAll((node: any) => typeof node.type === "string")[0];
   return { ...host.props, style: StyleSheet.flatten(host.props.style) ?? {} };
 }
 

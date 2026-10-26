@@ -13,10 +13,10 @@ import fs from "fs";
 import path from "path";
 
 /* eslint-disable @typescript-eslint/no-var-requires */
-const { allowedFor, graphemes, longestRendering, DOCS } = require("../../scripts/i18n-limits.js");
+const { allowedFor, graphemes, limitFor, longestRendering, DOCS } = require("../../scripts/i18n-limits.js");
 
 const ROOT = path.resolve(__dirname, "../..");
-type Limit = { limit: number; role: string; en: string };
+type Limit = { limit: number; role: string; en: string; localeLimits?: Record<string, number> };
 const limitsFile: Record<string, Limit | string> = JSON.parse(
   fs.readFileSync(path.join(DOCS, "limits.json"), "utf8")
 );
@@ -56,7 +56,8 @@ describe.each(tags)("%s", (tag) => {
   const cases = limits.filter(([key]) => typeof catalog[key] === "string");
   const run = (key: string) => (!strict && known.has(key) ? it.skip : it);
 
-  for (const [key, { limit }] of cases) {
+  for (const [key, entry] of cases) {
+    const limit: number = limitFor(entry, tag);
     run(key)(`${tag} ${key} ≤ ${limit}`, () => {
       const count = graphemes(longestRendering(catalog[key]));
       const allowed = allowedFor(limit);

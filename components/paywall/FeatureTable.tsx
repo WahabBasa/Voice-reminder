@@ -1,4 +1,5 @@
 import { t } from "../../lib/i18n";
+import { DENSE_MAX_FONT_SCALE } from "../../lib/textDefaults";
 import { joinedScriptText } from "../../lib/scriptStyle";
 import { StyleSheet, Text, View } from "react-native";
 import { scaleFontSize } from "../../lib/theme";
@@ -45,8 +46,8 @@ export default function FeatureTable() {
       <View style={styles.container}>
         <View style={styles.headRow}>
           <View style={styles.featureCol} />
-          <Text style={[styles.colHead, joinedScriptText()]}>{t("paywall.table.col.pro")}</Text>
-          <Text style={[styles.colHead, joinedScriptText()]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+          <Text style={[styles.colHead, joinedScriptText()]} maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE}>{t("paywall.table.col.pro")}</Text>
+          <Text style={[styles.colHead, joinedScriptText()]} maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
             {t("paywall.table.col.free")}
           </Text>
         </View>
