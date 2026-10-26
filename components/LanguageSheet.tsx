@@ -69,7 +69,7 @@ export function LanguageWheel({ initialCode, confirmLabel, onConfirm }: Language
                 accessibilityHint={endonymFor(value)}
                 testID="language-confirm"
             >
-                <Text style={styles.confirmText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+                <Text style={styles.confirmText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}>
                     {confirmLabel}
                 </Text>
             </TouchableOpacity>
@@ -200,6 +200,8 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
     confirmText: {
+        // A label that wraps (never "…" on an action) stays centred.
+        textAlign: "center",
         fontSize: scaleFontSize(15),
         fontWeight: "600",
         lineHeight: scaleFontSize(21),

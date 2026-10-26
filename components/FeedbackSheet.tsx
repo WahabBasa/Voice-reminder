@@ -1,4 +1,6 @@
 import { t } from "../lib/i18n";
+import { STACKED_BUTTON, STACKED_ROW, useStackWhenWrapped } from "../lib/useStackWhenWrapped";
+import { TEXT_MAX_FONT_SCALE, inputDirectionStyle } from "../lib/textDefaults";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Keyboard, StyleSheet, Text, View } from "react-native";
 import BottomSheet, {
@@ -77,6 +79,8 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
     onClose();
   }, [onClose, reset]);
 
+  // Buttons stack full-width when a label would wrap.
+  const { stacked, onTextLayout } = useStackWhenWrapped();
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
@@ -159,7 +163,8 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
 
       <View style={styles.inputCard}>
         <BottomSheetTextInput
-          style={styles.input}
+          style={[styles.input, inputDirectionStyle()]}
+          maxFontSizeMultiplier={TEXT_MAX_FONT_SCALE}
           value={text}
           onChangeText={setText}
           placeholder={t("feedback.sheet.placeholder")}
@@ -173,23 +178,23 @@ export default function FeedbackSheet({ visible, context, notice, onClose }: Fee
 
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
 
-      <View style={styles.actions}>
+      <View style={[styles.actions, stacked && STACKED_ROW]}>
         <TouchableOpacity
-          style={styles.cancelButton}
+          style={[styles.cancelButton, stacked && STACKED_BUTTON]}
           onPress={handleClose}
           activeOpacity={0.7}
           disabled={sending}
         >
-          <Text style={styles.cancelText}>{t("common.cancel")}</Text>
+          <Text style={styles.cancelText} onTextLayout={onTextLayout}>{t("common.cancel")}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.sendButton, sendDisabled && styles.sendButtonDisabled]}
+          style={[styles.sendButton, sendDisabled && styles.sendButtonDisabled, stacked && STACKED_BUTTON]}
           onPress={() => void handleSend()}
           activeOpacity={0.7}
           disabled={sendDisabled}
         >
-          <Text style={styles.sendText}>{sending ? t("feedback.sheet.sending") : t("feedback.sheet.send")}</Text>
+          <Text style={styles.sendText} onTextLayout={onTextLayout}>{sending ? t("feedback.sheet.sending") : t("feedback.sheet.send")}</Text>
         </TouchableOpacity>
       </View>
     </>

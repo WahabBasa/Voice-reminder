@@ -1,4 +1,5 @@
-import { t } from "../lib/i18n";
+import { isPseudoLocalization, t } from "../lib/i18n";
+import { pseudoLocalizationAvailable, togglePseudoLocalization } from "../lib/pseudoLocale";
 import { joinedScriptText } from "../lib/scriptStyle";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
@@ -54,6 +55,8 @@ export default function DiagnosticsScreen() {
   const [authStatus, setAuthStatus] = useState<number | undefined>(undefined);
   const [androidAlarmStatus, setAndroidAlarmStatus] = useState<number | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
+  const [pseudoAvailable] = useState(pseudoLocalizationAvailable);
+  const [pseudoOn, setPseudoOn] = useState(isPseudoLocalization);
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
@@ -149,12 +152,27 @@ export default function DiagnosticsScreen() {
             />
           ) : null}
         </View>
+
+        {pseudoAvailable ? (
+          // Dev-only (lib/pseudoLocale.ts): never shown in production builds.
+          <View style={[styles.card, styles.devCard]}>
+            <Row
+              icon="globe"
+              label={`Pseudo-localization (dev): ${pseudoOn ? "ON" : "OFF"}`}
+              onPress={() => void togglePseudoLocalization().then(setPseudoOn)}
+              isLast
+            />
+          </View>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  devCard: {
+    marginTop: 24,
+  },
   container: {
     flex: 1,
     backgroundColor: colors.background,

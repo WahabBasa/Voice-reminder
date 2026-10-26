@@ -1,4 +1,5 @@
 import { t } from "../lib/i18n";
+import { DENSE_MAX_FONT_SCALE } from "../lib/textDefaults";
 import React, { useCallback, useEffect, useState } from "react";
 import {
   AppState,
@@ -298,10 +299,10 @@ export default function PermissionPrompt() {
               </View>
             </View>
             {permissions.notifications ? (
-              <Text style={styles.grantedText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enabled")}</Text>
+              <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={styles.grantedText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>{t("permission.enabled")}</Text>
             ) : (
               <View style={styles.enableBtn}>
-                <Text style={styles.enableBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enable")}</Text>
+                <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={styles.enableBtnText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}>{t("permission.enable")}</Text>
               </View>
             )}
           </TouchableOpacity>
@@ -337,10 +338,10 @@ export default function PermissionPrompt() {
                   </View>
                 </View>
                 {permissions.alarms ? (
-                  <Text style={styles.grantedText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enabled")}</Text>
+                  <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={styles.grantedText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>{t("permission.enabled")}</Text>
                 ) : (
                   <View style={styles.enableBtn}>
-                    <Text style={styles.enableBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enable")}</Text>
+                    <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={styles.enableBtnText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}>{t("permission.enable")}</Text>
                   </View>
                 )}
               </TouchableOpacity>
@@ -376,10 +377,10 @@ export default function PermissionPrompt() {
                 </View>
               </View>
               {permissions.battery ? (
-                <Text style={styles.grantedText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enabled")}</Text>
+                <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={styles.grantedText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>{t("permission.enabled")}</Text>
               ) : (
                 <View style={styles.enableBtn}>
-                  <Text style={styles.enableBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("permission.enable")}</Text>
+                  <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={styles.enableBtnText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}>{t("permission.enable")}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -500,6 +501,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   enableBtnText: {
+    // A label that wraps (never "…" on an action) stays centred.
+    textAlign: "center",
     fontSize: scaleFontSize(13),
     fontWeight: "600",
     color: "#fff",

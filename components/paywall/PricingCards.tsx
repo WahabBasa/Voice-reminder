@@ -1,4 +1,5 @@
 import { t } from "../../lib/i18n";
+import { DENSE_MAX_FONT_SCALE } from "../../lib/textDefaults";
 import { joinedScriptText } from "../../lib/scriptStyle";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import type { PurchasesPackage } from "react-native-purchases";
@@ -39,13 +40,13 @@ function PricingCard({ kicker, plan, selected, badge, onPress }: PricingCardProp
     >
       {badge ? (
         <View style={styles.badge}>
-          <Text style={[styles.badgeText, joinedScriptText()]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+          <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={[styles.badgeText, joinedScriptText()]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
             {badge}
           </Text>
         </View>
       ) : null}
 
-      <Text style={styles.kicker} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+      <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={styles.kicker} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
         {kicker}
       </Text>
       <Text style={[styles.price, joinedScriptText()]} numberOfLines={1} adjustsFontSizeToFit>

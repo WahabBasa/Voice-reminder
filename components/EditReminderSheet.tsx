@@ -1,4 +1,5 @@
 import { intlLocale, t } from "../lib/i18n";
+import { TEXT_MAX_FONT_SCALE, inputDirectionStyle } from "../lib/textDefaults";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     Alert,
@@ -651,7 +652,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     {/* Title card: input + emoji chip */}
                     <View style={styles.titleCard}>
                         <TextInput
-                            style={styles.titleInput}
+                            style={[styles.titleInput, inputDirectionStyle()]}
+                            maxFontSizeMultiplier={TEXT_MAX_FONT_SCALE}
                             value={title}
                             onChangeText={setTitle}
                             onFocus={expandSheet}
@@ -677,7 +679,8 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                     <View style={styles.spokenCard}>
                         <Text style={styles.spokenLabel}>{t("edit.spokenLine.label")}</Text>
                         <TextInput
-                            style={styles.spokenInput}
+                            style={[styles.spokenInput, inputDirectionStyle()]}
+                            maxFontSizeMultiplier={TEXT_MAX_FONT_SCALE}
                             value={description}
                             onChangeText={setDescription}
                             onFocus={expandSheet}
@@ -851,9 +854,9 @@ export default function EditReminderSheet({ reminder: initialReminder, onClose, 
                         >
                             <Text
                                 style={styles.doneButtonText}
-                                numberOfLines={1}
+                                numberOfLines={2}
                                 adjustsFontSizeToFit
-                                minimumFontScale={0.75}
+                                minimumFontScale={0.85}
                             >
                                 {draftMode
                                     ? regeneratingVoice ? t("common.setting") : draftMode.confirmLabel
@@ -1123,6 +1126,8 @@ const styles = StyleSheet.create({
         opacity: 0.6,
     },
     doneButtonText: {
+        // A label that wraps (never "…" on an action) stays centred.
+        textAlign: "center",
         fontSize: scaleFontSize(16),
         fontWeight: "600",
         lineHeight: scaleFontSize(21),

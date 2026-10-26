@@ -1,5 +1,7 @@
-import { getUiLocale, t, useUiLocale } from "../lib/i18n";
+import { getUiLocale, t, useUiKey } from "../lib/i18n";
+import { loadPseudoLocalization } from "../lib/pseudoLocale";
 import { syncLayoutDirection } from "../lib/layoutDirection";
+import { installTextDefaults } from "../lib/textDefaults";
 import {
   applyDeviceLanguage,
   hasLoadedLanguage,
@@ -60,6 +62,10 @@ initSentry();
 // UI language: the device's, right away; the user's stored pick lands in
 // RootLayout before the first screen renders (lib/appLanguage.ts).
 applyDeviceLanguage();
+// Text-size cap, RTL start alignment, tall-script line heights (lib/textDefaults).
+installTextDefaults();
+// Dev builds only: restores the pseudo-localization switch (lib/pseudoLocale).
+void loadPseudoLocalization();
 
 // The native splash stays up until AnimatedSplash has drawn its identical copy.
 // Rejects harmlessly if a fast reload gets here after the splash is already gone.
@@ -381,7 +387,8 @@ function RootLayout() {
   }, []);
   // Every string is read at render, so a language change re-renders the
   // screens by remounting the Stack under the new catalog.
-  const uiLocale = useUiLocale();
+  // The locale plus the dev pseudo-localization switch: either remounts.
+  const uiKey = useUiKey();
   // Read only after the stored pick has loaded, so a saved choice never sees it.
   const chosenLanguage = useChosenLanguage();
   const showFirstLaunchWheel = shouldShowFirstLaunchWheel(languageReady, chosenLanguage);
@@ -421,7 +428,7 @@ function RootLayout() {
               <PermissionPrompt />
               <StatusBar style="light" />
               <Stack
-                key={uiLocale}
+                key={uiKey}
                 // iOS rides the native stack defaults: real UINavigationController
                 // push/pop with the swipe-back gesture, native sheet modals. The
                 // fade overrides exist only to keep Android exactly as it was.

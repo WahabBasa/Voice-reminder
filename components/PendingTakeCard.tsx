@@ -1,4 +1,5 @@
 import { t } from "../lib/i18n";
+import { DENSE_MAX_FONT_SCALE } from "../lib/textDefaults";
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
@@ -267,7 +268,7 @@ function AskingCard({
                 accessibilityRole="button"
                 accessibilityLabel={t("pending.quickChoice.a11y", { choice: choice.label })}
               >
-                <Text style={styles.choiceText}>
+                <Text style={styles.choiceText} maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE}>
                   {busy === choice.id ? t("common.setting") : choice.label}
                 </Text>
               </Pressable>

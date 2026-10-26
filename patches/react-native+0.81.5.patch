@@ -1,0 +1,49 @@
+diff --git a/node_modules/react-native/Libraries/Text/Text.js b/node_modules/react-native/Libraries/Text/Text.js
+--- a/node_modules/react-native/Libraries/Text/Text.js
++++ b/node_modules/react-native/Libraries/Text/Text.js
+@@ -138,9 +138,45 @@
+ 
+   let _selectable = selectable;
+ 
++  // [VR patch] App-wide text defaults, set by lib/textDefaults.ts:
++  // a Dynamic Type cap, start alignment under RTL (natural alignment follows
++  // the iOS app language, not the layout), and a line-height scale for tall
++  // scripts. Absent or neutral for Latin LTR, so nothing changes there.
++  const __vrText = global.__VR_TEXT_DEFAULTS;
++  if (
++    __vrText != null &&
++    restProps.maxFontSizeMultiplier === undefined &&
++    __vrText.maxFontSizeMultiplier != null
++  ) {
++    restProps = {...restProps, maxFontSizeMultiplier: __vrText.maxFontSizeMultiplier};
++  }
++  if (__vrText != null && __vrText.startAlign === true && _style == null) {
++    _style = {textAlign: 'left'};
++  }
++
+   let processedStyle = flattenStyle<TextStyleProp>(_style);
+   if (processedStyle != null) {
+     let overrides: ?{...TextStyleInternal} = null;
++    if (__vrText != null) {
++      if (
++        __vrText.startAlign === true &&
++        (processedStyle.textAlign == null || processedStyle.textAlign === 'auto')
++      ) {
++        // Fabric swaps an explicit 'left' to the right edge under RTL.
++        overrides = overrides || ({}: {...TextStyleInternal});
++        overrides.textAlign = 'left';
++      }
++      if (
++        typeof __vrText.lineHeightScale === 'number' &&
++        __vrText.lineHeightScale !== 1 &&
++        typeof processedStyle.lineHeight === 'number'
++      ) {
++        overrides = overrides || ({}: {...TextStyleInternal});
++        overrides.lineHeight = Math.ceil(
++          processedStyle.lineHeight * __vrText.lineHeightScale,
++        );
++      }
++    }
+     if (typeof processedStyle.fontWeight === 'number') {
+       overrides = overrides || ({}: {...TextStyleInternal});
+       overrides.fontWeight =

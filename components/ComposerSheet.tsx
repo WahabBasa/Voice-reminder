@@ -1,4 +1,5 @@
 import { t } from "../lib/i18n";
+import { TEXT_MAX_FONT_SCALE, inputDirectionStyle } from "../lib/textDefaults";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import BottomSheet, {
@@ -137,7 +138,8 @@ export default function ComposerSheet({
             >
                 <BottomSheetView style={styles.content}>
                     <BottomSheetTextInput
-                        style={styles.input}
+                        style={[styles.input, inputDirectionStyle()]}
+                        maxFontSizeMultiplier={TEXT_MAX_FONT_SCALE}
                         value={draft}
                         onChangeText={setDraft}
                         placeholder={t("composer.placeholder")}
@@ -168,7 +170,7 @@ export default function ComposerSheet({
                             accessibilityLabel={t("composer.speak.a11y")}
                         >
                             <AudioLines size={16} color="white" strokeWidth={2} />
-                            <Text style={styles.speakText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+                            <Text style={styles.speakText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}>
                                 {t("composer.speak")}
                             </Text>
                         </TouchableOpacity>
@@ -245,6 +247,8 @@ const styles = StyleSheet.create({
         borderRadius: borderRadius.full,
     },
     speakText: {
+        // A label that wraps (never "…" on an action) stays centred.
+        textAlign: "center",
         color: "white",
         fontWeight: "600",
         fontSize: scaleFontSize(14),

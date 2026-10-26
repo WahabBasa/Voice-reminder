@@ -463,9 +463,9 @@ export default function RecordingOverlay({
                     >
                       <Text
                         style={styles.upgradeButtonText}
-                        numberOfLines={1}
+                        numberOfLines={2}
                         adjustsFontSizeToFit
-                        minimumFontScale={0.75}
+                        minimumFontScale={0.85}
                       >
                         {t("recording.gate.upgrade")}
                       </Text>
@@ -635,6 +635,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   upgradeButtonText: {
+    // A label that wraps (never "…" on an action) stays centred.
+    textAlign: "center",
     color: "white",
     fontSize: scaleFontSize(13),
     fontWeight: "600",

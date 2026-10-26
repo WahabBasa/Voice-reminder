@@ -102,7 +102,56 @@ void instance.use(ICU).init({
 
 /** The translated string for `key`, English when the current catalog lacks it. */
 export function t(key: string, params?: TParams): string {
-  return instance.t(key, params as any) as unknown as string;
+  const text = instance.t(key, params as any) as unknown as string;
+  return pseudo ? pseudoLocalize(text) : text;
+}
+
+// ─── pseudo-localization (dev only; see lib/pseudoLocale.ts) ─────────────────
+
+const ACCENTED: Readonly<Record<string, string>> = {
+  a: "á", b: "ƀ", c: "ç", d: "ď", e: "é", f: "ƒ", g: "ğ", h: "ĥ", i: "í", j: "ĵ", k: "ķ", l: "ĺ", m: "ḿ",
+  n: "ń", o: "ó", p: "ƥ", q: "ʠ", r: "ŕ", s: "š", t: "ť", u: "ú", v: "ṽ", w: "ŵ", x: "ẋ", y: "ý", z: "ž",
+  A: "Á", B: "Ɓ", C: "Ç", D: "Ď", E: "É", F: "Ƒ", G: "Ğ", H: "Ĥ", I: "Í", J: "Ĵ", K: "Ķ", L: "Ĺ", M: "Ḿ",
+  N: "Ń", O: "Ó", P: "Ƥ", Q: "Ɋ", R: "Ŕ", S: "Š", T: "Ť", U: "Ú", V: "Ṽ", W: "Ŵ", X: "Ẋ", Y: "Ý", Z: "Ž",
+};
+
+/**
+ * "Remind me" → "[Ŕéḿíńď ḿé ~~~~]": accented letters, ~40% longer, bracketed,
+ * so clipped or truncated text shows on a device. Rich-text tags (<link>, <b>)
+ * are kept as they are.
+ */
+export function pseudoLocalize(text: string): string {
+  if (!text) return text;
+  let out = "";
+  let letters = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "<") {
+      const close = text.indexOf(">", i);
+      if (close > i) {
+        out += text.slice(i, close + 1);
+        i = close;
+        continue;
+      }
+    }
+    const ch = text[i];
+    if (ACCENTED[ch]) letters += 1;
+    out += ACCENTED[ch] ?? ch;
+  }
+  const padding = "~".repeat(Math.max(1, Math.ceil(Math.max(letters, text.length) * 0.4)));
+  return `[${out} ${padding}]`;
+}
+
+let pseudo = false;
+
+export function isPseudoLocalization(): boolean {
+  return pseudo;
+}
+
+/** Turn pseudo-localization on/off; the screens remount (see `useUiKey`). */
+export function setPseudoLocalization(on: boolean): void {
+  if (pseudo === on) return;
+  pseudo = on;
+  for (const listener of [...listeners]) listener();
 }
 
 let uiLocale: string = SOURCE_LOCALE;
@@ -159,6 +208,15 @@ export function useUiLocale(): string {
   return useSyncExternalStore(subscribeUiLocale, getUiLocale, getUiLocale);
 }
 
+function getUiKey(): string {
+  return pseudo ? `${uiLocale}:pseudo` : uiLocale;
+}
+
+/** The locale plus the pseudo-localization flag: a key that remounts on either. */
+export function useUiKey(): string {
+  return useSyncExternalStore(subscribeUiLocale, getUiKey, getUiKey);
+}
+
 /**
  * Splits a translated string around one rich-text tag:
  * "Learn more in our <link>Privacy Policy</link>." →
@@ -183,5 +241,6 @@ export function splitTag(
 
 /** Test seam: back to English. */
 export function __resetUiLocaleForTests(): void {
+  pseudo = false;
   setUiLocale(SOURCE_LOCALE);
 }

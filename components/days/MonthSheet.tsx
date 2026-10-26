@@ -1,4 +1,5 @@
 import { intlLocales, t } from "../../lib/i18n";
+import { DENSE_MAX_FONT_SCALE } from "../../lib/textDefaults";
 import { joinedScriptText } from "../../lib/scriptStyle";
 import { weekdayFullLabel, weekdayNarrowLabel } from "../../lib/weekdayLabels";
 import { useEffect, useMemo, useState } from "react";
@@ -98,7 +99,7 @@ export default function MonthSheet({
 
         <View style={styles.letterRow}>
           {WEEK_ORDER.map((day) => (
-            <Text key={day} style={[styles.letter, joinedScriptText()]} accessibilityLabel={weekdayFullLabel(day)}>
+            <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} key={day} style={[styles.letter, joinedScriptText()]} accessibilityLabel={weekdayFullLabel(day)}>
               {weekdayNarrowLabel(day)}
             </Text>
           ))}

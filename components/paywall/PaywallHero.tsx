@@ -42,7 +42,7 @@ export default function PaywallHero({
             style={[styles.heroLine, joinedScriptText()]}
             numberOfLines={1}
             adjustsFontSizeToFit
-            minimumFontScale={0.7}
+            minimumFontScale={0.85}
           >
             {line}
           </Text>

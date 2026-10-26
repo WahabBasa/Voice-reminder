@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from "react";
+import { DENSE_MAX_FONT_SCALE } from "../lib/textDefaults";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { TimerPickerModal } from "react-native-timer-picker";
@@ -143,11 +144,11 @@ export default function TimesEditor({
           onPress={() => selectMode("clock")}
           activeOpacity={0.7}
         >
-          <Text
+          <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE}
             style={[styles.modeChipText, mode === "clock" && styles.modeChipTextSelected]}
-            numberOfLines={1}
+            numberOfLines={2}
             adjustsFontSizeToFit
-            minimumFontScale={0.75}
+            minimumFontScale={0.85}
           >
             {t("times.mode.setTimes")}
           </Text>
@@ -164,11 +165,11 @@ export default function TimesEditor({
               color={mode === "interval" ? "#ffffff" : colors.textSecondary}
             />
           ) : null}
-          <Text
+          <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE}
             style={[styles.modeChipText, mode === "interval" && styles.modeChipTextSelected]}
-            numberOfLines={1}
+            numberOfLines={2}
             adjustsFontSizeToFit
-            minimumFontScale={0.75}
+            minimumFontScale={0.85}
           >
             {t("times.mode.interval")}
           </Text>
@@ -331,6 +332,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   modeChipText: {
+    // A label that wraps (never "…" on an action) stays centred.
+    textAlign: "center",
     fontSize: scaleFontSize(12),
     fontWeight: "500",
     lineHeight: scaleFontSize(17),

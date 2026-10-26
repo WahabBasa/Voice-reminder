@@ -609,12 +609,12 @@ export function AlarmOverlay({
       <View style={styles.actions}>
         <TouchableOpacity style={styles.snoozeButton} onPress={handleSnooze} activeOpacity={0.8}>
           <AppIcon name="clock" size={24} color="white" />
-          <Text style={styles.snoozeText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("alarmOverlay.later")}</Text>
+          <Text style={styles.snoozeText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}>{t("alarmOverlay.later")}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.dismissButton} onPress={handleDismiss} activeOpacity={0.8}>
           <AppIcon name="check" size={24} color="white" />
-          <Text style={styles.dismissText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t("alarmOverlay.done")}</Text>
+          <Text style={styles.dismissText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}>{t("alarmOverlay.done")}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -701,6 +701,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   snoozeText: {
+    // A label that wraps (never "…" on an action) stays centred.
+    textAlign: "center",
     fontSize: scaleFontSize(16),
     fontWeight: "600",
     color: "white",
@@ -716,6 +718,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   dismissText: {
+    // A label that wraps (never "…" on an action) stays centred.
+    textAlign: "center",
     fontSize: scaleFontSize(16),
     fontWeight: "600",
     color: "white",

@@ -1,4 +1,5 @@
 import { weekdayFullLabel, weekdayNarrowLabel } from "../../lib/weekdayLabels";
+import { DENSE_MAX_FONT_SCALE } from "../../lib/textDefaults";
 import { joinedScriptText } from "../../lib/scriptStyle";
 import { useEffect, useMemo, useRef } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -79,7 +80,7 @@ export default function WeekStrip({
             accessibilityState={{ selected: isSelected }}
             accessibilityLabel={`${weekdayFullLabel(WEEK_ORDER[index])} ${dayNumber}`}
           >
-            <Text style={[styles.dayLetter, joinedScriptText()]}>{weekdayNarrowLabel(WEEK_ORDER[index])}</Text>
+            <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={[styles.dayLetter, joinedScriptText()]}>{weekdayNarrowLabel(WEEK_ORDER[index])}</Text>
             <Text
               style={[
                 styles.dateText,

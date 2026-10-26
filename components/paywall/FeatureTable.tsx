@@ -46,7 +46,7 @@ export default function FeatureTable() {
         <View style={styles.headRow}>
           <View style={styles.featureCol} />
           <Text style={[styles.colHead, joinedScriptText()]}>{t("paywall.table.col.pro")}</Text>
-          <Text style={[styles.colHead, joinedScriptText()]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+          <Text style={[styles.colHead, joinedScriptText()]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
             {t("paywall.table.col.free")}
           </Text>
         </View>

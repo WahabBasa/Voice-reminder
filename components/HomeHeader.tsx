@@ -1,10 +1,12 @@
 import { useCallback, useState } from "react";
+import { DENSE_MAX_FONT_SCALE } from "../lib/textDefaults";
 import { LayoutChangeEvent, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Plus } from "lucide-react-native";
 import AppIcon from "./AppIcon";
 import { t } from "../lib/i18n";
 import { colors, scaleFontSize, shadows } from "../lib/theme";
 import { FONT_DISPLAY } from "../lib/fonts";
+import { joinedScriptText } from "../lib/scriptStyle";
 import {
   ADD_BUTTON_SIZE,
   HEADER_GAP,
@@ -27,7 +29,7 @@ function PillContent({ label, fit }: { label: string; fit: boolean }) {
   return (
     <>
       <AppIcon name="crown" size={14} color="white" style={styles.proIcon} />
-      <Text
+      <Text maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE}
         style={styles.proPillText}
         numberOfLines={1}
         adjustsFontSizeToFit={fit}
@@ -52,6 +54,7 @@ export default function HomeHeader({ dateLabel, isPro, onGetPro, onAdd }: HomeHe
   const [rowWidth, setRowWidth] = useState(0);
   const [titleWidth, setTitleWidth] = useState(0);
   const [pillFullWidth, setPillFullWidth] = useState(0);
+  const [pillCompactWidth, setPillCompactWidth] = useState(0);
 
   const widthSetter = useCallback(
     (set: (width: number) => void) => (event: LayoutChangeEvent) => {
@@ -61,52 +64,77 @@ export default function HomeHeader({ dateLabel, isPro, onGetPro, onAdd }: HomeHe
     []
   );
 
-  const mode = proPillMode({ rowWidth, titleWidth, pillFullWidth });
+  const mode = proPillMode({ rowWidth, titleWidth, pillFullWidth, pillCompactWidth });
+  const stacked = mode === "stacked";
+
+  const titleText = (
+    <Text
+      style={[styles.headerTitle, joinedScriptText()]}
+      numberOfLines={1}
+      adjustsFontSizeToFit
+      minimumFontScale={TITLE_MIN_SCALE}
+    >
+      {title}
+    </Text>
+  );
+  const dateText = (
+    <Text style={[styles.headerDate, stacked && styles.headerDateStacked]} numberOfLines={1}>
+      {dateLabel}
+    </Text>
+  );
+  const actions = (
+    <View style={styles.headerActions}>
+      {!isPro && (
+        <TouchableOpacity
+          style={[styles.proPill, mode !== "full" && styles.proPillCompact]}
+          activeOpacity={0.85}
+          onPress={onGetPro}
+          accessibilityRole="button"
+          accessibilityLabel={proLabel}
+          testID={`pro-pill-${mode}`}
+        >
+          <PillContent label={mode === "full" ? proLabel : "Pro"} fit={mode === "full"} />
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity
+        style={styles.addButton}
+        activeOpacity={0.85}
+        onPress={onAdd}
+        accessibilityRole="button"
+        accessibilityLabel={t("today.header.addTyped.a11y")}
+      >
+        <Plus size={20} color={colors.textHeading} strokeWidth={2} />
+      </TouchableOpacity>
+    </View>
+  );
 
   return (
     <View style={styles.header}>
-      <View style={styles.headerTop} onLayout={widthSetter(setRowWidth)}>
-        <View style={styles.headerTitleWrap}>
-          <Text
-            style={styles.headerTitle}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={TITLE_MIN_SCALE}
-          >
-            {title}
-          </Text>
-          <Text style={styles.headerDate} numberOfLines={1}>
-            {dateLabel}
-          </Text>
-        </View>
-        <View style={styles.headerActions}>
-          {!isPro && (
-            <TouchableOpacity
-              style={[styles.proPill, mode === "compact" && styles.proPillCompact]}
-              activeOpacity={0.85}
-              onPress={onGetPro}
-              accessibilityRole="button"
-              accessibilityLabel={proLabel}
-              testID={`pro-pill-${mode}`}
-            >
-              <PillContent label={mode === "compact" ? "Pro" : proLabel} fit={mode === "full"} />
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={styles.addButton}
-            activeOpacity={0.85}
-            onPress={onAdd}
-            accessibilityRole="button"
-            accessibilityLabel={t("today.header.addTyped.a11y")}
-          >
-            <Plus size={20} color={colors.textHeading} strokeWidth={2} />
-          </TouchableOpacity>
-        </View>
+      <View style={[styles.headerTop, stacked && styles.headerTopStacked]} onLayout={widthSetter(setRowWidth)}>
+        {stacked ? (
+          // Too long even shrunk next to the compact pill: the title gets its
+          // own line; the date, pill and + share the row under it.
+          <>
+            {titleText}
+            <View style={styles.stackedRow}>
+              {dateText}
+              {actions}
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.headerTitleWrap}>
+              {titleText}
+              {dateText}
+            </View>
+            {actions}
+          </>
+        )}
 
         {/* Invisible natural-width measurers (no width limit, one line). */}
         <View style={styles.measureBox} pointerEvents="none" aria-hidden>
           <View style={styles.measureItem}>
-            <Text style={styles.headerTitle} numberOfLines={1} onLayout={widthSetter(setTitleWidth)}>
+            <Text style={[styles.headerTitle, joinedScriptText()]} numberOfLines={1} onLayout={widthSetter(setTitleWidth)}>
               {title}
             </Text>
           </View>
@@ -114,6 +142,13 @@ export default function HomeHeader({ dateLabel, isPro, onGetPro, onAdd }: HomeHe
             <View style={styles.measureItem}>
               <View style={[styles.proPill, styles.proPillMeasure]} onLayout={widthSetter(setPillFullWidth)}>
                 <PillContent label={proLabel} fit={false} />
+              </View>
+            </View>
+          )}
+          {!isPro && (
+            <View style={styles.measureItem}>
+              <View style={[styles.proPill, styles.proPillCompact, styles.proPillMeasure]} onLayout={widthSetter(setPillCompactWidth)}>
+                <PillContent label="Pro" fit={false} />
               </View>
             </View>
           )}
@@ -133,6 +168,20 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
+  },
+  headerTopStacked: {
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
+  stackedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  headerDateStacked: {
+    flex: 1,
+    marginTop: 0,
+    marginRight: HEADER_GAP,
   },
   headerTitleWrap: {
     flex: 1,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { STACKED_BUTTON, STACKED_ROW, useStackWhenWrapped } from "../lib/useStackWhenWrapped";
 import { BackHandler, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import BottomSheet, { BottomSheetBackdrop, BottomSheetView } from "@gorhom/bottom-sheet";
 import { Portal } from "@gorhom/portal";
@@ -75,6 +76,8 @@ export default function AiConsentCard({
         [onDecline]
     );
 
+    // Buttons stack full-width when a label would wrap.
+    const { stacked, onTextLayout } = useStackWhenWrapped();
     const handleAllow = useCallback(() => {
         onAllow();
         bottomSheetRef.current?.close();
@@ -112,20 +115,20 @@ export default function AiConsentCard({
                         {AI_CONSENT_COPY.learnMoreSuffix}
                     </Text>
 
-                    <View style={styles.actions}>
+                    <View style={[styles.actions, stacked && STACKED_ROW]}>
                         <TouchableOpacity
-                            style={styles.declineButton}
+                            style={[styles.declineButton, stacked && STACKED_BUTTON]}
                             onPress={onDecline}
                             activeOpacity={0.7}
                         >
-                            <Text style={styles.declineText}>{AI_CONSENT_COPY.declineLabel}</Text>
+                            <Text style={styles.declineText} onTextLayout={onTextLayout}>{AI_CONSENT_COPY.declineLabel}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                            style={styles.allowButton}
+                            style={[styles.allowButton, stacked && STACKED_BUTTON]}
                             onPress={handleAllow}
                             activeOpacity={0.7}
                         >
-                            <Text style={styles.allowText}>{AI_CONSENT_COPY.allowLabel}</Text>
+                            <Text style={styles.allowText} onTextLayout={onTextLayout}>{AI_CONSENT_COPY.allowLabel}</Text>
                         </TouchableOpacity>
                     </View>
                 </BottomSheetView>
