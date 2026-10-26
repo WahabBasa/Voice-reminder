@@ -1,3 +1,5 @@
+import { useUpdatePromptHold } from "../lib/appUpdatePrompt";
+import UpdatePrompt from "../components/UpdatePrompt";
 import { getUiLocale, t, useUiKey } from "../lib/i18n";
 import { loadPseudoLocalization } from "../lib/pseudoLocale";
 import { syncLayoutDirection } from "../lib/layoutDirection";
@@ -394,6 +396,8 @@ function RootLayout() {
   const showFirstLaunchWheel = shouldShowFirstLaunchWheel(languageReady, chosenLanguage);
   const [splashVisible, setSplashVisible] = useState(true);
   const hideSplash = useCallback(() => setSplashVisible(false), []);
+  useUpdatePromptHold("splash", splashVisible);
+  useUpdatePromptHold("wheel", showFirstLaunchWheel);
 
   useEffect(() => {
     // Log build info first to detect stale bundles
@@ -501,6 +505,9 @@ function RootLayout() {
               <FeedbackHost />
               {/* Fallback alarm overlay for foreground app (pastebin Step 4.1) */}
               <AlarmOverlayFallback />
+              {/* "Update available" prompt: Home only, never over an alarm,
+                  the language wheel, consent, permissions or a recording. */}
+              <UpdatePrompt />
             </ToastProvider>
           </ConvexProvider>
         </SafeAreaProvider>

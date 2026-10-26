@@ -1,3 +1,4 @@
+import { useUpdatePromptHold } from "../lib/appUpdatePrompt";
 import { t } from "../lib/i18n";
 import { DENSE_MAX_FONT_SCALE } from "../lib/textDefaults";
 import React, { useCallback, useEffect, useState } from "react";
@@ -127,6 +128,7 @@ export async function prepareReminderCreation(): Promise<boolean> {
 
 export default function PermissionPrompt() {
   const [visible, setVisible] = useState(false);
+  useUpdatePromptHold("permission", visible);
   useEffect(() => {
     _promptVisible = visible;
     return () => {

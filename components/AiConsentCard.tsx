@@ -1,3 +1,4 @@
+import { useUpdatePromptHold } from "../lib/appUpdatePrompt";
 import { useCallback, useEffect, useRef } from "react";
 import { STACKED_BUTTON, STACKED_ROW, useStackWhenWrapped } from "../lib/useStackWhenWrapped";
 import { BackHandler, StyleSheet, Text, TouchableOpacity, View } from "react-native";
@@ -32,6 +33,7 @@ export default function AiConsentCard({
     onDecline,
     hostName = "root",
 }: AiConsentCardProps) {
+    useUpdatePromptHold("consent", visible);
     const bottomSheetRef = useRef<BottomSheet>(null);
 
     useEffect(() => {

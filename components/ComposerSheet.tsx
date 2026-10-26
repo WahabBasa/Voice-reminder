@@ -1,3 +1,4 @@
+import { useUpdatePromptHold } from "../lib/appUpdatePrompt";
 import { t } from "../lib/i18n";
 import { TEXT_MAX_FONT_SCALE, inputDirectionStyle } from "../lib/textDefaults";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -43,6 +44,7 @@ export default function ComposerSheet({
     onDismiss,
     hostName = "root",
 }: ComposerSheetProps) {
+    useUpdatePromptHold("composer", visible);
     const bottomSheetRef = useRef<BottomSheet>(null);
     const [draft, setDraft] = useState("");
 

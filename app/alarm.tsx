@@ -1,3 +1,4 @@
+import { useUpdatePromptHold } from "../lib/appUpdatePrompt";
 import { useEffect, useRef, useState } from "react";
 import {
     BackHandler,
@@ -40,6 +41,8 @@ const { width, height } = Dimensions.get("window");
 const ANDROID_ALARM_ACTIVITY = "com.wahabbasa.VoiceReminder.AlarmActivity";
 
 export default function AlarmScreen() {
+  // Never let the update prompt cover a ringing alarm.
+  useUpdatePromptHold("alarm");
     const router = useRouter();
     const removeConvexReminder = useMutation(api.reminders.remove);
     const params = useLocalSearchParams<{

@@ -1,3 +1,4 @@
+import { useUpdatePromptHold } from "../lib/appUpdatePrompt";
 import { t } from "../lib/i18n";
 import {
   View,
@@ -88,6 +89,7 @@ export default function RecordingOverlay({
   onRecordingStart,
   onRecordingComplete,
 }: RecordingOverlayProps) {
+  useUpdatePromptHold("recording", visible);
   const { height: windowHeight } = useWindowDimensions();
   const openHeight = Math.round(windowHeight * 0.48);
   const insets = useSafeAreaInsets();

@@ -1,3 +1,4 @@
+import { useUpdatePromptHold } from "../lib/appUpdatePrompt";
 import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -16,6 +17,7 @@ import { currentLanguageChoice, pickLanguage } from "../lib/pickLanguage";
  * then shows Home. Settings › Language changes it afterwards.
  */
 export default function FirstLaunchLanguage() {
+  useUpdatePromptHold("wheel");
     // Read once: the device language preselected.
     const [initialCode] = useState(currentLanguageChoice);
 

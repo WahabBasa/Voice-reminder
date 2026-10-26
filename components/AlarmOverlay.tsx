@@ -1,3 +1,4 @@
+import { useUpdatePromptHold } from "../lib/appUpdatePrompt";
 import { t } from "../lib/i18n";
 import { formatClockAt } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -105,6 +106,8 @@ export function AlarmOverlay({
   onSnooze,
   shouldExitOnResolve = false,
 }: AlarmOverlayProps) {
+  // Never let the update prompt cover a ringing alarm.
+  useUpdatePromptHold("alarm");
   const removeConvexReminder = useMutation(api.reminders.remove);
 
   const [isPlaying, setIsPlaying] = useState(true);
