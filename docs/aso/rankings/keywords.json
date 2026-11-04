@@ -1,0 +1,1479 @@
+{
+ "app_id": 6801797784,
+ "countries_by_language": {
+  "en": [
+   "US",
+   "GB",
+   "AU",
+   "AE",
+   "CH",
+   "FR"
+  ],
+  "pt": [
+   "BR"
+  ],
+  "es": [
+   "MX",
+   "US"
+  ],
+  "de": [
+   "DE",
+   "CH"
+  ],
+  "ar": [
+   "AE"
+  ],
+  "sv": [
+   "SE"
+  ]
+ },
+ "keywords": [
+  {
+   "language": "brand",
+   "keyword": "remi",
+   "source": [
+    "title"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "BR",
+    "MX",
+    "DE",
+    "SE"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "الساعة",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "الناطقة",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "ساعة",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "ناطقة",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "الساعه",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "الناطقه",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "ساعه",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "ناطقه",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "نطق",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "الوقت",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "الناطق",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "تذكير",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "الدواء",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "دواء",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "مواعيد",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "reloj",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "despertador",
+   "source": [
+    "asc_keywords",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "habla",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "hablar",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "hora",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "pastillas",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "medicina",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "cita",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recibo",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "cumpleaños",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "pendientes",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "tdah",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "agua",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "speaking",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "announce",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "announcer",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "time",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "timer",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "chime",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "hourly",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "med",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "forgetful",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "adhd",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "talk",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "ring",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "wake",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "remember",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "water",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "relógio",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "alarme",
+   "source": [
+    "asc_keywords",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "fala",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "falar",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "hora",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "remédio",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "boleto",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "consulta",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "aniversário",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "esquecido",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "tdah",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrar",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "água",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "zeitansage",
+   "source": [
+    "asc_keywords",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "ansage",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "ansagen",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "sprachansage",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "termine",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "erinnerung",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "medikamentenwecker",
+   "source": [
+    "asc_keywords",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "pillenwecker",
+   "source": [
+    "asc_keywords",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "tabletten",
+   "source": [
+    "asc_keywords"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "talking alarm clock",
+   "source": [
+    "title",
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "talking alarm",
+   "source": [
+    "title",
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "voice reminders",
+   "source": [
+    "title",
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "voice reminder",
+   "source": [
+    "title",
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "talking clock",
+   "source": [
+    "title",
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "reminder app",
+   "source": [
+    "title"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "alarm with voice",
+   "source": [
+    "title"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembretes por voz",
+   "source": [
+    "title",
+    "docs"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "despertador falante",
+   "source": [
+    "title",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorios con voz",
+   "source": [
+    "title",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "sprechender wecker",
+   "source": [
+    "title",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه ناطق بالعربي",
+   "source": [
+    "title",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه ناطق",
+   "source": [
+    "title",
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "speaking clock",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "speaking alarm",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "alarm that talks",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "voice reminder app",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "voice alarm",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "reminder with voice",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "time announcer",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "time announcer app",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "talking time",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "hourly chime",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "en",
+   "keyword": "speaking alarm clock",
+   "source": [
+    "apple_ads"
+   ],
+   "countries": [
+    "US",
+    "GB",
+    "AU",
+    "AE",
+    "CH",
+    "FR",
+    "SE"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "talande klocka",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "talande väckarklocka",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "väckarklocka med röst",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "talande alarm",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "röstlarm",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "röstpåminnelse",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "påminnelse med röst",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "medicinpåminnelse",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "läkemedelspåminnelse",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "pillerpåminnelse",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "sv",
+   "keyword": "fröken ur",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "wecker mit ansage",
+   "source": [
+    "apple_ads",
+    "docs"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "wecker mit sprachansage",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "sprachansage wecker",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "termine ansagen",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "erinnerung ansagen",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "akustische erinnerung",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "sprechende erinnerung",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "spracherinnerung",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "uhrzeit ansage",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "sprechende uhr",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "wecker mit sprachausgabe",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "sprach erinnerung",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "sprachnotiz erinnerung",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "erinnerung mit sprache",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "zeitansage uhr",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "ساعة ناطقة",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "تذكير صوتي",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه صوتي",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "الساعة الناطقة",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "الساعه الناطقه",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "ساعه ناطقه",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "نطق الوقت",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه الوقت الناطق",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه الوقت بالصوت",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "ذكرني بالصوت",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "تذكير بالصوت",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه بالصوت",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه الدواء",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "تذكير الدواء",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "alarma que habla",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "alarma con voz",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "despertador que habla",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorio de pastillas",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorio de pagos",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorio de citas",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorio de cumpleaños",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorio",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorios",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "alarma",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "alarme que fala",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete por voz",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "despertador que fala",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete de remédio",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete de boleto",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete de consulta",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete de aniversário",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembretes",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "despertador",
+   "source": [
+    "apple_ads"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "alarme falante",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete falado",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "alarme com voz",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "alarme de remédio",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete para tomar remédio",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete de contas",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembrete beber água",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "pt",
+   "keyword": "lembretes tdah",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorio con voz",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "alarma para pastillas",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorio para tomar pastillas",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorio de pago de tarjeta",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorio tomar agua",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "es",
+   "keyword": "recordatorios tdah",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "termin ansage",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "erinnerung vorlesen",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "tabletten wecker",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "tabletten erinnerung",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "erinnerung mit ton",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "erinnerung alarm",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "sprechender wecker senioren",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "de",
+   "keyword": "wecker für blinde",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "ذكرني",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "تطبيق ذكرني",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "تطبيق تذكير",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه تذكير",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "تذكير بالمواعيد",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه المواعيد",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه بصوت عالي",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "منبه يتكلم",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "تذكير صوتي بالعربي",
+   "source": [
+    "docs"
+   ]
+  },
+  {
+   "language": "ar",
+   "keyword": "المنبه الناطق",
+   "source": [
+    "docs"
+   ]
+  }
+ ]
+}
