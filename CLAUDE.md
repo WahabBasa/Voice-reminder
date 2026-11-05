@@ -55,7 +55,7 @@ User rules, set 2026-09-26. These override anything older in this file.
 - Local env file: `.env.local` (Convex URL + deployment)
 - Android tooling (Java 17, SDK, NDK, Gradle, ADB) is installed but parked; see the bottom section
 
-**RAM:** 12 GB installed, about 9.9 GB usable (the integrated graphics takes 2 GB). Fixed 2026-09-27 by swapping the sticks: Hynix 8 GB in slot 1, Samsung 4 GB in slot 2. With the Hynix in slot 2 the BIOS disabled it and only about 3.4 GB was usable. If sudden freezes come back, suspect slot 2. **2026-09-28: it came back** — Windows sees only 5.92 GB (both sticks detected, no bcdedit memory limit), plus bugchecks 0x139 and 0x3D and repeated Automatic Repair boots. Heavy local jobs can crash with Windows exit code `3221226505` (`0xC0000409`) when memory runs out.
+**RAM:** 12 GB installed, about 9.9 GB usable (the integrated graphics takes 2 GB). Fixed 2026-09-27 by swapping the sticks: Hynix 8 GB in slot 1, Samsung 4 GB in slot 2. With the Hynix in slot 2 the BIOS disabled it and only about 3.4 GB was usable. If sudden freezes come back, suspect slot 2. **2026-09-28: it came back** — Windows sees only 5.92 GB (both sticks detected, no bcdedit memory limit), plus bugchecks 0x139 and 0x3D and repeated Automatic Repair boots. **2026-11-04: only the Hynix (slot 1, DDR4-2666 running at 2400) is detected; the Samsung is missing from Win32_PhysicalMemory.** Heavy local jobs can crash with Windows exit code `3221226505` (`0xC0000409`) when memory runs out.
 
 **Known gotchas:**
 - PowerShell blocks `npm` / `npx` `.ps1` shims. Use `npm.cmd` / `npx.cmd`
