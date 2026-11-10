@@ -33,6 +33,9 @@ import type * as stt from "../stt.js";
 import type * as takeCardCopy from "../takeCardCopy.js";
 import type * as takeEmailActions from "../takeEmailActions.js";
 import type * as takeStoryEmail from "../takeStoryEmail.js";
+import type * as usage from "../usage.js";
+import type * as usageShape from "../usageShape.js";
+import type * as usageValidators from "../usageValidators.js";
 
 import type {
   ApiFromModules,
@@ -66,6 +69,9 @@ declare const fullApi: ApiFromModules<{
   takeCardCopy: typeof takeCardCopy;
   takeEmailActions: typeof takeEmailActions;
   takeStoryEmail: typeof takeStoryEmail;
+  usage: typeof usage;
+  usageShape: typeof usageShape;
+  usageValidators: typeof usageValidators;
 }>;
 
 /**

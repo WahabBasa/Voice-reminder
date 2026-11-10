@@ -77,4 +77,13 @@ crons.interval(
   {}
 );
 
+// Anonymous usage counts (convex/usage.ts) keep 365 days. Daily, idempotent;
+// a backlog larger than one batch reschedules itself until it is clear.
+crons.cron(
+  "prune usage counts",
+  "15 4 * * *",
+  internal.usage.prune,
+  {}
+);
+
 export default crons;

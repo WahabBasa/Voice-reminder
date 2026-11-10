@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import type { GridSchedule } from "./scheduleShape";
+import { screenValidator, stepValidator, tapValidator, variantValidator } from "./usageValidators";
 
 // Validator half of the days × times grid (OLD-97). The TypeScript half lives in
 // ./scheduleShape.ts and is the one definition; `gridScheduleValidator satisfies`
@@ -565,4 +566,32 @@ export default defineSchema({
     minSupportedVersion: v.optional(v.string()),
     testDeviceTags: v.array(v.string()),
   }),
+
+  /**
+   * Anonymous usage counts (convex/usage.ts, 1.0.6). No install/device id, no
+   * session id, no timezone/region, no free text: every field is a literal
+   * from convex/usageShape.ts, a capped number, or a pattern-checked
+   * version/build/language code. Rows cannot be joined. Kept 365 days.
+   */
+  usageSteps: defineTable({
+    step: stepValidator,
+    appVersion: v.string(),
+    buildNumber: v.string(),
+    lang: v.string(),
+    variant: variantValidator,
+    at: v.number(),
+  }).index("by_at", ["at"]),
+
+  usageVisits: defineTable({
+    visitNumber: v.number(),
+    durationSec: v.number(),
+    screens: v.array(screenValidator),
+    taps: v.array(tapValidator),
+    madeReminder: v.boolean(),
+    appVersion: v.string(),
+    buildNumber: v.string(),
+    lang: v.string(),
+    variant: variantValidator,
+    at: v.number(),
+  }).index("by_at", ["at"]),
 });

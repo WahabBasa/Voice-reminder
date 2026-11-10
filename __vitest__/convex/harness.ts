@@ -44,6 +44,7 @@ const modules: Record<string, () => Promise<unknown>> = {
   "../../convex/scheduleShape.ts": () => import("../../convex/scheduleShape"),
   "../../convex/schema.ts": () => import("../../convex/schema"),
   "../../convex/takeEmailActions.ts": () => import("../../convex/takeEmailActions"),
+  "../../convex/usage.ts": () => import("../../convex/usage"),
 };
 
 export function harness() {
