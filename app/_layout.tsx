@@ -17,7 +17,10 @@ import { AppState, InteractionManager, LogBox, Platform } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import * as Sentry from "@sentry/react-native";
 import { initSentry } from "../lib/sentry";
-import { Stack, useRouter } from "expo-router";
+import { Stack, usePathname, useRouter } from "expo-router";
+import Constants from "expo-constants";
+import * as Updates from "expo-updates";
+import { noteRoute, resolveVariant, startUsage } from "../lib/usageCounts";
 import { ConvexProvider, useMutation } from "convex/react";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -57,6 +60,23 @@ LogBox.ignoreLogs([
   /PurchasesError/,
   /react-native-purchases/,
 ]);
+
+// Anonymous usage counts (lib/usageCounts.ts). First, so its one-time
+// "did this install exist before 1.0.6?" read lands ahead of every write this
+// launch makes. No device id, no timezone: version, build, language code and
+// build variant are the only facts attached.
+startUsage({
+  send: {
+    step: (payload) => convex.mutation(api.usage.recordStep, payload),
+    visit: (payload) => convex.mutation(api.usage.recordVisit, payload),
+  },
+  meta: () => ({
+    appVersion: Constants.nativeApplicationVersion ?? Constants.expoConfig?.version,
+    buildNumber: Constants.nativeBuildVersion ?? Constants.expoConfig?.ios?.buildNumber,
+    locale: getUiLocale(),
+    variant: resolveVariant(Updates.channel, typeof __DEV__ !== "undefined" && __DEV__),
+  }),
+});
 
 // Init before first render so startup crashes are captured too.
 initSentry();
@@ -233,6 +253,15 @@ function StartupTasks() {
     }
   }, [reminders]);
 
+  return null;
+}
+
+/** Feeds the router's pathname to the usage counts' screen list. */
+function UsageRouteTracker() {
+  const pathname = usePathname();
+  useEffect(() => {
+    noteRoute(pathname);
+  }, [pathname]);
   return null;
 }
 
@@ -429,6 +458,7 @@ function RootLayout() {
               ) : (
               <>
               <StartupTasks />
+              <UsageRouteTracker />
               <PermissionPrompt />
               <StatusBar style="light" />
               <Stack

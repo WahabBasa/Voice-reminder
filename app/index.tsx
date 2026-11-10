@@ -21,6 +21,11 @@ import { useRouter } from "expo-router";
 import { useAction, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { convex } from "../lib/convexClient";
+import Constants from "expo-constants";
+import * as StoreReview from "expo-store-review";
+import { markStep, noteHomeSurface, noteReminderMade, noteTap } from "../lib/usageCounts";
+import type { UsageScreen } from "../convex/usageShape";
+import { maybeAskForReview, subscribeReviewCheck } from "../lib/ratingPrompt";
 import { colors, scaleFontSize } from "../lib/theme";
 import {
   copyAsync,
@@ -52,6 +57,7 @@ import {
 } from "../components/PermissionPrompt";
 import {
   POST_FIRST_RING_SOURCE,
+  isAlarmRinging,
   maybeShowPostFirstRingOffer,
   requestOfferCheck,
   subscribeOfferCheck,
@@ -490,21 +496,39 @@ export default function HomeScreen() {
         timer = setTimeout(() => {
           timer = null;
           if (!active || AppState.currentState !== "active") return;
+          const blocker = () =>
+            offerBlockerRef.current ?? (isPermissionPromptVisible() ? "permission_prompt" : null);
           void maybeShowPostFirstRingOffer({
             reason,
-            blocker: () =>
-              offerBlockerRef.current ?? (isPermissionPromptVisible() ? "permission_prompt" : null),
+            blocker,
             open: () =>
               router.push({ pathname: "/paywall", params: { source: POST_FIRST_RING_SOURCE } }),
-          });
+          })
+            .then((decision) => {
+              // The same calm moment serves the rating prompt (lib/ratingPrompt.ts),
+              // never on top of the offer. It only asks when a rung Done made it due.
+              if (decision === "shown" || !active) return;
+              return maybeAskForReview({
+                appVersion:
+                  Constants.nativeApplicationVersion ?? Constants.expoConfig?.version ?? null,
+                isAppActive: () => active && AppState.currentState === "active",
+                blocker,
+                isAlarmSounding: isAlarmRinging,
+                isAvailable: () => StoreReview.isAvailableAsync(),
+                requestReview: () => StoreReview.requestReview(),
+              });
+            })
+            .catch(() => {});
         }, 800);
       };
       const unsubscribe = subscribeOfferCheck(run);
+      const unsubscribeReview = subscribeReviewCheck(() => run("rung_done"));
       run("home_focus");
       return () => {
         active = false;
         if (timer) clearTimeout(timer);
         unsubscribe();
+        unsubscribeReview();
       };
     }, [router])
   );
@@ -550,6 +574,7 @@ export default function HomeScreen() {
     }
     if (useSettingsStore.getState().settings.aiConsentAcceptedAt === null) {
       perfLog(traceId, "ui.recording", "open_blocked_consent");
+      markStep("consent_shown");
       setShowConsentCard(true);
       return;
     }
@@ -651,6 +676,10 @@ export default function HomeScreen() {
     async (choice: AiConsentChoice) => {
       setShowConsentCard(false);
       const outcome = await resolveAiConsent(choice);
+      if (choice === "not_now") markStep("consent_declined");
+      if (outcome.consented) markStep("consent_accepted");
+      if (outcome.mic === "granted") markStep("mic_allowed");
+      else if (outcome.mic === "denied") markStep("mic_denied");
       if (outcome.error === "persist_failed") {
         Alert.alert(t("today.alert.saveChoiceFailed.title"), t("common.pleaseTryAgain"));
         return;
@@ -864,6 +893,7 @@ export default function HomeScreen() {
       }
 
       opts.onCreated?.();
+      noteReminderMade();
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       // Store already updated - no need for setReminders
 
@@ -1598,6 +1628,9 @@ export default function HomeScreen() {
         return;
       }
 
+      markStep("first_take_ok");
+      noteReminderMade();
+
       const feedback = describeTakeOutcome({
         created: summary.created,
         dropped: summary.dropped,
@@ -1782,6 +1815,7 @@ export default function HomeScreen() {
   const handleReminderPress = useCallback(
     (reminder: Reminder) => {
       const reminderId = reminder.id;
+      noteTap("reminder_card");
       const existing = tapTraceByReminderIdRef.current.get(reminderId);
       const traceId = existing?.traceId ?? createTraceId("tap");
       const now = Date.now();
@@ -1857,6 +1891,7 @@ export default function HomeScreen() {
 
   const handleMarkDone = useCallback(
     (reminderId: string, reminderTitle: string) => {
+      noteTap("mark_done");
       // Mark as exiting to trigger animation
       setExitingIds((prev) => new Set(prev).add(reminderId));
 
@@ -1973,7 +2008,44 @@ export default function HomeScreen() {
     [handleMarkDone]
   );
 
+  // Named controls for the anonymous usage counts (lib/usageCounts.ts). A
+  // count is one array push; the handler underneath is unchanged.
+  const handleMicTap = useCallback(() => {
+    noteTap("mic");
+    markStep("first_record_tap");
+    void handleOpenRecording();
+  }, [handleOpenRecording]);
+
+  const handleTypedEntryTap = useCallback(() => {
+    noteTap("typed_entry");
+    void handleOpenComposer();
+  }, [handleOpenComposer]);
+
+  const handleUpgradeTap = useCallback(() => {
+    noteTap("upgrade");
+    openPaywall();
+  }, [openPaywall]);
+
+  // What Home shows, for the visit's screen list. Only changes are recorded.
+  const usageSurface: UsageScreen = showRecording
+    ? "recording"
+    : showConsentCard
+      ? "consent"
+      : showComposer || isComposerSubmitting
+        ? "composer"
+        : editingReminder || timeDraft
+          ? "edit_sheet"
+          : page === PAGE_DAYS
+            ? "days"
+            : page === PAGE_SETTINGS
+              ? "settings"
+              : "home";
+  useEffect(() => {
+    noteHomeSurface(usageSurface);
+  }, [usageSurface]);
+
   const handleTab = useCallback((tab: BottomBarTab) => {
+    noteTap(tab === "today" ? "today_tab" : tab === "days" ? "days_tab" : "settings_tab");
     setPage(tab === "today" ? PAGE_TODAY : tab === "days" ? PAGE_DAYS : PAGE_SETTINGS);
   }, []);
 
@@ -2045,8 +2117,8 @@ export default function HomeScreen() {
           <HomeHeader
             dateLabel={dateLabel}
             isPro={isPro}
-            onGetPro={openPaywall}
-            onAdd={() => void handleOpenComposer()}
+            onGetPro={handleUpgradeTap}
+            onAdd={handleTypedEntryTap}
           />
 
           <FlatList
@@ -2141,7 +2213,7 @@ export default function HomeScreen() {
           <BottomBar
             activeTab={activeTab}
             onTab={handleTab}
-            onRecord={handleOpenRecording}
+            onRecord={handleMicTap}
           />
         </>
       )}
@@ -2153,7 +2225,7 @@ export default function HomeScreen() {
         canStartRecording={canStartRecording}
         gateStatusText={gateStatusText}
         showUpgradeCta={showUpgradeCta}
-        onUpgradePress={openPaywall}
+        onUpgradePress={handleUpgradeTap}
         onClose={handleCloseRecording}
         onRecordingStart={handleRecordingStart}
         onRecordingComplete={handleRecordingComplete}

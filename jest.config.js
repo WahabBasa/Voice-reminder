@@ -34,6 +34,9 @@ module.exports = {
     "lib/i18n.ts",
     "lib/appLanguage.ts",
     "lib/weekdayLabels.ts",
+    "lib/usageCounts.ts",
+    "lib/ratingPrompt.ts",
+    "convex/usageShape.ts",
   ],
   coverageThreshold: {
     "lib/time.ts": { lines: 85, branches: 70 },
@@ -64,5 +67,8 @@ module.exports = {
     "lib/i18n.ts": { lines: 90, branches: 85 },
     "lib/appLanguage.ts": { lines: 95, branches: 90 },
     "lib/weekdayLabels.ts": { lines: 85, branches: 100 },
+    "lib/usageCounts.ts": { lines: 95, branches: 85 },
+    "lib/ratingPrompt.ts": { lines: 95, branches: 90 },
+    "convex/usageShape.ts": { lines: 100, branches: 100 },
   },
 };

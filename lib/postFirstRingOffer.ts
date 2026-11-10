@@ -98,7 +98,8 @@ export function requestOfferCheck(reason: string): void {
   }
 }
 
-async function isAlarmRinging(): Promise<boolean> {
+/** A fallback alarm still pending, or an AlarmKit alarm alerting. Unknown = ringing. */
+export async function isAlarmRinging(): Promise<boolean> {
   try {
     const pending = await getPendingAlarm();
     if (pending && !pending.resolvedAt) return true;

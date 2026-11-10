@@ -35,6 +35,7 @@ import {
   resumeRecording,
   stopRecording,
 } from "../lib/audio";
+import { markStep } from "../lib/usageCounts";
 import { createTraceId, perfLog } from "../lib/perf";
 import { concentricCardRadius } from "../lib/screenCorners";
 import { getDeviceLocales, resolveVoiceLocale } from "../lib/deviceStt";
@@ -299,6 +300,9 @@ export default function RecordingOverlay({
           ms: Date.now() - tPerm,
           status,
         });
+        // First answer only (lib/usageCounts.ts): one array push, no I/O here.
+        if (status === "granted") markStep("mic_allowed");
+        else if (status === "denied") markStep("mic_denied");
         if (status !== "granted") {
           setPermissionDenied(true);
           return;

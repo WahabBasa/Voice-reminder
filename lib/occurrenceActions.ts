@@ -25,6 +25,7 @@ import { stopOccurrence } from "./alarmKit";
 import { planLaterComeback } from "./notificationDecisions";
 import { useReminderStore, type ReminderHistory } from "./store";
 import { vrLog } from "./vrLog";
+import { noteRungDone } from "./ratingPrompt";
 
 export interface CompleteOccurrenceOpts {
   /** Title recorded on the history row. */
@@ -100,6 +101,10 @@ export async function completeOccurrence(
       scheduledFor: ref.occurrenceAt,
       action: "dismissed",
     });
+    // A rung reminder answered Done counts toward the rating prompt
+    // (lib/ratingPrompt.ts). Inside this branch so a replayed Done counts once.
+    // Fire-and-forget, never throws.
+    void noteRungDone(ref.occurrenceAt, opts.at ?? Date.now());
   }
 
   // 4. One-off: gone. Repeater: its future occurrences survive.

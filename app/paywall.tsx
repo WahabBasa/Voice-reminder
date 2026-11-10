@@ -44,6 +44,7 @@ import ClosingBlock from "../components/paywall/ClosingBlock";
 import FooterLegalRow from "../components/paywall/FooterLegalRow";
 import { AwardBadgeRow, ProofCarousel, TestimonialWall } from "../components/paywall/ProofSlots";
 import { PAYWALL_GUTTER, paywallColors, paywallWeight } from "../components/paywall/paywallTheme";
+import { markStep } from "../lib/usageCounts";
 
 const ERROR_COPY: Record<Exclude<PurchaseErrorCategory, "cancelled">, () => string> = {
     network: () => t("paywall.error.network"),
@@ -67,6 +68,7 @@ export default function PaywallScreen() {
     const paywallSource = typeof params.source === "string" ? params.source : "default";
     useEffect(() => {
         vrLog("paywall", "opened", { source: paywallSource, context: paywallContext });
+        markStep("paywall_shown");
         // Logged once per open.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);

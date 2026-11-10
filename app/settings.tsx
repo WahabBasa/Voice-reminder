@@ -32,6 +32,7 @@ import { useSettingsStore } from "../lib/settingsStore";
 import { useFeedbackUi } from "../lib/feedbackUi";
 import type { VoiceLanguageSetting } from "../lib/deviceStt";
 import type { SpeechEngine } from "../lib/vrSpeech";
+import { noteTap } from "../lib/usageCounts";
 
 const VOICE_LANGUAGE_LABELS: Record<VoiceLanguageSetting, () => string> = {
   auto: () => t("settings.voiceLanguage.auto"),
@@ -269,7 +270,10 @@ export function SettingsContent({ embedded = false, visible = true }: SettingsCo
             ? () => void handleManageSubscription()
             : proCard.action === "retry"
               ? () => void handleRetryProStatus()
-              : () => router.push("/paywall")
+              : () => {
+                  noteTap("upgrade");
+                  router.push("/paywall");
+                }
         }
         activeOpacity={0.7}
       >
