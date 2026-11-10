@@ -91,24 +91,50 @@ export type OutcomeStatus = "committed" | "failed";
 
 export type OutcomeNotify = "failed" | "first_take_worked" | null;
 
+/** Above this the app's install counter stops (lib/installCount.ts). */
+export const MAX_INSTALL_NUMBER = 99;
+
+/**
+ * The install number `hello` will store: an integer 1..99, else undefined
+ * (older builds send none; a bad value is treated the same way).
+ */
+export function cleanInstallNumber(value: unknown): number | undefined {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MAX_INSTALL_NUMBER
+    ? value
+    : undefined;
+}
+
+/**
+ * Whether an install is the phone's first: undefined (an older build, which
+ * cannot tell) or 1. A reinstall (2+) is never a "new device".
+ */
+export function isFirstInstall(installNumber: number | undefined): boolean {
+  return installNumber === undefined || installNumber <= 1;
+}
+
 /**
  * What one take's outcome means for the founder.
  *
- * - `newDevice`: the device is not a pre-launch (seeded) install and first said
- *   hello within the last seven days.
+ * - `newDevice`: the device is not a pre-launch (seeded) install, not a
+ *   reinstall (`installNumber` 2+), and first said hello within the last
+ *   seven days.
  * - `firstTake`: no outcome was recorded for this device before this one.
  * - `notify`: every failure emails; a success emails only when it is a new
  *   device's first take.
  */
 export function classifyOutcome(input: {
   status: OutcomeStatus;
-  device: { seeded: boolean; firstSeenAt: number } | null;
+  device: { seeded: boolean; firstSeenAt: number; installNumber?: number } | null;
   hasPriorOutcome: boolean;
   now: number;
 }): { newDevice: boolean; firstTake: boolean; notify: OutcomeNotify } {
   const newDevice =
     input.device !== null &&
     !input.device.seeded &&
+    isFirstInstall(input.device.installNumber) &&
     input.now - input.device.firstSeenAt <= NEW_DEVICE_WINDOW_MS;
   const firstTake = !input.hasPriorOutcome;
   let notify: OutcomeNotify = null;
@@ -164,9 +190,12 @@ export type NewDeviceInput = {
 
 export function buildNewDeviceEmail(input: NewDeviceInput): Email {
   const subject = `Remi: new device (${or(input.timezone, "unknown tz")}, ${or(input.locale, "unknown locale")})`;
-  const body = [
-    "A new device opened Remi.",
-    "",
+  const body = ["A new device opened Remi.", "", ...deviceLines(input)].join("\n");
+  return { subject, body };
+}
+
+function deviceLines(input: NewDeviceInput): string[] {
+  return [
     `device: ${input.deviceTag}`,
     `time zone: ${or(input.timezone, "unknown")}`,
     `locale: ${or(input.locale, "unknown")}`,
@@ -174,6 +203,18 @@ export function buildNewDeviceEmail(input: NewDeviceInput): Email {
     `build: ${or(input.buildNumber, "unknown")}`,
     `update: ${or(input.updateId, "unknown")}`,
     `iOS: ${or(input.iosVersion, "unknown")}`,
+  ];
+}
+
+// ─── reinstall ───────────────────────────────────────────────────────────────
+
+/** A phone that has had the app before installed it again (install #N, N >= 2). */
+export function buildReinstallEmail(input: NewDeviceInput & { installNumber: number }): Email {
+  const subject = `Remi: reinstall #${input.installNumber} (${or(input.timezone, "unknown tz")}, ${or(input.locale, "unknown locale")})`;
+  const body = [
+    `A phone reinstalled Remi (install #${input.installNumber} on this phone).`,
+    "",
+    ...deviceLines(input),
   ].join("\n");
   return { subject, body };
 }

@@ -18,6 +18,10 @@
  * row), and when it fires it tells the whole story — every failed attempt, the
  * retry that recovered if one did, and what the user saw. A take that works
  * first time sends nothing, except a new device's first take.
+ *
+ * A reinstall (`devices.installNumber` 2+) is never a new device, and a device
+ * the founder marked as a test phone (`devices.markTest`) sends no email at
+ * all; its takes are still logged.
  */
 
 import { internalAction, internalMutation, type MutationCtx } from "./_generated/server";
@@ -31,6 +35,7 @@ import {
   buildDailySummaryEmail,
   classifyOutcome,
   cleanField,
+  isFirstInstall,
   deviceTagFor,
   type DailySummaryInput,
 } from "./founderAlertsEmail";
@@ -185,7 +190,9 @@ export const recordOutcome = internalMutation({
 
     const { newDevice, firstTake, notify } = classifyOutcome({
       status: args.status,
-      device: device ? { seeded: device.seeded, firstSeenAt: device.firstSeenAt } : null,
+      device: device
+        ? { seeded: device.seeded, firstSeenAt: device.firstSeenAt, installNumber: device.installNumber }
+        : null,
       hasPriorOutcome: prior !== null,
       now,
     });
@@ -213,6 +220,9 @@ export const recordOutcome = internalMutation({
       at: now,
     };
     await ctx.db.insert("takeOutcomes", row);
+
+    // The founder's own test phones are logged, never emailed about.
+    if (device?.isTest) return null;
 
     // ── One email per take, not per attempt.
     const pending = await findTakeEmail(ctx, job.creationId, deviceTag);
@@ -413,6 +423,8 @@ export const deliverTakeEmail = internalMutation({
 
     const now = Date.now();
     const job = await ctx.db.get(row.jobId);
+    // Marked a test phone after this take's email was queued: drop it.
+    if (job && (await getDevice(ctx, job.deviceId))?.isTest) return null;
     const running = job !== null && (job.status === "pending" || job.status === "transcribed");
     if (running && now - row.dueAt < TAKE_EMAIL_MAX_WAIT_MS) {
       await ctx.scheduler.runAfter(TAKE_EMAIL_RECHECK_MS, internal.founderAlerts.deliverTakeEmail, args);
@@ -511,8 +523,9 @@ export const dailySummary = internalMutation({
       .query("devices")
       .withIndex("by_firstSeen", (q) => q.gte("firstSeenAt", since).lt("firstSeenAt", until))
       .take(SUMMARY_READ_CAP);
+    // Reinstalls (installNumber 2+) are not new users.
     const newDevices = firstSeen
-      .filter((d) => !d.seeded)
+      .filter((d) => !d.seeded && isFirstInstall(d.installNumber))
       .map((d) => ({
         deviceTag: d.deviceTag,
         timezone: d.timezone,

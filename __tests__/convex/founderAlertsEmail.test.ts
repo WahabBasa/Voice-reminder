@@ -11,8 +11,11 @@ import {
   HEARD_EMAIL_MAX,
   buildDailySummaryEmail,
   buildNewDeviceEmail,
+  buildReinstallEmail,
   classifyOutcome,
   cleanField,
+  cleanInstallNumber,
+  isFirstInstall,
   clip,
   deviceTagFor,
   helloShouldWrite,
@@ -115,6 +118,54 @@ describe("classifyOutcome", () => {
     expect(
       classifyOutcome({ status: "failed", device: fresh, hasPriorOutcome: false, now: AT })
     ).toEqual({ newDevice: true, firstTake: true, notify: "failed" });
+  });
+});
+
+describe("install number (reinstalls)", () => {
+  it("keeps only an integer 1..99", () => {
+    expect(cleanInstallNumber(1)).toBe(1);
+    expect(cleanInstallNumber(99)).toBe(99);
+    for (const bad of [undefined, null, 0, -1, 100, 1.5, NaN, "2"]) {
+      expect(cleanInstallNumber(bad)).toBeUndefined();
+    }
+  });
+
+  it("undefined (older builds) and 1 are a first install; 2+ is a reinstall", () => {
+    expect(isFirstInstall(undefined)).toBe(true);
+    expect(isFirstInstall(1)).toBe(true);
+    expect(isFirstInstall(2)).toBe(false);
+    expect(isFirstInstall(99)).toBe(false);
+  });
+
+  it("classifies a reinstall as not new, so its first success is silent", () => {
+    const at = { seeded: false, firstSeenAt: AT - DAY_MS };
+    for (const installNumber of [undefined, 1]) {
+      expect(
+        classifyOutcome({ status: "committed", device: { ...at, installNumber }, hasPriorOutcome: false, now: AT })
+      ).toEqual({ newDevice: true, firstTake: true, notify: "first_take_worked" });
+    }
+    expect(
+      classifyOutcome({ status: "committed", device: { ...at, installNumber: 2 }, hasPriorOutcome: false, now: AT })
+    ).toEqual({ newDevice: false, firstTake: true, notify: null });
+    // A reinstall's failure still notifies, without the new-user flag.
+    expect(
+      classifyOutcome({ status: "failed", device: { ...at, installNumber: 3 }, hasPriorOutcome: false, now: AT })
+    ).toEqual({ newDevice: false, firstTake: true, notify: "failed" });
+  });
+
+  it("the reinstall email says which install it is, and carries no deviceId", () => {
+    const email = buildReinstallEmail({
+      deviceTag: "ba7816bf",
+      timezone: "Europe/Stockholm",
+      locale: "sv-SE",
+      installNumber: 3,
+      at: AT,
+    });
+    expect(email.subject).toBe("Remi: reinstall #3 (Europe/Stockholm, sv-SE)");
+    expect(email.body).toContain("install #3 on this phone");
+    expect(email.body).toContain("device: ba7816bf");
+    expect(email.body).toContain("local time: 2026-10-05 14:00 (Europe/Stockholm)");
+    expect(email.body).not.toContain(DEVICE_ID);
   });
 });
 

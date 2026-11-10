@@ -468,6 +468,13 @@ export default defineSchema({
     spokenLangCandidate: v.optional(v.string()),
     spokenLangCandidateCount: v.optional(v.number()),
     spokenLangLastCreationId: v.optional(v.string()),
+    // How many times this phone has installed the app, from a counter the app
+    // keeps in the iOS Keychain (lib/installCount.ts): 1 = first install, 2+ =
+    // a reinstall. Undefined on rows from older builds. Only undefined or 1
+    // counts as a genuinely new install.
+    installNumber: v.optional(v.number()),
+    // The founder's own test phones (`devices.markTest`): no founder emails.
+    isTest: v.optional(v.boolean()),
   })
     .index("by_deviceId", ["deviceId"])
     // Founder lookups by the tag the alert emails carry (feedback.messageDevice).

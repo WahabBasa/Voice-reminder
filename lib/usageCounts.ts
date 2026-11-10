@@ -264,6 +264,21 @@ function load(): Promise<void> {
   return loadPromise;
 }
 
+/**
+ * Whether this install existed before 1.0.6, by the same one-time read the
+ * counts use (it shares that read and its persisted answer, so it stays right
+ * on every later launch). Unreadable storage answers true, the safe side.
+ * Never throws. Used by lib/installCount.ts.
+ */
+export async function isExistingInstall(): Promise<boolean> {
+  try {
+    await load();
+    return state?.existing ?? true;
+  } catch {
+    return true;
+  }
+}
+
 // ─── steps ───────────────────────────────────────────────────────────────────
 
 function scheduleFlush(): void {

@@ -37,6 +37,7 @@ module.exports = {
     "lib/usageCounts.ts",
     "lib/ratingPrompt.ts",
     "convex/usageShape.ts",
+    "lib/installCount.ts",
   ],
   coverageThreshold: {
     "lib/time.ts": { lines: 85, branches: 70 },
@@ -70,5 +71,6 @@ module.exports = {
     "lib/usageCounts.ts": { lines: 95, branches: 85 },
     "lib/ratingPrompt.ts": { lines: 95, branches: 90 },
     "convex/usageShape.ts": { lines: 100, branches: 100 },
+    "lib/installCount.ts": { lines: 100, branches: 95 },
   },
 };

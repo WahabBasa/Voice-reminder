@@ -8,6 +8,10 @@
  * capped, a device seen under an hour ago writes nothing, and new-device emails
  * are capped per hour.
  *
+ * A reinstall (the app's Keychain install counter says 2+, `installNumber`)
+ * gets a "Reinstall #N" email instead of the new-device one, under the same
+ * hourly cap. Older builds send no `installNumber` and behave as before.
+ *
  * "Genuinely new" means no row here AND no footprint anywhere else — no
  * reminders, no feedback, no creation jobs under that deviceId. The footprint
  * check is what keeps every pre-launch install quiet even before
@@ -27,7 +31,9 @@ import type { Doc } from "./_generated/dataModel";
 import {
   HOUR_MS,
   buildNewDeviceEmail,
+  buildReinstallEmail,
   cleanField,
+  cleanInstallNumber,
   deviceTagFor,
   helloShouldWrite,
   validDeviceId,
@@ -89,6 +95,7 @@ export async function hasPriorFootprint(
 
 const helloResult = v.union(
   v.literal("new"), // first sighting of a genuinely new install — founder emailed
+  v.literal("reinstall"), // first sighting of a reinstall (installNumber 2+) — founder told so
   v.literal("known"), // first sighting of a pre-existing install — no email
   v.literal("updated"), // existing row refreshed
   v.literal("throttled") // seen under an hour ago — nothing written
@@ -102,6 +109,9 @@ export const hello = mutation({
     locale: v.optional(v.string()),
     timezone: v.optional(v.string()),
     iosVersion: v.optional(v.string()),
+    // 1 = first install on this phone, 2+ = a reinstall (lib/installCount.ts).
+    // Older builds send none and behave exactly as before.
+    installNumber: v.optional(v.number()),
   },
   // `spokenLang` (OLD-140): the language this install speaks in, once the
   // server has learned it. Older builds ignore it.
@@ -122,6 +132,7 @@ export const hello = mutation({
       locale: cleanField(args.locale),
       timezone: cleanField(args.timezone),
       iosVersion: cleanField(args.iosVersion),
+      installNumber: cleanInstallNumber(args.installNumber),
     };
 
     if (existing) {
@@ -144,6 +155,9 @@ export const hello = mutation({
       ...fields,
     });
     if (seeded) return { result: "known" as const };
+    // A phone that had the app before: told apart, never a "new device".
+    const reinstallNumber =
+      fields.installNumber !== undefined && fields.installNumber >= 2 ? fields.installNumber : undefined;
 
     const recent = await ctx.db
       .query("devices")
@@ -152,16 +166,44 @@ export const hello = mutation({
     if (recent.filter((d) => !d.seeded).length > MAX_NEW_DEVICE_EMAILS_PER_HOUR) {
       console.warn("[VR] devices.hello: new-device email cap reached; skipping email");
     } else {
-      const email = buildNewDeviceEmail({ deviceTag, ...fields, at: now });
+      const email =
+        reinstallNumber !== undefined
+          ? buildReinstallEmail({ deviceTag, ...fields, installNumber: reinstallNumber, at: now })
+          : buildNewDeviceEmail({ deviceTag, ...fields, at: now });
       await ctx.scheduler.runAfter(0, internal.founderAlerts.sendEmail, email);
     }
-    return { result: "new" as const };
+    return { result: reinstallNumber !== undefined ? ("reinstall" as const) : ("new" as const) };
   },
 });
 
 function spokenLangOf(device: Doc<"devices">): { spokenLang?: string } {
   return device.spokenLang ? { spokenLang: device.spokenLang } : {};
 }
+
+// ─── markTest ─────────────────────────────────────────────────────────────────
+
+/**
+ * Founder-only: mark (or unmark) one of the founder's own phones as a test
+ * device. A test device sends no founder emails of any kind; its takes are
+ * still logged in takeOutcomes. `deviceTag` is the tag from any founder email.
+ *
+ *   npx convex run devices:markTest '{"deviceTag":"237dcc2b","isTest":true}'
+ */
+export const markTest = internalMutation({
+  args: { deviceTag: v.string(), isTest: v.boolean() },
+  returns: v.object({ deviceTag: v.string(), isTest: v.boolean() }),
+  handler: async (ctx, args) => {
+    const tag = args.deviceTag.trim().toLowerCase();
+    const matches = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceTag", (q) => q.eq("deviceTag", tag))
+      .take(2);
+    if (matches.length === 0) throw new Error(`devices.markTest: no device with tag "${tag}"`);
+    if (matches.length > 1) throw new Error(`devices.markTest: tag "${tag}" matches more than one install`);
+    await ctx.db.patch(matches[0]._id, { isTest: args.isTest ? true : undefined });
+    return { deviceTag: tag, isTest: args.isTest };
+  },
+});
 
 // ─── spoken language (OLD-140) ───────────────────────────────────────────────
 

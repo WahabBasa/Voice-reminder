@@ -2,6 +2,7 @@ import { api } from "../convex/_generated/api";
 import { getDeviceId } from "./deviceId";
 import { getDeviceLocales } from "./deviceStt";
 import { getRuntimeInfo } from "./feedbackContext";
+import { getInstallNumber } from "./installCount";
 import { rememberSpokenLanguage, spokenLangFromResponse } from "./spokenLanguage";
 
 /**
@@ -29,6 +30,8 @@ export type HelloArgs = {
   locale?: string;
   timezone?: string;
   iosVersion?: string;
+  /** 1 = first install on this phone, 2+ = a reinstall (lib/installCount.ts). */
+  installNumber?: number;
 };
 
 function str(value: unknown): string | undefined {
@@ -40,6 +43,8 @@ function str(value: unknown): string | undefined {
 /** What `hello` is sent. Exported for the test. */
 export async function buildHelloArgs(): Promise<HelloArgs> {
   const info = getRuntimeInfo();
+  // Counted before the device id is read (it mints one on a fresh install).
+  const installNumber = await getInstallNumber();
   return {
     deviceId: await getDeviceId(),
     buildNumber: str(info.buildNumber),
@@ -47,6 +52,7 @@ export async function buildHelloArgs(): Promise<HelloArgs> {
     locale: str(getDeviceLocales()[0]),
     timezone: str(info.timezone),
     iosVersion: str(info.iosVersion),
+    ...(installNumber !== undefined ? { installNumber } : {}),
   };
 }
 

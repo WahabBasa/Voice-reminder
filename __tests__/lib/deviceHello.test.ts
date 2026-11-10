@@ -4,6 +4,10 @@
  */
 
 jest.mock("../../lib/deviceId", () => ({ getDeviceId: jest.fn(async () => "dev_123") }));
+let mockInstallNumber: number | undefined = 2;
+jest.mock("../../lib/installCount", () => ({
+  getInstallNumber: jest.fn(async () => mockInstallNumber),
+}));
 jest.mock("../../lib/deviceStt", () => ({ getDeviceLocales: jest.fn(() => ["sv-SE", "en-US"]) }));
 jest.mock("../../lib/feedbackContext", () => ({
   getRuntimeInfo: jest.fn(() => ({
@@ -24,6 +28,7 @@ import { __resetSpokenLanguageForTests, getSpokenLanguage } from "../../lib/spok
 
 beforeEach(() => {
   __resetDeviceHelloForTests();
+  mockInstallNumber = 2;
 });
 
 it("sends stringified runtime facts and the first preferred locale", async () => {
@@ -34,7 +39,15 @@ it("sends stringified runtime facts and the first preferred locale", async () =>
     locale: "sv-SE",
     timezone: "Europe/Stockholm",
     iosVersion: "26.0",
+    installNumber: 2,
   });
+});
+
+it("leaves installNumber out when the Keychain could not be used", async () => {
+  mockInstallNumber = undefined;
+  const args = await buildHelloArgs();
+  expect(args).not.toHaveProperty("installNumber");
+  expect(args.deviceId).toBe("dev_123");
 });
 
 it("calls devices.hello once per launch", async () => {
