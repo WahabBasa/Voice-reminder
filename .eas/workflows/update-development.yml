@@ -7,4 +7,4 @@ jobs:
     params:
       branch: development
       platform: ios
-      message: "claude/rtl-ui @ 0977479 (1.0.3: in-app update prompt, test)"
+      message: "release/1.0.7 @ d35e1e8 (1.0.7: usage counts, rating prompt, install counter)"
