@@ -385,6 +385,34 @@ describe("SPOKEN_LINE_RULE", () => {
     expect(SPOKEN_LINE_RULE).not.toContain("is starting this minute");
   });
 
+  // 'Need to follow up with Sadam ... on my WVD issue' came back as 'Follow up
+  // with Sadam about my WVD issue.' — the examples showed second person, but no
+  // sentence said the user's own first person has to flip.
+  it("turns the user's own first person into second person, in every language", () => {
+    expect(SPOKEN_LINE_RULE).toContain("The line speaks TO the user, in every language");
+    expect(SPOKEN_LINE_RULE).toContain("first person (my, me, I, mine) becomes second person");
+    expect(SPOKEN_LINE_RULE).toContain("'send my report' is 'Send your report.'");
+    expect(SPOKEN_LINE_RULE).toContain("'remind me to call my mom' is 'Call your mom.'");
+    expect(SPOKEN_LINE_RULE).toContain("'تقريري' is 'تقريرك'");
+    expect(SPOKEN_LINE_RULE).toContain("'أمي' is 'أمك'");
+    expect(SPOKEN_LINE_RULE).toContain("no first person is left in the line");
+  });
+
+  it("leaves other people's pronouns as the user said them", () => {
+    expect(SPOKEN_LINE_RULE).toContain("other people stay as said ('Call his mother.')");
+  });
+
+  // Stated in the named section, so it reaches both spoken fields through the
+  // one reference each builder carries — not copied into either builder.
+  it("reaches description and preDescription through the shared section", () => {
+    expect(SPOKEN_LINE_RULES_SECTION).toContain("description and preDescription alike");
+    expect(SPOKEN_LINE_RULES_SECTION).toContain("becomes second person");
+    for (const instruction of [buildDescriptionInstruction(), buildPreReminderInstruction()]) {
+      expect(instruction).toContain(SPOKEN_LINE_RULE_REFERENCE);
+      expect(instruction).not.toContain("becomes second person");
+    }
+  });
+
   it("forbids the clock, label and lead-in openers by name, in both languages", () => {
     for (const banned of [
       "'It is time'",

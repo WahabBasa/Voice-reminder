@@ -132,4 +132,13 @@ describe("buildSystemPrompt — the spoken-line rule ships once", () => {
     // reference was the replay-variant field, gone with the variants (OLD-108).
     expect(references).toBe(2);
   });
+
+  // The first-to-second-person rule lives in the named section only. A mirror
+  // line in INTENT + TONE RULES was tried and pulled titles toward 'your' too.
+  it("states the perspective rule once, inside the cacheable prefix", () => {
+    const prompt = buildSystemPrompt(CONTEXT_A);
+    const prefix = prompt.slice(0, prompt.indexOf(CONTEXT_MARKER));
+    expect(prompt.split("becomes second person")).toHaveLength(2);
+    expect(prefix).toContain("becomes second person");
+  });
 });
